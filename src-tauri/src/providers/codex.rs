@@ -3,7 +3,10 @@
 //! Priority per the TaskPulse design: native hook > session/app-server
 //! metadata > process scan.  On this machine Codex is the Desktop (electron)
 //! app; it doesn't expose a CLI hook we can reuse non-invasively, so we read
-//! its session transcripts: `~/.codex/sessions/**/rollout-*.jsonl`.
+//! its session transcripts: `~/.codex/sessions/**/rollout-*.jsonl`.  On the
+//! remote hosts the same transcripts live under the server user's home, read
+//! via the remote-tmux snapshot (`__TP_CODEX__` section) — this module shares
+//! one event parser for both.
 //!
 //! State inference (from the agent's own emitted events — more reliable than
 //! process scanning, so confidence = HOOK):
@@ -17,7 +20,7 @@
 //! wiring TaskPulse's own receiver there would give EXACT turn-end events, but
 //! that mutates the user's Codex config — deferred.  Reading the transcript is
 //! non-invasive and stays behind this adapter, so a Codex format change only
-//! touches this file.
+//! touches this file (plus the shared parses below).
 
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -84,163 +87,15 @@ impl CodexProvider {
         });
         files
     }
-}
 
-fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    if root.is_dir() {
-        for entry in std::fs::read_dir(root)? {
-            let entry = entry?;
-            let p = entry.path();
-            if p.is_dir() {
-                out.extend(walk(&p)?);
-            } else {
-                out.push(p);
-            }
-        }
-    }
-    Ok(out)
-}
-
-/// Derived live state of one Codex session.
-#[derive(Debug, Clone)]
-struct SessionState {
-    status: TaskStatus,
-    updated_at: SystemTime,
-    project: Option<String>,
-    last_message: Option<String>,
-    session_id: String,
-}
-
-impl CodexProvider {
     fn parse_session_state(&self, path: &Path, now: SystemTime) -> Option<SessionState> {
-        let mtime = path.metadata().ok()?.modified().ok()?;
         let body = std::fs::read_to_string(path).ok()?;
-
-        let mut project: Option<String> = None;
-        let mut status = TaskStatus::Unknown;
-        let mut updated_at = mtime;
-        let mut last_message: Option<String> = None;
-        let mut session_id = path
+        let sid = path
             .file_stem()
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-
-        for line in body.lines() {
-            let line = line.trim_start();
-            if !line.starts_with('{') {
-                continue;
-            }
-            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
-                continue;
-            };
-            let ts = value.get("timestamp").and_then(parse_rfc3339_value);
-            let Some(payload) = value.get("payload") else {
-                continue;
-            };
-
-            // Extract project (cwd) + session id on ANY line that carries them
-            // — session_meta / turn_context have no `payload.type`, so this
-            // must run before the type guard below.
-            if project.is_none() {
-                if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
-                    let base = Path::new(cwd)
-                        .file_name()
-                        .map(|n| n.to_string_lossy().into_owned())
-                        .unwrap_or_else(|| cwd.to_string());
-                    project = Some(truncate(&base, PROJECT_LEN));
-                }
-            }
-            if value.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
-                if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                    session_id = id.to_string();
-                }
-            }
-
-            let Some(ptype) = payload.get("type").and_then(|v| v.as_str()) else {
-                continue;
-            };
-
-            match ptype {
-                "task_started" | "user_message" => {
-                    status = TaskStatus::Running;
-                    if let Some(t) = ts {
-                        updated_at = t;
-                    }
-                }
-                "agent_message" => {
-                    status = TaskStatus::Running;
-                    if let Some(t) = ts {
-                        updated_at = t;
-                    }
-                    if last_message.is_none() {
-                        if let Some(msg) = payload.get("message").and_then(|v| v.as_str()) {
-                            last_message = Some(truncate(msg, 120));
-                        }
-                    }
-                }
-                "token_count" | "mcp_tool_call_end" | "web_search_end" | "patch_apply_end"
-                | "item_completed" => {
-                    // activity — confirms the turn is running
-                    if status != TaskStatus::Running {
-                        status = TaskStatus::Running;
-                    }
-                    if let Some(t) = ts {
-                        updated_at = t;
-                    }
-                }
-                "task_complete" => {
-                    status = TaskStatus::WaitingInput;
-                    if let Some(t) = payload
-                        .get("completed_at")
-                        .and_then(parse_rfc3339_value)
-                        .or(ts)
-                    {
-                        updated_at = t;
-                    }
-                    if last_message.is_none() {
-                        if let Some(msg) =
-                            payload.get("last_agent_message").and_then(|v| v.as_str())
-                        {
-                            last_message = Some(truncate(msg, 120));
-                        }
-                    }
-                }
-                "turn_aborted" | "thread_rolled_back" => {
-                    status = TaskStatus::WaitingInput;
-                    if let Some(t) = ts {
-                        updated_at = t;
-                    }
-                }
-                _ => {}
-            }
-        }
-
-        // Lifecycle gate.
-        let age = now.duration_since(updated_at).unwrap_or_default();
-        match status {
-            TaskStatus::Running => {
-                if age > RUNNING_TTL {
-                    // no recent write while "running" → stale transcript; drop.
-                    return None;
-                }
-            }
-            TaskStatus::WaitingInput => {
-                if age > WAITING_TTL {
-                    return None;
-                }
-            }
-            _ => return None,
-        }
-
-        Some(SessionState {
-            status,
-            updated_at,
-            project,
-            last_message,
-            session_id,
-        })
+        parse_codex_rollout(&body, now, &sid)
     }
 
     fn session_to_task(&self, host: &SessionState, now: SystemTime) -> TaskSnapshot {
@@ -264,6 +119,231 @@ impl CodexProvider {
             task.updated_at = host.updated_at;
         }
         task
+    }
+}
+
+fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
+    let mut out = Vec::new();
+    if root.is_dir() {
+        for entry in std::fs::read_dir(root)? {
+            let entry = entry?;
+            let p = entry.path();
+            if p.is_dir() {
+                out.extend(walk(&p)?);
+            } else {
+                out.push(p);
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// Derived live state of one Codex session.
+#[derive(Debug, Clone)]
+pub struct SessionState {
+    pub status: TaskStatus,
+    pub updated_at: SystemTime,
+    pub project: Option<String>,
+    pub last_message: Option<String>,
+    pub session_id: String,
+}
+
+/// Shared Codex rollout → session-state parser.
+///
+/// Used by the local `CodexProvider` and by the remote-tmux snapshot parser
+/// (which reads remote `~/.codex/sessions` rollouts). Keeps the Codex event
+/// semantics in ONE place behind an adapter boundary.
+pub fn parse_codex_rollout(
+    body: &str,
+    now: SystemTime,
+    default_session_id: &str,
+) -> Option<SessionState> {
+    if body.trim().is_empty() {
+        return None;
+    }
+    let mut project: Option<String> = None;
+    let mut status = TaskStatus::Unknown;
+    let mut updated_at = now;
+    let mut last_message: Option<String> = None;
+    let mut session_id = default_session_id.to_string();
+
+    for line in body.lines() {
+        let line = line.trim_start();
+        if !line.starts_with('{') {
+            continue;
+        }
+        let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        let ts = value.get("timestamp").and_then(parse_rfc3339_value);
+        let Some(payload) = value.get("payload") else {
+            continue;
+        };
+
+        // Extract project (cwd) + session id on ANY line that carries them
+        // — session_meta / turn_context have no `payload.type`, so this
+        // must run before the type guard below.
+        if project.is_none() {
+            if let Some(cwd) = payload.get("cwd").and_then(|v| v.as_str()) {
+                let base = Path::new(cwd)
+                    .file_name()
+                    .map(|n| n.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| cwd.to_string());
+                project = Some(truncate(&base, PROJECT_LEN));
+            }
+        }
+        if value.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+            if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                session_id = id.to_string();
+            }
+        }
+
+        let Some(ptype) = payload.get("type").and_then(|v| v.as_str()) else {
+            continue;
+        };
+
+        match ptype {
+            "task_started" | "user_message" => {
+                status = TaskStatus::Running;
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+            }
+            "agent_message" => {
+                status = TaskStatus::Running;
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+                if last_message.is_none() {
+                    if let Some(msg) = payload.get("message").and_then(|v| v.as_str()) {
+                        last_message = Some(truncate(msg, 120));
+                    }
+                }
+            }
+            "token_count" | "mcp_tool_call_end" | "web_search_end" | "patch_apply_end"
+            | "item_completed" => {
+                // activity — confirms the turn is running
+                if status != TaskStatus::Running {
+                    status = TaskStatus::Running;
+                }
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+            }
+            "task_complete" => {
+                status = TaskStatus::WaitingInput;
+                if let Some(t) = payload
+                    .get("completed_at")
+                    .and_then(parse_rfc3339_value)
+                    .or(ts)
+                {
+                    updated_at = t;
+                }
+                if last_message.is_none() {
+                    if let Some(msg) = payload.get("last_agent_message").and_then(|v| v.as_str()) {
+                        last_message = Some(truncate(msg, 120));
+                    }
+                }
+            }
+            "turn_aborted" | "thread_rolled_back" => {
+                status = TaskStatus::WaitingInput;
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+            }
+            _ => {}
+        }
+    }
+
+    // Lifecycle gate.
+    let age = now.duration_since(updated_at).unwrap_or_default();
+    match status {
+        TaskStatus::Running => {
+            if age > RUNNING_TTL {
+                // no recent write while "running" → stale transcript; drop.
+                return None;
+            }
+        }
+        TaskStatus::WaitingInput => {
+            if age > WAITING_TTL {
+                return None;
+            }
+        }
+        _ => return None,
+    }
+
+    Some(SessionState {
+        status,
+        updated_at,
+        project,
+        last_message,
+        session_id,
+    })
+}
+
+/// Build remote Codex tasks from the snapshot's `__TP_CODEX__` section.
+///
+/// Each remote rollout is prefixed by a `===S:<slug>===` header (the workspace
+/// slug the rollout lives under). We parse each rollout body with the shared
+/// `parse_codex_rollout` and emit a task per live session.
+pub fn tasks_from_codex_section(
+    section: &str,
+    ssh_host: &str,
+    host_id: &str,
+    now: SystemTime,
+) -> Vec<TaskSnapshot> {
+    let mut out = Vec::new();
+    let mut current_slug: Option<String> = None;
+    let mut buf = String::new();
+
+    for line in section.lines() {
+        let line = line.trim();
+        if let Some(slug) = line
+            .strip_prefix("===S:")
+            .and_then(|s| s.strip_suffix("==="))
+        {
+            flush_codex(&current_slug, &mut buf, now, ssh_host, host_id, &mut out);
+            current_slug = Some(slug.to_string());
+            buf.clear();
+            continue;
+        }
+        buf.push_str(line);
+        buf.push('\n');
+    }
+    flush_codex(&current_slug, &mut buf, now, ssh_host, host_id, &mut out);
+    out
+}
+
+fn flush_codex(
+    slug: &Option<String>,
+    buf: &mut String,
+    now: SystemTime,
+    ssh_host: &str,
+    host_id: &str,
+    out: &mut Vec<TaskSnapshot>,
+) {
+    if buf.trim().is_empty() {
+        return;
+    }
+    let Some(slug) = slug else { return };
+    if let Some(state) = parse_codex_rollout(buf, now, slug) {
+        let name = state.project.clone().unwrap_or_else(|| slug.clone());
+        let mut t = TaskSnapshot::new(
+            format!("codex-remote:{host_id}:{}", state.session_id),
+            name,
+            TaskSource::Codex,
+            state.status,
+            DetectionConfidence::Hook,
+            now,
+        )
+        .with_host(ssh_host.to_string())
+        .with_remote();
+        t.project = state.project.or_else(|| Some(slug.clone()));
+        t.updated_at = state.updated_at;
+        t.message = state.last_message;
+        t.cli = Some("codex".into());
+        t.session_id = Some(state.session_id);
+        out.push(t);
     }
 }
 
@@ -498,14 +578,34 @@ mod tests {
     fn discover_finds_rollouts_recursively() {
         let root = tempfile::tempdir().unwrap();
         let a = root.path().join("2026/08/27");
-        std::fs::create_dir_all(&a).unwrap();
-        let p1 = a.join("rollout-2026-08-27T00-00-00-abc.jsonl");
-        let p2 = a.join("not-a-rollout.jsonl");
-        std::fs::write(&p1, header("/x")).unwrap();
-        std::fs::write(&p2, header("/y")).unwrap();
+        let mut f = std::fs::File::create(a.join("rollout-x.jsonl")).unwrap_or_else(|_| {
+            std::fs::create_dir_all(&a).unwrap();
+            std::fs::File::create(a.join("rollout-x.jsonl")).unwrap()
+        });
+        f.write_all(b"{}").unwrap();
         let provider = CodexProvider::with_root(root.path().to_path_buf());
         let files = provider.discover();
         assert_eq!(files.len(), 1);
-        assert!(files[0].ends_with("rollout-2026-08-27T00-00-00-abc.jsonl"));
+    }
+
+    #[test]
+    fn codex_section_builds_remote_tasks() {
+        let section = format!(
+            "===S:--home-ai-projects-Game--===\n{}\n{}\n",
+            header("/home/ai/projects/Game"),
+            format!(
+                "{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"t1\",\"completed_at\":\"{ts}\"}}}}\n",
+                ts = recent_rfc3339(60)
+            )
+        );
+        let now = SystemTime::now();
+        let tasks = tasks_from_codex_section(&section, "Server3", "server3", now);
+        assert_eq!(tasks.len(), 1);
+        let t = &tasks[0];
+        assert_eq!(t.source, TaskSource::Codex);
+        assert_eq!(t.status, TaskStatus::WaitingInput);
+        assert_eq!(t.host.as_deref(), Some("Server3"));
+        assert!(t.remote);
+        assert_eq!(t.name, "Game");
     }
 }

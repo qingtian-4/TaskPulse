@@ -24,6 +24,7 @@ use super::parser::{PaneInfo, ProcInfo};
 
 /// Marker separating the runs section in the snapshot output.
 pub const RUNS_MARKER: &str = "__TP_RUNS__";
+pub const CODEX_MARKER: &str = "__TP_CODEX__";
 
 #[derive(Debug, Clone, Deserialize, Default)]
 #[allow(dead_code)] // schema fields are read selectively
@@ -61,7 +62,7 @@ pub struct RunFile {
 /// line in `args`).  So while the panes section ends at the FIRST ps marker,
 /// the runs section must start at the LAST runs marker — the real `echo`
 /// precedes the `find`/`cat` and is the final occurrence.
-pub fn split_snapshot_sections(output: &str) -> (String, String, String) {
+pub fn split_snapshot_sections(output: &str) -> (String, String, String, String) {
     let (head, rest) = match output.split_once(super::parser::PS_MARKER) {
         Some((panes, rest)) => (panes.to_string(), rest.to_string()),
         None => (output.to_string(), String::new()),
@@ -70,7 +71,13 @@ pub fn split_snapshot_sections(output: &str) -> (String, String, String) {
         Some((procs, runs)) => (procs.to_string(), runs.to_string()),
         None => (rest, String::new()),
     };
-    (head, procs, runs)
+    // The Codex section's real marker is the LAST one (re-emitted after ps,
+    // whose args echo the marker text too) — split from the right.
+    let (runs, codex) = match runs.rsplit_once(CODEX_MARKER) {
+        Some((runs, codex)) => (runs.to_string(), codex.to_string()),
+        None => (runs, String::new()),
+    };
+    (head, procs, runs, codex)
 }
 
 /// Parse concatenated run-file JSON documents.
@@ -325,7 +332,7 @@ mod tests {
     fn split_three_sections() {
         let out =
             "pane line\n__TP_PS__\n  1 1 bash bash\n__TP_RUNS__\n{\"status\":\"succeeded\"}\n";
-        let (panes, procs, runs) = split_snapshot_sections(out);
+        let (panes, procs, runs, _) = split_snapshot_sections(out);
         assert!(panes.contains("pane line"));
         assert!(procs.contains("bash"));
         assert!(runs.contains("succeeded"));
@@ -339,7 +346,7 @@ mod tests {
         let out = format!(
             "demo\t0\t0\t%4\t901112\tpts/0\t/home/user\tbash\t\ttitle\n__TP_PS__\n  901112  1 bash -bash\n  915238  915230 bash {ps_cmd}\n__TP_RUNS__\n{{\"schema_version\":1,\"status\":\"succeeded\",\"exit_code\":0,\"pane_id\":\"%4\",\"label\":\"success-demo\"}}\n"
         );
-        let (panes, procs, runs) = split_snapshot_sections(&out);
+        let (panes, procs, runs, _) = split_snapshot_sections(&out);
         assert!(panes.contains("%4"), "panes: {panes}");
         assert!(procs.contains("915238"), "procs: {procs}");
         assert!(runs.contains("success-demo"), "runs: {runs}");

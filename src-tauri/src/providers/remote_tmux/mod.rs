@@ -47,6 +47,7 @@ struct RemoteSnapshot {
     panes: Vec<PaneInfo>,
     procs: HashMap<u32, ProcInfo>,
     runs: Vec<runfile::RunFile>,
+    codex_section: String,
 }
 
 pub struct RemoteTmuxProvider {
@@ -89,9 +90,10 @@ impl RemoteTmuxProvider {
         // backslash escapes, so the remote output must contain actual tabs.
         let fmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{window_name}";
         format!(
-            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\; 2>/dev/null; true",
+            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 2>/dev/null | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===\"; cat \"$f\"; done; true",
             parser::PS_MARKER,
-            runfile::RUNS_MARKER
+            runfile::RUNS_MARKER,
+            runfile::CODEX_MARKER
         )
     }
 
@@ -104,6 +106,7 @@ impl RemoteTmuxProvider {
         panes: &[PaneInfo],
         procs: &HashMap<u32, ProcInfo>,
         runs: &[runfile::RunFile],
+        codex_section: &str,
         now: SystemTime,
     ) -> ProviderOutput {
         let state = self.hosts.get_mut(host_id).expect("host state exists");
@@ -245,6 +248,24 @@ impl RemoteTmuxProvider {
         }
         tasks.extend(exact);
 
+        // REMOTE Codex sessions (read from the server's ~/.codex/sessions in the
+        // same snapshot) are surfaced here, tagged remote + host, so local and
+        // remote Codex dialogue tasks show as separate entries.
+        let remote_codex = crate::providers::codex::tasks_from_codex_section(
+            codex_section,
+            ssh_host,
+            host_id,
+            now,
+        );
+        if !remote_codex.is_empty() {
+            log::debug!(
+                "{}: {} remote Codex session(s)",
+                ssh_host,
+                remote_codex.len()
+            );
+        }
+        tasks.extend(remote_codex);
+
         state.last_tasks = tasks.clone();
         ProviderOutput {
             tasks,
@@ -323,7 +344,7 @@ impl Provider for RemoteTmuxProvider {
                         let command = RemoteTmuxProvider::snapshot_command();
                         match executor.run(&ssh_host, &command, SSH_TIMEOUT) {
                             Ok(output) => {
-                                let (panes_section, procs_section, runs_section) =
+                                let (panes_section, procs_section, runs_section, codex_section) =
                                     runfile::split_snapshot_sections(&output);
                                 HostPollResult {
                                     host_id: id,
@@ -332,6 +353,7 @@ impl Provider for RemoteTmuxProvider {
                                         panes: parser::parse_panes(&panes_section),
                                         procs: parser::parse_procs(&procs_section),
                                         runs: runfile::parse_run_files(&runs_section),
+                                        codex_section,
                                     }),
                                 }
                             }
@@ -375,6 +397,7 @@ impl Provider for RemoteTmuxProvider {
                         &snapshot.panes,
                         &snapshot.procs,
                         &snapshot.runs,
+                        &snapshot.codex_section,
                         now,
                     );
                     output.tasks.extend(host_out.tasks);
