@@ -1,36 +1,44 @@
-use std::sync::Mutex;
+//! Tray lifecycle: aggregate attention state → icon, popup window show/hide/
+//! pin, position restore.  Preserved from AgentTray, with the aggregate
+//! priority updated to TaskPulse semantics:
+//! FAILED > WAITING_INPUT > DISCONNECTED > RUNNING > SUCCEEDED/IDLE > UNKNOWN
+
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
 
 use tauri::image::Image;
-use tauri::webview::WebviewWindowBuilder;
-use tauri::{AppHandle, Emitter, Listener, Manager, WebviewUrl};
 use tauri::tray::TrayIconId;
 use tauri::webview::Color;
+use tauri::webview::WebviewWindowBuilder;
+use tauri::{AppHandle, Emitter, Listener, Manager, WebviewUrl};
 
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-use crate::watcher::AgentStatus;
+use crate::domain::{TaskSnapshot, TaskStatus};
+use crate::providers::{HostHealth, HostStatus};
 
 static LAST_STATE: Mutex<String> = Mutex::new(String::new());
 static PINNED: AtomicBool = AtomicBool::new(false);
 
-fn aggregate_state(agents: &[AgentStatus]) -> &str {
-    if agents.is_empty() {
-        return "offline";
+/// Aggregate attention state across tasks (and host health).
+/// Returns an icon-name string used by `icon_bytes`.
+fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str {
+    // Host disconnected is a strong signal even with no tasks.
+    if hosts.iter().any(|h| h.status == HostStatus::Disconnected) {
+        return "disconnected";
     }
-    let priority = |s: &str| match s {
-        "needs-input" => 0,
-        "error" => 1,
-        "working" => 2,
-        "starting" => 3,
-        "idle" => 4,
-        _ => 5,
+
+    let Some(best) = tasks.iter().min_by_key(|t| t.status.priority()) else {
+        return "offline";
     };
-    agents
-        .iter()
-        .min_by_key(|a| priority(&a.status))
-        .map(|a| a.status.as_str())
-        .unwrap_or("offline")
+    match best.status {
+        TaskStatus::Failed => "error",
+        TaskStatus::WaitingInput => "needs-input",
+        TaskStatus::Disconnected => "disconnected",
+        TaskStatus::Running => "working",
+        TaskStatus::Succeeded | TaskStatus::Idle => "idle",
+        TaskStatus::Unknown => "offline",
+    }
 }
 
 fn icon_bytes(state: &str) -> &'static [u8] {
@@ -38,16 +46,15 @@ fn icon_bytes(state: &str) -> &'static [u8] {
         "needs-input" => include_bytes!("../icons/tray-needs-input.png"),
         "error" => include_bytes!("../icons/tray-error.png"),
         "working" => include_bytes!("../icons/tray-working.png"),
-        "starting" => include_bytes!("../icons/tray-starting.png"),
+        "disconnected" => include_bytes!("../icons/tray-offline.png"),
         "idle" => include_bytes!("../icons/tray-idle.png"),
         _ => include_bytes!("../icons/tray-offline.png"),
     }
 }
 
-pub fn update_icon(app: &AppHandle, agents: &[AgentStatus]) {
-    let state = aggregate_state(agents);
+pub fn update_icon(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
+    let state = aggregate_state(tasks, hosts);
 
-    // Only swap if state changed
     {
         let mut last = LAST_STATE.lock().unwrap_or_else(|e| {
             log::warn!("LAST_STATE mutex poisoned, recovering");
@@ -65,14 +72,13 @@ pub fn update_icon(app: &AppHandle, agents: &[AgentStatus]) {
             let _ = tray.set_icon(Some(icon));
         }
     }
-    log::debug!("Tray icon updated to: {}", state);
+    log::debug!("Tray icon updated to: {state}");
 }
 
 pub fn pin_popup(app: &AppHandle) {
     PINNED.store(true, Ordering::SeqCst);
     let _ = app.emit("pinned-changed", true);
 
-    // Show popup if not already visible
     if let Some(win) = app.get_webview_window("popup") {
         if !win.is_visible().unwrap_or(false) {
             let _ = win.show();
@@ -82,7 +88,6 @@ pub fn pin_popup(app: &AppHandle) {
         return;
     }
 
-    // First open — delegate to toggle_popup which creates the window
     toggle_popup(app);
 }
 
@@ -95,20 +100,18 @@ pub fn toggle_popup(app: &AppHandle) {
             let _ = win.hide();
             return;
         }
-        // Already exists but hidden — show at last position and refresh state
         let _ = win.show();
         let _ = win.set_focus();
         emit_current_state(app);
         return;
     }
 
-    // First open: create the popup window
     match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
-        .title("AgentTray")
-        .inner_size(400.0, 120.0) // Minimal; frontend auto-resizes to fit content
+        .title("TaskPulse")
+        .inner_size(400.0, 120.0)
         .decorations(false)
         .transparent(true)
-        .background_color(Color(0, 0, 0, 0)) // Transparent WebView2 on Windows
+        .background_color(Color(0, 0, 0, 0))
         .always_on_top(true)
         .skip_taskbar(true)
         .resizable(false)
@@ -116,31 +119,25 @@ pub fn toggle_popup(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            // Set top-right default in physical pixels; plugin restores saved position
-            // asynchronously on webview ready and will override this.
             let (default_x, default_y) = compute_default_position(app);
             let _ = win.set_position(tauri::PhysicalPosition::new(default_x, default_y));
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
-                    .args(["-r", "AgentTray", "-b", "remove,sticky"])
+                    .args(["-r", "TaskPulse", "-b", "remove,sticky"])
                     .output();
                 let _ = std::process::Command::new("wmctrl")
-                    .args(["-r", "AgentTray", "-b", "add,sticky"])
+                    .args(["-r", "TaskPulse", "-b", "add,sticky"])
                     .output();
             }
             let _ = win.show();
             let _ = win.set_focus();
-            // Emit current state once the frontend signals it has registered
-            // its event listeners. The frontend emits 'popup-ready' from
-            // onMount after all listeners are active. This avoids the race
-            // between WebView load time and state emission.
             let h = app.clone();
             app.once("popup-ready", move |_| {
                 emit_current_state(&h);
             });
         }
-        Err(e) => log::error!("Failed to create popup window: {}", e),
+        Err(e) => log::error!("Failed to create popup window: {e}"),
     }
 }
 
@@ -177,7 +174,11 @@ fn compute_default_position(app: &AppHandle) -> (i32, i32) {
     app.primary_monitor()
         .ok()
         .flatten()
-        .or_else(|| app.available_monitors().ok().and_then(|m| m.into_iter().next()))
+        .or_else(|| {
+            app.available_monitors()
+                .ok()
+                .and_then(|m| m.into_iter().next())
+        })
         .map(|m| (m.size().width as i32 - 410, 32))
         .unwrap_or((100, 32))
 }
@@ -185,49 +186,66 @@ fn compute_default_position(app: &AppHandle) -> (i32, i32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::SystemTime;
 
-    fn agent(status: &str) -> AgentStatus {
-        AgentStatus {
-            id: "test:0".into(),
-            name: "test".into(),
-            status: status.into(),
-            message: "".into(),
-            terminal: None,
-            can_focus: false,
-            cpu: None,
-            source: None,
-            cli: None,
-            session_id: None,
-            hook_event: None,
-            hook_matcher: None,
-            mtime: None,
-        }
+    fn task(status: TaskStatus) -> TaskSnapshot {
+        TaskSnapshot::new(
+            "test:0",
+            "test",
+            crate::domain::TaskSource::LocalFile,
+            status,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        )
     }
 
     #[test]
     fn aggregate_empty_returns_offline() {
-        assert_eq!(aggregate_state(&[]), "offline");
+        assert_eq!(aggregate_state(&[], &[]), "offline");
     }
 
     #[test]
     fn aggregate_single_agent() {
-        assert_eq!(aggregate_state(&[agent("working")]), "working");
+        assert_eq!(
+            aggregate_state(&[task(TaskStatus::Running)], &[]),
+            "working"
+        );
     }
 
     #[test]
-    fn aggregate_needs_input_beats_all() {
-        let agents = vec![
-            agent("idle"),
-            agent("working"),
-            agent("needs-input"),
-            agent("error"),
+    fn aggregate_waiting_input_beats_running() {
+        let tasks = vec![
+            task(TaskStatus::Idle),
+            task(TaskStatus::Running),
+            task(TaskStatus::WaitingInput),
         ];
-        assert_eq!(aggregate_state(&agents), "needs-input");
+        assert_eq!(aggregate_state(&tasks, &[]), "needs-input");
     }
 
     #[test]
-    fn aggregate_error_beats_working() {
-        let agents = vec![agent("working"), agent("error"), agent("idle")];
-        assert_eq!(aggregate_state(&agents), "error");
+    fn aggregate_failed_beats_waiting() {
+        let tasks = vec![task(TaskStatus::WaitingInput), task(TaskStatus::Failed)];
+        assert_eq!(aggregate_state(&tasks, &[]), "error");
+    }
+
+    #[test]
+    fn aggregate_disconnected_host_beats_running() {
+        let tasks = vec![task(TaskStatus::Running), task(TaskStatus::Running)];
+        let hosts = vec![HostHealth::disconnected("Server3", None)];
+        assert_eq!(aggregate_state(&tasks, &hosts), "disconnected");
+    }
+
+    #[test]
+    fn aggregate_succeeded_idle() {
+        let tasks = vec![task(TaskStatus::Succeeded), task(TaskStatus::Idle)];
+        assert_eq!(aggregate_state(&tasks, &[]), "idle");
+    }
+
+    #[test]
+    fn aggregate_unknown() {
+        assert_eq!(
+            aggregate_state(&[task(TaskStatus::Unknown)], &[]),
+            "offline"
+        );
     }
 }

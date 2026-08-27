@@ -1,10 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod domain;
 mod focus;
 mod focusers;
 mod heuristics;
 mod notifier;
+mod providers;
 mod scanner;
+mod store;
+mod transition;
 mod tray;
 mod watcher;
 
@@ -38,7 +42,6 @@ fn main() {
             let h_watch = handle.clone();
             std::thread::spawn(move || watcher::watch(h_watch));
 
-
             // Build tray menu (required for AppIndicator on GNOME to show icon;
             // GNOME AppIndicator does NOT support direct click events — only menu)
             let h_show = handle.clone();
@@ -48,7 +51,10 @@ fn main() {
             let hide_item = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &pin_item, &hide_item, &separator, &quit_item])?;
+            let menu = Menu::with_items(
+                app,
+                &[&show_item, &pin_item, &hide_item, &separator, &quit_item],
+            )?;
 
             TrayIconBuilder::with_id("main")
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
@@ -96,7 +102,14 @@ fn main() {
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![focus::focus_terminal, watcher::get_agents, watcher::get_status_dir, watcher::install_hooks, tray::toggle_pin, tray::close_popup])
+        .invoke_handler(tauri::generate_handler![
+            focus::focus_terminal,
+            watcher::get_agents,
+            watcher::get_status_dir,
+            watcher::install_hooks,
+            tray::toggle_pin,
+            tray::close_popup
+        ])
         .build(tauri::generate_context!())
         .expect("AgentTray failed to build")
         .run(|_app, event| {

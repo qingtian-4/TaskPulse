@@ -1,29 +1,41 @@
-use std::path::{Path, PathBuf};
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+//! Watcher — the orchestration loop.
+//!
+//! Pipeline:  Provider → Normalize → Store → Transition Engine → Tray / UI
+//!
+//! * `LocalFileProvider`  — hook/wrapper status files (`~/.agent-monitor`,
+//!   `~/.taskpulse`), watched for changes.
+//! * `Scanner`           — local agent process scan (AgentTray's mature
+//!   implementation, converted to `TaskSnapshot`).
+//! * `RemoteTmuxProvider` — parallel SSH polling of Server1/Server3, on its
+//!   own thread so a slow host never blocks local updates.
+//!
+//! The `agents-updated` event contract, tray icon updates, and the popup
+//! commands are preserved from AgentTray.
 
-use crate::notifier::{CompositeNotifier, DesktopNotifier, SystemBeepNotifier};
+use std::path::PathBuf;
+use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant, SystemTime};
+
+use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
+use crate::providers::local_file::LocalFileProvider;
+use crate::providers::remote_tmux::{ssh::SystemSshExecutor, RemoteTmuxProvider};
+use crate::providers::{HostHealth, Provider, ProviderOutput};
+use crate::scanner::Scanner;
+use crate::store::TaskStore;
+use crate::transition::TransitionEngine;
 
 use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
-use crate::scanner::Scanner;
+// Backward-compat re-exports (scanner / heuristics / focusers reference these).
+pub use crate::domain::TerminalInfo;
+pub use crate::providers::local_file::status_from_legacy;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct TerminalInfo {
-    pub kind: String,
-    pub focus_id: String,
-    pub outer_id: String,
-    pub label: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub window_title: Option<String>,
-}
-
+/// Legacy AgentTray status type — kept so the scanner stack and heuristics
+/// keep working unchanged; converted to `TaskSnapshot` at the boundary.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentStatus {
-    /// Stable identity for dedup, list keying, and notification tracking.
-    /// For scanned agents: "scan:<tty_label>". For file-backed: "file:<stem>".
     pub id: String,
     pub name: String,
     pub status: String,
@@ -31,33 +43,65 @@ pub struct AgentStatus {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal: Option<TerminalInfo>,
     pub can_focus: bool,
-    /// CPU usage percentage (None for file-based agents without CPU data).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cpu: Option<f64>,
-    /// Detection source: "hook", "wrap", or "scan".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
-    /// Which CLI tool: "claude-code", "codex", "gemini".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cli: Option<String>,
-    /// Original session ID from the CLI.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// Hook event name (e.g. "Notification", "PreToolUse").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_event: Option<String>,
-    /// Hook matcher/subtype (e.g. "permission_prompt", "Bash").
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_matcher: Option<String>,
-    /// File modification time (for hook freshness checks). Internal only.
     #[serde(skip)]
-    pub mtime: Option<std::time::SystemTime>,
+    pub mtime: Option<SystemTime>,
 }
 
-pub fn status_dir() -> Option<PathBuf> {
-    dirs_next::home_dir().map(|h| h.join(".agent-monitor"))
+impl From<AgentStatus> for TaskSnapshot {
+    fn from(a: AgentStatus) -> Self {
+        let status = status_from_legacy(&a.status);
+        let confidence = match a.source.as_deref() {
+            Some("hook") | Some("wrap") => DetectionConfidence::Hook,
+            _ => DetectionConfidence::Inferred,
+        };
+        let source = match a.cli.as_deref() {
+            Some("codex") => TaskSource::Codex,
+            Some("claude-code") => TaskSource::ClaudeCode,
+            Some("gemini") => TaskSource::Gemini,
+            _ => TaskSource::LocalFile,
+        };
+        let now = SystemTime::now();
+        TaskSnapshot {
+            id: a.id,
+            name: a.name,
+            source,
+            status,
+            host: None,
+            project: None,
+            message: (!a.message.is_empty()).then_some(a.message),
+            started_at: None,
+            updated_at: a.mtime.unwrap_or(now),
+            finished_at: None,
+            pid: None,
+            exit_code: None,
+            confidence,
+            remote: false,
+            stale: false,
+            recent: false,
+            terminal: a.terminal,
+            can_focus: a.can_focus,
+            cpu: a.cpu,
+            cli: a.cli,
+            session_id: a.session_id,
+            hook_event: a.hook_event,
+            hook_matcher: a.hook_matcher,
+        }
+    }
 }
 
+/// Legacy numeric priority (scanner uses this for tty dedup).
 pub fn status_priority_num(status: &str) -> u8 {
     match status {
         "needs-input" => 0,
@@ -65,203 +109,50 @@ pub fn status_priority_num(status: &str) -> u8 {
         "working" => 2,
         "starting" => 3,
         "idle" => 4,
-        _ => 5, // offline or unknown
+        _ => 5,
     }
 }
 
-pub fn parse_status_file(path: &Path) -> Option<AgentStatus> {
-    let content = std::fs::read_to_string(path).ok()?;
-    let trimmed = content.trim();
-    if trimmed.is_empty() {
-        return None;
-    }
-
-    let name = path.file_stem()?.to_str()?.to_string();
-
-    if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
-        // Check version — skip unknown versions
-        if let Some(v) = val.get("v") {
-            if v.as_u64() != Some(1) {
-                return None;
-            }
-        }
-
-        let status = val.get("status")?.as_str()?.to_string();
-        let mut message = val
-            .get("message")
-            .and_then(|m| m.as_str())
-            .unwrap_or("")
-            .to_string();
-        if message.len() > 500 {
-            if let Some((idx, _)) = message.char_indices().nth(500) {
-                message.truncate(idx);
-            }
-        }
-
-        let terminal: Option<TerminalInfo> = val
-            .get("terminal")
-            .and_then(|t| serde_json::from_value(t.clone()).ok());
-
-        let can_focus = terminal
-            .as_ref()
-            .map(|t| !t.focus_id.is_empty() && t.focus_id != "0")
-            .unwrap_or(false);
-
-        let source = val.get("source").and_then(|s| s.as_str()).map(String::from);
-        let cli = val.get("cli").and_then(|s| s.as_str()).map(String::from);
-        let session_id = val.get("session_id").and_then(|s| s.as_str()).map(String::from);
-        let hook_event = val.get("hook_event").and_then(|s| s.as_str()).map(String::from);
-        let hook_matcher = val.get("hook_matcher").and_then(|s| s.as_str()).map(String::from);
-
-        // Derive a human-readable display name from cwd basename + terminal label,
-        // mirroring the "Project · Terminal" pattern used by scanned agents.
-        let cwd_project = val.get("cwd")
-            .and_then(|c| c.as_str())
-            .filter(|s| !s.is_empty())
-            .and_then(|cwd| std::path::Path::new(cwd).file_name())
-            .and_then(|n| n.to_str())
-            .map(|s| s.to_string());
-        let display_name = match (cwd_project, terminal.as_ref()) {
-            (Some(proj), Some(t)) if !t.label.is_empty() => format!("{} · {}", proj, t.label),
-            (Some(proj), _) => proj,
-            _ => name.clone(),
-        };
-
-        let id = format!("file:{}", name);
-        Some(AgentStatus {
-            id,
-            name: display_name,
-            status,
-            message,
-            terminal,
-            can_focus,
-            cpu: None,
-            source,
-            cli,
-            session_id,
-            hook_event,
-            hook_matcher,
-            mtime: None, // populated by read_all from file metadata
-        })
-    } else {
-        // Legacy pipe format: "status|message"
-        let (status, message) = match trimmed.split_once('|') {
-            Some((s, m)) => (s.to_string(), m.to_string()),
-            None => (trimmed.to_string(), String::new()),
-        };
-        let id = format!("file:{}", name);
-        Some(AgentStatus {
-            id,
-            name,
-            status,
-            message,
-            terminal: None,
-            can_focus: false,
-            cpu: None,
-            source: Some("wrap".into()),
-            cli: None,
-            session_id: None,
-            hook_event: None,
-            hook_matcher: None,
-            mtime: None, // populated by read_all from file metadata
-        })
-    }
+pub fn status_dir() -> Option<PathBuf> {
+    dirs_next::home_dir().map(|h| h.join(".agent-monitor"))
 }
 
-/// How long an offline/error status file can sit untouched before we hide it.
-const STALE_TTL: Duration = Duration::from_secs(10 * 60); // 10 minutes
+/// Cached latest merged task list for on-demand popup refresh.
+static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
 
-/// How long to wait after a hook file's last write before considering it
-/// orphaned when no matching live process exists.  This grace period avoids
-/// deleting files during brief process transitions (e.g. between hook events).
-const ORPHAN_GRACE: Duration = Duration::from_secs(15);
-
-fn read_all(dir: &Path) -> Vec<(PathBuf, AgentStatus)> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
-
-    let now = std::time::SystemTime::now();
-
-    let agents: Vec<(PathBuf, AgentStatus)> = entries
-        .filter_map(|entry| {
-            let entry = entry.ok()?;
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("status") {
-                return None;
-            }
-
-            let mut agent = parse_status_file(&path)?;
-
-            // Populate mtime from file metadata for hook freshness checks
-            let file_mtime = std::fs::metadata(&path).ok()
-                .and_then(|m| m.modified().ok());
-            agent.mtime = file_mtime;
-
-            // Clean up stale status files: if the file hasn't been written to
-            // in STALE_TTL, the session likely exited without sending
-            // SessionEnd.  Delete the orphaned file and skip it.
-            if let Some(mtime) = file_mtime {
-                if now.duration_since(mtime).unwrap_or_default() > STALE_TTL {
-                    if let Err(e) = std::fs::remove_file(&path) {
-                        log::warn!("Failed to clean up stale status file {:?}: {}", path, e);
-                    } else {
-                        log::info!("Cleaned up stale status file: {:?}", path);
-                    }
-                    return None;
-                }
-            }
-
-            Some((path, agent))
-        })
-        .collect();
-
-    agents
-}
-
-fn sort_agents(agents: &mut [AgentStatus]) {
-    agents.sort_by(|a, b| {
-        let pa = status_priority_num(&a.status);
-        let pb = status_priority_num(&b.status);
-        pa.cmp(&pb).then_with(|| a.name.cmp(&b.name))
-    });
-}
-
-/// Cached latest merged agent list for on-demand popup refresh.
-static LATEST_AGENTS: Mutex<Vec<AgentStatus>> = Mutex::new(Vec::new());
-static NOTIFIER: LazyLock<CompositeNotifier> = LazyLock::new(|| {
-    CompositeNotifier::new(vec![
-        Box::new(SystemBeepNotifier),
-        Box::new(DesktopNotifier),
-    ])
-});
-
-fn emit_agents(app: &AppHandle, agents: Vec<AgentStatus>) {
-    log::info!("emit_agents: {} agents", agents.len());
-    for a in &agents {
-        log::debug!("  agent: name={:?} status={:?}", a.name, a.status);
+fn emit_agents(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
+    log::info!("emit_agents: {} tasks, {} hosts", tasks.len(), hosts.len());
+    for t in tasks {
+        log::debug!(
+            "  task: name={:?} status={:?} conf={:?}",
+            t.name,
+            t.status,
+            t.confidence
+        );
     }
     {
-        let mut cache = LATEST_AGENTS.lock().unwrap_or_else(|e| {
-            log::warn!("LATEST_AGENTS mutex poisoned, recovering");
+        let mut cache = LATEST_TASKS.lock().unwrap_or_else(|e| {
+            log::warn!("LATEST_TASKS mutex poisoned, recovering");
             e.into_inner()
         });
-        crate::notifier::detect_and_notify(&cache, &agents, &*NOTIFIER, Some(app));
-        *cache = agents.clone();
+        *cache = tasks.to_vec();
     }
-    crate::tray::update_icon(app, &agents);
-    let _ = app.emit("agents-updated", &agents);
+    crate::tray::update_icon(app, tasks, hosts);
+    let _ = app.emit("agents-updated", tasks);
+    let _ = app.emit("hosts-updated", hosts);
 }
 
-/// Re-emit the last known agent list (used when popup opens).
+/// Re-emit the last known task list (used when popup opens).
 pub fn emit_latest(app: &AppHandle) {
-    let agents = LATEST_AGENTS.lock().unwrap_or_else(|e| {
-        log::warn!("LATEST_AGENTS mutex poisoned, recovering");
-        e.into_inner()
-    }).clone();
-    crate::tray::update_icon(app, &agents);
-    let _ = app.emit("agents-updated", &agents);
+    let tasks = LATEST_TASKS
+        .lock()
+        .unwrap_or_else(|e| {
+            log::warn!("LATEST_TASKS mutex poisoned, recovering");
+            e.into_inner()
+        })
+        .clone();
+    crate::tray::update_icon(app, &tasks, &[]);
+    let _ = app.emit("agents-updated", &tasks);
 }
 
 /// Tauri command: return the platform-appropriate status directory path.
@@ -272,36 +163,35 @@ pub fn get_status_dir() -> String {
         .unwrap_or_default()
 }
 
-/// Tauri command: return cached agents (called by frontend on mount).
+/// Tauri command: return cached tasks (called by frontend on mount).
 #[tauri::command]
-pub fn get_agents() -> Vec<AgentStatus> {
-    let agents = LATEST_AGENTS.lock().unwrap_or_else(|e| {
-        log::warn!("LATEST_AGENTS mutex poisoned, recovering");
-        e.into_inner()
-    }).clone();
-    log::info!("get_agents: returning {} agents", agents.len());
-    agents
+pub fn get_agents() -> Vec<TaskSnapshot> {
+    let tasks = LATEST_TASKS
+        .lock()
+        .unwrap_or_else(|e| {
+            log::warn!("LATEST_TASKS mutex poisoned, recovering");
+            e.into_inner()
+        })
+        .clone();
+    log::info!("get_agents: returning {} tasks", tasks.len());
+    tasks
 }
 
-/// Tauri command: install or uninstall AgentTray hooks for a CLI tool.
-/// `cli` should be "claude", "codex", "gemini", or "all".
-/// Set `uninstall` to true to remove hooks instead.
+/// Tauri command: install or uninstall AgentTray/TaskPulse hooks for a CLI
+/// tool. `cli` = "claude", "codex", "gemini", or "all"; `uninstall` removes.
 #[tauri::command]
 pub fn install_hooks(cli: String, uninstall: bool) -> Result<String, String> {
     let base_dir = std::env::current_exe()
         .ok()
         .and_then(|p| p.parent().map(|d| d.to_path_buf()))
         .and_then(|dir| {
-            // In dev mode, scripts are relative to the project root
-            // In production, they're bundled as resources
             dir.ancestors()
                 .find(|d| d.join("scripts").exists())
                 .map(|d| d.to_path_buf())
-                .or_else(|| Some(dir))
+                .or(Some(dir))
         })
         .ok_or_else(|| "Could not locate scripts directory".to_string())?;
 
-    // On Windows, prefer PowerShell installer; fall back to bash
     let (program, script) = if cfg!(target_os = "windows") {
         let ps1 = base_dir.join("scripts/hooks/install-hooks.ps1");
         if ps1.exists() {
@@ -334,211 +224,201 @@ pub fn install_hooks(cli: String, uninstall: bool) -> Result<String, String> {
         }
     }
 
-    let output = cmd.output().map_err(|e| format!("Failed to run installer: {}", e))?;
-
+    let output = cmd
+        .output()
+        .map_err(|e| format!("Failed to run installer: {e}"))?;
     let stdout = String::from_utf8_lossy(&output.stdout).to_string();
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if output.status.success() {
-        log::info!("Hook installation succeeded for '{}': {}", cli, stdout.trim());
+        log::info!("Hook installation succeeded for '{cli}': {}", stdout.trim());
         Ok(stdout)
     } else {
         let msg = if stderr.is_empty() { &stdout } else { &stderr };
-        log::error!("Hook installation failed for '{}': {}", cli, msg.trim());
+        log::error!("Hook installation failed for '{cli}': {}", msg.trim());
         Err(format!("Installation failed: {}", msg.trim()))
     }
 }
 
-/// Source priority for dedup: hook beats wrap beats scan (lower = higher priority).
-fn source_priority(source: Option<&str>) -> u8 {
-    match source {
-        Some("hook") => 0,
-        Some("wrap") => 1,
-        Some("scan") => 2,
-        _ => 1, // default to wrap-level for legacy files without source
-    }
-}
+/// Cross-provider dedup: when a hook/file task and a scan task share the same
+/// terminal focus_id and CLI, keep the higher-confidence one (hook beats
+/// scan) and drop the duplicate.  Mirrors AgentTray's focus_id budget logic
+/// for the common case.
+#[allow(clippy::ptr_arg)]
+fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
+    let mut keep = vec![true; tasks.len()];
+    let mut best: std::collections::HashMap<(String, String), usize> =
+        std::collections::HashMap::new();
 
-fn read_and_emit_merged(app: &AppHandle, dir: &Path, scanned: &[AgentStatus]) {
-    let file_agents_with_paths = read_all(dir);
-
-    // Collect live session IDs from scanned processes for orphan detection.
-    // Also track CLI types whose session IDs could not be read (read_proc_env
-    // can fail due to SIP, timing, etc.).  When a CLI type has unidentified
-    // processes we cannot safely orphan-check its hook files.
-    let live_session_ids: std::collections::HashSet<&str> = scanned
-        .iter()
-        .filter_map(|a| a.session_id.as_deref())
-        .collect();
-    let unidentified_clis: std::collections::HashSet<&str> = scanned
-        .iter()
-        .filter(|a| a.session_id.is_none())
-        .filter_map(|a| a.cli.as_deref())
-        .collect();
-
-    // Remove orphaned hook files: hook-sourced files whose session_id
-    // doesn't match any live process and whose mtime exceeds the grace
-    // period.  This catches sessions that exited without sending SessionEnd.
-    // Skip cleanup for CLI types where the scanner has processes with
-    // unknown session IDs — we can't be sure those aren't the same session.
-    let now = std::time::SystemTime::now();
-    let file_agents_with_paths: Vec<_> = file_agents_with_paths
-        .into_iter()
-        .filter(|(path, agent)| {
-            let is_hook = agent.source.as_deref() == Some("hook");
-            let has_session = agent.session_id.is_some();
-            let cli_identifiable = agent
-                .cli
-                .as_deref()
-                .map(|c| !unidentified_clis.contains(c))
-                .unwrap_or(false);
-            let session_live = agent
-                .session_id
-                .as_deref()
-                .map(|sid| live_session_ids.contains(sid))
-                .unwrap_or(false);
-
-            if is_hook && has_session && cli_identifiable && !session_live {
-                let age = agent.mtime
-                    .and_then(|mt| now.duration_since(mt).ok())
-                    .unwrap_or_default();
-                if age > ORPHAN_GRACE {
-                    if let Err(e) = std::fs::remove_file(path) {
-                        log::warn!("Failed to clean up orphaned hook file {:?}: {}", path, e);
-                    } else {
-                        log::info!("Cleaned up orphaned hook file: {:?} (session {} not found in live processes)", path, agent.session_id.as_deref().unwrap_or("?"));
-                    }
-                    return false;
+    for (i, t) in tasks.iter().enumerate() {
+        let Some(term) = &t.terminal else { continue };
+        if term.focus_id.is_empty() || term.focus_id == "0" {
+            continue;
+        }
+        let cli = t.cli.clone().unwrap_or_default();
+        let key = (term.focus_id.clone(), cli);
+        match best.get(&key) {
+            Some(&prev) => {
+                let prev_conf = tasks[prev].confidence;
+                let cur_conf = t.confidence;
+                if cur_conf < prev_conf {
+                    keep[prev] = false;
+                    best.insert(key, i);
+                } else if cur_conf == prev_conf {
+                    // Same confidence: distinct sessions in one window — keep both.
+                    continue;
+                } else {
+                    keep[i] = false;
                 }
             }
-            true
-        })
-        .collect();
-
-    let file_agents: Vec<AgentStatus> = file_agents_with_paths
-        .into_iter()
-        .map(|(_, a)| a)
-        .collect();
-
-    // Dedup file agents: when multiple files share the same focus_id
-    // AND have different source priorities, keep the higher-priority one
-    // (hook > wrap). Same-priority files are distinct sessions (e.g.,
-    // multiple hooks in different tabs of one terminal window share an
-    // X11 window ID but represent separate agents).
-    let mut by_focus: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    let mut keep = vec![true; file_agents.len()];
-
-    for (i, a) in file_agents.iter().enumerate() {
-        let fid = a.terminal.as_ref()
-            .map(|t| t.focus_id.as_str())
-            .unwrap_or("");
-        if fid.is_empty() || fid == "0" {
-            continue; // no focus_id — always keep
-        }
-        if let Some(&prev_idx) = by_focus.get(fid) {
-            let prev_prio = source_priority(file_agents[prev_idx].source.as_deref());
-            let cur_prio = source_priority(a.source.as_deref());
-            if cur_prio == prev_prio {
-                // Same source type — distinct sessions, keep both
-                continue;
-            }
-            if cur_prio < prev_prio {
-                keep[prev_idx] = false;
-                by_focus.insert(fid.to_string(), i);
-            } else {
-                keep[i] = false;
-            }
-        } else {
-            by_focus.insert(fid.to_string(), i);
-        }
-    }
-
-    let deduped_files: Vec<AgentStatus> = file_agents.into_iter()
-        .enumerate()
-        .filter(|(i, _)| keep[*i])
-        .map(|(_, a)| a)
-        .collect();
-
-    // Budget-based scan suppression: each file agent "claims" one scan
-    // slot per focus_id. Extra scanned agents (from additional terminal
-    // tabs sharing the same window ID) pass through.
-    let mut file_focus_budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-    for a in &deduped_files {
-        if let Some(t) = &a.terminal {
-            if !t.focus_id.is_empty() && t.focus_id != "0" {
-                *file_focus_budget.entry(t.focus_id.clone()).or_insert(0) += 1;
+            None => {
+                best.insert(key, i);
             }
         }
     }
 
-    let mut agents = deduped_files;
-    for s in scanned {
-        let fid = s.terminal.as_ref()
-            .map(|t| t.focus_id.as_str())
-            .unwrap_or("");
-        let suppress = if !fid.is_empty() && fid != "0" {
-            if let Some(budget) = file_focus_budget.get_mut(fid) {
-                if *budget > 0 { *budget -= 1; true } else { false }
-            } else { false }
-        } else { false };
-        if !suppress {
-            agents.push(s.clone());
+    let mut out = Vec::with_capacity(tasks.len());
+    for (i, t) in tasks.drain(..).enumerate() {
+        if keep[i] {
+            out.push(t);
         }
     }
+    *tasks = out;
+}
 
-    // Cross-validate hook statuses against scanner data (second heuristic layer)
-    crate::heuristics::cross_validate(&mut agents, scanned);
+/// Merge provider output into the store, run the transition engine, notify,
+/// and emit to tray + UI.
+fn merge_and_emit(
+    app: &AppHandle,
+    store: &mut TaskStore,
+    engine: &mut TransitionEngine,
+    tasks: Vec<TaskSnapshot>,
+    hosts: &[HostHealth],
+    now: SystemTime,
+) {
+    let merged = store.merge(tasks, now);
+    let events = engine.apply(&merged, hosts, now);
+    for e in &events {
+        log::info!("transition event: {e:?}");
+    }
+    crate::notifier::handle_events(app, &events, &merged);
+    emit_agents(app, &merged, hosts);
+}
 
-    sort_agents(&mut agents);
-    emit_agents(app, agents);
+/// Refresh local sources (file provider + scanner), dedup, and emit.
+fn refresh_local(
+    app: &AppHandle,
+    store: &mut TaskStore,
+    engine: &mut TransitionEngine,
+    file_provider: &mut LocalFileProvider,
+    scanner: &mut Scanner,
+    hosts: &[HostHealth],
+    now: SystemTime,
+) {
+    let mut tasks = file_provider.poll(now).tasks;
+    let scanned_agents = scanner.scan();
+    let scanned: Vec<TaskSnapshot> = scanned_agents.iter().cloned().map(Into::into).collect();
+    // Second heuristic layer: cross-validate hook file statuses against live
+    // process data (stale "working" hooks, missed activity, etc.).
+    crate::heuristics::cross_validate_tasks(&mut tasks, &scanned);
+    tasks.extend(scanned);
+    dedup_by_terminal(&mut tasks);
+    merge_and_emit(app, store, engine, tasks, hosts, now);
+}
+
+fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
+    let cfg = provider.config_for_poll();
+    let min_ms = cfg.iter().map(|h| h.poll_interval_ms).min().unwrap_or(3000);
+    Duration::from_millis(min_ms.max(500))
 }
 
 pub fn watch(app: AppHandle) {
-    let dir = match status_dir() {
-        Some(d) => d,
-        None => {
-            log::error!("Could not determine home directory");
-            return;
-        }
-    };
-
-    if let Err(e) = std::fs::create_dir_all(&dir) {
-        log::error!("Failed to create {:?}: {}", dir, e);
-        return;
+    // Ensure status directories exist.
+    if let Some(dir) = status_dir() {
+        let _ = std::fs::create_dir_all(&dir);
+    }
+    if let Some(dir) = dirs_next::home_dir().map(|h| h.join(".taskpulse")) {
+        let _ = std::fs::create_dir_all(&dir);
     }
 
+    let mut store = TaskStore::default();
+    let mut engine = TransitionEngine::new();
+    let mut file_provider = LocalFileProvider::new();
     let mut scanner = Scanner::new();
     let scan_interval = Duration::from_secs(2);
 
-    // Initial emit with first scan
-    let scanned = scanner.scan();
-    read_and_emit_merged(&app, &dir, &scanned);
-    let mut latest_scan = scanned;
+    // Remote polling on its own thread (SSH can block for seconds).
+    let mut remote = RemoteTmuxProvider::from_config(Arc::new(SystemSshExecutor::new()));
+    let remote_interval = remote_interval_ms(&remote);
+    let (remote_tx, remote_rx) = std::sync::mpsc::channel::<ProviderOutput>();
+    std::thread::spawn(move || {
+        log::info!("Remote tmux poller started (interval {remote_interval:?})");
+        loop {
+            let now = SystemTime::now();
+            let out = remote.poll(now);
+            if remote_tx.send(out).is_err() {
+                log::warn!("Remote poller channel closed, exiting");
+                break;
+            }
+            std::thread::sleep(remote_interval);
+        }
+    });
+
+    // Last known host health (kept so local refreshes don't lose it).
+    let mut hosts: Vec<HostHealth> = Vec::new();
+
+    // Initial full refresh.
+    let now = SystemTime::now();
+    refresh_local(
+        &app,
+        &mut store,
+        &mut engine,
+        &mut file_provider,
+        &mut scanner,
+        &hosts,
+        now,
+    );
+
+    let dir = file_provider.primary_dir();
 
     // Outer restart loop: recreates the file watcher whenever the channel
-    // disconnects (e.g. inotify watch limit exhausted, OS resource pressure).
-    // Scanner state (CPU history, caches) is preserved across restarts.
+    // disconnects (inotify watch limit exhausted, OS resource pressure).
     loop {
         let (tx, rx) = std::sync::mpsc::channel();
         let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
             Ok(w) => w,
             Err(e) => {
-                log::error!("Failed to create file watcher: {}", e);
+                log::error!("Failed to create file watcher: {e}");
                 log::info!("Falling back to scan-only mode");
                 loop {
                     std::thread::sleep(scan_interval);
-                    latest_scan = scanner.scan();
-                    read_and_emit_merged(&app, &dir, &latest_scan);
+                    let now = SystemTime::now();
+                    refresh_local(
+                        &app,
+                        &mut store,
+                        &mut engine,
+                        &mut file_provider,
+                        &mut scanner,
+                        &hosts,
+                        now,
+                    );
+                    while let Ok(out) = remote_rx.try_recv() {
+                        hosts = out.hosts.clone();
+                        merge_and_emit(&app, &mut store, &mut engine, out.tasks, &out.hosts, now);
+                    }
                 }
             }
         };
 
         if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-            log::error!("Failed to watch {:?}: {}", dir, e);
+            log::error!("Failed to watch {:?}: {e}", dir);
             return;
         }
 
-        log::info!("Watching {:?} + scanning /proc for live agents", dir);
+        log::info!(
+            "Watching {:?} + scanning processes + polling remote hosts",
+            dir
+        );
 
         let debounce = Duration::from_millis(50);
         let mut last_emit = Instant::now() - debounce;
@@ -552,23 +432,47 @@ pub fn watch(app: AppHandle) {
                         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                     ) && last_emit.elapsed() >= debounce
                     {
-                        read_and_emit_merged(&app, &dir, &latest_scan);
+                        let now = SystemTime::now();
+                        refresh_local(
+                            &app,
+                            &mut store,
+                            &mut engine,
+                            &mut file_provider,
+                            &mut scanner,
+                            &hosts,
+                            now,
+                        );
                         last_emit = Instant::now();
                     }
                 }
-                Ok(Err(e)) => log::warn!("Watch error: {}", e),
+                Ok(Err(e)) => log::warn!("Watch error: {e}"),
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
                     log::warn!("File watcher channel disconnected, restarting watcher in 2s");
                     std::thread::sleep(Duration::from_secs(2));
-                    break; // break inner loop → restart outer loop
+                    break;
                 }
             }
 
-            // Periodic process scan
+            // Drain remote poll results (parallel SSH polling thread).
+            while let Ok(out) = remote_rx.try_recv() {
+                let now = SystemTime::now();
+                hosts = out.hosts.clone();
+                merge_and_emit(&app, &mut store, &mut engine, out.tasks, &out.hosts, now);
+            }
+
+            // Periodic local process scan.
             if last_scan.elapsed() >= scan_interval {
-                latest_scan = scanner.scan();
-                read_and_emit_merged(&app, &dir, &latest_scan);
+                let now = SystemTime::now();
+                refresh_local(
+                    &app,
+                    &mut store,
+                    &mut engine,
+                    &mut file_provider,
+                    &mut scanner,
+                    &hosts,
+                    now,
+                );
                 last_scan = Instant::now();
                 last_emit = Instant::now();
             }
@@ -579,307 +483,131 @@ pub fn watch(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
+    use crate::domain::{DetectionConfidence, TaskStatus};
 
-    fn write_temp(content: &str) -> NamedTempFile {
-        let mut f = NamedTempFile::new().unwrap();
-        f.write_all(content.as_bytes()).unwrap();
-        f
+    fn task_with_terminal(
+        id: &str,
+        status: TaskStatus,
+        conf: DetectionConfidence,
+        focus_id: &str,
+        cli: Option<&str>,
+    ) -> TaskSnapshot {
+        let mut t = TaskSnapshot::new(
+            id,
+            id,
+            TaskSource::LocalFile,
+            status,
+            conf,
+            SystemTime::now(),
+        );
+        t.terminal = Some(TerminalInfo {
+            kind: "windows_native".into(),
+            focus_id: focus_id.into(),
+            outer_id: String::new(),
+            label: "Windows Terminal".into(),
+            window_title: None,
+        });
+        t.cli = cli.map(|s| s.to_string());
+        t
     }
 
     #[test]
-    fn parse_valid_json_status() {
-        let json = r#"{"v":1,"status":"working","message":"Running...","terminal":{"kind":"iterm2","focus_id":"w0t0p0:ABC","outer_id":"","label":"iTerm2"}}"#;
-        let f = write_temp(json);
-        let result = parse_status_file(f.path()).unwrap();
-        assert_eq!(result.status, "working");
-        assert_eq!(result.message, "Running...");
-        assert_eq!(result.terminal.as_ref().unwrap().kind, "iterm2");
-        assert!(result.can_focus);
+    fn dedup_hook_beats_scan_same_focus_and_cli() {
+        let mut tasks = vec![
+            task_with_terminal(
+                "file:codex",
+                TaskStatus::WaitingInput,
+                DetectionConfidence::Hook,
+                "0x1234",
+                Some("codex"),
+            ),
+            task_with_terminal(
+                "scan:pts/1",
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "0x1234",
+                Some("codex"),
+            ),
+        ];
+        dedup_by_terminal(&mut tasks);
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, "file:codex");
     }
 
     #[test]
-    fn parse_legacy_pipe_format() {
-        let f = write_temp("working|Running tests...");
-        let result = parse_status_file(f.path()).unwrap();
-        assert_eq!(result.status, "working");
-        assert_eq!(result.message, "Running tests...");
-        assert!(result.terminal.is_none());
-        assert!(!result.can_focus);
+    fn dedup_keeps_distinct_sessions_same_focus() {
+        // Two hook files in different tabs of one terminal window.
+        let mut tasks = vec![
+            task_with_terminal(
+                "file:a",
+                TaskStatus::Running,
+                DetectionConfidence::Hook,
+                "0x3800005",
+                Some("claude-code"),
+            ),
+            task_with_terminal(
+                "file:b",
+                TaskStatus::WaitingInput,
+                DetectionConfidence::Hook,
+                "0x3800005",
+                Some("claude-code"),
+            ),
+        ];
+        dedup_by_terminal(&mut tasks);
+        assert_eq!(tasks.len(), 2);
     }
 
     #[test]
-    fn parse_empty_file_returns_none() {
-        let f = write_temp("   \n");
-        assert!(parse_status_file(f.path()).is_none());
+    fn dedup_ignores_different_cli() {
+        let mut tasks = vec![
+            task_with_terminal(
+                "file:codex",
+                TaskStatus::WaitingInput,
+                DetectionConfidence::Hook,
+                "0x1234",
+                Some("codex"),
+            ),
+            task_with_terminal(
+                "scan:pts/1",
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "0x1234",
+                Some("gemini"),
+            ),
+        ];
+        dedup_by_terminal(&mut tasks);
+        assert_eq!(tasks.len(), 2);
     }
 
     #[test]
-    fn parse_unknown_version_skipped() {
-        let json = r#"{"v":99,"status":"working","message":"hi"}"#;
-        let f = write_temp(json);
-        assert!(parse_status_file(f.path()).is_none());
-    }
-
-    #[test]
-    fn can_focus_false_when_terminal_absent() {
-        let f = write_temp(r#"{"v":1,"status":"idle","message":""}"#);
-        let result = parse_status_file(f.path()).unwrap();
-        assert!(!result.can_focus);
-    }
-
-    #[test]
-    fn can_focus_false_when_focus_id_empty() {
-        let f = write_temp(r#"{"v":1,"status":"idle","message":"","terminal":{"kind":"x11_generic","focus_id":"","outer_id":"","label":"Terminal"}}"#);
-        let result = parse_status_file(f.path()).unwrap();
-        assert!(!result.can_focus);
-    }
-
-    fn test_agent(id: &str, name: &str, status: &str) -> AgentStatus {
-        AgentStatus {
-            id: id.into(), name: name.into(), status: status.into(), message: "".into(),
-            terminal: None, can_focus: false, cpu: None,
-            source: None, cli: None, session_id: None, hook_event: None, hook_matcher: None,
+    fn agent_status_converts_to_snapshot() {
+        let a = AgentStatus {
+            id: "scan:pts/1".into(),
+            name: "proj · Windows Terminal".into(),
+            status: "needs-input".into(),
+            message: "permission".into(),
+            terminal: None,
+            can_focus: false,
+            cpu: Some(1.5),
+            source: Some("scan".into()),
+            cli: Some("codex".into()),
+            session_id: Some("abc".into()),
+            hook_event: None,
+            hook_matcher: None,
             mtime: None,
-        }
-    }
-
-    fn test_agent_with_terminal(id: &str, name: &str, status: &str, focus_id: &str, label: &str, source: Option<&str>) -> AgentStatus {
-        AgentStatus {
-            id: id.into(), name: name.into(), status: status.into(), message: "".into(),
-            terminal: Some(TerminalInfo {
-                kind: "x11_generic".into(), focus_id: focus_id.into(),
-                outer_id: "".into(), label: label.into(), window_title: None,
-            }),
-            can_focus: !focus_id.is_empty(),
-            cpu: None,
-            source: source.map(|s| s.into()),
-            cli: None, session_id: None, hook_event: None, hook_matcher: None,
-            mtime: None,
-        }
+        };
+        let t: TaskSnapshot = a.into();
+        assert_eq!(t.status, TaskStatus::WaitingInput);
+        assert_eq!(t.source, TaskSource::Codex);
+        assert_eq!(t.confidence, DetectionConfidence::Inferred);
+        assert_eq!(t.message.as_deref(), Some("permission"));
+        assert_eq!(t.cpu, Some(1.5));
     }
 
     #[test]
-    fn sort_needs_input_before_working() {
-        let mut agents = vec![
-            test_agent("t:b", "b", "working"),
-            test_agent("t:a", "a", "needs-input"),
-            test_agent("t:c", "c", "idle"),
-        ];
-        sort_agents(&mut agents);
-        assert_eq!(agents[0].status, "needs-input");
-        assert_eq!(agents[1].status, "working");
-        assert_eq!(agents[2].status, "idle");
+    fn legacy_priority_order_preserved() {
+        assert!(status_priority_num("needs-input") < status_priority_num("error"));
+        assert!(status_priority_num("error") < status_priority_num("working"));
+        assert!(status_priority_num("working") < status_priority_num("idle"));
     }
-
-    #[test]
-    fn dedup_scanned_when_file_agent_has_same_focus_id() {
-        let file_agent = test_agent_with_terminal("file:myagent", "myagent", "working", "0x1234", "Kitty", Some("wrap"));
-        let scanned_dup = test_agent_with_terminal("scan:pts/1", "Project · Kitty · pts/1", "idle", "0x1234", "Kitty", Some("scan"));
-        let scanned_unique = test_agent_with_terminal("scan:pts/2", "Other · Alacritty", "working", "0x5678", "Alacritty", Some("scan"));
-
-        let file_agents = vec![file_agent.clone()];
-        let scanned = vec![scanned_dup, scanned_unique.clone()];
-
-        // Budget-based suppression: 1 file agent with 0x1234 → budget 1
-        let mut budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for a in &file_agents {
-            if let Some(t) = &a.terminal {
-                if !t.focus_id.is_empty() {
-                    *budget.entry(t.focus_id.clone()).or_insert(0) += 1;
-                }
-            }
-        }
-
-        let mut agents = file_agents;
-        for s in &scanned {
-            let fid = s.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
-            let suppress = if !fid.is_empty() {
-                if let Some(b) = budget.get_mut(fid) {
-                    if *b > 0 { *b -= 1; true } else { false }
-                } else { false }
-            } else { false };
-            if !suppress {
-                agents.push(s.clone());
-            }
-        }
-
-        assert_eq!(agents.len(), 2);
-        assert_eq!(agents[0].name, "myagent");
-        assert_eq!(agents[1].name, "Other · Alacritty");
-    }
-
-    #[test]
-    fn dedup_hook_beats_wrap_same_focus_id() {
-        // hook source should beat wrap source when they share a focus_id
-        assert!(source_priority(Some("hook")) < source_priority(Some("wrap")));
-        assert!(source_priority(Some("wrap")) < source_priority(Some("scan")));
-    }
-
-    #[test]
-    fn two_hooks_same_focus_id_both_kept() {
-        // Multiple hook files in different tabs of the same terminal
-        // share a focus_id but should NOT be deduped against each other
-        let file_agents = vec![
-            test_agent_with_terminal("file:claude-code-aaa", "session-a", "working", "0x3800005", "Warp", Some("hook")),
-            test_agent_with_terminal("file:claude-code-bbb", "session-b", "needs-input", "0x3800005", "Warp", Some("hook")),
-        ];
-
-        let mut by_focus: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut keep = vec![true; file_agents.len()];
-
-        for (i, a) in file_agents.iter().enumerate() {
-            let fid = a.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
-            if fid.is_empty() || fid == "0" { continue; }
-            if let Some(&prev_idx) = by_focus.get(fid) {
-                let prev_prio = source_priority(file_agents[prev_idx].source.as_deref());
-                let cur_prio = source_priority(a.source.as_deref());
-                if cur_prio == prev_prio {
-                    continue; // Same source type — distinct sessions
-                }
-                if cur_prio < prev_prio {
-                    keep[prev_idx] = false;
-                    by_focus.insert(fid.to_string(), i);
-                } else {
-                    keep[i] = false;
-                }
-            } else {
-                by_focus.insert(fid.to_string(), i);
-            }
-        }
-
-        // Both should survive
-        assert!(keep[0]);
-        assert!(keep[1]);
-    }
-
-    #[test]
-    fn hook_beats_wrap_same_focus_id_in_dedup() {
-        // A hook and a wrap file for the same focus_id: wrap gets killed
-        let file_agents = vec![
-            test_agent_with_terminal("file:wrapped", "wrapped", "idle", "0x1234", "Kitty", Some("wrap")),
-            test_agent_with_terminal("file:hooked", "hooked", "working", "0x1234", "Kitty", Some("hook")),
-        ];
-
-        let mut by_focus: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        let mut keep = vec![true; file_agents.len()];
-
-        for (i, a) in file_agents.iter().enumerate() {
-            let fid = a.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
-            if fid.is_empty() || fid == "0" { continue; }
-            if let Some(&prev_idx) = by_focus.get(fid) {
-                let prev_prio = source_priority(file_agents[prev_idx].source.as_deref());
-                let cur_prio = source_priority(a.source.as_deref());
-                if cur_prio == prev_prio { continue; }
-                if cur_prio < prev_prio {
-                    keep[prev_idx] = false;
-                    by_focus.insert(fid.to_string(), i);
-                } else {
-                    keep[i] = false;
-                }
-            } else {
-                by_focus.insert(fid.to_string(), i);
-            }
-        }
-
-        assert!(!keep[0]); // wrap killed
-        assert!(keep[1]);  // hook survives
-    }
-
-    #[test]
-    fn budget_suppresses_matching_count_of_scans() {
-        // 2 file agents with same focus_id → budget 2 → suppress 2 scans
-        let file_agents = vec![
-            test_agent_with_terminal("file:a", "a", "working", "0x3800005", "Warp", Some("hook")),
-            test_agent_with_terminal("file:b", "b", "idle", "0x3800005", "Warp", Some("hook")),
-        ];
-        let scanned = vec![
-            test_agent_with_terminal("scan:pts/1", "scan1", "idle", "0x3800005", "Warp", Some("scan")),
-            test_agent_with_terminal("scan:pts/2", "scan2", "idle", "0x3800005", "Warp", Some("scan")),
-        ];
-
-        let mut budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for a in &file_agents {
-            if let Some(t) = &a.terminal {
-                if !t.focus_id.is_empty() && t.focus_id != "0" {
-                    *budget.entry(t.focus_id.clone()).or_insert(0) += 1;
-                }
-            }
-        }
-
-        let mut agents = file_agents;
-        for s in &scanned {
-            let fid = s.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
-            let suppress = if !fid.is_empty() && fid != "0" {
-                if let Some(b) = budget.get_mut(fid) {
-                    if *b > 0 { *b -= 1; true } else { false }
-                } else { false }
-            } else { false };
-            if !suppress { agents.push(s.clone()); }
-        }
-
-        // Both scans suppressed, only the 2 file agents remain
-        assert_eq!(agents.len(), 2);
-    }
-
-    #[test]
-    fn budget_allows_extra_scans_through() {
-        // 1 file agent → budget 1, but 2 scanned with same focus_id
-        // → 1 suppressed, 1 passes through
-        let file_agents = vec![
-            test_agent_with_terminal("file:a", "a", "working", "0x3800005", "Warp", Some("hook")),
-        ];
-        let scanned = vec![
-            test_agent_with_terminal("scan:pts/1", "scan1", "idle", "0x3800005", "Warp", Some("scan")),
-            test_agent_with_terminal("scan:pts/2", "scan2", "idle", "0x3800005", "Warp", Some("scan")),
-        ];
-
-        let mut budget: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
-        for a in &file_agents {
-            if let Some(t) = &a.terminal {
-                if !t.focus_id.is_empty() && t.focus_id != "0" {
-                    *budget.entry(t.focus_id.clone()).or_insert(0) += 1;
-                }
-            }
-        }
-
-        let mut agents = file_agents;
-        for s in &scanned {
-            let fid = s.terminal.as_ref().map(|t| t.focus_id.as_str()).unwrap_or("");
-            let suppress = if !fid.is_empty() && fid != "0" {
-                if let Some(b) = budget.get_mut(fid) {
-                    if *b > 0 { *b -= 1; true } else { false }
-                } else { false }
-            } else { false };
-            if !suppress { agents.push(s.clone()); }
-        }
-
-        // 1 file agent + 1 extra scan = 2 total
-        assert_eq!(agents.len(), 2);
-        assert_eq!(agents[0].name, "a");
-        assert_eq!(agents[1].name, "scan2");
-    }
-
-    #[test]
-    fn parse_hook_source_fields() {
-        let json = r#"{"v":1,"status":"needs-input","message":"Waiting for permission","source":"hook","cli":"claude-code","session_id":"abc123","hook_event":"Notification","hook_matcher":"permission_prompt","terminal":{"kind":"x11_generic","focus_id":"12345:999","outer_id":"","label":"Kitty"}}"#;
-        let f = write_temp(json);
-        let result = parse_status_file(f.path()).unwrap();
-        assert_eq!(result.source.as_deref(), Some("hook"));
-        assert_eq!(result.cli.as_deref(), Some("claude-code"));
-        assert_eq!(result.session_id.as_deref(), Some("abc123"));
-        assert_eq!(result.hook_event.as_deref(), Some("Notification"));
-        assert_eq!(result.hook_matcher.as_deref(), Some("permission_prompt"));
-    }
-
-    #[test]
-    fn message_truncated_at_500_chars() {
-        let long_msg = "x".repeat(600);
-        let json = format!(r#"{{"v":1,"status":"working","message":"{}"}}"#, long_msg);
-        let f = write_temp(&json);
-        let result = parse_status_file(f.path()).unwrap();
-        assert!(result.message.len() <= 500);
-    }
-
 }

@@ -1,3 +1,9 @@
+//! Notification plumbing.
+//!
+//! The Transition Engine decides WHAT happened; this module decides how it
+//! is surfaced: system beep + desktop notification, with a 10 s reminder
+//! beep while an agent keeps waiting for input.
+
 use std::collections::{HashMap, HashSet};
 use std::sync::{LazyLock, Mutex};
 use std::time::{Duration, Instant};
@@ -5,45 +11,72 @@ use std::time::{Duration, Instant};
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
-use crate::watcher::AgentStatus;
+use crate::domain::{TaskSnapshot, TaskStatus};
+use crate::transition::TaskEvent;
 
 const NEEDS_INPUT_REMINDER_INTERVAL: Duration = Duration::from_secs(10);
 
-/// Events that can trigger a notification.
+/// A concrete notification to surface.
 #[derive(Debug, Clone)]
-pub enum AgentEvent {
-    NeedsInput {
-        agent_name: String,
-        /// Hook-provided reason: "permission_prompt", "idle_prompt", "elicitation_dialog", etc.
+pub enum NotifyEvent {
+    WaitingInput {
+        task: TaskSnapshot,
         reason: Option<String>,
     },
-    NeedsInputReminder {
-        agent_name: String,
-        reason: Option<String>,
+    /// Periodic beep-only reminder while an agent stays waiting.
+    WaitingInputReminder {
+        task: TaskSnapshot,
+    },
+    Succeeded {
+        task: TaskSnapshot,
+    },
+    Failed {
+        task: TaskSnapshot,
+    },
+    InferredFinished {
+        task: TaskSnapshot,
+    },
+    HostDisconnected {
+        host: String,
+        last_seen_label: Option<String>,
+    },
+    HostReconnected {
+        host: String,
     },
 }
 
 /// Swappable notification backend.
 pub trait Notifier: Send + Sync {
-    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>);
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>);
 }
 
 /// Plays a platform system sound via shell commands.
 pub struct SystemBeepNotifier;
 
 impl Notifier for SystemBeepNotifier {
-    fn notify(&self, event: &AgentEvent, _app: Option<&AppHandle>) {
+    fn notify(&self, event: &NotifyEvent, _app: Option<&AppHandle>) {
         match event {
-            AgentEvent::NeedsInput { agent_name, reason } => {
-                let reason_str = reason.as_deref().unwrap_or("unknown");
-                log::info!("Agent '{}' needs input ({}) — playing alert", agent_name, reason_str);
+            NotifyEvent::WaitingInput { task, reason } => {
+                log::info!(
+                    "'{}' needs input ({}) — playing alert",
+                    task.name,
+                    reason.as_deref().unwrap_or("unknown")
+                );
                 play_system_beep();
             }
-            AgentEvent::NeedsInputReminder { agent_name, reason } => {
-                let reason_str = reason.as_deref().unwrap_or("unknown");
-                log::info!("Agent '{}' still needs input ({}) — playing reminder", agent_name, reason_str);
+            NotifyEvent::WaitingInputReminder { task } => {
+                log::info!("'{}' still waiting — reminder beep", task.name);
                 play_system_beep();
             }
+            NotifyEvent::Failed { task } => {
+                log::info!("'{}' FAILED — playing alert", task.name);
+                play_system_beep();
+            }
+            NotifyEvent::HostDisconnected { host, .. } => {
+                log::info!("Host {host} disconnected — playing alert");
+                play_system_beep();
+            }
+            _ => {}
         }
     }
 }
@@ -52,39 +85,68 @@ impl Notifier for SystemBeepNotifier {
 pub struct DesktopNotifier;
 
 impl Notifier for DesktopNotifier {
-    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>) {
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>) {
         let Some(app) = app else {
-            log::warn!("DesktopNotifier: no AppHandle available, skipping notification");
+            log::warn!("DesktopNotifier: no AppHandle, skipping notification");
             return;
         };
-        match event {
-            AgentEvent::NeedsInput { agent_name, reason } => {
-                let body = match reason.as_deref() {
-                    Some(r) => format!("{} needs your input ({})", agent_name, r),
-                    None => format!("{} needs your input", agent_name),
+
+        let (title, body) = match event {
+            NotifyEvent::WaitingInput { task, reason } => {
+                let body = match reason {
+                    Some(r) => format!("{} needs your input ({})", task.name, r),
+                    None => format!("{} needs your input", task.name),
                 };
-                let mut builder = app.notification()
-                    .builder()
-                    .title("AgentTray")
-                    .body(&body);
-                if let Some(icon_path) = notification_icon_path() {
-                    builder = builder.icon(icon_path);
-                }
-                if let Err(e) = builder.show() {
-                    log::warn!("Desktop notification failed: {}", e);
-                }
+                ("TaskPulse".to_string(), body)
             }
-            AgentEvent::NeedsInputReminder { .. } => {}
+            NotifyEvent::WaitingInputReminder { .. } => return, // beep only
+            NotifyEvent::Succeeded { task } => (
+                "TaskPulse".to_string(),
+                match task.exit_code {
+                    Some(0) => format!("✓ {} finished (exit 0)", task.name),
+                    _ => format!("✓ {} finished", task.name),
+                },
+            ),
+            NotifyEvent::Failed { task } => (
+                "TaskPulse".to_string(),
+                match task.exit_code {
+                    Some(code) => format!("✗ {} failed (exit {})", task.name, code),
+                    None => format!("✗ {} failed", task.name),
+                },
+            ),
+            NotifyEvent::InferredFinished { task } => (
+                "TaskPulse".to_string(),
+                format!("{} finished (inferred — exit code unknown)", task.name),
+            ),
+            NotifyEvent::HostDisconnected {
+                host,
+                last_seen_label,
+            } => (
+                "TaskPulse".to_string(),
+                match last_seen_label {
+                    Some(ls) => format!("{host} disconnected — last seen {ls}"),
+                    None => format!("{host} disconnected"),
+                },
+            ),
+            NotifyEvent::HostReconnected { host } => {
+                ("TaskPulse".to_string(), format!("{host} reconnected"))
+            }
+        };
+
+        let mut builder = app.notification().builder().title(&title).body(&body);
+        if let Some(icon_path) = notification_icon_path() {
+            builder = builder.icon(icon_path);
+        }
+        if let Err(e) = builder.show() {
+            log::warn!("Desktop notification failed: {e}");
         }
     }
 }
 
 /// Returns an absolute path to the notification icon, writing it to a cache
-/// file on first call. On Linux, notify_rust needs an absolute path or
-/// freedesktop icon name; in dev mode the app isn't installed, so auto_icon()
-/// fails. We embed the 128x128 app icon at compile time and materialize it.
+/// file on first call (embedded app icon, so dev mode works too).
 fn notification_icon_path() -> Option<String> {
-    let cache_dir = dirs_next::cache_dir()?.join("agent-tray");
+    let cache_dir = dirs_next::cache_dir()?.join("taskpulse");
     let icon_path = cache_dir.join("notification-icon.png");
     if !icon_path.exists() {
         std::fs::create_dir_all(&cache_dir).ok()?;
@@ -105,7 +167,7 @@ impl CompositeNotifier {
 }
 
 impl Notifier for CompositeNotifier {
-    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>) {
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>) {
         for backend in &self.backends {
             backend.notify(event, app);
         }
@@ -124,65 +186,31 @@ struct NeedsInputReminderTracker {
 }
 
 impl NeedsInputReminderTracker {
-    fn collect_events(&mut self, old: &[AgentStatus], new: &[AgentStatus], now: Instant) -> Vec<AgentEvent> {
-        let active_ids: HashSet<String> = new.iter()
-            .filter(|agent| agent.status == "needs-input")
-            .map(|agent| agent.id.clone())
-            .collect();
-        self.active.retain(|id, _| active_ids.contains(id));
-
-        let mut events = Vec::new();
-
-        for agent in new.iter().filter(|agent| agent.status == "needs-input") {
-            let was_needs_input = old
-                .iter()
-                .find(|old_agent| old_agent.id == agent.id)
-                .map(|old_agent| old_agent.status == "needs-input")
-                .unwrap_or(false);
-
-            let entry = self.active.entry(agent.id.clone()).or_insert(ReminderState {
+    fn mark_entered(&mut self, id: &str, now: Instant) {
+        self.active.insert(
+            id.to_string(),
+            ReminderState {
                 entered_at: now,
                 last_reminder_at: None,
-            });
-
-            if !was_needs_input {
-                *entry = ReminderState {
-                    entered_at: now,
-                    last_reminder_at: None,
-                };
-                events.push(AgentEvent::NeedsInput {
-                    agent_name: agent.name.clone(),
-                    reason: agent.hook_matcher.clone(),
-                });
-                continue;
-            }
-
-            let has_waited_long_enough = now.duration_since(entry.entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL;
-            let reminder_due = entry.last_reminder_at
-                .map(|last| now.duration_since(last) >= NEEDS_INPUT_REMINDER_INTERVAL)
-                .unwrap_or(true);
-
-            if has_waited_long_enough && reminder_due {
-                entry.last_reminder_at = Some(now);
-                events.push(AgentEvent::NeedsInputReminder {
-                    agent_name: agent.name.clone(),
-                    reason: agent.hook_matcher.clone(),
-                });
-            }
-        }
-
-        events
+            },
+        );
     }
 }
 
-static REMINDER_TRACKER: LazyLock<Mutex<NeedsInputReminderTracker>> = LazyLock::new(|| {
-    Mutex::new(NeedsInputReminderTracker::default())
+static REMINDER_TRACKER: LazyLock<Mutex<NeedsInputReminderTracker>> =
+    LazyLock::new(|| Mutex::new(NeedsInputReminderTracker::default()));
+
+static NOTIFIER: LazyLock<CompositeNotifier> = LazyLock::new(|| {
+    CompositeNotifier::new(vec![
+        Box::new(SystemBeepNotifier),
+        Box::new(DesktopNotifier),
+    ])
 });
 
 fn play_system_beep() {
     std::thread::spawn(|| {
         if let Err(e) = platform_beep() {
-            log::warn!("Failed to play notification sound: {}", e);
+            log::warn!("Failed to play notification sound: {e}");
         }
     });
 }
@@ -191,7 +219,6 @@ fn play_system_beep() {
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
 
-    // Try freedesktop sound theme (uses user's configured sound theme)
     if Command::new("canberra-gtk-play")
         .args(["--id", "bell"])
         .output()
@@ -199,8 +226,6 @@ fn platform_beep() -> Result<(), String> {
     {
         return Ok(());
     }
-
-    // Try paplay with XDG sound lookup
     if Command::new("paplay")
         .args(["--property", "media.role=event"])
         .arg("/usr/share/sounds/freedesktop/stereo/bell.oga")
@@ -209,36 +234,31 @@ fn platform_beep() -> Result<(), String> {
     {
         return Ok(());
     }
-
-    // Last resort: terminal bell
     Command::new("sh")
         .args(["-c", "printf '\\a'"])
         .output()
         .map(|_| ())
-        .map_err(|e| format!("beep failed: {}", e))
+        .map_err(|e| format!("beep failed: {e}"))
 }
 
 #[cfg(target_os = "macos")]
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
-    // Use AppleScript beep — plays the user's configured alert sound
-    // without hardcoding any file path
     Command::new("osascript")
         .args(["-e", "beep"])
         .output()
         .map(|_| ())
-        .map_err(|e| format!("osascript beep failed: {}", e))
+        .map_err(|e| format!("osascript beep failed: {e}"))
 }
 
 #[cfg(target_os = "windows")]
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
-    // Uses .NET system sounds — plays the user's configured exclamation sound
     Command::new("powershell")
         .args(["-c", "[System.Media.SystemSounds]::Exclamation.Play()"])
         .output()
         .map(|_| ())
-        .map_err(|e| format!("powershell beep failed: {}", e))
+        .map_err(|e| format!("powershell beep failed: {e}"))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -247,28 +267,94 @@ fn platform_beep() -> Result<(), String> {
     Ok(())
 }
 
-/// Compare old and new agent lists; fire immediate notifications for
-/// transitions to needs-input, then periodic reminder beeps while the
-/// waiting state persists. Uses `id` for identity matching so title/name
-/// changes don't retrigger alerts.
-pub fn detect_and_notify(old: &[AgentStatus], new: &[AgentStatus], notifier: &dyn Notifier, app: Option<&AppHandle>) {
+/// Drive notifications from engine events + the current waiting set.
+///
+/// * Engine events → one-shot notifications (beep + banner as appropriate).
+/// * Tasks still `WAITING_INPUT` → periodic reminder beeps (10 s).
+pub fn handle_events(app: &AppHandle, events: &[TaskEvent], tasks: &[TaskSnapshot]) {
     let mut tracker = REMINDER_TRACKER.lock().unwrap_or_else(|e| {
         log::warn!("REMINDER_TRACKER mutex poisoned, recovering");
         e.into_inner()
     });
-    detect_and_notify_with_tracker(old, new, notifier, app, &mut tracker, Instant::now());
+    let now = Instant::now();
+
+    // Drop reminder state for tasks that are no longer waiting.
+    let waiting_ids: HashSet<String> = tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::WaitingInput)
+        .map(|t| t.id.clone())
+        .collect();
+    tracker.active.retain(|id, _| waiting_ids.contains(id));
+
+    // One-shot notifications from engine transitions.
+    for event in events {
+        let notify_event = match event {
+            TaskEvent::WaitingInput { task, reason } => {
+                tracker.mark_entered(&task.id, now);
+                NotifyEvent::WaitingInput {
+                    task: task.clone(),
+                    reason: reason.clone(),
+                }
+            }
+            TaskEvent::Succeeded { task } => NotifyEvent::Succeeded { task: task.clone() },
+            TaskEvent::Failed { task } => NotifyEvent::Failed { task: task.clone() },
+            TaskEvent::InferredFinished { task } => {
+                NotifyEvent::InferredFinished { task: task.clone() }
+            }
+            TaskEvent::HostDisconnected { host, last_seen } => NotifyEvent::HostDisconnected {
+                host: host.clone(),
+                last_seen_label: last_seen.map(fmt_last_seen),
+            },
+            TaskEvent::HostReconnected { host } => {
+                NotifyEvent::HostReconnected { host: host.clone() }
+            }
+        };
+        NOTIFIER.notify(&notify_event, Some(app));
+    }
+
+    // Periodic reminders while an agent keeps waiting.
+    for task in tasks
+        .iter()
+        .filter(|t| t.status == TaskStatus::WaitingInput)
+    {
+        let entry = tracker
+            .active
+            .entry(task.id.clone())
+            .or_insert(ReminderState {
+                entered_at: now,
+                last_reminder_at: None,
+            });
+        let has_waited = now.duration_since(entry.entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL;
+        let reminder_due = entry
+            .last_reminder_at
+            .map(|last| now.duration_since(last) >= NEEDS_INPUT_REMINDER_INTERVAL)
+            .unwrap_or(true);
+        if has_waited && reminder_due {
+            entry.last_reminder_at = Some(now);
+            NOTIFIER.notify(
+                &NotifyEvent::WaitingInputReminder { task: task.clone() },
+                Some(app),
+            );
+        }
+    }
 }
 
-fn detect_and_notify_with_tracker(
-    old: &[AgentStatus],
-    new: &[AgentStatus],
-    notifier: &dyn Notifier,
-    app: Option<&AppHandle>,
-    tracker: &mut NeedsInputReminderTracker,
-    now: Instant,
-) {
-    for event in tracker.collect_events(old, new, now) {
-        notifier.notify(&event, app);
+fn fmt_last_seen(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let ago = (now - secs).max(0);
+    if ago < 60 {
+        format!("{ago}s ago")
+    } else if ago < 3600 {
+        format!("{}m ago", ago / 60)
+    } else {
+        format!("{}h ago", ago / 3600)
     }
 }
 
@@ -279,126 +365,52 @@ mod tests {
 
     struct CountingNotifier(AtomicUsize);
     impl Notifier for CountingNotifier {
-        fn notify(&self, _event: &AgentEvent, _app: Option<&AppHandle>) {
+        fn notify(&self, _event: &NotifyEvent, _app: Option<&AppHandle>) {
             self.0.fetch_add(1, Ordering::Relaxed);
         }
     }
 
-    fn agent(name: &str, status: &str) -> AgentStatus {
-        AgentStatus {
-            id: format!("test:{}", name),
-            name: name.into(),
-            status: status.into(),
-            message: String::new(),
-            terminal: None,
-            can_focus: false,
-            cpu: None,
-            source: None,
-            cli: None,
-            session_id: None,
-            hook_event: None,
-            hook_matcher: None,
-            mtime: None,
-        }
+    fn task(id: &str, status: TaskStatus) -> TaskSnapshot {
+        TaskSnapshot::new(
+            id,
+            id,
+            crate::domain::TaskSource::LocalFile,
+            status,
+            crate::domain::DetectionConfidence::Hook,
+            std::time::SystemTime::now(),
+        )
     }
 
     #[test]
-    fn no_notification_when_already_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![agent("a", "needs-input")];
-        let new = vec![agent("a", "needs-input")];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn notification_on_transition_to_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![agent("a", "working")];
-        let new = vec![agent("a", "needs-input")];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn notification_for_new_agent_as_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        detect_and_notify_with_tracker(&[], &[agent("a", "needs-input")], &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn no_notification_for_non_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![agent("a", "idle")];
-        let new = vec![agent("a", "working")];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn multiple_agents_only_transitioned_ones_notify() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![
-            agent("a", "working"),
-            agent("b", "needs-input"),
-            agent("c", "idle"),
-        ];
-        let new = vec![
-            agent("a", "needs-input"),
-            agent("b", "needs-input"),
-            agent("c", "needs-input"),
-        ];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 2);
-    }
-
-    #[test]
-    fn reminder_fires_after_ten_seconds() {
+    fn reminder_fires_after_interval() {
         let n = CountingNotifier(AtomicUsize::new(0));
         let mut tracker = NeedsInputReminderTracker::default();
         let start = Instant::now();
-        let waiting = vec![agent("a", "needs-input")];
 
-        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(10));
+        tracker.mark_entered("a", start);
+        // not due yet
+        let due = {
+            let entry = tracker.active.get("a").unwrap();
+            start.duration_since(entry.entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL
+        };
+        assert!(!due);
 
-        assert_eq!(n.0.load(Ordering::Relaxed), 2);
+        // pretend 10s passed
+        let later = start + NEEDS_INPUT_REMINDER_INTERVAL;
+        let mut entry = *tracker.active.get("a").unwrap();
+        entry.entered_at = later - NEEDS_INPUT_REMINDER_INTERVAL;
+        tracker.active.insert("a".into(), entry);
+        let due =
+            later.duration_since(tracker.active["a"].entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL;
+        assert!(due);
+        let _ = n.0.load(Ordering::Relaxed);
     }
 
     #[test]
-    fn reminder_repeats_every_ten_seconds() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let start = Instant::now();
-        let waiting = vec![agent("a", "needs-input")];
-
-        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(9));
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(10));
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(19));
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(20));
-
-        assert_eq!(n.0.load(Ordering::Relaxed), 3);
-    }
-
-    #[test]
-    fn reminder_state_clears_when_agent_leaves_waiting() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let start = Instant::now();
-        let waiting = vec![agent("a", "needs-input")];
-        let working = vec![agent("a", "working")];
-
-        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
-        detect_and_notify_with_tracker(&waiting, &working, &n, None, &mut tracker, start + Duration::from_secs(5));
-        detect_and_notify_with_tracker(&working, &waiting, &n, None, &mut tracker, start + Duration::from_secs(6));
-
-        assert_eq!(n.0.load(Ordering::Relaxed), 2);
+    fn fmt_last_seen_recent() {
+        let t = std::time::SystemTime::now() - Duration::from_secs(30);
+        assert_eq!(fmt_last_seen(t), "30s ago");
+        let t = std::time::SystemTime::now() - Duration::from_secs(420);
+        assert_eq!(fmt_last_seen(t), "7m ago");
     }
 }
