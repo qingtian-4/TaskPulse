@@ -1,16 +1,17 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::watcher::TerminalInfo;
-use super::{known_terminal, ProcInfo, WindowCache};
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
+use super::{known_terminal, ProcInfo, WindowCache};
+use crate::watcher::TerminalInfo;
 
 /// Find CLI processes matching any registered strategy.
-pub fn find_cli_processes<'a>(
-    strategies: &'a [Box<dyn CliStrategy>],
-) -> (Vec<(ProcInfo, &'a dyn CliStrategy)>, HashMap<u32, u32>) {
+pub fn find_cli_processes(
+    strategies: &[Box<dyn CliStrategy>],
+) -> (Vec<(ProcInfo, &dyn CliStrategy)>, HashMap<u32, u32>) {
     // Build wmic filter for all strategy process names + script runtimes
-    let all_names: Vec<&str> = strategies.iter()
+    let all_names: Vec<&str> = strategies
+        .iter()
         .flat_map(|s| s.process_names().iter().copied())
         .chain(SCRIPT_RUNTIMES.iter().copied())
         .collect();
@@ -19,7 +20,8 @@ pub fn find_cli_processes<'a>(
     }
 
     // Query all potential agent processes in one wmic call
-    let name_filter = all_names.iter()
+    let name_filter = all_names
+        .iter()
         .map(|n| format!("name='{}.exe'", n))
         .collect::<Vec<_>>()
         .join(" or ");
@@ -51,18 +53,21 @@ pub fn find_cli_processes<'a>(
         }
 
         let cmd_line = cols[1];
-        let proc_name = cols[2].trim().strip_suffix(".exe").unwrap_or(cols[2].trim());
+        let proc_name = cols[2]
+            .trim()
+            .strip_suffix(".exe")
+            .unwrap_or(cols[2].trim());
 
         // Phase 1: Direct process name match (native binaries)
-        let strategy = strategies.iter().find(|s| {
-            s.process_names().iter().any(|n| *n == proc_name)
-        });
+        let strategy = strategies
+            .iter()
+            .find(|s| s.process_names().contains(&proc_name));
 
         // Phase 2: If process is a script runtime, check CommandLine for script names
         let strategy = match strategy {
             Some(s) => s.as_ref(),
             None => {
-                if !SCRIPT_RUNTIMES.iter().any(|r| *r == proc_name) {
+                if !SCRIPT_RUNTIMES.contains(&proc_name) {
                     continue;
                 }
                 match cmd_line.split_whitespace().skip(1).find_map(|arg| {
@@ -73,9 +78,9 @@ pub fn find_cli_processes<'a>(
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("");
-                    strategies.iter().find(|s| {
-                        s.script_names().iter().any(|n| *n == arg_name)
-                    })
+                    strategies
+                        .iter()
+                        .find(|s| s.script_names().contains(&arg_name))
                 }) {
                     Some(s) => s.as_ref(),
                     None => continue,
@@ -83,7 +88,11 @@ pub fn find_cli_processes<'a>(
             }
         };
 
-        if strategy.excluded_substrings().iter().any(|exc| cmd_line.contains(exc)) {
+        if strategy
+            .excluded_substrings()
+            .iter()
+            .any(|exc| cmd_line.contains(exc))
+        {
             continue;
         }
 
@@ -100,17 +109,20 @@ pub fn find_cli_processes<'a>(
         // Get CPU times (100-nanosecond units) via wmic
         let (utime, stime) = wmic_cpu_times(pid);
 
-        out.push((ProcInfo {
-            pid,
-            ppid,
-            cwd,
-            tty_label: String::new(),
-            utime,
-            stime,
-            instant_cpu: None,
-            window_title: None,
-            last_active: None,
-        }, strategy));
+        out.push((
+            ProcInfo {
+                pid,
+                ppid,
+                cwd,
+                tty_label: String::new(),
+                utime,
+                stime,
+                instant_cpu: None,
+                window_title: None,
+                last_active: None,
+            },
+            strategy,
+        ));
     }
 
     (out, ppid_map)
@@ -151,7 +163,9 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
 
         let stdout = String::from_utf8_lossy(&output.stdout);
         // CSV: Node,Name,ParentProcessId
-        let line = stdout.lines().find(|l| !l.trim().is_empty() && !l.contains("Node"))?;
+        let line = stdout
+            .lines()
+            .find(|l| !l.trim().is_empty() && !l.contains("Node"))?;
         let cols: Vec<&str> = line.split(',').collect();
         if cols.len() < 3 {
             break;
@@ -234,7 +248,11 @@ fn powershell_window_title(pid: u32) -> Option<String> {
         .output()
         .ok()?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 /// Read a single environment variable from a running process on Windows.
@@ -260,7 +278,11 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
         .output()
         .ok()?;
     let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if val.is_empty() { None } else { Some(val) }
+    if val.is_empty() {
+        None
+    } else {
+        Some(val)
+    }
 }
 
 /// PowerShell script that reads a process environment variable via Windows APIs.

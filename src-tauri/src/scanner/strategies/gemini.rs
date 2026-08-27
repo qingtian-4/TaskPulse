@@ -8,11 +8,27 @@ pub struct GeminiStrategy;
 /// ◇ = Ready, ✋ = Action Required, ✦ = Working
 const TITLE_PATTERNS: &[TitlePattern] = &[
     // Unicode status icons (primary signal — documented Gemini feature)
-    TitlePattern { pattern: "\u{270B}", status: "needs-input", confidence: 0.95 }, // ✋
-    TitlePattern { pattern: "\u{2726}", status: "working", confidence: 0.9 },      // ✦
-    TitlePattern { pattern: "\u{25C7}", status: "idle", confidence: 0.85 },        // ◇
+    TitlePattern {
+        pattern: "\u{270B}",
+        status: "needs-input",
+        confidence: 0.95,
+    }, // ✋
+    TitlePattern {
+        pattern: "\u{2726}",
+        status: "working",
+        confidence: 0.9,
+    }, // ✦
+    TitlePattern {
+        pattern: "\u{25C7}",
+        status: "idle",
+        confidence: 0.85,
+    }, // ◇
     // Text fallbacks
-    TitlePattern { pattern: "Action Required", status: "needs-input", confidence: 0.9 },
+    TitlePattern {
+        pattern: "Action Required",
+        status: "needs-input",
+        confidence: 0.9,
+    },
 ];
 
 impl CliStrategy for GeminiStrategy {
@@ -41,7 +57,11 @@ impl CliStrategy for GeminiStrategy {
         if child_count > 0 && cpu_pct > 0.5 {
             return DetectedState {
                 status: "working".to_string(),
-                message: format!("Running tool ({} subprocess{})", child_count, if child_count == 1 { "" } else { "es" }),
+                message: format!(
+                    "Running tool ({} subprocess{})",
+                    child_count,
+                    if child_count == 1 { "" } else { "es" }
+                ),
                 confidence: 0.7,
             };
         }
@@ -82,10 +102,12 @@ mod tests {
 
     fn make_info(title: Option<&str>) -> ProcInfo {
         ProcInfo {
-            pid: 1000, ppid: 999,
+            pid: 1000,
+            ppid: 999,
             cwd: PathBuf::from("/home/user/project"),
             tty_label: "pts/1".to_string(),
-            utime: 0, stime: 0,
+            utime: 0,
+            stime: 0,
             instant_cpu: None,
             window_title: title.map(|s| s.to_string()),
             last_active: None,

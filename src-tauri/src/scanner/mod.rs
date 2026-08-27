@@ -119,7 +119,8 @@ impl Scanner {
             // Compute raw instantaneous CPU%, then smooth with a rolling window
             // to avoid state flipping on transient spikes or dips.
             let instant_cpu = self.cpu_pct(&p);
-            let mut history = self.prev
+            let mut history = self
+                .prev
                 .get(&p.pid)
                 .map(|s| s.cpu_history.clone())
                 .unwrap_or_default();
@@ -160,7 +161,8 @@ impl Scanner {
             // multiplexer with a CLI focus API (Kitty, WezTerm, tmux, Zellij, screen).
             // Env vars are stable for a process's lifetime, so results are cached.
             if let Some(ref mut t) = terminal {
-                let mux = self.multiplexer_cache
+                let mux = self
+                    .multiplexer_cache
                     .entry(p.pid)
                     .or_insert_with(|| detect_multiplexer_focus(p.pid));
                 if let Some((ref kind, ref focus_id, ref outer_id)) = *mux {
@@ -207,7 +209,7 @@ impl Scanner {
             let name = if suffix.is_empty() {
                 project.to_string()
             } else {
-                format!("{} · {}", project, &suffix)
+                format!("{} · {}", project, suffix)
             };
 
             let can_focus = terminal
@@ -375,14 +377,17 @@ fn count_children(pid: u32, excluded: &[&str]) -> u32 {
 #[cfg(target_os = "windows")]
 fn count_children(pid: u32, _excluded: &[&str]) -> u32 {
     // wmic is removed in Windows 11 24H2+; use Get-CimInstance instead.
-    let script = format!(
-        "(Get-CimInstance Win32_Process -Filter 'ParentProcessId={pid}').Count"
-    );
+    let script = format!("(Get-CimInstance Win32_Process -Filter 'ParentProcessId={pid}').Count");
     std::process::Command::new("powershell")
         .args(["-NoProfile", "-Command", &script])
         .output()
         .ok()
-        .and_then(|o| String::from_utf8_lossy(&o.stdout).trim().parse::<u32>().ok())
+        .and_then(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .trim()
+                .parse::<u32>()
+                .ok()
+        })
         .unwrap_or(0)
 }
 
@@ -427,7 +432,9 @@ fn clk_tck() -> u64 {
                 .unwrap_or(100)
         }
         #[cfg(not(target_os = "linux"))]
-        { 100 }
+        {
+            100
+        }
     })
 }
 
@@ -524,7 +531,11 @@ fn read_tmux_pane_title(pane_id: &str) -> Option<String> {
         .output()
         .ok()?;
     let title = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if title.is_empty() { None } else { Some(title) }
+    if title.is_empty() {
+        None
+    } else {
+        Some(title)
+    }
 }
 
 #[cfg(test)]

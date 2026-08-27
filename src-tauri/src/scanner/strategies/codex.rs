@@ -9,12 +9,36 @@ pub struct CodexStrategy;
 /// Codex CLI sets dynamic status labels in terminal title via /title command:
 /// Starting..., Ready, Thinking..., Working..., Waiting..., Undoing...
 const TITLE_PATTERNS: &[TitlePattern] = &[
-    TitlePattern { pattern: "Waiting", status: "needs-input", confidence: 0.95 },
-    TitlePattern { pattern: "Thinking", status: "working", confidence: 0.9 },
-    TitlePattern { pattern: "Working", status: "working", confidence: 0.9 },
-    TitlePattern { pattern: "Undoing", status: "working", confidence: 0.85 },
-    TitlePattern { pattern: "Starting", status: "starting", confidence: 0.85 },
-    TitlePattern { pattern: "Ready", status: "idle", confidence: 0.85 },
+    TitlePattern {
+        pattern: "Waiting",
+        status: "needs-input",
+        confidence: 0.95,
+    },
+    TitlePattern {
+        pattern: "Thinking",
+        status: "working",
+        confidence: 0.9,
+    },
+    TitlePattern {
+        pattern: "Working",
+        status: "working",
+        confidence: 0.9,
+    },
+    TitlePattern {
+        pattern: "Undoing",
+        status: "working",
+        confidence: 0.85,
+    },
+    TitlePattern {
+        pattern: "Starting",
+        status: "starting",
+        confidence: 0.85,
+    },
+    TitlePattern {
+        pattern: "Ready",
+        status: "idle",
+        confidence: 0.85,
+    },
 ];
 
 impl CliStrategy for CodexStrategy {
@@ -22,8 +46,14 @@ impl CliStrategy for CodexStrategy {
         // The npm wrapper spawns a native Rust binary. Process name varies:
         // - "codex" (standalone or symlinked)
         // - Platform-specific names from GitHub Releases
-        &["codex", "codex-linux-x64", "codex-linux-arm64",
-          "codex-darwin-x64", "codex-darwin-arm64", "codex-win-x64"]
+        &[
+            "codex",
+            "codex-linux-x64",
+            "codex-linux-arm64",
+            "codex-darwin-x64",
+            "codex-darwin-arm64",
+            "codex-win-x64",
+        ]
     }
 
     fn excluded_substrings(&self) -> &[&str] {
@@ -47,7 +77,11 @@ impl CliStrategy for CodexStrategy {
         if child_count > 0 && cpu_pct > 0.5 {
             return DetectedState {
                 status: "working".to_string(),
-                message: format!("Running tool ({} subprocess{})", child_count, if child_count == 1 { "" } else { "es" }),
+                message: format!(
+                    "Running tool ({} subprocess{})",
+                    child_count,
+                    if child_count == 1 { "" } else { "es" }
+                ),
                 confidence: 0.7,
             };
         }
@@ -88,10 +122,12 @@ mod tests {
 
     fn make_info(title: Option<&str>) -> ProcInfo {
         ProcInfo {
-            pid: 1000, ppid: 999,
+            pid: 1000,
+            ppid: 999,
             cwd: PathBuf::from("/home/user/project"),
             tty_label: "pts/1".to_string(),
-            utime: 0, stime: 0,
+            utime: 0,
+            stime: 0,
             instant_cpu: None,
             window_title: title.map(|s| s.to_string()),
             last_active: None,

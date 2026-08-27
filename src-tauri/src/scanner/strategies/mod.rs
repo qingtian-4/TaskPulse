@@ -12,8 +12,7 @@ use super::ProcInfo;
 /// these, the scanner checks subsequent args against `script_names()`.
 /// To support a new runtime, add one entry here — no other changes needed.
 pub const SCRIPT_RUNTIMES: &[&str] = &[
-    "node", "nodejs", "bun", "deno", "npx", "pnpx", "tsx", "ts-node",
-    "python", "python3",
+    "node", "nodejs", "bun", "deno", "npx", "pnpx", "tsx", "ts-node", "python", "python3",
 ];
 
 /// A window title substring → agent status mapping.
@@ -91,10 +90,10 @@ pub fn detect_from_title(title: &str, patterns: &[TitlePattern]) -> Option<Detec
             let msg = if title.len() <= 120 {
                 title.to_string()
             } else {
-                title.char_indices().nth(120).map_or_else(
-                    || title.to_string(),
-                    |(idx, _)| title[..idx].to_string(),
-                )
+                title
+                    .char_indices()
+                    .nth(120)
+                    .map_or_else(|| title.to_string(), |(idx, _)| title[..idx].to_string())
             };
             return Some(DetectedState {
                 status: p.status.to_string(),

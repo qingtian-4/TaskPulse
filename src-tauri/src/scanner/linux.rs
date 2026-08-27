@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::watcher::TerminalInfo;
-use super::{known_terminal, ProcInfo, WindowCache};
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
+use super::{known_terminal, ProcInfo, WindowCache};
+use crate::watcher::TerminalInfo;
 
 /// Find CLI processes matching any registered strategy.
 /// Returns each process paired with a reference to the strategy that matched it,
@@ -33,7 +33,9 @@ pub fn find_cli_processes<'a>(
         let stat_str = std::fs::read_to_string(base.join("stat")).ok();
         if let Some(ref stat) = stat_str {
             if let Some(close) = stat.rfind(')') {
-                if let Some(ppid) = stat[close + 2..].split_whitespace().nth(1)
+                if let Some(ppid) = stat[close + 2..]
+                    .split_whitespace()
+                    .nth(1)
                     .and_then(|s| s.parse::<u32>().ok())
                 {
                     ppid_map.insert(pid, ppid);
@@ -46,7 +48,10 @@ pub fn find_cli_processes<'a>(
             _ => continue,
         };
 
-        let first_end = cmdline.iter().position(|&b| b == 0).unwrap_or(cmdline.len());
+        let first_end = cmdline
+            .iter()
+            .position(|&b| b == 0)
+            .unwrap_or(cmdline.len());
         let exe_path = String::from_utf8_lossy(&cmdline[..first_end]);
         let exe_name = Path::new(exe_path.as_ref())
             .file_name()
@@ -54,9 +59,9 @@ pub fn find_cli_processes<'a>(
             .unwrap_or("");
 
         // Phase 1: Direct exe_name match (native binaries like "claude")
-        let strategy = strategies.iter().find(|s| {
-            s.process_names().iter().any(|n| *n == exe_name)
-        });
+        let strategy = strategies
+            .iter()
+            .find(|s| s.process_names().iter().any(|n| *n == exe_name));
 
         // Phase 2: If argv[0] is a script runtime (node, bun, etc.),
         // check argv[1..] for script names (e.g., "gemini", "codex")
@@ -66,7 +71,8 @@ pub fn find_cli_processes<'a>(
                 if !SCRIPT_RUNTIMES.iter().any(|r| *r == exe_name) {
                     continue;
                 }
-                let args: Vec<&[u8]> = cmdline.split(|&b| b == 0)
+                let args: Vec<&[u8]> = cmdline
+                    .split(|&b| b == 0)
                     .filter(|a| !a.is_empty())
                     .collect();
                 match args.iter().skip(1).find_map(|arg_bytes| {
@@ -78,9 +84,9 @@ pub fn find_cli_processes<'a>(
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("");
-                    strategies.iter().find(|s| {
-                        s.script_names().iter().any(|n| *n == arg_name)
-                    })
+                    strategies
+                        .iter()
+                        .find(|s| s.script_names().iter().any(|n| *n == arg_name))
                 }) {
                     Some(s) => s.as_ref(),
                     None => continue,
@@ -90,7 +96,11 @@ pub fn find_cli_processes<'a>(
 
         // Check exclusions
         let full = String::from_utf8_lossy(&cmdline);
-        if strategy.excluded_substrings().iter().any(|exc| full.contains(exc)) {
+        if strategy
+            .excluded_substrings()
+            .iter()
+            .any(|exc| full.contains(exc))
+        {
             continue;
         }
 
@@ -130,17 +140,20 @@ pub fn find_cli_processes<'a>(
             .unwrap_or(&tty_path)
             .to_string();
 
-        out.push((ProcInfo {
-            pid,
-            ppid,
-            cwd,
-            tty_label,
-            utime,
-            stime,
-            instant_cpu: None,
-            window_title: None,
-            last_active: None,
-        }, strategy));
+        out.push((
+            ProcInfo {
+                pid,
+                ppid,
+                cwd,
+                tty_label,
+                utime,
+                stime,
+                instant_cpu: None,
+                window_title: None,
+                last_active: None,
+            },
+            strategy,
+        ));
     }
 
     (out, ppid_map)
@@ -229,7 +242,11 @@ fn xdotool_get_name(wid_hex: &str) -> Option<String> {
         .output()
         .ok()?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 /// Search for an X11 window owned by `start_pid`, walking up parent chain
