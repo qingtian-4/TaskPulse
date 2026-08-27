@@ -1,0 +1,100 @@
+#!/usr/bin/env bash
+#
+# tp-run — exact-mode wrapper for remote tmux tasks (TaskPulse).
+#
+# Usage:
+#   tp-run "LoCoMo Eval" -- python eval.py
+#   tp-run "run all" -- bash run_eval.sh
+#
+# Behavior:
+#   * Binds to $TMUX_PANE when running inside tmux (pane_id recorded).
+#   * Writes a status file to ~/.local/state/taskpulse/runs/<run_id>.json
+#     (atomic: tmp + rename), so TaskPulse's RemoteTmuxProvider can merge
+#     EXACT state over its INFERRED process-tree state.
+#   * Preserves stdin/stdout/stderr exactly — no capture-and-replay.
+#   * Preserves the child's exit code (`exit "$rc"`).
+#   * SIGINT/SIGTERM traps record the final state (failed/interrupted).
+#
+# Run file schema (v1):
+#   schema_version, run_id, label, hostname, pane_id, cwd, command,
+#   started_at, finished_at, status, exit_code
+#   status: running | succeeded | failed | interrupted
+#
+# License: MIT (TaskPulse)
+
+set -u
+
+SCHEMA_VERSION=1
+STATE_DIR="${TASKPULSE_STATE_DIR:-$HOME/.local/state/taskpulse/runs}"
+LABEL="${1:-untitled}"
+shift
+if [ "$#" -ge 1 ] && [ "$1" = "--" ]; then
+    shift
+fi
+if [ "$#" -eq 0 ]; then
+    echo "tp-run: no command given" >&2
+    exit 2
+fi
+
+mkdir -p "$STATE_DIR" || exit 2
+
+RUN_ID="$(date +%s)-$$"
+RUN_FILE="$STATE_DIR/$RUN_ID.json"
+HOSTNAME="$(hostname 2>/dev/null || echo unknown)"
+PANE_ID="${TMUX_PANE:-}"
+CWD="$(pwd)"
+STARTED_AT="$(date +%s)"
+CMD_TEXT="$*"
+
+# JSON-string escape a value (backslash, quote, control chars).
+json_str() {
+    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ' | tr '\r' ' ' | tr '\t' ' '
+}
+
+write_run() {
+    # atomic write: tmp + rename
+    local status="$1"
+    local exit_code="${2:-null}"
+    local finished_at="${3:-null}"
+    local tmp="$RUN_FILE.tmp"
+    {
+        echo "{"
+        echo "  \"schema_version\": $SCHEMA_VERSION,"
+        echo "  \"run_id\": \"$(json_str "$RUN_ID")\","
+        echo "  \"label\": \"$(json_str "$LABEL")\","
+        echo "  \"hostname\": \"$(json_str "$HOSTNAME")\","
+        echo "  \"pane_id\": \"$(json_str "$PANE_ID")\","
+        echo "  \"cwd\": \"$(json_str "$CWD")\","
+        echo "  \"command\": \"$(json_str "$CMD_TEXT")\","
+        echo "  \"pid\": $$,"
+        echo "  \"started_at\": $STARTED_AT,"
+        echo "  \"finished_at\": $finished_at,"
+        echo "  \"status\": \"$status\","
+        echo "  \"exit_code\": $exit_code"
+        echo "}"
+    } > "$tmp"
+    mv -f "$tmp" "$RUN_FILE"
+}
+
+cleanup() {
+    local rc="${1:-130}"
+    write_run "failed" "$rc" "$(date +%s)"
+    exit "$rc"
+}
+
+trap 'cleanup 130' INT
+trap 'cleanup 143' TERM
+
+write_run "running"
+
+# Run the real command.  stdin/stdout/stderr pass through untouched.
+"$@"
+rc=$?
+
+if [ "$rc" -eq 0 ]; then
+    write_run "succeeded" 0 "$(date +%s)"
+else
+    write_run "failed" "$rc" "$(date +%s)"
+fi
+
+exit "$rc"
