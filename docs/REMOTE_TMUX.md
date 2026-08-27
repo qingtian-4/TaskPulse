@@ -86,13 +86,19 @@ id = "server1"
 ssh_host = "Server1"   # ~/.ssh/config 中的别名
 enabled = true
 poll_interval_ms = 3000
+tmux_sessions = ["wavelet", "8*"]   # 只监控这些 tmux 会话（精确名或 * 通配）；空=全部
 
 [[remote_hosts]]
 id = "server3"
 ssh_host = "Server3"
 enabled = true
 poll_interval_ms = 3000
+tmux_sessions = []   # 空 = 监控该服务器全部 tmux 会话
 ```
+
+**`tmux_sessions`（Phase 6 加）**：只监控你指定的 tmux 会话，条目支持精确会话名或 `*` 通配（如 `train*`）；**留空 = 全部会话**（默认行为）。
+
+⚠️ **重要**：远端监控只看 **tmux pane**。如果真实任务（vllm/llama-server 等 GPU 推理）运行在 **VS Code Remote-SSH 的 pty 终端**里（父链 `llama-server ← bash(vscode shellIntegration) ← node(ptyHost) ← code-server`），它们**不在 tmux 里**，不会被抓到。要监控这类任务需额外的「终端附件工作负载」检测（可后续加）。
 
 TaskPulse **不保存任何凭据**：走系统 `ssh.exe` + `BatchMode=yes`，认证完全依赖用户自己的 `~/.ssh/config` / key / ssh-agent。
 

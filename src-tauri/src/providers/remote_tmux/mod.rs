@@ -107,10 +107,30 @@ impl RemoteTmuxProvider {
         now: SystemTime,
     ) -> ProviderOutput {
         let state = self.hosts.get_mut(host_id).expect("host state exists");
+
+        // Tmux-session whitelist: only monitor the sessions the user asked for
+        // (exact name or `*` glob). Empty whitelist = every session.
+        let whitelist = self
+            .config
+            .remote_hosts
+            .iter()
+            .find(|h| h.id == host_id)
+            .map(|h| h.tmux_sessions.clone())
+            .unwrap_or_default();
+        let panes: Vec<PaneInfo> = if whitelist.is_empty() {
+            panes.to_vec()
+        } else {
+            panes
+                .iter()
+                .filter(|p| session_allowed(&p.session_name, &whitelist))
+                .cloned()
+                .collect()
+        };
+
         let mut tasks: Vec<TaskSnapshot> = Vec::new();
         let mut seen_panes: std::collections::HashSet<String> = std::collections::HashSet::new();
 
-        for pane in panes {
+        for pane in &panes {
             let class = detector::classify_pane(pane, procs);
             match class {
                 detector::PaneClass::Running => {
@@ -219,7 +239,7 @@ impl RemoteTmuxProvider {
 
         // EXACT mode: tp-run run files override inference for the same pane
         // (store merges by id, EXACT > HOOK > INFERRED).
-        let exact = runfile::tasks_from_run_files(ssh_host, runs, procs, panes, now);
+        let exact = runfile::tasks_from_run_files(ssh_host, runs, procs, &panes, now);
         if !exact.is_empty() {
             log::debug!("{}: {} exact tp-run task(s)", ssh_host, exact.len());
         }
@@ -367,6 +387,37 @@ impl Provider for RemoteTmuxProvider {
     }
 }
 
+/// Is `session` in the watch-list? Empty list = allow all. Entries may be an
+/// exact tmux session name or a `*` glob (e.g. `train*`, `worker*`).
+fn session_allowed(session: &str, whitelist: &[String]) -> bool {
+    whitelist.iter().any(|pattern| glob_match(pattern, session))
+}
+
+/// Minimal `*` glob: `*` matches any run of characters, everything else is a
+/// literal. Full match against the whole string.
+fn glob_match(pattern: &str, text: &str) -> bool {
+    let p: Vec<char> = pattern.chars().collect();
+    let t: Vec<char> = text.chars().collect();
+    // DP match with `*` wildcard only.
+    let mut dp = vec![false; t.len() + 1];
+    dp[0] = true;
+    for &pc in &p {
+        if pc == '*' {
+            for i in 0..t.len() {
+                if dp[i] {
+                    dp[i + 1] = true;
+                }
+            }
+        } else {
+            for i in (0..t.len()).rev() {
+                dp[i + 1] = dp[i] && t[i] == pc;
+            }
+            dp[0] = false;
+        }
+    }
+    dp[t.len()]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -425,12 +476,14 @@ mod tests {
                     ssh_host: "Server1".into(),
                     enabled: true,
                     poll_interval_ms: 3000,
+                    tmux_sessions: vec![],
                 },
                 RemoteHostConfig {
                     id: "server3".into(),
                     ssh_host: "Server3".into(),
                     enabled: true,
                     poll_interval_ms: 3000,
+                    tmux_sessions: vec![],
                 },
             ],
         }
@@ -443,6 +496,7 @@ mod tests {
                 ssh_host: "Server3".into(),
                 enabled: true,
                 poll_interval_ms: 3000,
+                tmux_sessions: vec![],
             }],
         }
     }
@@ -455,6 +509,56 @@ mod tests {
     /// Two-host provider (Server1 + Server3) — parallelism tests.
     fn provider_with_two_hosts(executor: Arc<dyn SshExecutor>) -> RemoteTmuxProvider {
         RemoteTmuxProvider::new(config_with_hosts(), executor)
+    }
+
+    #[test]
+    fn session_allowed_matches_exact_and_glob() {
+        let wl: Vec<String> = vec!["train".into(), "worker*".into()];
+        assert!(session_allowed("train", &wl));
+        assert!(session_allowed("worker1", &wl));
+        assert!(session_allowed("worker-abc", &wl));
+        assert!(!session_allowed("other", &wl));
+        assert!(!session_allowed("trainx", &wl)); // exact, not prefix
+    }
+
+    #[test]
+    fn whitelist_filters_other_sessions() {
+        // Only session "allowed" is watched; "other" must produce no task.
+        let cfg = TaskPulseConfig {
+            remote_hosts: vec![RemoteHostConfig {
+                id: "server3".into(),
+                ssh_host: "Server3".into(),
+                enabled: true,
+                poll_interval_ms: 3000,
+                tmux_sessions: vec!["allowed".into()],
+            }],
+        };
+        let fake = FakeSshExecutor::new()
+            .with(
+                "Server3",
+                &snapshot_body(
+                    &[
+                        pane_line("allowed", "%1", 100, "bash", "/home/user/proj"),
+                        pane_line("other", "%2", 300, "bash", "/home/user/proj"),
+                    ],
+                    &[
+                        ps_line(100, 90, "bash", "bash"),
+                        ps_line(200, 100, "python", "python train.py"),
+                        ps_line(300, 290, "bash", "bash"),
+                        ps_line(400, 300, "python", "python other.py"),
+                    ],
+                ),
+            )
+            .arc();
+        let mut provider = RemoteTmuxProvider::new(cfg, fake);
+        let out = provider.poll(SystemTime::now());
+        // Only the "allowed" pane's python workload is shown.
+        let ids: Vec<&str> = out.tasks.iter().map(|t| t.id.as_str()).collect();
+        assert_eq!(ids.len(), 1, "expected exactly one task, got {ids:?}");
+        assert!(
+            ids[0].ends_with(":%1"),
+            "task should be from allowed pane %1, got {ids:?}"
+        );
     }
 
     #[test]

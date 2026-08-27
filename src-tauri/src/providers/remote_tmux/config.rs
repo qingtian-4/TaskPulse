@@ -22,6 +22,10 @@ pub struct RemoteHostConfig {
     pub enabled: bool,
     #[serde(default = "default_poll_ms")]
     pub poll_interval_ms: u64,
+    /// Only monitor tasks inside these tmux session names (exact or `*` glob).
+    /// Empty = all sessions.
+    #[serde(default)]
+    pub tmux_sessions: Vec<String>,
 }
 
 fn default_true() -> bool {
@@ -89,12 +93,14 @@ pub fn default_config() -> TaskPulseConfig {
                 ssh_host: "Server1".into(),
                 enabled: true,
                 poll_interval_ms: 3000,
+                tmux_sessions: vec![],
             },
             RemoteHostConfig {
                 id: "server3".into(),
                 ssh_host: "Server3".into(),
                 enabled: true,
                 poll_interval_ms: 3000,
+                tmux_sessions: vec![],
             },
         ],
     }
@@ -163,5 +169,19 @@ ssh_host = "A"
         .unwrap();
         assert!(cfg.remote_hosts[0].enabled);
         assert_eq!(cfg.remote_hosts[0].poll_interval_ms, 3000);
+    }
+
+    #[test]
+    fn parses_tmux_session_whitelist() {
+        let cfg: TaskPulseConfig = toml::from_str(
+            r#"
+[[remote_hosts]]
+id = "a"
+ssh_host = "A"
+tmux_sessions = ["train", "worker*"]
+"#,
+        )
+        .unwrap();
+        assert_eq!(cfg.remote_hosts[0].tmux_sessions, vec!["train", "worker*"]);
     }
 }
