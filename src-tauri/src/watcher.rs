@@ -18,6 +18,7 @@ use std::time::{Duration, Instant, SystemTime};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
 use crate::providers::codex::CodexProvider;
+use crate::providers::hermes::HermesProvider;
 use crate::providers::local_file::LocalFileProvider;
 use crate::providers::remote_tmux::{ssh::SystemSshExecutor, RemoteTmuxProvider};
 use crate::providers::{HostHealth, Provider, ProviderOutput};
@@ -301,6 +302,15 @@ fn dedup_codex_over_scan(tasks: &mut Vec<TaskSnapshot>) {
     }
 }
 
+fn dedup_hermes_over_scan(tasks: &mut Vec<TaskSnapshot>) {
+    let has_session = tasks.iter().any(|t| t.source == TaskSource::Hermes);
+    if has_session {
+        tasks.retain(|t| {
+            !(t.cli.as_deref() == Some("hermes") && t.confidence == DetectionConfidence::Inferred)
+        });
+    }
+}
+
 fn merge_and_emit(
     app: &AppHandle,
     store: &mut TaskStore,
@@ -326,6 +336,7 @@ fn refresh_local(
     engine: &mut TransitionEngine,
     file_provider: &mut LocalFileProvider,
     codex: &mut CodexProvider,
+    hermes: &mut HermesProvider,
     scanner: &mut Scanner,
     hosts: &[HostHealth],
     now: SystemTime,
@@ -333,6 +344,8 @@ fn refresh_local(
     let mut tasks = file_provider.poll(now).tasks;
     let codex_tasks = codex.poll(now).tasks;
     tasks.extend(codex_tasks);
+    let hermes_tasks = hermes.poll(now).tasks;
+    tasks.extend(hermes_tasks);
     let scanned_agents = scanner.scan();
     let scanned: Vec<TaskSnapshot> = scanned_agents.iter().cloned().map(Into::into).collect();
     // Second heuristic layer: cross-validate hook file statuses against live
@@ -341,6 +354,7 @@ fn refresh_local(
     tasks.extend(scanned);
     dedup_by_terminal(&mut tasks);
     dedup_codex_over_scan(&mut tasks);
+    dedup_hermes_over_scan(&mut tasks);
     merge_and_emit(app, store, engine, tasks, hosts, now);
 }
 
@@ -363,6 +377,7 @@ pub fn watch(app: AppHandle) {
     let mut engine = TransitionEngine::new();
     let mut file_provider = LocalFileProvider::new();
     let mut codex = CodexProvider::new();
+    let mut hermes = HermesProvider::new();
     let mut scanner = Scanner::new();
     let scan_interval = Duration::from_secs(2);
 
@@ -394,6 +409,7 @@ pub fn watch(app: AppHandle) {
         &mut engine,
         &mut file_provider,
         &mut codex,
+        &mut hermes,
         &mut scanner,
         &hosts,
         now,
@@ -419,6 +435,7 @@ pub fn watch(app: AppHandle) {
                         &mut engine,
                         &mut file_provider,
                         &mut codex,
+                        &mut hermes,
                         &mut scanner,
                         &hosts,
                         now,
@@ -460,6 +477,7 @@ pub fn watch(app: AppHandle) {
                             &mut engine,
                             &mut file_provider,
                             &mut codex,
+                            &mut hermes,
                             &mut scanner,
                             &hosts,
                             now,
@@ -492,6 +510,7 @@ pub fn watch(app: AppHandle) {
                     &mut engine,
                     &mut file_provider,
                     &mut codex,
+                    &mut hermes,
                     &mut scanner,
                     &hosts,
                     now,

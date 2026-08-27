@@ -3,6 +3,7 @@
 //! or the UI — they only observe and normalize.
 
 pub mod codex;
+pub mod hermes;
 pub mod local_file;
 pub mod remote_tmux;
 

@@ -33,11 +33,17 @@
 - adapter 边界隔离在 `providers/codex.rs`，Codex 格式变化只影响该文件；fixture 测试在文件内（completed/active/aborted/stale/unicode/recursive 6 个）。
 - `notify = ["...", "turn-ended"]` 是 Codex Desktop 的配置项；接入 TaskPulse 接收者可获得 EXACT turn 结束事件，但会改动用户配置——MVP 不自动改，留作后续。当前机器无活跃 Codex 会话时 provider 正确不产任务。
 
-## Hermes
+## Hermes（Phase 7 已实现）
 
 - 首选 Hermes 官方 lifecycle hooks（实时状态）。
-- 兜底：`~/.hermes/state.db`（SQLite）会话解析 + 进程状态推断（Phase 7 计划，参考 AgentMonitor 的 hermes.rs adapter，fixture 测试）。
-- 转换：turn 开始 → RUNNING；turn 正常结束 → WAITING_INPUT。
+- **会话元数据 provider**（`providers/hermes.rs`）：读 Hermes 的 SQLite 状态库（`$HERMES_STATE_DB` → `~/.hermes/state.db` → `$LOCALAPPDATA/hermes/state.db`），用 `sessions` 表 + **`session_turn_leases` 表**判断 turn 状态：
+  - 有未过期的 turn 租约（`expires_at > now`）→ **RUNNING**（agent 正在处理）
+  - 无活跃租约、最近有活动 → **WAITING_INPUT**（完成、等用户）
+  - 置信度 = HOOK（来自 Hermes 自身的状态与租约，比进程扫描可靠）
+- 优先级：lifecycle hook > 会话元数据 > 进程扫描；存在 Hermes 会话任务时抑制扫描的 Hermes 条目（`dedup_hermes_over_scan`）。
+- 生命周期门槛：RUNNING 会话 10 分钟未活动丢弃；WAITING_INPUT 会话 24h 未活动丢弃。
+- adapter 隔离在 `providers/hermes.rs`；fixture 测试（active lease→RUNNING / expired→WAITING_INPUT / archived skipped / stale dropped / missing db empty）共 5 个，用临时 SQLite 库。
+- 已在本机真实 Hermes 库端到端验证：当前会话（TaskPulse Windows MVP）显示 Running，另两个会话显示 WaitingInput。
 
 ## DeepSeek Harness
 
