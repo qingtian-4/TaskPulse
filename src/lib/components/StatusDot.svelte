@@ -4,12 +4,12 @@
 
   let { status }: { status: Status } = $props();
 
-  const animated: ReadonlySet<string> = new Set(['needs-input', 'working', 'starting']);
+  const animated: ReadonlySet<string> = new Set(['waiting_input', 'running']);
   const isAnimated = $derived(animated.has(status));
   const color = $derived(STATUS_COLOR[status]);
   const animDuration = $derived(
-    status === 'needs-input' ? '0.9s' :
-    status === 'working'     ? '1.3s' : '1.7s'
+    status === 'waiting_input' ? '0.9s' :
+    status === 'running'       ? '1.3s' : '1.7s'
   );
 </script>
 

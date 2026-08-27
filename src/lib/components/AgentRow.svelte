@@ -1,19 +1,55 @@
 <script lang="ts">
-  import type { AgentStatus } from '$lib/types';
-  import { STATUS_LABEL, CLI_LABEL, CLI_COLOR, formatTerminalChip } from '$lib/types';
+  import type { TaskSnapshot } from '$lib/types';
+  import {
+    STATUS_LABEL,
+    STATUS_COLOR,
+    SOURCE_LABEL,
+    SOURCE_COLOR,
+    CONFIDENCE_LABEL,
+    formatElapsed,
+    formatAgo,
+  } from '$lib/types';
   import StatusDot from './StatusDot.svelte';
   import { SquareTerminal } from '@lucide/svelte';
 
   let {
-    agent,
+    task,
     onFocus,
-  }: { agent: AgentStatus; onFocus: () => void } = $props();
+  }: { task: TaskSnapshot; onFocus: () => void } = $props();
 
   let hovered = $state(false);
 
-  let cliLabel = $derived(agent.cli ? CLI_LABEL[agent.cli] || '' : '');
-  let cliColor = $derived(agent.cli ? CLI_COLOR[agent.cli] || '#888' : '#888');
-  let termChip = $derived(formatTerminalChip(agent.terminal));
+  let sourceLabel = $derived(SOURCE_LABEL[task.source] || '');
+  let sourceColor = $derived(SOURCE_COLOR[task.source] || '#888');
+
+  // Line 2: host · project (remote) or terminal chip (local)
+  let metaLine = $derived(
+    task.remote
+      ? [task.host, task.project].filter(Boolean).join(' · ')
+      : ''
+  );
+
+  // Line 3: status · elapsed · confidence
+  function statusLine(): string {
+    const parts: string[] = [];
+    if (task.status === 'waiting_input') parts.push('waiting input');
+    else if (task.status === 'succeeded' && task.exit_code === 0) parts.push('exit 0');
+    else if (task.status === 'failed') parts.push(`exit ${task.exit_code ?? '?'}`);
+    else parts.push(STATUS_LABEL[task.status]);
+
+    if (task.remote) {
+      if (task.status === 'running' || task.status === 'waiting_input') {
+        const el = formatElapsed(task.started_at ?? task.updated_at);
+        if (el) parts.push(el);
+      } else if (task.finished_at) {
+        parts.push(`finished ${formatAgo(task.finished_at)}`);
+      }
+      parts.push(CONFIDENCE_LABEL[task.confidence]);
+    } else if (task.cpu != null && task.cpu > 0) {
+      parts.push(`${task.cpu.toFixed(0)}% cpu`);
+    }
+    return parts.join(' · ');
+  }
 </script>
 
 <li
@@ -22,43 +58,59 @@
   onmouseenter={() => hovered = true}
   onmouseleave={() => hovered = false}
 >
-  <StatusDot status={agent.status} />
+  <StatusDot status={task.status} />
 
   <div class="flex-1 min-w-0">
     <div class="flex items-center gap-1.5">
-      <p class="text-[12px] font-medium text-[#e8e6e1] truncate">{agent.name}</p>
-      {#if cliLabel}
+      <p class="text-[12px] font-medium text-[#e8e6e1] truncate">{task.name}</p>
+      {#if sourceLabel}
         <span
           class="text-[9px] font-semibold px-[5px] py-[1px] rounded-[3px] flex-shrink-0 uppercase tracking-wide"
-          style="color: {cliColor}; background: {cliColor}18; border: 0.5px solid {cliColor}30;"
-        >{cliLabel}</span>
+          style="color: {sourceColor}; background: {sourceColor}18; border: 0.5px solid {sourceColor}30;"
+        >{sourceLabel}</span>
+      {/if}
+      {#if task.status === 'succeeded'}
+        <span class="text-[10px] text-[#78b644] flex-shrink-0">✓</span>
+      {:else if task.status === 'failed'}
+        <span class="text-[10px] text-[#dd4f4f] flex-shrink-0">✗</span>
       {/if}
     </div>
-    <p class="text-[11px] text-[#8a8880] truncate mt-[1px]">
-      {#if termChip}
-        <span class="inline-flex items-center gap-[3px] text-[#9a9890]">
-          <SquareTerminal size={11} strokeWidth={1.8} class="inline-block flex-shrink-0" />
-          <span>{termChip}</span>
-        </span>
-        {#if agent.message}
-          <span class="text-[#6a6860]"> — </span>{agent.message}
+
+    {#if task.remote}
+      <p class="text-[11px] text-[#9a9890] truncate mt-[1px]">
+        {#if metaLine}
+          <span class="inline-flex items-center gap-[3px]">
+            <SquareTerminal size={11} strokeWidth={1.8} class="inline-block flex-shrink-0" />
+            <span>{metaLine}</span>
+          </span>
         {/if}
-      {:else}
-        {agent.message || STATUS_LABEL[agent.status]}
-      {/if}
-    </p>
+        {#if task.message}
+          {#if metaLine}<span class="text-[#6a6860]"> · </span>{/if}
+          <span>{task.message}</span>
+        {/if}
+      </p>
+    {:else}
+      <p class="text-[11px] text-[#8a8880] truncate mt-[1px]">
+        {task.message || STATUS_LABEL[task.status]}
+      </p>
+    {/if}
+
+    {#if statusLine()}
+      <p class="text-[10px] text-[#6a6860] truncate mt-[1px] tabular-nums" style="color: {task.stale ? '#8a6a3a' : '#6a6860'};">
+        {statusLine()}
+        {#if task.stale}<span class="text-[#8a6a3a]"> · stale</span>{/if}
+      </p>
+    {/if}
   </div>
 
   <div class="flex flex-col items-end gap-[3px] flex-shrink-0">
-    {#if agent.cpu != null && agent.cpu > 0}
-      <span class="text-[10px] font-mono text-[#8a8880] opacity-80 tabular-nums">
-        {agent.cpu.toFixed(0)}% CPU
-      </span>
+    {#if task.status === 'waiting_input'}
+      <span class="text-[10px] font-mono font-semibold tabular-nums" style="color: {STATUS_COLOR.waiting_input};">needs you</span>
     {/if}
-    {#if agent.can_focus}
+    {#if task.can_focus}
       <button
         type="button"
-        aria-label="Focus terminal for {agent.name}"
+        aria-label="Focus terminal for {task.name}"
         class="text-[10px] font-medium px-[7px] py-[2px] rounded-md border transition-all duration-150
                text-[#5aa8dc] border-[rgba(90,168,220,0.25)] bg-[rgba(90,168,220,0.08)]
                hover:bg-[rgba(90,168,220,0.18)] hover:border-[rgba(90,168,220,0.45)]

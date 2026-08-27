@@ -1,11 +1,38 @@
-import { STATUS_PRIORITY, type Status, type AgentStatus } from './types';
+import { STATUS_PRIORITY, type Status, type TaskSnapshot } from './types';
 
-export function aggregate(agents: AgentStatus[]): Status {
-  if (agents.length === 0) return 'offline';
-  return agents.reduce<Status>((best, a) =>
-    STATUS_PRIORITY[a.status] < STATUS_PRIORITY[best]
-      ? a.status
-      : best,
-    'offline'
+export function aggregate(tasks: TaskSnapshot[]): Status {
+  if (tasks.length === 0) return 'unknown';
+  return tasks.reduce<Status>(
+    (best, t) => (STATUS_PRIORITY[t.status] < STATUS_PRIORITY[best] ? t.status : best),
+    'unknown'
   );
+}
+
+/** Active tasks (not finished / not RECENT). */
+export function activeTasks(tasks: TaskSnapshot[]): TaskSnapshot[] {
+  return tasks.filter((t) => !t.recent && !(t.status === 'succeeded' || t.status === 'failed'));
+}
+
+/** RECENT completed tasks. */
+export function recentTasks(tasks: TaskSnapshot[]): TaskSnapshot[] {
+  return tasks
+    .filter((t) => t.recent || t.status === 'succeeded' || t.status === 'failed')
+    .sort((a, b) => (b.finished_at ?? 0) - (a.finished_at ?? 0));
+}
+
+/** Local (non-remote) active tasks. */
+export function localTasks(tasks: TaskSnapshot[]): TaskSnapshot[] {
+  return activeTasks(tasks).filter((t) => !t.remote);
+}
+
+/** Remote active tasks grouped by host (insertion order = priority order). */
+export function remoteByHost(tasks: TaskSnapshot[]): Map<string, TaskSnapshot[]> {
+  const map = new Map<string, TaskSnapshot[]>();
+  for (const t of activeTasks(tasks).filter((t) => t.remote)) {
+    const host = t.host ?? 'unknown';
+    const list = map.get(host) ?? [];
+    list.push(t);
+    map.set(host, list);
+  }
+  return map;
 }

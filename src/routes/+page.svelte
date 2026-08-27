@@ -4,37 +4,40 @@
   import { invoke } from '@tauri-apps/api/core';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
-  import type { AgentStatus } from '$lib/types';
+  import type { TaskSnapshot, HostHealth } from '$lib/types';
+  import { formatAgo } from '$lib/types';
   import AgentRow from '$lib/components/AgentRow.svelte';
   import AggregatePill from '$lib/components/AggregatePill.svelte';
-  import { aggregate } from '$lib/utils';
+  import { aggregate, localTasks, remoteByHost, recentTasks } from '$lib/utils';
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
+  import Server from '@lucide/svelte/icons/server';
+  import Clock from '@lucide/svelte/icons/clock';
 
   // Window width — height is fully responsive, capped to available screen height
   const WIN_W = 400;
   const SCREEN_H = screen.availHeight;
-  const MAX_WIN_H = SCREEN_H - 16; // 8px breathing room top + bottom
+  const MAX_WIN_H = SCREEN_H - 16;
 
-  let agents = $state<AgentStatus[]>([]);
+  let tasks = $state<TaskSnapshot[]>([]);
+  let hosts = $state<HostHealth[]>([]);
   let pinned = $state(false);
   let statusDir = $state('~/.agent-monitor');
   let ipcError = $state('');
-  let aggregateState = $derived(aggregate(agents));
 
-  // Panel ref for ResizeObserver-based window sizing
+  let locals = $derived(localTasks(tasks));
+  let remotes = $derived(remoteByHost(tasks));
+  let recents = $derived(recentTasks(tasks));
+  let aggregateState = $derived(aggregate(tasks));
+
   let panelEl = $state<HTMLDivElement | null>(null);
 
-  // Auto-resize window to match actual rendered panel height.
-  // prevH guards against redundant setSize calls: on macOS, every setSize
-  // triggers a WKWebView backdrop-filter recomposition causing visible flicker.
   $effect(() => {
     if (!panelEl) return;
     let prevH = 0;
     const observer = new ResizeObserver((entries) => {
       const entry = entries[0];
       if (!entry) return;
-      // borderBoxSize includes border but not margin; add 8px for m-[4px] × 2
       const borderBoxH = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height + 2;
       const totalH = Math.min(Math.round(borderBoxH) + 8, MAX_WIN_H);
       if (totalH === prevH) return;
@@ -49,76 +52,59 @@
     const cleanups: Array<() => void> = [];
     let mounted = true;
 
-    /** Register a listener, auto-cleaning if the component already unmounted. */
     async function addListener<T>(unlisten: Promise<() => void>) {
       const fn = await unlisten;
-      if (mounted) {
-        cleanups.push(fn);
-      } else {
-        fn(); // component unmounted while awaiting — immediately unsubscribe
-      }
+      if (mounted) cleanups.push(fn);
+      else fn();
     }
 
     (async () => {
-      // Register listeners FIRST to avoid missing events between
-      // get_agents() and listener registration (race condition fix)
-      await addListener(listen<AgentStatus[]>('agents-updated', (event) => {
-        agents = event.payload;
-        ipcError = ''; // clear any previous error on successful event
+      await addListener(listen<TaskSnapshot[]>('agents-updated', (event) => {
+        tasks = event.payload;
+        ipcError = '';
+      }));
+      await addListener(listen<HostHealth[]>('hosts-updated', (event) => {
+        hosts = event.payload;
       }));
 
-      await addListener(listen<boolean>('pinned-changed', (event) => {
-        pinned = event.payload;
-      }));
-
-      // Signal to Rust that listeners are active. On first open, Rust's
-      // once('popup-ready') handler responds with emit_current_state, which
-      // pushes agents via the agents-updated event we just registered.
       await emit('popup-ready', null);
 
-      // Also fetch directly as an immediate synchronous fill — covers edge
-      // cases (e.g. popup reshown without full JS reload, HMR state loss).
       try {
-        const result = await invoke<AgentStatus[]>('get_agents');
-        agents = result;
+        const result = await invoke<TaskSnapshot[]>('get_agents');
+        tasks = result;
       } catch (e) {
         ipcError = `IPC error: ${e}`;
-        console.error('[AgentTray] get_agents failed:', e);
+        console.error('[TaskPulse] get_agents failed:', e);
       }
 
-      // Retry once if initial fetch returned empty (backend may not have
-      // completed first scan yet on cold start)
-      if (agents.length === 0) {
+      if (tasks.length === 0) {
         await new Promise(r => setTimeout(r, 600));
         try {
-          const retry = await invoke<AgentStatus[]>('get_agents');
-          if (retry.length > 0) agents = retry;
+          const retry = await invoke<TaskSnapshot[]>('get_agents');
+          if (retry.length > 0) tasks = retry;
         } catch (e) {
-          console.warn('[AgentTray] retry get_agents failed:', e);
+          console.warn('[TaskPulse] retry get_agents failed:', e);
         }
       }
 
       try {
         statusDir = await invoke<string>('get_status_dir') || statusDir;
       } catch (e) {
-        console.warn('[AgentTray] get_status_dir failed:', e);
+        console.warn('[TaskPulse] get_status_dir failed:', e);
       }
 
       const win = getCurrentWindow();
       let showTime = Date.now();
 
-      // Re-fetch agents when popup is shown (also works around HMR state loss)
       await addListener(listen('tauri://focus', async () => {
         showTime = Date.now();
         try {
-          agents = await invoke<AgentStatus[]>('get_agents');
+          tasks = await invoke<TaskSnapshot[]>('get_agents');
         } catch (e) {
-          console.warn('[AgentTray] get_agents on focus failed:', e);
+          console.warn('[TaskPulse] get_agents on focus failed:', e);
         }
       }));
 
-      // Ignore blur events within 300ms of focus — the global shortcut
-      // toggle causes a brief focus/blur cycle that would immediately hide the popup
       const BLUR_DEBOUNCE_MS = 300;
       await addListener(win.onFocusChanged(({ payload: focused }) => {
         if (!focused && !pinned && Date.now() - showTime > BLUR_DEBOUNCE_MS) invoke('close_popup');
@@ -133,16 +119,16 @@
 
   let focusing = $state(false);
   let focusError = $state('');
-  async function focusAgent(agent: AgentStatus) {
-    if (focusing || !agent.can_focus || !agent.terminal) return;
+  async function focusAgent(task: TaskSnapshot) {
+    if (focusing || !task.can_focus || !task.terminal) return;
     focusing = true;
     focusError = '';
     try {
       await invoke('focus_terminal', {
         req: {
-          kind:     agent.terminal.kind,
-          focus_id: agent.terminal.focus_id,
-          outer_id: agent.terminal.outer_id,
+          kind:     task.terminal.kind,
+          focus_id: task.terminal.focus_id,
+          outer_id: task.terminal.outer_id,
         }
       });
       if (!pinned) invoke('close_popup');
@@ -153,6 +139,22 @@
       focusing = false;
     }
   }
+
+  let remoteHosts = $derived(
+    [...remotes.keys()].map((host) => ({
+      host,
+      health: hosts.find((h) => h.host === host) ?? null,
+    }))
+  );
+
+  function hostStatusLine(host: string): string | null {
+    const h = hosts.find((x) => x.host === host);
+    if (!h) return null;
+    if (h.status === 'disconnected') {
+      return h.last_seen ? `disconnected · last seen ${formatAgo(h.last_seen)}` : 'disconnected';
+    }
+    return h.last_seen ? `connected · ${formatAgo(h.last_seen)}` : null;
+  }
 </script>
 
 <div bind:this={panelEl} class="glass-panel glass-noise relative w-[392px] rounded-[14px] overflow-hidden m-[4px] flex flex-col"
@@ -160,7 +162,7 @@
   <!-- Header (drag region) -->
   <div data-tauri-drag-region class="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06] shrink-0"
        style="background: rgba(255,255,255,0.03);">
-    <span data-tauri-drag-region class="text-[10px] font-semibold tracking-widest uppercase text-[#8a8880]">AgentTray</span>
+    <span data-tauri-drag-region class="text-[10px] font-semibold tracking-widest uppercase text-[#8a8880]">TaskPulse</span>
     <div class="flex items-center gap-1.5">
       <AggregatePill state={aggregateState} />
       <button
@@ -189,16 +191,64 @@
     </div>
   {/if}
 
-  <!-- Agent list -->
-  {#if agents.length === 0}
+  {#if tasks.length === 0}
     <p class="text-[11px] text-[#8a8880] text-center py-5 leading-relaxed">
-      No agents detected.<br/>See {statusDir}
+      No tasks detected.<br/>Local status files: {statusDir}<br/>Remote hosts: see ~/.taskpulse/config.toml
     </p>
   {:else}
-    <ul class="py-1 m-0 p-0 glass-scroll flex-1 min-h-0 overflow-y-auto">
-      {#each agents as agent (agent.id)}
-        <AgentRow {agent} onFocus={() => focusAgent(agent)} />
-      {/each}
-    </ul>
+    <div class="glass-scroll flex-1 min-h-0 overflow-y-auto py-1">
+      {#if locals.length > 0}
+        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#6a6860] px-4 pt-1.5 pb-0.5">Local Agents</p>
+        <ul class="m-0 p-0">
+          {#each locals as task (task.id)}
+            <AgentRow {task} onFocus={() => focusAgent(task)} />
+          {/each}
+        </ul>
+      {/if}
+
+      {#if remotes.size > 0 || hosts.length > 0}
+        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#6a6860] px-4 pt-2 pb-0.5">Remote Tmux</p>
+        {#if remotes.size === 0}
+          <p class="text-[10px] text-[#6a6860] px-4 py-1">
+            {#each hosts as h (h.host)}
+              <span class="mr-2 inline-flex items-center gap-1">
+                <Server size={10} class="inline-block" />
+                {h.host}
+                <span style="color: {h.status === 'disconnected' ? '#dd4f4f' : '#78b644'}">
+                  {h.status === 'disconnected' ? (h.last_seen ? `disconnected · ${formatAgo(h.last_seen)}` : 'disconnected') : 'idle'}
+                </span>
+              </span>
+            {/each}
+          </p>
+        {:else}
+          {#each remoteHosts as rh (rh.host)}
+            <div class="px-3.5 pt-1 flex items-center gap-1.5">
+              <Server size={11} strokeWidth={1.8} class="flex-shrink-0 text-[#8a7fd9]" />
+              <span class="text-[11px] font-medium text-[#c8c6c1]">{rh.host}</span>
+              {#if hostStatusLine(rh.host)}
+                <span class="text-[10px] text-[#6a6860] tabular-nums">{hostStatusLine(rh.host)}</span>
+              {/if}
+            </div>
+            <ul class="m-0 p-0">
+              {#each remotes.get(rh.host) ?? [] as task (task.id)}
+                <AgentRow {task} onFocus={() => focusAgent(task)} />
+              {/each}
+            </ul>
+          {/each}
+        {/if}
+      {/if}
+
+      {#if recents.length > 0}
+        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#6a6860] px-4 pt-2 pb-0.5">Recent</p>
+        <ul class="m-0 p-0">
+          {#each recents as task (task.id)}
+            <AgentRow {task} onFocus={() => focusAgent(task)} />
+          {/each}
+        </ul>
+        <p class="text-[9px] text-[#55534d] px-4 pb-1 flex items-center gap-1">
+          <Clock size={9} class="inline-block" /> completed tasks stay for 30 minutes
+        </p>
+      {/if}
+    </div>
   {/if}
 </div>
