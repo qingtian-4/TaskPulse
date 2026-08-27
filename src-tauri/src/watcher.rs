@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
+use crate::providers::codex::CodexProvider;
 use crate::providers::local_file::LocalFileProvider;
 use crate::providers::remote_tmux::{ssh::SystemSshExecutor, RemoteTmuxProvider};
 use crate::providers::{HostHealth, Provider, ProviderOutput};
@@ -288,6 +289,18 @@ fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
 
 /// Merge provider output into the store, run the transition engine, notify,
 /// and emit to tray + UI.
+/// Session-metadata (Codex) beats process-scan (Codex): if a real Codex
+/// session task exists, drop the scanner's inferred scan entry for the same
+/// CLI so we never show the same agent twice.
+fn dedup_codex_over_scan(tasks: &mut Vec<TaskSnapshot>) {
+    let has_session = tasks.iter().any(|t| t.source == TaskSource::Codex);
+    if has_session {
+        tasks.retain(|t| {
+            !(t.cli.as_deref() == Some("codex") && t.confidence == DetectionConfidence::Inferred)
+        });
+    }
+}
+
 fn merge_and_emit(
     app: &AppHandle,
     store: &mut TaskStore,
@@ -305,17 +318,21 @@ fn merge_and_emit(
     emit_agents(app, &merged, hosts);
 }
 
-/// Refresh local sources (file provider + scanner), dedup, and emit.
+/// Refresh local sources (file provider + Codex session metadata + scanner),
+/// dedup, and emit.
 fn refresh_local(
     app: &AppHandle,
     store: &mut TaskStore,
     engine: &mut TransitionEngine,
     file_provider: &mut LocalFileProvider,
+    codex: &mut CodexProvider,
     scanner: &mut Scanner,
     hosts: &[HostHealth],
     now: SystemTime,
 ) {
     let mut tasks = file_provider.poll(now).tasks;
+    let codex_tasks = codex.poll(now).tasks;
+    tasks.extend(codex_tasks);
     let scanned_agents = scanner.scan();
     let scanned: Vec<TaskSnapshot> = scanned_agents.iter().cloned().map(Into::into).collect();
     // Second heuristic layer: cross-validate hook file statuses against live
@@ -323,6 +340,7 @@ fn refresh_local(
     crate::heuristics::cross_validate_tasks(&mut tasks, &scanned);
     tasks.extend(scanned);
     dedup_by_terminal(&mut tasks);
+    dedup_codex_over_scan(&mut tasks);
     merge_and_emit(app, store, engine, tasks, hosts, now);
 }
 
@@ -344,6 +362,7 @@ pub fn watch(app: AppHandle) {
     let mut store = TaskStore::default();
     let mut engine = TransitionEngine::new();
     let mut file_provider = LocalFileProvider::new();
+    let mut codex = CodexProvider::new();
     let mut scanner = Scanner::new();
     let scan_interval = Duration::from_secs(2);
 
@@ -374,6 +393,7 @@ pub fn watch(app: AppHandle) {
         &mut store,
         &mut engine,
         &mut file_provider,
+        &mut codex,
         &mut scanner,
         &hosts,
         now,
@@ -398,6 +418,7 @@ pub fn watch(app: AppHandle) {
                         &mut store,
                         &mut engine,
                         &mut file_provider,
+                        &mut codex,
                         &mut scanner,
                         &hosts,
                         now,
@@ -438,6 +459,7 @@ pub fn watch(app: AppHandle) {
                             &mut store,
                             &mut engine,
                             &mut file_provider,
+                            &mut codex,
                             &mut scanner,
                             &hosts,
                             now,
@@ -469,6 +491,7 @@ pub fn watch(app: AppHandle) {
                     &mut store,
                     &mut engine,
                     &mut file_provider,
+                    &mut codex,
                     &mut scanner,
                     &hosts,
                     now,

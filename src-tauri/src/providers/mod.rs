@@ -2,6 +2,7 @@
 //! normalized `TaskSnapshot`s.  Providers never talk to the tray, the store,
 //! or the UI — they only observe and normalize.
 
+pub mod codex;
 pub mod local_file;
 pub mod remote_tmux;
 

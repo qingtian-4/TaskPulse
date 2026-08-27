@@ -24,11 +24,14 @@
 
 **关键区分**：Agent 完成一个 turn（WAITING_INPUT）≠ 命令完成（SUCCEEDED）。只有拿到真实退出码才标 SUCCEEDED/FAILED。
 
-## Codex
+## Codex（Phase 6 已实现）
 
 - 复用 AgentTray 的 Codex hook（`scripts/hooks/`）；`Stop` 事件 → `WAITING_INPUT`。
-- 兜底：进程扫描（`~/.codex/sessions/**/rollout-*.jsonl` 会话解析在 Phase 6 计划中，参考 AgentMonitor adapter）。
-- 优先级：native hook > session/app-server 元数据 > 进程扫描。
+- **会话元数据 provider**（`providers/codex.rs`）：读 `~/.codex/sessions/**/rollout-*.jsonl`（CLI 与 Desktop 同源——Desktop 的 `state_5.sqlite.threads.rollout_path` 指向同一路径）；`task_complete` → `WAITING_INPUT`、`task_started/user_message/agent_message` → `RUNNING`、`turn_aborted` → `WAITING_INPUT`，置信度 HOOK。
+- 优先级：native hook > 会话元数据(node) > 进程扫描；当存在 Codex 会话任务时抑制扫描的 Codex 条目（去重，见 watcher `dedup_codex_over_scan`）。
+- 生命周期门槛：RUNNING 会话 10 分钟内未写入 → 丢弃；WAITING_INPUT 会话 24h 未更新 → 丢弃。
+- adapter 边界隔离在 `providers/codex.rs`，Codex 格式变化只影响该文件；fixture 测试在文件内（completed/active/aborted/stale/unicode/recursive 6 个）。
+- `notify = ["...", "turn-ended"]` 是 Codex Desktop 的配置项；接入 TaskPulse 接收者可获得 EXACT turn 结束事件，但会改动用户配置——MVP 不自动改，留作后续。当前机器无活跃 Codex 会话时 provider 正确不产任务。
 
 ## Hermes
 
