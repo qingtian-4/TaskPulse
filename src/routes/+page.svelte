@@ -173,12 +173,12 @@
   <!-- Header (drag region) -->
   <div data-tauri-drag-region class="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06] shrink-0"
        style="background: rgba(255,255,255,0.03);">
-    <span data-tauri-drag-region class="text-[10px] font-semibold tracking-widest uppercase text-[#8a8880]">TaskPulse</span>
+    <span data-tauri-drag-region class="text-[10px] font-semibold tracking-widest uppercase text-[#aaa89f]">TaskPulse</span>
     <div class="flex items-center gap-1.5">
       <AggregatePill state={aggregateState} />
       <button
         onclick={() => invoke('toggle_pin')}
-        class="p-0.5 rounded hover:bg-white/10 transition-colors {pinned ? 'text-white/80' : 'text-[#7a7870]'}"
+        class="p-0.5 rounded hover:bg-white/10 transition-colors {pinned ? 'text-white/80' : 'text-[#a5a39b]'}"
         title={pinned ? 'Unpin window' : 'Pin window'}
       >
         {#if pinned}
@@ -203,13 +203,13 @@
   {/if}
 
   {#if tasks.length === 0}
-    <p class="text-[11px] text-[#8a8880] text-center py-5 leading-relaxed">
+    <p class="text-[11px] text-[#aaa89f] text-center py-5 leading-relaxed">
       No tasks detected.<br/>Local status files: {statusDir}<br/>Remote hosts: see ~/.taskpulse/config.toml
     </p>
   {:else}
     <div class="glass-scroll flex-1 min-h-0 overflow-y-auto py-1">
       {#if locals.length > 0}
-        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#6a6860] px-4 pt-1.5 pb-0.5">Local Agents</p>
+        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#8f8d86] px-4 pt-1.5 pb-0.5">Local Agents</p>
         <ul class="m-0 p-0">
           {#each locals as task (task.id)}
             <AgentRow {task} onFocus={() => focusAgent(task)} />
@@ -218,9 +218,9 @@
       {/if}
 
       {#if remotes.size > 0 || hosts.length > 0}
-        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#6a6860] px-4 pt-2 pb-0.5">Remote Tmux</p>
+        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#8f8d86] px-4 pt-2 pb-0.5">Remote Tmux</p>
         {#if remotes.size === 0}
-          <p class="text-[10px] text-[#6a6860] px-4 py-1">
+          <p class="text-[10px] text-[#8f8d86] px-4 py-1">
             {#each hosts as h (h.host)}
               <span class="mr-2 inline-flex items-center gap-1">
                 <Server size={10} class="inline-block" />
@@ -235,9 +235,9 @@
           {#each remoteHosts as rh (rh.host)}
             <div class="px-3.5 pt-1 flex items-center gap-1.5">
               <Server size={11} strokeWidth={1.8} class="flex-shrink-0 text-[#8a7fd9]" />
-              <span class="text-[11px] font-medium text-[#c8c6c1]">{rh.host}</span>
+              <span class="text-[11px] font-medium text-[#d9d7d2]">{rh.host}</span>
               {#if hostStatusLine(rh.host)}
-                <span class="text-[10px] text-[#6a6860] tabular-nums">{hostStatusLine(rh.host)}</span>
+                <span class="text-[10px] text-[#8f8d86] tabular-nums">{hostStatusLine(rh.host)}</span>
               {/if}
             </div>
             <ul class="m-0 p-0">
@@ -250,13 +250,13 @@
       {/if}
 
       {#if recents.length > 0}
-        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#6a6860] px-4 pt-2 pb-0.5">Recent</p>
+        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#8f8d86] px-4 pt-2 pb-0.5">Recent</p>
         <ul class="m-0 p-0">
           {#each recents as task (task.id)}
             <AgentRow {task} onFocus={() => focusAgent(task)} />
           {/each}
         </ul>
-        <p class="text-[9px] text-[#55534d] px-4 pb-1 flex items-center gap-1">
+        <p class="text-[9px] text-[#8a887f] px-4 pb-1 flex items-center gap-1">
           <Clock size={9} class="inline-block" /> completed tasks stay for 30 minutes
         </p>
       {/if}

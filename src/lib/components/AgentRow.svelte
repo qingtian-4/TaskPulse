@@ -85,20 +85,20 @@
           </span>
         {/if}
         {#if task.message}
-          {#if metaLine}<span class="text-[#6a6860]"> · </span>{/if}
+          {#if metaLine}<span class="text-[#8f8d86]"> · </span>{/if}
           <span>{task.message}</span>
         {/if}
       </p>
     {:else}
-      <p class="text-[11px] text-[#8a8880] truncate mt-[1px]">
+      <p class="text-[11px] text-[#aaa89f] truncate mt-[1px]">
         {task.message || STATUS_LABEL[task.status]}
       </p>
     {/if}
 
     {#if statusLine()}
-      <p class="text-[10px] text-[#6a6860] truncate mt-[1px] tabular-nums" style="color: {task.stale ? '#8a6a3a' : '#6a6860'};">
+      <p class="text-[10px] text-[#8f8d86] truncate mt-[1px] tabular-nums" style="color: {task.stale ? '#b0895a' : '#8f8d86'};">
         {statusLine()}
-        {#if task.stale}<span class="text-[#8a6a3a]"> · stale</span>{/if}
+        {#if task.stale}<span class="text-[#b0895a]"> · stale</span>{/if}
       </p>
     {/if}
   </div>
