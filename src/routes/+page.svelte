@@ -22,6 +22,7 @@
   let tasks = $state<TaskSnapshot[]>([]);
   let hosts = $state<HostHealth[]>([]);
   let pinned = $state(false);
+  let overPopup = $state(false);
   let statusDir = $state('~/.agent-monitor');
   let ipcError = $state('');
 
@@ -39,7 +40,7 @@
       const entry = entries[0];
       if (!entry) return;
       const borderBoxH = entry.borderBoxSize[0]?.blockSize ?? entry.contentRect.height + 2;
-      const totalH = Math.min(Math.round(borderBoxH) + 8, MAX_WIN_H);
+      const totalH = Math.min(Math.round(borderBoxH), MAX_WIN_H);
       if (totalH === prevH) return;
       prevH = totalH;
       getCurrentWindow().setSize(new LogicalSize(WIN_W, totalH));
@@ -107,7 +108,15 @@
 
       const BLUR_DEBOUNCE_MS = 300;
       await addListener(win.onFocusChanged(({ payload: focused }) => {
-        if (!focused && !pinned && Date.now() - showTime > BLUR_DEBOUNCE_MS) invoke('close_popup');
+        // Don't auto-hide when pinned, when the pointer is still over the
+        // popup (clicking/dragging the drag-region header causes a transient
+        // blur), or within the debounce window after opening.
+        if (!focused && !pinned && !overPopup && Date.now() - showTime > BLUR_DEBOUNCE_MS)
+          invoke('close_popup');
+      }));
+
+      await addListener(listen<boolean>('pinned-changed', (event) => {
+        pinned = event.payload;
       }));
     })();
 
@@ -157,8 +166,10 @@
   }
 </script>
 
-<div bind:this={panelEl} class="glass-panel glass-noise relative w-[392px] rounded-[14px] overflow-hidden m-[4px] flex flex-col"
-     style="max-height: {MAX_WIN_H - 8}px;">
+<div bind:this={panelEl} class="glass-panel glass-noise relative w-full rounded-[14px] overflow-hidden flex flex-col"
+     style="max-height: {MAX_WIN_H}px;"
+     onpointerenter={() => (overPopup = true)}
+     onpointerleave={() => (overPopup = false)}>
   <!-- Header (drag region) -->
   <div data-tauri-drag-region class="flex items-center justify-between px-3.5 py-2.5 border-b border-white/[0.06] shrink-0"
        style="background: rgba(255,255,255,0.03);">
