@@ -90,6 +90,7 @@ impl TaskStatus {
 pub enum TaskSource {
     Codex,
     Hermes,
+    #[serde(rename = "deepseek_harness")]
     DeepSeekHarness,
     RemoteTmux,
     /// Generic local wrapper/hook file (`~/.agent-monitor` / `~/.taskpulse`).

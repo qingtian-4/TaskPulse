@@ -45,12 +45,13 @@
 - adapter 隔离在 `providers/hermes.rs`；fixture 测试（active lease→RUNNING / expired→WAITING_INPUT / archived skipped / stale dropped / missing db empty）共 5 个，用临时 SQLite 库。
 - 已在本机真实 Hermes 库端到端验证：当前会话（TaskPulse Windows MVP）显示 Running，另两个会话显示 WaitingInput。
 
-## DeepSeek Harness
+## DeepSeek Harness（Phase 8 已实现）
 
-- 独立 adapter/plugin（`integrations/deepseek-harness/taskpulse-plugin/`），监听当前版 Plugin/Event API 的 agent/status、session/event。
-- 转换：running → RUNNING；running → idle → WAITING_INPUT。
-- Harness 是 Developer Preview，API 可能变化——adapter 边界隔离，类型绝不泄漏进 TaskStore。
-- 无 OCR / 无截图。
+- **会话元数据 provider**（`providers/deepseek_harness.rs`）：dsh（`@deepseek-ai/dsh`）装在 **WSL2**（`$DSH_HOME` 默认 `~/.dsh`），会话是 `~/.dsh/sessions/<workspace>/<session-id>/session.jsonl.zstd`（zstd 压缩的追加式事件流）。
+- **状态推断**（读 harness 自己的事件流，置信度 = HOOK）：最新 `turn/end` seq > 最新 `turn/start` seq → **WAITING_INPUT**；有 `turn/start` 无后续 `turn/end` → **RUNNING**；无 turn 事件 → **IDLE**。
+- **访问**：本机 WSL2 的 `\\wsl.localhost` 文件共享不可用（Windows 程序读不到 WSL2 文件系统），故每轮经 `wsl.exe` 子进程 + WSL 端 `base64` + Rust 侧 `zstd` 解压；`(path, mtime)` 缓存 + 6s 探测节流避免反复 spawn wsl.exe。
+- 项目名取自会话 `cwd` basename；distro 可经 `TASKPULSE_WSL_DISTRO` 覆盖（默认 Ubuntu）。
+- adapter 隔离在 `providers/deepseek_harness.rs`；fixture 测试走 zstd 编解码验证推断逻辑。已在本机真实 WSL2 dsh 库端到端验证（Game 工作区会话 → WaitingInput）。
 
 ## 可靠性机制（沿用 AgentTray）
 
