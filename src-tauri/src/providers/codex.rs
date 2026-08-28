@@ -418,11 +418,12 @@ fn flush_codex(
     let Some(slug) = slug else { return };
     if let Some(state) = parse_codex_rollout(buf, now, slug) {
         let title = titles.get(&state.session_id).map(|s| s.as_str());
-        let name = title
-            .filter(|t| !is_synthetic_title(t))
-            .map(clean_task_name)
-            .or_else(|| state.project.as_deref().map(clean_task_name))
-            .unwrap_or_else(|| slug.clone());
+        // A1: only surface sessions that carry a readable task title; drop the
+        // synthetic sub-agent boilerplate so the view stays clean.
+        if title.is_none_or(|t| t.trim().is_empty() || is_synthetic_title(t)) {
+            return;
+        }
+        let name = title.map(clean_task_name).unwrap_or_else(|| slug.clone());
         let mut t = TaskSnapshot::new(
             format!("codex-remote:{host_id}:{}", state.session_id),
             name,
@@ -690,7 +691,7 @@ mod tests {
     #[test]
     fn codex_section_builds_remote_tasks() {
         let section = format!(
-            "===S:--home-ai-projects-Game--===\n{}\n{}\n",
+            "META\t{{\"id\":\"sess-1\",\"t\":\"研究 Game 记忆机制\"}}\n===S:--home-ai-projects-Game--===\n{}\n{}\n",
             header("/home/ai/projects/Game"),
             format!(
                 "{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"t1\",\"completed_at\":\"{ts}\"}}}}\n",
@@ -705,6 +706,6 @@ mod tests {
         assert_eq!(t.status, TaskStatus::WaitingInput);
         assert_eq!(t.host.as_deref(), Some("Server3"));
         assert!(t.remote);
-        assert_eq!(t.name, "Game");
+        assert_eq!(t.name, "研究 Game 记忆机制");
     }
 }
