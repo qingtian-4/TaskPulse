@@ -37,6 +37,9 @@ impl SshExecutor for SystemSshExecutor {
         let connect_timeout = timeout.as_secs().clamp(1, 10).to_string();
         let mut cmd = Command::new("ssh");
         cmd.arg("-o").arg("BatchMode=yes");
+        // Suppress non-fatal stderr noise (e.g. the post-quantum KEX WARNING)
+        // that would otherwise make ssh exit with status 1 on success.
+        cmd.arg("-o").arg("LogLevel=ERROR");
         cmd.arg("-o")
             .arg(format!("ConnectTimeout={connect_timeout}"));
         cmd.arg(host);
