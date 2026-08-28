@@ -74,9 +74,11 @@
       {:else if task.status === 'failed'}
         <span class="text-[10px] text-[#dd4f4f] flex-shrink-0">✗</span>
       {/if}
-      {#if task.quota_used_pct != null}
-        <span class="text-[9px] text-[#c9c161] flex-shrink-0 tabular-nums" title="Codex 7天窗口用量">
-          额度 {Math.round(task.quota_used_pct)}%
+      {#if task.quota_5h_used_pct != null || task.quota_1w_used_pct != null}
+        <span class="text-[9px] text-[#c9c161] flex-shrink-0 tabular-nums" title="Codex 用量：5 小时 / 1 周">
+          {task.quota_5h_used_pct != null ? `5h ${Math.round(task.quota_5h_used_pct)}%` : ''}
+          {task.quota_5h_used_pct != null && task.quota_1w_used_pct != null ? ' · ' : ''}
+          {task.quota_1w_used_pct != null ? `1周 ${Math.round(task.quota_1w_used_pct)}%` : ''}
         </span>
       {/if}
     </div>

@@ -46,16 +46,6 @@
     return { groups, flat };
   }
 
-  function quotaText(t: TaskSnapshot) {
-    if (t.quota_used_pct == null) return '';
-    const pct = Math.round(t.quota_used_pct);
-    if (t.quota_resets_at) {
-      const days = Math.max(1, Math.round((t.quota_resets_at - Date.now() / 1000) / 86400));
-      return `额度 ${pct}% · ${days}d`;
-    }
-    return `额度 ${pct}%`;
-  }
-
   let panelEl = $state<HTMLDivElement | null>(null);
 
   $effect(() => {

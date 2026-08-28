@@ -254,12 +254,18 @@ pub struct TaskSnapshot {
     pub cli: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
-    /// Codex 7-day window usage percent (0-100) from token_count rate_limits.
+    /// Codex 5-hour window usage percent (0-100) from token_count rate_limits.primary.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub quota_used_pct: Option<f64>,
-    /// Unix epoch seconds the Codex usage window resets.
+    pub quota_5h_used_pct: Option<f64>,
+    /// Unix epoch seconds when the 5-hour window resets.
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub quota_resets_at: Option<i64>,
+    pub quota_5h_resets_at: Option<i64>,
+    /// Codex 1-week window usage percent (0-100) from rate_limits.secondary.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_1w_used_pct: Option<f64>,
+    /// Unix epoch seconds when the 1-week window resets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_1w_resets_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_event: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -301,8 +307,10 @@ impl TaskSnapshot {
             session_id: None,
             hook_event: None,
             hook_matcher: None,
-            quota_used_pct: None,
-            quota_resets_at: None,
+            quota_5h_used_pct: None,
+            quota_5h_resets_at: None,
+            quota_1w_used_pct: None,
+            quota_1w_resets_at: None,
         }
     }
 

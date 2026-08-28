@@ -173,8 +173,10 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
                 .get("hook_matcher")
                 .and_then(|s| s.as_str())
                 .map(String::from),
-            quota_used_pct: None,
-            quota_resets_at: None,
+            quota_5h_used_pct: None,
+            quota_5h_resets_at: None,
+            quota_1w_used_pct: None,
+            quota_1w_resets_at: None,
         };
         Some(snapshot)
     } else {
@@ -207,8 +209,10 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             session_id: None,
             hook_event: None,
             hook_matcher: None,
-            quota_used_pct: None,
-            quota_resets_at: None,
+            quota_5h_used_pct: None,
+            quota_5h_resets_at: None,
+            quota_1w_used_pct: None,
+            quota_1w_resets_at: None,
         })
     }
 }
