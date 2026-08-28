@@ -381,7 +381,35 @@ pub fn tasks_from_codex_section(
         &titles,
         &mut out,
     );
+    propagate_freshest_quota(&mut out);
     out
+}
+
+/// Copy the freshest rate-limit quota (from the most-recently-updated codex
+/// session) onto every codex task, so the displayed `5h / 1周` usage reflects
+/// the newest codex self-report instead of a stale session's cached value.
+pub(crate) fn propagate_freshest_quota(tasks: &mut [TaskSnapshot]) {
+    let Some(newest) = tasks
+        .iter()
+        .filter(|t| t.source == TaskSource::Codex)
+        .max_by_key(|t| t.updated_at)
+    else {
+        return;
+    };
+    let (h5, r5, h1, r1) = (
+        newest.quota_5h_used_pct,
+        newest.quota_5h_resets_at,
+        newest.quota_1w_used_pct,
+        newest.quota_1w_resets_at,
+    );
+    for t in tasks.iter_mut() {
+        if t.source == TaskSource::Codex {
+            t.quota_5h_used_pct = h5;
+            t.quota_5h_resets_at = r5;
+            t.quota_1w_used_pct = h1;
+            t.quota_1w_resets_at = r1;
+        }
+    }
 }
 
 fn is_synthetic_title(t: &str) -> bool {
@@ -463,6 +491,7 @@ impl Provider for CodexProvider {
                 tasks.push(self.session_to_task(&state, now));
             }
         }
+        propagate_freshest_quota(&mut tasks);
 
         // Sessions we previously knew but that vanished / went stale → no
         // terminal snapshot needed (the store's TTL handles the drop). We only
