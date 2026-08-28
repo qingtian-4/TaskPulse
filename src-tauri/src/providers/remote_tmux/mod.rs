@@ -85,7 +85,7 @@ impl RemoteTmuxProvider {
     /// (avoids stdio quote-nesting) then cats it, so each remote Codex session
     /// can be named by its task title. No-op if there's no Codex state DB.
     fn codex_meta_cmd() -> &'static str {
-        "python3 -c \"import sqlite3,json;c=sqlite3.connect('$HOME/.codex/state_5.sqlite');f=open('$HOME/.codex/.tp_meta','w');[f.write(json.dumps({'id':r[0],'t':r[1]},ensure_ascii=False)+'\\n') for r in c.execute('SELECT id,title FROM threads')];f.close()\" 2>/dev/null; cat \"$HOME/.codex/.tp_meta\" 2>/dev/null"
+        "python3 -c \"import sqlite3,json;c=sqlite3.connect('$HOME/.codex/state_5.sqlite');f=open('$HOME/.codex/.tp_meta','w');[f.write('META\\t'+json.dumps({'id':r[0],'t':(r[1] or '')[:120]},ensure_ascii=False)+'\\n') for r in c.execute('SELECT id,title FROM threads')];f.close()\" 2>/dev/null; cat \"$HOME/.codex/.tp_meta\" 2>/dev/null"
     }
 
     /// The single remote command that returns panes + process table + recent
@@ -97,7 +97,7 @@ impl RemoteTmuxProvider {
         // backslash escapes, so the remote output must contain actual tabs.
         let fmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{window_name}";
         format!(
-            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 2>/dev/null | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===\"; tail -c 65536 \"$f\"; done; {}; true",
+            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -4 | cut -d' ' -f2- | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===F:$(basename \"$f\")===\"; tail -c 8192 \"$f\"; done; {}; true",
             parser::PS_MARKER,
             runfile::RUNS_MARKER,
             runfile::CODEX_MARKER,

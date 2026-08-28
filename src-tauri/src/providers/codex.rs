@@ -205,7 +205,12 @@ pub fn parse_codex_rollout(
                 project = Some(truncate(&base, PROJECT_LEN));
             }
         }
-        if value.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+        // Codex emits session_meta with `type` in different places depending
+        // on host form: local Desktop puts it in payload.type, headless
+        // app-server (Server3) puts it at the top level. Accept both.
+        let is_session_meta = value.get("type").and_then(|v| v.as_str()) == Some("session_meta")
+            || payload.get("type").and_then(|v| v.as_str()) == Some("session_meta");
+        if is_session_meta {
             if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
                 session_id = id.to_string();
             }
@@ -345,6 +350,7 @@ pub fn tasks_from_codex_section(
 
     let mut out = Vec::new();
     let mut current_slug: Option<String> = None;
+    let mut current_uuid: Option<String> = None;
     let mut buf = String::new();
 
     for line in section.lines() {
@@ -352,12 +358,16 @@ pub fn tasks_from_codex_section(
         if line.starts_with("META\t") {
             continue;
         }
-        if let Some(slug) = line
-            .strip_prefix("===S:")
-            .and_then(|s| s.strip_suffix("==="))
-        {
+        if let Some(rest) = line.strip_prefix("===S:") {
+            let rest = rest.strip_suffix("===").unwrap_or(rest);
+            // rest = "<slug>===F:<basename>"
+            let (slug, fname) = match rest.split_once("===F:") {
+                Some((s, f)) => (s, Some(f)),
+                None => (rest, None),
+            };
             flush_codex(
                 &current_slug,
+                &current_uuid,
                 &mut buf,
                 now,
                 ssh_host,
@@ -366,6 +376,7 @@ pub fn tasks_from_codex_section(
                 &mut out,
             );
             current_slug = Some(slug.to_string());
+            current_uuid = fname.and_then(uuid_from_filename);
             buf.clear();
             continue;
         }
@@ -374,6 +385,7 @@ pub fn tasks_from_codex_section(
     }
     flush_codex(
         &current_slug,
+        &current_uuid,
         &mut buf,
         now,
         ssh_host,
@@ -383,6 +395,21 @@ pub fn tasks_from_codex_section(
     );
     propagate_freshest_quota(&mut out);
     out
+}
+
+/// Extract the Codex thread id (uuid) from a rollout filename like
+/// `rollout-2026-08-27T23-12-16-01a0457e-da94-7711-a20f-9738009992b8.jsonl`.
+/// The tail we read for remote sessions does not include session_meta, so we
+/// recover the id from the filename instead.
+fn uuid_from_filename(name: &str) -> Option<String> {
+    let stem = name.strip_suffix(".jsonl").unwrap_or(name);
+    let stem = stem.strip_prefix("rollout-")?;
+    let parts: Vec<&str> = stem.split('-').collect();
+    // parts = [YYYY, MM, DDTHH, MM, SS, <uuid 5 groups>]  (10 total)
+    if parts.len() < 10 {
+        return None;
+    }
+    Some(parts[5..].join("-"))
 }
 
 /// Copy the freshest rate-limit quota (from the most-recently-updated codex
@@ -433,6 +460,7 @@ fn clean_task_name(s: &str) -> String {
 
 fn flush_codex(
     slug: &Option<String>,
+    uuid: &Option<String>,
     buf: &mut String,
     now: SystemTime,
     ssh_host: &str,
@@ -445,7 +473,13 @@ fn flush_codex(
     }
     let Some(slug) = slug else { return };
     if let Some(state) = parse_codex_rollout(buf, now, slug) {
-        let title = titles.get(&state.session_id).map(|s| s.as_str());
+        // The tail we read may not carry session_meta (it's at the top of the
+        // file), so prefer the thread id extracted from the rollout filename.
+        let sid = uuid
+            .as_deref()
+            .map(str::to_string)
+            .unwrap_or_else(|| state.session_id.clone());
+        let title = titles.get(&sid).map(|s| s.as_str());
         // A1: only surface sessions that carry a readable task title; drop the
         // synthetic sub-agent boilerplate so the view stays clean.
         if title.is_none_or(|t| t.trim().is_empty() || is_synthetic_title(t)) {
@@ -453,7 +487,7 @@ fn flush_codex(
         }
         let name = title.map(clean_task_name).unwrap_or_else(|| slug.clone());
         let mut t = TaskSnapshot::new(
-            format!("codex-remote:{host_id}:{}", state.session_id),
+            format!("codex-remote:{host_id}:{sid}"),
             name,
             TaskSource::Codex,
             state.status,
@@ -466,7 +500,7 @@ fn flush_codex(
         t.updated_at = state.updated_at;
         t.message = state.last_message;
         t.cli = Some("codex".into());
-        t.session_id = Some(state.session_id);
+        t.session_id = Some(sid);
         t.quota_5h_used_pct = state.quota_5h_used_pct;
         t.quota_5h_resets_at = state.quota_5h_resets_at;
         t.quota_1w_used_pct = state.quota_1w_used_pct;
@@ -578,7 +612,7 @@ mod tests {
 
     fn header(cwd: &str) -> String {
         format!(
-            "{{\"timestamp\":\"{ts}\",\"type\":\"session_meta\",\"payload\":{{\"id\":\"sess-1\",\"cwd\":\"{cwd}\",\"originator\":\"Codex Desktop\"}}}}\n",
+            "{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"session_meta\",\"id\":\"sess-1\",\"cwd\":\"{cwd}\",\"originator\":\"Codex Desktop\"}}}}\n",
             ts = recent_rfc3339(120)
         )
     }
