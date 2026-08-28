@@ -97,7 +97,7 @@ impl RemoteTmuxProvider {
         // backslash escapes, so the remote output must contain actual tabs.
         let fmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{window_name}";
         format!(
-            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 2>/dev/null | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===\"; cat \"$f\"; done; {}; true",
+            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 2>/dev/null | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===\"; tail -c 65536 \"$f\"; done; {}; true",
             parser::PS_MARKER,
             runfile::RUNS_MARKER,
             runfile::CODEX_MARKER,
