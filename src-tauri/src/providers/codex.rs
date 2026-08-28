@@ -27,6 +27,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use crate::providers::{Provider, ProviderOutput};
+use std::collections::HashMap;
 
 /// A session whose last event is `task_complete` is WAITING_INPUT for this
 /// long before we consider it dormant/uninteresting.
@@ -292,17 +293,44 @@ pub fn tasks_from_codex_section(
     host_id: &str,
     now: SystemTime,
 ) -> Vec<TaskSnapshot> {
+    let mut titles: HashMap<String, String> = HashMap::new();
+    for line in section.lines() {
+        if let Some(rest) = line.strip_prefix("META\t") {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
+                if let (Some(id), Some(t)) = (
+                    v.get("id").and_then(|x| x.as_str()),
+                    v.get("t").and_then(|x| x.as_str()),
+                ) {
+                    if !t.trim().is_empty() {
+                        titles.insert(id.to_string(), t.to_string());
+                    }
+                }
+            }
+        }
+    }
+
     let mut out = Vec::new();
     let mut current_slug: Option<String> = None;
     let mut buf = String::new();
 
     for line in section.lines() {
         let line = line.trim();
+        if line.starts_with("META\t") {
+            continue;
+        }
         if let Some(slug) = line
             .strip_prefix("===S:")
             .and_then(|s| s.strip_suffix("==="))
         {
-            flush_codex(&current_slug, &mut buf, now, ssh_host, host_id, &mut out);
+            flush_codex(
+                &current_slug,
+                &mut buf,
+                now,
+                ssh_host,
+                host_id,
+                &titles,
+                &mut out,
+            );
             current_slug = Some(slug.to_string());
             buf.clear();
             continue;
@@ -310,8 +338,35 @@ pub fn tasks_from_codex_section(
         buf.push_str(line);
         buf.push('\n');
     }
-    flush_codex(&current_slug, &mut buf, now, ssh_host, host_id, &mut out);
+    flush_codex(
+        &current_slug,
+        &mut buf,
+        now,
+        ssh_host,
+        host_id,
+        &titles,
+        &mut out,
+    );
     out
+}
+
+fn is_synthetic_title(t: &str) -> bool {
+    t.starts_with("The following is the Codex agent history")
+        || t.starts_with("# Files mentioned by the user")
+        || t.starts_with("PLEASE IMPLEMENT THIS PLAN")
+}
+
+/// Collapse whitespace/newlines (titles can be multi-line prompts) and clamp
+/// to a readable length for a row label.
+fn clean_task_name(s: &str) -> String {
+    let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
+    if collapsed.chars().count() <= 56 {
+        collapsed
+    } else {
+        let mut t: String = collapsed.chars().take(56).collect();
+        t.push('…');
+        t
+    }
 }
 
 fn flush_codex(
@@ -320,6 +375,7 @@ fn flush_codex(
     now: SystemTime,
     ssh_host: &str,
     host_id: &str,
+    titles: &HashMap<String, String>,
     out: &mut Vec<TaskSnapshot>,
 ) {
     if buf.trim().is_empty() {
@@ -327,7 +383,12 @@ fn flush_codex(
     }
     let Some(slug) = slug else { return };
     if let Some(state) = parse_codex_rollout(buf, now, slug) {
-        let name = state.project.clone().unwrap_or_else(|| slug.clone());
+        let title = titles.get(&state.session_id).map(|s| s.as_str());
+        let name = title
+            .filter(|t| !is_synthetic_title(t))
+            .map(clean_task_name)
+            .or_else(|| state.project.as_deref().map(clean_task_name))
+            .unwrap_or_else(|| slug.clone());
         let mut t = TaskSnapshot::new(
             format!("codex-remote:{host_id}:{}", state.session_id),
             name,
