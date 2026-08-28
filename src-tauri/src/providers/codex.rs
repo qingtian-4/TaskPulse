@@ -332,7 +332,7 @@ pub fn tasks_from_codex_section(
     host_id: &str,
     now: SystemTime,
 ) -> Vec<TaskSnapshot> {
-    let mut titles: HashMap<String, String> = HashMap::new();
+    let mut titles: HashMap<String, (String, String)> = HashMap::new();
     for line in section.lines() {
         if let Some(rest) = line.strip_prefix("META\t") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
@@ -341,7 +341,12 @@ pub fn tasks_from_codex_section(
                     v.get("t").and_then(|x| x.as_str()),
                 ) {
                     if !t.trim().is_empty() {
-                        titles.insert(id.to_string(), t.to_string());
+                        let cwd = v
+                            .get("cwd")
+                            .and_then(|x| x.as_str())
+                            .unwrap_or("")
+                            .to_string();
+                        titles.insert(id.to_string(), (t.to_string(), cwd));
                     }
                 }
             }
@@ -393,6 +398,38 @@ pub fn tasks_from_codex_section(
         &titles,
         &mut out,
     );
+    // Fill the project tree with EVERY readable thread (from META), so a
+    // project shows its full task list even if a thread has no recent rollout.
+    let present: std::collections::HashSet<String> =
+        out.iter().filter_map(|t| t.session_id.clone()).collect();
+    for (id, (title, cwd)) in &titles {
+        if present.contains(id) {
+            continue;
+        }
+        if title.trim().is_empty() || is_synthetic_title(title) {
+            continue;
+        }
+        let project = cwd
+            .rsplit(['/', '\\'])
+            .next()
+            .filter(|s| !s.is_empty())
+            .unwrap_or_else(|| cwd.as_str())
+            .to_string();
+        let mut t = TaskSnapshot::new(
+            format!("codex-remote:{host_id}:{id}"),
+            clean_task_name(title),
+            TaskSource::Codex,
+            TaskStatus::Idle,
+            DetectionConfidence::Hook,
+            now,
+        )
+        .with_host(ssh_host.to_string())
+        .with_remote();
+        t.project = Some(project);
+        t.cli = Some("codex".into());
+        t.session_id = Some(id.clone());
+        out.push(t);
+    }
     propagate_freshest_quota(&mut out);
     out
 }
@@ -443,6 +480,8 @@ fn is_synthetic_title(t: &str) -> bool {
     t.starts_with("The following is the Codex agent history")
         || t.starts_with("# Files mentioned by the user")
         || t.starts_with("PLEASE IMPLEMENT THIS PLAN")
+        || t.starts_with("<environment_context")
+        || t.starts_with("hello") && t.len() < 20
 }
 
 /// Collapse whitespace/newlines (titles can be multi-line prompts) and clamp
@@ -465,7 +504,7 @@ fn flush_codex(
     now: SystemTime,
     ssh_host: &str,
     host_id: &str,
-    titles: &HashMap<String, String>,
+    titles: &HashMap<String, (String, String)>,
     out: &mut Vec<TaskSnapshot>,
 ) {
     if buf.trim().is_empty() {
@@ -479,7 +518,7 @@ fn flush_codex(
             .as_deref()
             .map(str::to_string)
             .unwrap_or_else(|| state.session_id.clone());
-        let title = titles.get(&sid).map(|s| s.as_str());
+        let title = titles.get(&sid).map(|(t, _)| t.as_str());
         // A1: only surface sessions that carry a readable task title; drop the
         // synthetic sub-agent boilerplate so the view stays clean.
         if title.is_none_or(|t| t.trim().is_empty() || is_synthetic_title(t)) {

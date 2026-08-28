@@ -85,7 +85,7 @@ impl RemoteTmuxProvider {
     /// (avoids stdio quote-nesting) then cats it, so each remote Codex session
     /// can be named by its task title. No-op if there's no Codex state DB.
     fn codex_meta_cmd() -> &'static str {
-        "python3 -c \"import sqlite3,json;c=sqlite3.connect('$HOME/.codex/state_5.sqlite');f=open('$HOME/.codex/.tp_meta','w');[f.write('META\\t'+json.dumps({'id':r[0],'t':(r[1] or '')[:120]},ensure_ascii=False)+'\\n') for r in c.execute('SELECT id,title FROM threads')];f.close()\" 2>/dev/null; cat \"$HOME/.codex/.tp_meta\" 2>/dev/null"
+        "python3 -c 'import sqlite3,json,os;c=sqlite3.connect(os.path.expanduser(\"~/.codex/state_5.sqlite\"));[print(\"META\\t\"+json.dumps({\"id\":r[0],\"t\":(r[1] or \"\")[:120],\"cwd\":(r[2] or \"\")},ensure_ascii=False)) for r in c.execute(\"SELECT id,title,cwd FROM threads WHERE archived=0 AND title IS NOT NULL\")]' 2>/dev/null"
     }
 
     /// The single remote command that returns panes + process table + recent
