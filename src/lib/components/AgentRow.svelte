@@ -74,6 +74,11 @@
       {:else if task.status === 'failed'}
         <span class="text-[10px] text-[#dd4f4f] flex-shrink-0">✗</span>
       {/if}
+      {#if task.quota_used_pct != null}
+        <span class="text-[9px] text-[#c9c161] flex-shrink-0 tabular-nums" title="Codex 7天窗口用量">
+          额度 {Math.round(task.quota_used_pct)}%
+        </span>
+      {/if}
     </div>
 
     {#if task.remote}

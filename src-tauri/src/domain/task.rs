@@ -254,6 +254,12 @@ pub struct TaskSnapshot {
     pub cli: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub session_id: Option<String>,
+    /// Codex 7-day window usage percent (0-100) from token_count rate_limits.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_used_pct: Option<f64>,
+    /// Unix epoch seconds the Codex usage window resets.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub quota_resets_at: Option<i64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hook_event: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -295,6 +301,8 @@ impl TaskSnapshot {
             session_id: None,
             hook_event: None,
             hook_matcher: None,
+            quota_used_pct: None,
+            quota_resets_at: None,
         }
     }
 

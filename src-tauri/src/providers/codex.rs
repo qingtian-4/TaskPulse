@@ -112,6 +112,8 @@ impl CodexProvider {
         task.project = host.project.clone();
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
+        task.quota_used_pct = host.quota_used_pct;
+        task.quota_resets_at = host.quota_resets_at;
         task.started_at = Some(host.updated_at);
         task.message = host.last_message.clone();
         // A completed turn means the agent is waiting on the user — keep the
@@ -147,6 +149,8 @@ pub struct SessionState {
     pub project: Option<String>,
     pub last_message: Option<String>,
     pub session_id: String,
+    pub quota_used_pct: Option<f64>,
+    pub quota_resets_at: Option<i64>,
 }
 
 /// Shared Codex rollout → session-state parser.
@@ -167,6 +171,8 @@ pub fn parse_codex_rollout(
     let mut updated_at = now;
     let mut last_message: Option<String> = None;
     let mut session_id = default_session_id.to_string();
+    let mut quota_used_pct: Option<f64> = None;
+    let mut quota_resets_at: Option<i64> = None;
 
     for line in body.lines() {
         let line = line.trim_start();
@@ -221,8 +227,22 @@ pub fn parse_codex_rollout(
                     }
                 }
             }
-            "token_count" | "mcp_tool_call_end" | "web_search_end" | "patch_apply_end"
-            | "item_completed" => {
+            "token_count" => {
+                if status != TaskStatus::Running {
+                    status = TaskStatus::Running;
+                }
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+                // Codex 7-day rate-limit quota, from token_count rate_limits.
+                if let Some(rl) = payload.get("rate_limits") {
+                    if let Some(primary) = rl.get("primary") {
+                        quota_used_pct = primary.get("used_percent").and_then(|v| v.as_f64());
+                        quota_resets_at = primary.get("resets_at").and_then(|v| v.as_i64());
+                    }
+                }
+            }
+            "mcp_tool_call_end" | "web_search_end" | "patch_apply_end" | "item_completed" => {
                 // activity — confirms the turn is running
                 if status != TaskStatus::Running {
                     status = TaskStatus::Running;
@@ -279,6 +299,8 @@ pub fn parse_codex_rollout(
         project,
         last_message,
         session_id,
+        quota_used_pct,
+        quota_resets_at,
     })
 }
 
@@ -404,6 +426,8 @@ fn flush_codex(
         t.message = state.last_message;
         t.cli = Some("codex".into());
         t.session_id = Some(state.session_id);
+        t.quota_used_pct = state.quota_used_pct;
+        t.quota_resets_at = state.quota_resets_at;
         out.push(t);
     }
 }

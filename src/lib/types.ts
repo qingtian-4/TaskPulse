@@ -50,6 +50,8 @@ export interface TaskSnapshot {
   cpu?: number;
   cli?: string;
   session_id?: string;
+  quota_used_pct?: number;
+  quota_resets_at?: number;
   hook_event?: string;
   hook_matcher?: string;
 }

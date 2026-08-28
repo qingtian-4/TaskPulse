@@ -100,6 +100,8 @@ impl From<AgentStatus> for TaskSnapshot {
             session_id: a.session_id,
             hook_event: a.hook_event,
             hook_matcher: a.hook_matcher,
+            quota_used_pct: None,
+            quota_resets_at: None,
         }
     }
 }

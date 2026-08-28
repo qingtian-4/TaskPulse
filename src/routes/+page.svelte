@@ -31,6 +31,31 @@
   let recents = $derived(recentTasks(tasks));
   let aggregateState = $derived(aggregate(tasks));
 
+  // Group a task list by project (Codex tasks share a project → one group),
+  // so each project shows its task names; tasks without a project stay flat.
+  function groupProject(tasks: TaskSnapshot[]) {
+    const groups: { project: string; tasks: TaskSnapshot[] }[] = [];
+    const flat: TaskSnapshot[] = [];
+    for (const t of tasks) {
+      if (t.project) {
+        const g = groups.find((x) => x.project === t.project);
+        if (g) g.tasks.push(t);
+        else groups.push({ project: t.project, tasks: [t] });
+      } else flat.push(t);
+    }
+    return { groups, flat };
+  }
+
+  function quotaText(t: TaskSnapshot) {
+    if (t.quota_used_pct == null) return '';
+    const pct = Math.round(t.quota_used_pct);
+    if (t.quota_resets_at) {
+      const days = Math.max(1, Math.round((t.quota_resets_at - Date.now() / 1000) / 86400));
+      return `额度 ${pct}% · ${days}d`;
+    }
+    return `额度 ${pct}%`;
+  }
+
   let panelEl = $state<HTMLDivElement | null>(null);
 
   $effect(() => {
@@ -240,11 +265,21 @@
                 <span class="text-[10px] text-[#8f8d86] tabular-nums">{hostStatusLine(rh.host)}</span>
               {/if}
             </div>
-            <ul class="m-0 p-0">
-              {#each remotes.get(rh.host) ?? [] as task (task.id)}
-                <AgentRow {task} onFocus={() => focusAgent(task)} />
-              {/each}
-            </ul>
+            {@const { groups, flat } = groupProject(remotes.get(rh.host) ?? [])}
+            {#each groups as g (g.project)}
+              <div class="px-3.5 pt-1 flex items-center gap-1.5">
+                <span class="text-[9px] font-semibold tracking-wider uppercase text-[#8f8d86]">{g.project}</span>
+                <span class="text-[9px] text-[#8a887f] ml-auto tabular-nums">{g.tasks.length} 任务</span>
+              </div>
+              <ul class="m-0 p-0">
+                {#each g.tasks as task (task.id)}
+                  <AgentRow {task} onFocus={() => focusAgent(task)} />
+                {/each}
+              </ul>
+            {/each}
+            {#each flat as task (task.id)}
+              <AgentRow {task} onFocus={() => focusAgent(task)} />
+            {/each}
           {/each}
         {/if}
       {/if}
