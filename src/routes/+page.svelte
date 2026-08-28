@@ -7,6 +7,7 @@
   import type { TaskSnapshot, HostHealth } from '$lib/types';
   import { formatAgo } from '$lib/types';
   import AgentRow from '$lib/components/AgentRow.svelte';
+  import ProjectTree from '$lib/components/ProjectTree.svelte';
   import AggregatePill from '$lib/components/AggregatePill.svelte';
   import { aggregate, localTasks, remoteByHost, recentTasks } from '$lib/utils';
   import Pin from '@lucide/svelte/icons/pin';
@@ -30,6 +31,16 @@
   let remotes = $derived(remoteByHost(tasks));
   let recents = $derived(recentTasks(tasks));
   let aggregateState = $derived(aggregate(tasks));
+  let selectedId = $state<string | null>(null);
+  let selectedTask = $derived(tasks.find((t) => t.id === selectedId) ?? null);
+
+  function statusLabel(s: TaskSnapshot['status']) {
+    const m: Record<TaskSnapshot['status'], string> = {
+      running: 'running', waiting_input: 'waiting input', succeeded: 'succeeded',
+      failed: 'failed', idle: 'idle', disconnected: 'disconnected', unknown: 'unknown',
+    };
+    return m[s] ?? s;
+  }
 
   // Group a task list by project (Codex tasks share a project → one group),
   // so each project shows its task names; tasks without a project stay flat.
@@ -223,55 +234,23 @@
     </p>
   {:else}
     <div class="glass-scroll flex-1 min-h-0 overflow-y-auto py-1">
-      {#if locals.length > 0}
-        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#8f8d86] px-4 pt-1.5 pb-0.5">Local Agents</p>
-        <ul class="m-0 p-0">
-          {#each locals as task (task.id)}
-            <AgentRow {task} onFocus={() => focusAgent(task)} />
+      {#if hosts.length > 0}
+        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#8f8d86] px-4 pt-2 pb-0.5">Remote Hosts</p>
+        <p class="text-[10px] text-[#8f8d86] px-4 py-1">
+          {#each hosts as h (h.host)}
+            <span class="mr-2 inline-flex items-center gap-1">
+              <Server size={10} class="inline-block" />
+              {h.host}
+              <span style="color: {h.status === 'disconnected' ? '#dd4f4f' : '#78b644'}">
+                {h.status === 'disconnected' ? (h.last_seen ? `disconnected · ${formatAgo(h.last_seen)}` : 'disconnected') : 'idle'}
+              </span>
+            </span>
           {/each}
-        </ul>
+        </p>
       {/if}
 
-      {#if remotes.size > 0 || hosts.length > 0}
-        <p class="text-[9px] font-semibold tracking-widest uppercase text-[#8f8d86] px-4 pt-2 pb-0.5">Remote Tmux</p>
-        {#if remotes.size === 0}
-          <p class="text-[10px] text-[#8f8d86] px-4 py-1">
-            {#each hosts as h (h.host)}
-              <span class="mr-2 inline-flex items-center gap-1">
-                <Server size={10} class="inline-block" />
-                {h.host}
-                <span style="color: {h.status === 'disconnected' ? '#dd4f4f' : '#78b644'}">
-                  {h.status === 'disconnected' ? (h.last_seen ? `disconnected · ${formatAgo(h.last_seen)}` : 'disconnected') : 'idle'}
-                </span>
-              </span>
-            {/each}
-          </p>
-        {:else}
-          {#each remoteHosts as rh (rh.host)}
-            <div class="px-3.5 pt-1 flex items-center gap-1.5">
-              <Server size={11} strokeWidth={1.8} class="flex-shrink-0 text-[#8a7fd9]" />
-              <span class="text-[11px] font-medium text-[#d9d7d2]">{rh.host}</span>
-              {#if hostStatusLine(rh.host)}
-                <span class="text-[10px] text-[#8f8d86] tabular-nums">{hostStatusLine(rh.host)}</span>
-              {/if}
-            </div>
-            {@const { groups, flat } = groupProject(remotes.get(rh.host) ?? [])}
-            {#each groups as g (g.project)}
-              <div class="px-3.5 pt-1 flex items-center gap-1.5">
-                <span class="text-[9px] font-semibold tracking-wider uppercase text-[#8f8d86]">{g.project}</span>
-                <span class="text-[9px] text-[#8a887f] ml-auto tabular-nums">{g.tasks.length} 任务</span>
-              </div>
-              <ul class="m-0 p-0">
-                {#each g.tasks as task (task.id)}
-                  <AgentRow {task} onFocus={() => focusAgent(task)} />
-                {/each}
-              </ul>
-            {/each}
-            {#each flat as task (task.id)}
-              <AgentRow {task} onFocus={() => focusAgent(task)} />
-            {/each}
-          {/each}
-        {/if}
+      {#if tasks.length > 0}
+        <ProjectTree tasks={tasks} {selectedId} onSelect={(id) => (selectedId = id)} title="项目 · 任务" />
       {/if}
 
       {#if recents.length > 0}
@@ -284,6 +263,21 @@
         <p class="text-[9px] text-[#8a887f] px-4 pb-1 flex items-center gap-1">
           <Clock size={9} class="inline-block" /> completed tasks stay for 30 minutes
         </p>
+      {/if}
+    </div>
+  {/if}
+
+  {#if selectedTask}
+    <div class="px-3.5 py-2 border-t border-white/[0.06] flex items-center gap-2" style="background:rgba(74,158,234,0.06)">
+      <span class="text-[9px] uppercase tracking-widest text-[#8f8d86]">监控中</span>
+      <span class="flex-1 min-w-0 truncate text-[11px] text-[#e4e2dd] font-medium">
+        {selectedTask.project ? `${selectedTask.project} › ` : ''}{selectedTask.name}
+      </span>
+      <span class="text-[9px] text-[#8f8d86] tabular-nums">{statusLabel(selectedTask.status)}</span>
+      {#if selectedTask.quota_5h_used_pct != null || selectedTask.quota_1w_used_pct != null}
+        <span class="text-[9px] text-[#c9c161] tabular-nums">
+          {selectedTask.quota_5h_used_pct != null ? `5h ${Math.round(selectedTask.quota_5h_used_pct)}%` : ''}{selectedTask.quota_5h_used_pct != null && selectedTask.quota_1w_used_pct != null ? ' · ' : ''}{selectedTask.quota_1w_used_pct != null ? `1周 ${Math.round(selectedTask.quota_1w_used_pct)}%` : ''}
+        </span>
       {/if}
     </div>
   {/if}
