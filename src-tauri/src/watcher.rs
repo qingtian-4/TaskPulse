@@ -126,6 +126,7 @@ pub fn status_dir() -> Option<PathBuf> {
 
 /// Cached latest merged task list for on-demand popup refresh.
 static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
+static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
 
 fn emit_agents(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
     log::info!("emit_agents: {} tasks, {} hosts", tasks.len(), hosts.len());
@@ -144,6 +145,13 @@ fn emit_agents(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
         });
         *cache = tasks.to_vec();
     }
+    {
+        let mut cache = LATEST_HOSTS.lock().unwrap_or_else(|e| {
+            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
+            e.into_inner()
+        });
+        *cache = hosts.to_vec();
+    }
     crate::tray::update_icon(app, tasks, hosts);
     let _ = app.emit("agents-updated", tasks);
     let _ = app.emit("hosts-updated", hosts);
@@ -158,8 +166,16 @@ pub fn emit_latest(app: &AppHandle) {
             e.into_inner()
         })
         .clone();
-    crate::tray::update_icon(app, &tasks, &[]);
+    let hosts = LATEST_HOSTS
+        .lock()
+        .unwrap_or_else(|e| {
+            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
+            e.into_inner()
+        })
+        .clone();
+    crate::tray::update_icon(app, &tasks, &hosts);
     let _ = app.emit("agents-updated", &tasks);
+    let _ = app.emit("hosts-updated", &hosts);
 }
 
 /// Tauri command: return the platform-appropriate status directory path.
@@ -182,6 +198,18 @@ pub fn get_agents() -> Vec<TaskSnapshot> {
         .clone();
     log::info!("get_agents: returning {} tasks", tasks.len());
     tasks
+}
+
+/// Tauri command: return cached remote-host health with the cached tasks.
+#[tauri::command]
+pub fn get_hosts() -> Vec<HostHealth> {
+    LATEST_HOSTS
+        .lock()
+        .unwrap_or_else(|e| {
+            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
+            e.into_inner()
+        })
+        .clone()
 }
 
 /// Tauri command: install or uninstall AgentTray/TaskPulse hooks for a CLI
@@ -334,8 +362,9 @@ fn merge_and_emit(
     tasks: Vec<TaskSnapshot>,
     hosts: &[HostHealth],
     now: SystemTime,
+    remote: bool,
 ) {
-    let merged = store.merge(tasks, now);
+    let merged = store.merge_partition(tasks, remote, now);
     let events = engine.apply(&merged, hosts, now);
     for e in &events {
         log::info!("transition event: {e:?}");
@@ -375,7 +404,7 @@ fn refresh_local(
     dedup_codex_over_scan(&mut tasks);
     dedup_hermes_over_scan(&mut tasks);
     dedup_dsh_over_scan(&mut tasks);
-    merge_and_emit(app, store, engine, tasks, hosts, now);
+    merge_and_emit(app, store, engine, tasks, hosts, now, false);
 }
 
 fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
@@ -465,7 +494,15 @@ pub fn watch(app: AppHandle) {
                     );
                     while let Ok(out) = remote_rx.try_recv() {
                         hosts = out.hosts.clone();
-                        merge_and_emit(&app, &mut store, &mut engine, out.tasks, &out.hosts, now);
+                        merge_and_emit(
+                            &app,
+                            &mut store,
+                            &mut engine,
+                            out.tasks,
+                            &out.hosts,
+                            now,
+                            true,
+                        );
                     }
                 }
             }
@@ -522,7 +559,15 @@ pub fn watch(app: AppHandle) {
             while let Ok(out) = remote_rx.try_recv() {
                 let now = SystemTime::now();
                 hosts = out.hosts.clone();
-                merge_and_emit(&app, &mut store, &mut engine, out.tasks, &out.hosts, now);
+                merge_and_emit(
+                    &app,
+                    &mut store,
+                    &mut engine,
+                    out.tasks,
+                    &out.hosts,
+                    now,
+                    true,
+                );
             }
 
             // Periodic local process scan.

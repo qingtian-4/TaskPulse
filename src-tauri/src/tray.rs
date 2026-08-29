@@ -23,8 +23,17 @@ static PINNED: AtomicBool = AtomicBool::new(false);
 /// Aggregate attention state across tasks (and host health).
 /// Returns an icon-name string used by `icon_bytes`.
 fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str {
-    // Host disconnected is a strong signal even with no tasks.
-    if hosts.iter().any(|h| h.status == HostStatus::Disconnected) {
+    // Task attention wins over infrastructure health, matching the public
+    // priority contract: FAILED > WAITING_INPUT > DISCONNECTED > RUNNING.
+    if tasks.iter().any(|t| t.status == TaskStatus::Failed) {
+        return "error";
+    }
+    if tasks.iter().any(|t| t.status == TaskStatus::WaitingInput) {
+        return "needs-input";
+    }
+    if hosts.iter().any(|h| h.status == HostStatus::Disconnected)
+        || tasks.iter().any(|t| t.status == TaskStatus::Disconnected)
+    {
         return "disconnected";
     }
 
@@ -233,6 +242,20 @@ mod tests {
         let tasks = vec![task(TaskStatus::Running), task(TaskStatus::Running)];
         let hosts = vec![HostHealth::disconnected("Server3", None)];
         assert_eq!(aggregate_state(&tasks, &hosts), "disconnected");
+    }
+
+    #[test]
+    fn aggregate_failed_beats_disconnected_host() {
+        let tasks = vec![task(TaskStatus::Failed)];
+        let hosts = vec![HostHealth::disconnected("Server3", None)];
+        assert_eq!(aggregate_state(&tasks, &hosts), "error");
+    }
+
+    #[test]
+    fn aggregate_waiting_beats_disconnected_host() {
+        let tasks = vec![task(TaskStatus::WaitingInput)];
+        let hosts = vec![HostHealth::disconnected("Server3", None)];
+        assert_eq!(aggregate_state(&tasks, &hosts), "needs-input");
     }
 
     #[test]

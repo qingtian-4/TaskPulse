@@ -55,7 +55,7 @@ pub struct RemoteTmuxProvider {
     executor: Arc<dyn SshExecutor>,
     hosts: HashMap<String, HostPollState>,
     /// First-seen time per pane (used as detected_at when start is unknown).
-    detected: HashMap<String, SystemTime>,
+    detected: HashMap<(String, String), SystemTime>,
 }
 
 impl RemoteTmuxProvider {
@@ -147,7 +147,8 @@ impl RemoteTmuxProvider {
                 detector::PaneClass::Running => {
                     seen_panes.insert(pane.pane_id.clone());
                     state.running_panes.insert(pane.pane_id.clone());
-                    let detected_at = *self.detected.entry(pane.pane_id.clone()).or_insert(now);
+                    let pane_key = (host_id.to_string(), pane.pane_id.clone());
+                    let detected_at = *self.detected.entry(pane_key).or_insert(now);
                     let workload = detector::workload_process(pane, procs);
                     let label = detector::workload_label(pane, procs);
                     let pid = workload.map(|p| p.pid).unwrap_or(pane.pane_pid);
@@ -197,7 +198,12 @@ impl RemoteTmuxProvider {
                         .with_remote()
                         .with_host(ssh_host)
                         .with_project(project)
-                        .with_started_at(self.detected.get(&pane.pane_id).copied().unwrap_or(now))
+                        .with_started_at(
+                            self.detected
+                                .get(&(host_id.to_string(), pane.pane_id.clone()))
+                                .copied()
+                                .unwrap_or(now),
+                        )
                         .with_finished_at(now)
                         .with_message("finished (inferred — exit code unknown)");
                         task.recent = true;
@@ -223,7 +229,10 @@ impl RemoteTmuxProvider {
             .collect();
         for pane_id in gone {
             state.running_panes.remove(&pane_id);
-            let detected_at = self.detected.get(&pane_id).copied();
+            let detected_at = self
+                .detected
+                .get(&(host_id.to_string(), pane_id.clone()))
+                .copied();
             let mut task = TaskSnapshot::new(
                 format!("ssh:{ssh_host}:{pane_id}"),
                 "tmux pane destroyed",
@@ -245,8 +254,11 @@ impl RemoteTmuxProvider {
         }
 
         // Prune detected-at cache for panes that are gone.
-        self.detected
-            .retain(|p, _| seen_panes.contains(p) || state.running_panes.contains(p));
+        self.detected.retain(|(detected_host, pane_id), _| {
+            detected_host != host_id
+                || seen_panes.contains(pane_id)
+                || state.running_panes.contains(pane_id)
+        });
 
         // EXACT mode: tp-run run files override inference for the same pane
         // (store merges by id, EXACT > HOOK > INFERRED).
@@ -769,6 +781,24 @@ mod tests {
         let out = provider.poll(SystemTime::now());
         let ids: Vec<&str> = out.tasks.iter().map(|t| t.id.as_str()).collect();
         assert_eq!(ids, vec!["ssh:Server1:%3", "ssh:Server3:%3"]);
+    }
+
+    #[test]
+    fn identical_pane_ids_on_different_hosts_keep_distinct_start_times() {
+        let fake = Arc::new(FakeSshExecutor::new());
+        let mut provider = provider_with_two_hosts(fake);
+        let first = SystemTime::now();
+        let second = first + Duration::from_secs(20);
+        let panes = parser::parse_panes(&pane_line("demo", "%0", 600, "python", "/home/user/proj"));
+        let procs = parser::parse_procs(&ps_line(600, 1, "python", "python run.py"));
+
+        let server1 =
+            provider.process_snapshot("Server1", "server1", &panes, &procs, &[], "", first);
+        let server3 =
+            provider.process_snapshot("Server3", "server3", &panes, &procs, &[], "", second);
+
+        assert_eq!(server1.tasks[0].started_at, Some(first));
+        assert_eq!(server3.tasks[0].started_at, Some(second));
     }
 
     #[test]

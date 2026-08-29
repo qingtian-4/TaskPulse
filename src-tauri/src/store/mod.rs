@@ -86,6 +86,49 @@ impl TaskStore {
         out
     }
 
+    /// Reconcile one complete local/remote observation partition.
+    ///
+    /// A successful provider cycle is authoritative for its partition: tasks
+    /// that were previously active but are absent now must not remain as
+    /// ghosts forever. A vanished RUNNING task is retained in RECENT as an
+    /// inferred finish; waiting/idle tasks simply disappear. Remote SSH
+    /// failures are safe because RemoteTmuxProvider re-emits its last tasks
+    /// with `stale=true` rather than returning an empty successful snapshot.
+    pub fn merge_partition(
+        &mut self,
+        incoming: Vec<TaskSnapshot>,
+        remote: bool,
+        now: SystemTime,
+    ) -> Vec<TaskSnapshot> {
+        let incoming_ids: std::collections::HashSet<&str> =
+            incoming.iter().map(|t| t.id.as_str()).collect();
+        let vanished: Vec<String> = self
+            .active
+            .iter()
+            .filter(|(id, task)| task.remote == remote && !incoming_ids.contains(id.as_str()))
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        for id in vanished {
+            let Some(mut task) = self.active.remove(&id) else {
+                continue;
+            };
+            if task.status == crate::domain::TaskStatus::Running {
+                task.status = crate::domain::TaskStatus::Idle;
+                task.confidence = DetectionConfidence::Inferred;
+                task.updated_at = now;
+                task.finished_at = Some(now);
+                task.exit_code = None;
+                task.stale = false;
+                task.recent = true;
+                self.recent.retain(|recent| recent.id != id);
+                self.recent.push(task);
+            }
+        }
+
+        self.merge(incoming, now)
+    }
+
     /// Active (non-finished) tasks only.
     #[allow(dead_code)]
     pub fn active(&self) -> Vec<TaskSnapshot> {
@@ -390,6 +433,66 @@ mod tests {
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].status, TaskStatus::Running);
         assert!(store.active().len() == 1);
+    }
+
+    #[test]
+    fn successful_partition_reconciliation_finishes_vanished_running_task() {
+        let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
+        let now = SystemTime::now();
+        let mut running = t0(
+            "codex:local-1",
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+        );
+        running.remote = false;
+        store.merge_partition(vec![running], false, now);
+
+        let out = store.merge_partition(Vec::new(), false, secs(now, 5));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].status, TaskStatus::Idle);
+        assert_eq!(out[0].confidence, DetectionConfidence::Inferred);
+        assert!(out[0].recent);
+        assert!(out[0].finished_at.is_some());
+        assert!(store.active().is_empty());
+    }
+
+    #[test]
+    fn successful_partition_reconciliation_drops_vanished_waiting_task() {
+        let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
+        let now = SystemTime::now();
+        let mut waiting = t0(
+            "hermes:local-1",
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+        );
+        waiting.remote = false;
+        store.merge_partition(vec![waiting], false, now);
+
+        let out = store.merge_partition(Vec::new(), false, secs(now, 5));
+        assert!(out.is_empty());
+        assert!(store.active().is_empty());
+    }
+
+    #[test]
+    fn partition_reconciliation_preserves_other_partition() {
+        let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
+        let now = SystemTime::now();
+        let mut local = t0(
+            "codex:local",
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+        );
+        local.remote = false;
+        let mut remote = t0(
+            "ssh:Server3:%0",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+        );
+        remote.remote = true;
+        store.merge(vec![local, remote], now);
+
+        let out = store.merge_partition(Vec::new(), false, secs(now, 5));
+        assert!(out.iter().any(|task| task.id == "ssh:Server3:%0"));
     }
 
     #[test]
