@@ -1,9 +1,13 @@
-import { STATUS_PRIORITY, type Status, type TaskSnapshot } from './types';
+import { STATUS_PRIORITY, type HostHealth, type Status, type TaskSnapshot } from './types';
 
-export function aggregate(tasks: TaskSnapshot[]): Status {
-  if (tasks.length === 0) return 'unknown';
-  return tasks.reduce<Status>(
-    (best, t) => (STATUS_PRIORITY[t.status] < STATUS_PRIORITY[best] ? t.status : best),
+export function aggregate(tasks: TaskSnapshot[], hosts: HostHealth[] = []): Status {
+  const statuses: Status[] = [
+    ...tasks.map((task) => task.status),
+    ...hosts.filter((host) => host.status === 'disconnected').map(() => 'disconnected' as const),
+  ];
+  if (statuses.length === 0) return 'unknown';
+  return statuses.reduce<Status>(
+    (best, status) => (STATUS_PRIORITY[status] < STATUS_PRIORITY[best] ? status : best),
     'unknown'
   );
 }

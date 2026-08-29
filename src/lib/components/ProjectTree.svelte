@@ -1,102 +1,114 @@
 <script lang="ts">
-  import type { TaskSnapshot } from '$lib/types';
+  import type { Status, TaskSnapshot } from '$lib/types';
+  import { STATUS_LABEL, STATUS_PRIORITY } from '$lib/types';
   import StatusDot from './StatusDot.svelte';
 
   let {
     tasks,
     selectedId = null,
-    title = '项目',
+    title,
     onSelect,
   }: {
     tasks: TaskSnapshot[];
     selectedId?: string | null;
-    title?: string;
+    title: string;
     onSelect?: (id: string) => void;
   } = $props();
 
-  // Group by project; tasks without a project go to "flat".
   const groups = $derived.by(() => {
-    const m = new Map<string, TaskSnapshot[]>();
+    const projects = new Map<string, TaskSnapshot[]>();
     const flat: TaskSnapshot[] = [];
-    for (const t of tasks) {
-      const p = (t.project ?? '').trim();
-      if (p) {
-        const arr = m.get(p);
-        if (arr) arr.push(t);
-        else m.set(p, [t]);
-      } else flat.push(t);
+    for (const task of tasks) {
+      const project = (task.project ?? '').trim();
+      if (!project) {
+        flat.push(task);
+        continue;
+      }
+      const projectTasks = projects.get(project) ?? [];
+      projectTasks.push(task);
+      projects.set(project, projectTasks);
     }
     return {
-      projects: [...m.entries()].map(([project, ts]) => ({ project, tasks: ts })),
+      projects: [...projects.entries()].map(([project, projectTasks]) => ({
+        project,
+        tasks: projectTasks,
+      })),
       flat,
     };
   });
 
-  // Which projects are expanded.
   let open = $state<Record<string, boolean>>({});
 
-  function colorFor(status: TaskSnapshot['status']) {
-    const c: Record<TaskSnapshot['status'], string> = {
-      running: '#4a9eea', waiting_input: '#c9c161', succeeded: '#78b644',
-      failed: '#dd4f4f', idle: '#8f8d86', disconnected: '#dd4f4f', unknown: '#8f8d86',
-    };
-    return c[status] ?? '#8f8d86';
+  function groupStatus(groupTasks: TaskSnapshot[]): Status {
+    return groupTasks.reduce<Status>(
+      (best, task) => STATUS_PRIORITY[task.status] < STATUS_PRIORITY[best] ? task.status : best,
+      'unknown',
+    );
+  }
+
+  function shouldOpen(groupTasks: TaskSnapshot[]): boolean {
+    return groupTasks.some((task) => task.status === 'failed' || task.status === 'waiting_input');
   }
 </script>
 
-<p class="text-[9px] font-semibold tracking-widest uppercase text-[#8f8d86] px-4 pt-2 pb-0.5">{title}</p>
+<section class="py-1" aria-label={title}>
+  <div class="flex items-center gap-2 px-4 pt-1.5 pb-1">
+    <p class="text-[10px] font-semibold tracking-[0.12em] text-[#aaa89f]">{title}</p>
+    <span class="text-[9px] text-[#74726c] tabular-nums">{tasks.length}</span>
+  </div>
 
-<ul class="m-0 p-0">
-  {#each groups.projects as g (g.project)}
-    {@const isOpen = open[g.project] ?? false}
-    <li>
-      <button
-        class="w-full flex items-center gap-1.5 px-3.5 py-1 text-left hover:bg-white/[0.03]"
-        onclick={() => (open[g.project] = !isOpen)}
-      >
-        <span class="text-[9px] text-[#8f8d86] transition-transform {isOpen ? 'rotate-90' : ''}">›</span>
-        <span class="text-[11px] font-semibold text-[#d9d7d2]">{g.project}</span>
-        {#if g.tasks.some((t) => t.host)}
-          <span class="text-[9px] text-[#8a7fd9] flex items-center gap-1">
-            {g.tasks.find((t) => t.host)?.host}
-            <StatusDot status="waiting_input" />
-          </span>
+  <ul class="m-0 p-0">
+    {#each groups.projects as group (group.project)}
+      {@const status = groupStatus(group.tasks)}
+      {@const isOpen = open[group.project] ?? shouldOpen(group.tasks)}
+      <li>
+        <button
+          type="button"
+          aria-expanded={isOpen}
+          class="w-full flex items-center gap-2 px-3.5 py-1.5 text-left hover:bg-white/[0.04] transition-colors"
+          onclick={() => (open[group.project] = !isOpen)}
+        >
+          <span aria-hidden="true" class="text-[10px] text-[#77756f] transition-transform {isOpen ? 'rotate-90' : ''}">›</span>
+          <StatusDot status={status} />
+          <span class="min-w-0 flex-1 truncate text-[12px] font-medium text-[#ddd9d2]">{group.project}</span>
+          <span class="text-[9px] text-[#8f8d86]">{STATUS_LABEL[status]}</span>
+          <span class="text-[9px] text-[#686762] tabular-nums">{group.tasks.length}</span>
+        </button>
+
+        {#if isOpen}
+          <ul class="m-0 p-0">
+            {#each group.tasks as task (task.id)}
+              <li>
+                <button
+                  type="button"
+                  aria-pressed={task.id === selectedId}
+                  class="w-full flex items-center gap-2 px-3.5 py-1.5 pl-8 text-left hover:bg-white/[0.04] transition-colors {task.id === selectedId ? 'bg-[#4a9eea]/[0.12]' : ''}"
+                  onclick={() => onSelect?.(task.id)}
+                >
+                  <StatusDot status={task.status} />
+                  <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}">{task.name}</span>
+                  <span class="text-[9px] text-[#77756f] flex-shrink-0">{STATUS_LABEL[task.status]}</span>
+                </button>
+              </li>
+            {/each}
+          </ul>
         {/if}
-        <span class="ml-auto text-[9px] text-[#8f8d86] tabular-nums">{g.tasks.length} 任务</span>
-      </button>
-      {#if isOpen}
-        <ul class="m-0 p-0">
-          {#each g.tasks as task (task.id)}
-            <li>
-              <button
-                class="w-full flex items-center gap-2 px-3.5 py-1 pl-7 text-left hover:bg-white/[0.03] {task.id === selectedId ? 'bg-[#4a9eea]/[0.12]' : ''}"
-                onclick={() => onSelect?.(task.id)}
-              >
-                <StatusDot status={task.status} />
-                <span class="flex-1 min-w-0 truncate text-[11.5px] {task.id === selectedId ? 'text-[#e4e2dd]' : 'text-[#aaa89f]'}">{task.name}</span>
-                {#if task.quota_1w_used_pct != null}
-                  <span class="text-[8px] text-[#c9c161] tabular-nums flex-shrink-0">
-                    {task.quota_5h_used_pct != null ? `5h ${Math.round(task.quota_5h_used_pct)}%` : ''}{task.quota_1w_used_pct != null ? ` · 1周 ${Math.round(task.quota_1w_used_pct)}%` : ''}
-                  </span>
-                {/if}
-                {#if task.id === selectedId}
-                  <span class="text-[8px] text-[#4a9eea] flex-shrink-0">● 监控中</span>
-                {/if}
-              </button>
-            </li>
-          {/each}
-        </ul>
-      {/if}
-    </li>
-  {/each}
+      </li>
+    {/each}
 
-  {#each groups.flat as task (task.id)}
-    <li>
-      <button class="w-full flex items-center gap-2 px-3.5 py-1 text-left hover:bg-white/[0.03] {task.id === selectedId ? 'bg-[#4a9eea]/[0.12]' : ''}" onclick={() => onSelect?.(task.id)}>
-        <StatusDot status={task.status} />
-        <span class="flex-1 min-w-0 truncate text-[11.5px] {task.id === selectedId ? 'text-[#e4e2dd]' : 'text-[#aaa89f]'}">{task.name}</span>
-        {#if task.id === selectedId}<span class="text-[8px] text-[#4a9eea]">● 监控中</span>{/if}
-      </button>
-    </li>
-  {/each}
-</ul>
+    {#each groups.flat as task (task.id)}
+      <li>
+        <button
+          type="button"
+          aria-pressed={task.id === selectedId}
+          class="w-full flex items-center gap-2 px-3.5 py-1.5 text-left hover:bg-white/[0.04] transition-colors {task.id === selectedId ? 'bg-[#4a9eea]/[0.12]' : ''}"
+          onclick={() => onSelect?.(task.id)}
+        >
+          <StatusDot status={task.status} />
+          <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}">{task.name}</span>
+          <span class="text-[9px] text-[#77756f] flex-shrink-0">{STATUS_LABEL[task.status]}</span>
+        </button>
+      </li>
+    {/each}
+  </ul>
+</section>

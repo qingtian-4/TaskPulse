@@ -1,53 +1,39 @@
 <script lang="ts">
   import type { TaskSnapshot } from '$lib/types';
   import {
-    STATUS_LABEL,
-    STATUS_COLOR,
-    SOURCE_LABEL,
-    SOURCE_COLOR,
     CONFIDENCE_LABEL,
-    formatElapsed,
+    SOURCE_COLOR,
+    SOURCE_LABEL,
+    STATUS_COLOR,
+    STATUS_LABEL,
     formatAgo,
+    formatElapsed,
   } from '$lib/types';
   import StatusDot from './StatusDot.svelte';
   import { SquareTerminal } from '@lucide/svelte';
 
-  let {
-    task,
-    onFocus,
-  }: { task: TaskSnapshot; onFocus: () => void } = $props();
-
+  let { task, onFocus }: { task: TaskSnapshot; onFocus: () => void } = $props();
   let hovered = $state(false);
 
   let sourceLabel = $derived(SOURCE_LABEL[task.source] || '');
   let sourceColor = $derived(SOURCE_COLOR[task.source] || '#888');
+  let metaLine = $derived(task.remote ? [task.host, task.project].filter(Boolean).join(' · ') : '');
 
-  // Line 2: host · project (remote) or terminal chip (local)
-  let metaLine = $derived(
-    task.remote
-      ? [task.host, task.project].filter(Boolean).join(' · ')
-      : ''
-  );
-
-  // Line 3: status · elapsed · confidence
   function statusLine(): string {
     const parts: string[] = [];
-    if (task.status === 'waiting_input') parts.push('waiting input');
-    else if (task.status === 'succeeded' && task.exit_code === 0) parts.push('exit 0');
-    else if (task.status === 'failed') parts.push(`exit ${task.exit_code ?? '?'}`);
+    if (task.status === 'succeeded' && task.exit_code === 0) parts.push('退出码 0');
+    else if (task.status === 'failed') parts.push(`退出码 ${task.exit_code ?? '?'}`);
     else parts.push(STATUS_LABEL[task.status]);
 
-    if (task.remote) {
-      if (task.status === 'running' || task.status === 'waiting_input') {
-        const el = formatElapsed(task.started_at ?? task.updated_at);
-        if (el) parts.push(el);
-      } else if (task.finished_at) {
-        parts.push(`finished ${formatAgo(task.finished_at)}`);
-      }
-      parts.push(CONFIDENCE_LABEL[task.confidence]);
-    } else if (task.cpu != null && task.cpu > 0) {
-      parts.push(`${task.cpu.toFixed(0)}% cpu`);
+    if (task.status === 'running' || task.status === 'waiting_input') {
+      const elapsed = formatElapsed(task.started_at ?? task.updated_at);
+      if (elapsed) parts.push(elapsed);
+    } else if (task.finished_at) {
+      parts.push(`完成于 ${formatAgo(task.finished_at)}`);
     }
+    if (task.remote) parts.push(CONFIDENCE_LABEL[task.confidence]);
+    else if (task.cpu != null && task.cpu > 0) parts.push(`CPU ${task.cpu.toFixed(0)}%`);
+    if (task.stale) parts.push('信息可能已过期');
     return parts.join(' · ');
   }
 </script>
@@ -65,14 +51,9 @@
       <p class="text-[12px] font-medium text-[#e8e6e1] truncate">{task.name}</p>
       {#if sourceLabel}
         <span
-          class="text-[9px] font-semibold px-[5px] py-[1px] rounded-[3px] flex-shrink-0 uppercase tracking-wide"
+          class="text-[9px] font-semibold px-[5px] py-[1px] rounded-[3px] flex-shrink-0 tracking-wide"
           style="color: {sourceColor}; background: {sourceColor}18; border: 0.5px solid {sourceColor}30;"
         >{sourceLabel}</span>
-      {/if}
-      {#if task.status === 'succeeded'}
-        <span class="text-[10px] text-[#78b644] flex-shrink-0">✓</span>
-      {:else if task.status === 'failed'}
-        <span class="text-[10px] text-[#dd4f4f] flex-shrink-0">✗</span>
       {/if}
       {#if task.quota_5h_used_pct != null || task.quota_1w_used_pct != null}
         <span class="text-[9px] text-[#c9c161] flex-shrink-0 tabular-nums" title="Codex 用量：5 小时 / 1 周">
@@ -83,51 +64,36 @@
       {/if}
     </div>
 
-    {#if task.remote}
-      <p class="text-[11px] text-[#9a9890] truncate mt-[1px]">
-        {#if metaLine}
-          <span class="inline-flex items-center gap-[3px]">
-            <SquareTerminal size={11} strokeWidth={1.8} class="inline-block flex-shrink-0" />
-            <span>{metaLine}</span>
-          </span>
-        {/if}
-        {#if task.message}
-          {#if metaLine}<span class="text-[#8f8d86]"> · </span>{/if}
-          <span>{task.message}</span>
-        {/if}
-      </p>
-    {:else}
-      <p class="text-[11px] text-[#aaa89f] truncate mt-[1px]">
-        {task.message || STATUS_LABEL[task.status]}
-      </p>
-    {/if}
+    <p class="text-[11px] text-[#aaa89f] truncate mt-[1px]">
+      {#if task.remote && metaLine}
+        <span class="inline-flex items-center gap-[3px]">
+          <SquareTerminal size={11} strokeWidth={1.8} class="inline-block flex-shrink-0" />
+          <span>{metaLine}</span>
+        </span>
+        {#if task.message}<span class="text-[#8f8d86]"> · </span>{/if}
+      {/if}
+      {task.message || STATUS_LABEL[task.status]}
+    </p>
 
-    {#if statusLine()}
-      <p class="text-[10px] text-[#8f8d86] truncate mt-[1px] tabular-nums" style="color: {task.stale ? '#b0895a' : '#8f8d86'};">
-        {statusLine()}
-        {#if task.stale}<span class="text-[#b0895a]"> · stale</span>{/if}
-      </p>
-    {/if}
+    <p class="text-[10px] truncate mt-[1px] tabular-nums" style="color: {task.stale ? '#b0895a' : '#8f8d86'};">
+      {statusLine()}
+    </p>
   </div>
 
   <div class="flex flex-col items-end gap-[3px] flex-shrink-0">
     {#if task.status === 'waiting_input'}
-      <span class="text-[10px] font-mono font-semibold tabular-nums" style="color: {STATUS_COLOR.waiting_input};">needs you</span>
+      <span class="text-[10px] font-semibold" style="color: {STATUS_COLOR.waiting_input};">需要处理</span>
     {/if}
     {#if task.can_focus}
       <button
         type="button"
-        aria-label="Focus terminal for {task.name}"
-        class="text-[10px] font-medium px-[7px] py-[2px] rounded-md border transition-all duration-150
-               text-[#5aa8dc] border-[rgba(90,168,220,0.25)] bg-[rgba(90,168,220,0.08)]
-               hover:bg-[rgba(90,168,220,0.18)] hover:border-[rgba(90,168,220,0.45)]
-               disabled:opacity-30"
-        style="backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px);"
+        aria-label="定位到 {task.name} 的终端"
+        class="text-[10px] font-medium px-[7px] py-[2px] rounded-md border transition-all duration-150 text-[#5aa8dc] border-[rgba(90,168,220,0.25)] bg-[rgba(90,168,220,0.08)] hover:bg-[rgba(90,168,220,0.18)] hover:border-[rgba(90,168,220,0.45)]"
         class:opacity-0={!hovered}
         class:opacity-100={hovered}
         onclick={onFocus}
       >
-        focus ↗
+        定位 →
       </button>
     {/if}
   </div>

@@ -76,19 +76,19 @@ export const STATUS_PRIORITY: Record<Status, number> = {
 };
 
 export const STATUS_LABEL: Record<Status, string> = {
-  'failed':         'failed',
-  'waiting_input':  'waiting input',
-  'disconnected':   'disconnected',
-  'running':        'running',
-  'succeeded':      'succeeded',
-  'idle':           'idle',
-  'unknown':        'unknown',
+  'failed':         '失败',
+  'waiting_input':  '等待输入',
+  'disconnected':   '已断开',
+  'running':        '运行中',
+  'succeeded':      '已完成',
+  'idle':           '空闲',
+  'unknown':        '未知',
 };
 
 export const STATUS_COLOR: Record<Status, string> = {
   'failed':         '#dd4f4f',
   'waiting_input':  '#e8c840',
-  'disconnected':   '#999999',
+  'disconnected':   '#d46a6a',
   'running':        '#4a90d9',
   'succeeded':      '#78b644',
   'idle':           '#78b644',
@@ -116,9 +116,9 @@ export const SOURCE_COLOR: Record<Source, string> = {
 };
 
 export const CONFIDENCE_LABEL: Record<Confidence, string> = {
-  'exact':    'exact',
-  'hook':     'hook',
-  'inferred': 'inferred',
+  'exact':    '精确',
+  'hook':     'Hook',
+  'inferred': '推断',
 };
 
 /** Maps terminal kind → short display name. null = use terminal.label instead. */
@@ -162,8 +162,8 @@ export function formatElapsed(startMs: number | undefined, untilMs: number = Dat
 export function formatAgo(ms: number | undefined, nowMs: number = Date.now()): string {
   if (!ms) return '';
   const secs = Math.max(0, Math.floor((nowMs - ms) / 1000));
-  if (secs < 60) return `${secs}s ago`;
-  if (secs < 3600) return `${Math.floor(secs / 60)}m ago`;
-  if (secs < 86400) return `${Math.floor(secs / 3600)}h ago`;
-  return `${Math.floor(secs / 86400)}d ago`;
+  if (secs < 60) return `${secs} 秒前`;
+  if (secs < 3600) return `${Math.floor(secs / 60)} 分钟前`;
+  if (secs < 86400) return `${Math.floor(secs / 3600)} 小时前`;
+  return `${Math.floor(secs / 86400)} 天前`;
 }

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Status } from '$lib/types';
-  import { STATUS_COLOR } from '$lib/types';
+  import { STATUS_COLOR, STATUS_LABEL } from '$lib/types';
 
   let { status }: { status: Status } = $props();
 
@@ -14,6 +14,8 @@
 </script>
 
 <div
+  role="img"
+  aria-label={STATUS_LABEL[status]}
   class="w-[7px] h-[7px] rounded-full flex-shrink-0"
   style="
     background-color: {color};
