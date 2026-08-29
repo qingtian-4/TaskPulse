@@ -33,13 +33,22 @@ const STALE_TTL: Duration = Duration::from_secs(24 * 3600);
 const PROBE_INTERVAL: Duration = Duration::from_secs(6);
 const WSL_DISTRO: &str = "Ubuntu";
 const NAME_LEN: usize = 40;
+const MAX_SESSIONS: usize = 6;
+
+#[derive(Debug, Clone)]
+struct CachedSession {
+    mtime: f64,
+    status: TaskStatus,
+    cwd: String,
+    message: Option<String>,
+}
 
 pub struct DeepSeekHarnessProvider {
     distro: String,
-    /// path → (mtime, status, cwd); unchanged logs are not re-parsed.
-    cache: std::collections::HashMap<String, (f64, TaskStatus, String)>,
+    /// path → parsed state; unchanged logs are not re-parsed.
+    cache: std::collections::HashMap<String, CachedSession>,
     last_probe: Option<std::time::Instant>,
-    last_task: Option<TaskSnapshot>,
+    last_tasks: Vec<TaskSnapshot>,
 }
 
 impl DeepSeekHarnessProvider {
@@ -50,7 +59,7 @@ impl DeepSeekHarnessProvider {
             distro,
             cache: Default::default(),
             last_probe: None,
-            last_task: None,
+            last_tasks: Vec::new(),
         }
     }
 
@@ -60,35 +69,30 @@ impl DeepSeekHarnessProvider {
             .args(["--distribution", &self.distro, "-e", "bash", "-lc", script])
             .output()?;
         if !out.status.success() {
-            return Ok(Vec::new());
+            let detail = String::from_utf8_lossy(&out.stderr);
+            return Err(std::io::Error::other(format!(
+                "WSL command failed: {}",
+                detail.trim()
+            )));
         }
         Ok(out.stdout)
     }
 
-    /// Path + mtime of the most recently written session log.
-    fn newest_session(&self) -> Option<(String, f64)> {
-        let out = self
-            .wsl("ls -t --time-style=+%s ~/.dsh/sessions/*/*/session.jsonl.zstd 2>/dev/null | head -1")
-            .ok()?;
-        let line = String::from_utf8_lossy(&out);
-        // The `ls -t` listing with --time-style shows "mtime path". But we only
-        // asked for the path; parse the single path.
-        let path = line.trim().lines().next()?.to_string();
-        if path.is_empty() {
-            return None;
-        }
-        let mtime = self
-            .wsl(&format!("stat -c %Y {path} 2>/dev/null"))
-            .ok()
-            .and_then(|b| String::from_utf8_lossy(&b).trim().parse::<f64>().ok());
-        Some((path, mtime.unwrap_or(0.0)))
+    /// Paths + mtimes of the most recently written session logs. NUL-delimited
+    /// output preserves workspaces containing spaces or shell punctuation.
+    fn recent_sessions(&self) -> std::io::Result<Vec<(String, f64)>> {
+        let out = self.wsl(&format!(
+            "find \"$HOME/.dsh/sessions\" -type f -name session.jsonl.zstd -printf '%T@\\t%p\\0' 2>/dev/null | sort -z -nr | head -z -n {MAX_SESSIONS}"
+        ))?;
+        Ok(parse_discovery_output(&out))
     }
 
     /// Read + decompress + parse a session log, returning inferred status.
-    fn parse_session(&self, path: &str) -> Option<(TaskStatus, String)> {
+    fn parse_session(&self, path: &str) -> Option<(TaskStatus, String, Option<String>)> {
         // base64 to avoid any binary/CRLF mangling through wsl.exe stdio.
+        let path = shell_quote(path);
         let b64 = self
-            .wsl(&format!("base64 -w0 {path} 2>/dev/null; echo"))
+            .wsl(&format!("base64 -w0 -- {path} 2>/dev/null; echo"))
             .ok()?;
         let b64 = String::from_utf8_lossy(&b64);
         let b64: String = b64.chars().filter(|c| !c.is_whitespace()).collect();
@@ -121,18 +125,16 @@ impl DeepSeekHarnessProvider {
                 "turn/start" => last_turn_start_seq = seq,
                 "turn/end" => last_turn_end_seq = seq,
                 "assistant/message" => {
-                    if last_msg.is_none() {
-                        if let Some(msg) = v
-                            .get("data")
-                            .and_then(|d| d.get("message"))
-                            .and_then(|m| m.get("content"))
-                            .and_then(|c| c.as_array())
-                            .and_then(|a| a.first())
-                            .and_then(|f| f.get("text"))
-                            .and_then(|t| t.as_str())
-                        {
-                            last_msg = Some(truncate(msg, 120));
-                        }
+                    if let Some(msg) = v
+                        .get("data")
+                        .and_then(|d| d.get("message"))
+                        .and_then(|m| m.get("content"))
+                        .and_then(|c| c.as_array())
+                        .and_then(|a| a.first())
+                        .and_then(|f| f.get("text"))
+                        .and_then(|t| t.as_str())
+                    {
+                        last_msg = Some(truncate(msg, 120));
                     }
                 }
                 _ => {}
@@ -146,7 +148,7 @@ impl DeepSeekHarnessProvider {
         } else {
             TaskStatus::Running
         };
-        Some((status, cwd.unwrap_or_default()))
+        Some((status, cwd.unwrap_or_default(), last_msg))
     }
 
     fn session_to_task(
@@ -154,6 +156,8 @@ impl DeepSeekHarnessProvider {
         path: &str,
         status: TaskStatus,
         cwd: &str,
+        message: Option<String>,
+        updated_at: SystemTime,
         now: SystemTime,
     ) -> TaskSnapshot {
         let name = PathBuf::from(cwd)
@@ -172,9 +176,29 @@ impl DeepSeekHarnessProvider {
             .file_name()
             .map(|n| n.to_string_lossy().into_owned());
         task.project = project;
+        task.message = message;
+        task.updated_at = updated_at;
         task.cli = Some("dsh".into());
         task
     }
+}
+
+fn parse_discovery_output(out: &[u8]) -> Vec<(String, f64)> {
+    out.split(|byte| *byte == 0)
+        .filter_map(|record| {
+            let record = String::from_utf8_lossy(record);
+            let (mtime, path) = record.split_once('\t')?;
+            let path = path.trim();
+            if path.is_empty() {
+                return None;
+            }
+            Some((path.to_string(), mtime.trim().parse::<f64>().ok()?))
+        })
+        .collect()
+}
+
+fn shell_quote(value: &str) -> String {
+    format!("'{}'", value.replace('\'', "'\"'\"'"))
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -196,54 +220,81 @@ impl Provider for DeepSeekHarnessProvider {
         // we don't spawn wsl.exe every 2s poll.
         if let Some(last) = self.last_probe {
             if last.elapsed() < PROBE_INTERVAL {
-                return match &self.last_task {
-                    Some(t) => ProviderOutput {
-                        tasks: vec![t.clone()],
-                        hosts: vec![],
-                    },
-                    None => ProviderOutput::default(),
+                return ProviderOutput {
+                    tasks: self.last_tasks.clone(),
+                    hosts: vec![],
                 };
             }
         }
         self.last_probe = Some(std::time::Instant::now());
 
-        let Some((path, mtime)) = self.newest_session() else {
-            self.last_task = None;
-            return ProviderOutput::default();
-        };
-
-        let mtime_time = UNIX_EPOCH + Duration::from_secs_f64(mtime);
-        let age = now.duration_since(mtime_time).unwrap_or_default();
-        if age > STALE_TTL {
-            self.last_task = None;
-            return ProviderOutput::default();
-        }
-
-        // Cache: skip re-parsing if unchanged.
-        if let Some((cached_mtime, status, cwd)) =
-            self.cache.get(&path).cloned().map(|(m, s, c)| (m, s, c))
-        {
-            if (cached_mtime - mtime).abs() < 0.5 {
-                let t = self.session_to_task(&path, status, &cwd, now);
-                self.last_task = Some(t.clone());
+        let sessions = match self.recent_sessions() {
+            Ok(sessions) => sessions,
+            Err(error) => {
+                log::warn!("deepseek-harness: session discovery failed: {error}");
+                let tasks = self
+                    .last_tasks
+                    .iter()
+                    .cloned()
+                    .map(|mut task| {
+                        task.stale = true;
+                        task
+                    })
+                    .collect();
                 return ProviderOutput {
-                    tasks: vec![t],
+                    tasks,
                     hosts: vec![],
                 };
             }
-        }
-
-        let Some((status, cwd)) = self.parse_session(&path) else {
-            self.last_task = None;
-            return ProviderOutput::default();
         };
-        self.cache
-            .insert(path.clone(), (mtime, status, cwd.clone()));
 
-        let task = self.session_to_task(&path, status, &cwd, now);
-        self.last_task = Some(task.clone());
+        let mut tasks = Vec::new();
+        let mut live_paths = std::collections::HashSet::new();
+        for (path, mtime) in sessions {
+            let mtime_time = UNIX_EPOCH + Duration::from_secs_f64(mtime);
+            let age = now.duration_since(mtime_time).unwrap_or_default();
+            if age > STALE_TTL {
+                continue;
+            }
+            live_paths.insert(path.clone());
+
+            let cached = self.cache.get(&path).cloned();
+            let (state, stale) = match cached {
+                Some(cached) if (cached.mtime - mtime).abs() < 0.5 => (cached, false),
+                previous => match self.parse_session(&path) {
+                    Some((status, cwd, message)) => {
+                        let parsed = CachedSession {
+                            mtime,
+                            status,
+                            cwd,
+                            message,
+                        };
+                        self.cache.insert(path.clone(), parsed.clone());
+                        (parsed, false)
+                    }
+                    None => {
+                        let Some(previous) = previous else {
+                            continue;
+                        };
+                        (previous, true)
+                    }
+                },
+            };
+            let mut task = self.session_to_task(
+                &path,
+                state.status,
+                &state.cwd,
+                state.message,
+                mtime_time,
+                now,
+            );
+            task.stale = stale;
+            tasks.push(task);
+        }
+        self.cache.retain(|path, _| live_paths.contains(path));
+        self.last_tasks = tasks.clone();
         ProviderOutput {
-            tasks: vec![task],
+            tasks,
             hosts: vec![],
         }
     }
@@ -252,13 +303,6 @@ impl Provider for DeepSeekHarnessProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn now_secs() -> f64 {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs_f64()
-    }
 
     // Parse-only tests (no WSL): feed JSONL event text through the same logic.
     // We exercise parse by building a zstd frame of the JSONL and decoding it
@@ -326,5 +370,20 @@ mod tests {
         use std::time::Duration as D;
         let t = UNIX_EPOCH + D::from_secs_f64(0.0);
         assert_eq!(t.duration_since(UNIX_EPOCH).unwrap().as_secs(), 0);
+    }
+
+    #[test]
+    fn discovery_output_preserves_paths_with_spaces() {
+        let out = b"1788000000.25\t/home/q/My Project/s1/session.jsonl.zstd\0\
+                    1787999999.00\t/home/q/other/s2/session.jsonl.zstd\0";
+        let sessions = parse_discovery_output(out);
+        assert_eq!(sessions.len(), 2);
+        assert_eq!(sessions[0].0, "/home/q/My Project/s1/session.jsonl.zstd");
+    }
+
+    #[test]
+    fn shell_quote_handles_spaces_and_apostrophes() {
+        assert_eq!(shell_quote("/tmp/My Project/a"), "'/tmp/My Project/a'");
+        assert_eq!(shell_quote("/tmp/a'b"), "'/tmp/a'\"'\"'b'");
     }
 }

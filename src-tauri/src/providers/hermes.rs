@@ -38,6 +38,7 @@ impl HermesProvider {
     }
 
     /// Constructor for tests: point at a specific DB.
+    #[cfg(test)]
     pub fn with_db_path(path: PathBuf) -> Self {
         Self {
             db_path: Some(path),
@@ -194,7 +195,9 @@ impl Provider for HermesProvider {
 
         let mut tasks = Vec::new();
         for row in rows {
-            if row.archived {
+            // Ended conversations are not waiting for user input even when
+            // Hermes has not archived them yet.
+            if row.archived || row.ended_at.and_then(epoch_to_time).is_some() {
                 continue;
             }
             let Some(at) = row.last_activity_at.and_then(epoch_to_time) else {
@@ -300,6 +303,18 @@ mod tests {
         );
         let mut provider = HermesProvider::with_db_path(db);
         let out = provider.poll(SystemTime::now());
+        assert!(out.tasks.is_empty());
+    }
+
+    #[test]
+    fn ended_session_skipped_even_when_not_archived() {
+        let now = now_secs();
+        let (_dir, db) = make_db(
+            &[("s-ended", "ended", now - 5.0, "/tmp/proj", false, now)],
+            &[],
+        );
+        let mut p = HermesProvider::with_db_path(db);
+        let out = p.poll(SystemTime::now());
         assert!(out.tasks.is_empty());
     }
 

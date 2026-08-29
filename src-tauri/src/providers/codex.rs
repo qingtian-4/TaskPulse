@@ -44,6 +44,10 @@ pub struct CodexProvider {
     /// session id → last-seen mtime, so we can emit a terminal snapshot when a
     /// session stops being updated (it finished).
     seen: std::collections::HashMap<String, SystemTime>,
+    /// path → (mtime, size, parsed state). Rollouts are append-only, so an
+    /// unchanged signature can reuse the previous parse instead of rereading
+    /// multi-megabyte JSONL files every two seconds.
+    cache: std::collections::HashMap<PathBuf, (SystemTime, u64, Option<SessionState>)>,
 }
 
 impl CodexProvider {
@@ -59,6 +63,7 @@ impl CodexProvider {
         Self {
             sessions_root: root,
             seen: Default::default(),
+            cache: Default::default(),
         }
     }
 
@@ -97,6 +102,22 @@ impl CodexProvider {
             .unwrap_or("")
             .to_string();
         parse_codex_rollout(&body, now, &sid)
+    }
+
+    fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
+        let metadata = path.metadata().ok()?;
+        let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
+        let len = metadata.len();
+        if let Some((cached_mtime, cached_len, state)) = self.cache.get(path) {
+            if *cached_mtime == modified && *cached_len == len {
+                return state.clone().filter(|state| session_is_live(state, now));
+            }
+        }
+
+        let state = self.parse_session_state(path, now);
+        self.cache
+            .insert(path.to_path_buf(), (modified, len, state.clone()));
+        state
     }
 
     fn session_to_task(&self, host: &SessionState, now: SystemTime) -> TaskSnapshot {
@@ -155,6 +176,15 @@ pub struct SessionState {
     pub quota_5h_resets_at: Option<i64>,
     pub quota_1w_used_pct: Option<f64>,
     pub quota_1w_resets_at: Option<i64>,
+}
+
+fn session_is_live(state: &SessionState, now: SystemTime) -> bool {
+    let age = now.duration_since(state.updated_at).unwrap_or_default();
+    match state.status {
+        TaskStatus::Running => age <= RUNNING_TTL,
+        TaskStatus::WaitingInput => age <= WAITING_TTL,
+        _ => false,
+    }
 }
 
 /// Shared Codex rollout → session-state parser.
@@ -232,10 +262,8 @@ pub fn parse_codex_rollout(
                 if let Some(t) = ts {
                     updated_at = t;
                 }
-                if last_message.is_none() {
-                    if let Some(msg) = payload.get("message").and_then(|v| v.as_str()) {
-                        last_message = Some(truncate(msg, 120));
-                    }
+                if let Some(msg) = payload.get("message").and_then(|v| v.as_str()) {
+                    last_message = Some(truncate(msg, 120));
                 }
             }
             "token_count" => {
@@ -275,10 +303,8 @@ pub fn parse_codex_rollout(
                 {
                     updated_at = t;
                 }
-                if last_message.is_none() {
-                    if let Some(msg) = payload.get("last_agent_message").and_then(|v| v.as_str()) {
-                        last_message = Some(truncate(msg, 120));
-                    }
+                if let Some(msg) = payload.get("last_agent_message").and_then(|v| v.as_str()) {
+                    last_message = Some(truncate(msg, 120));
                 }
             }
             "turn_aborted" | "thread_rolled_back" => {
@@ -291,24 +317,7 @@ pub fn parse_codex_rollout(
         }
     }
 
-    // Lifecycle gate.
-    let age = now.duration_since(updated_at).unwrap_or_default();
-    match status {
-        TaskStatus::Running => {
-            if age > RUNNING_TTL {
-                // no recent write while "running" → stale transcript; drop.
-                return None;
-            }
-        }
-        TaskStatus::WaitingInput => {
-            if age > WAITING_TTL {
-                return None;
-            }
-        }
-        _ => return None,
-    }
-
-    Some(SessionState {
+    let state = SessionState {
         status,
         updated_at,
         project,
@@ -318,7 +327,8 @@ pub fn parse_codex_rollout(
         quota_5h_resets_at,
         quota_1w_used_pct,
         quota_1w_resets_at,
-    })
+    };
+    session_is_live(&state, now).then_some(state)
 }
 
 /// Build remote Codex tasks from the snapshot's `__TP_CODEX__` section.
@@ -557,13 +567,16 @@ impl Provider for CodexProvider {
         let files = self.discover();
         let mut tasks = Vec::new();
         let mut live: std::collections::HashMap<String, SystemTime> = Default::default();
+        let selected: Vec<PathBuf> = files.into_iter().take(MAX_SESSIONS).collect();
 
-        for path in files.iter().take(MAX_SESSIONS) {
-            if let Some(state) = self.parse_session_state(path, now) {
+        for path in &selected {
+            if let Some(state) = self.cached_session_state(path, now) {
                 live.insert(state.session_id.clone(), state.updated_at);
                 tasks.push(self.session_to_task(&state, now));
             }
         }
+        let selected: std::collections::HashSet<PathBuf> = selected.into_iter().collect();
+        self.cache.retain(|path, _| selected.contains(path));
         propagate_freshest_quota(&mut tasks);
 
         // Sessions we previously knew but that vanished / went stale → no
@@ -728,6 +741,21 @@ mod tests {
     }
 
     #[test]
+    fn latest_agent_message_is_displayed() {
+        let ts = recent_rfc3339(60);
+        let body = format!(
+            "{}{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\",\"message\":\"first\"}}}}\n{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"agent_message\",\"message\":\"latest\"}}}}\n",
+            header("/home/user/proj")
+        );
+        let (_dir, path) = temp_rollout(&body);
+        let provider = CodexProvider::with_root(PathBuf::from("/nonexistent"));
+        let state = provider
+            .parse_session_state(&path, SystemTime::now())
+            .unwrap();
+        assert_eq!(state.last_message.as_deref(), Some("latest"));
+    }
+
+    #[test]
     fn aborted_turn_returns_to_waiting() {
         let body = format!(
             "{}{}",
@@ -788,6 +816,33 @@ mod tests {
         let provider = CodexProvider::with_root(root.path().to_path_buf());
         let files = provider.discover();
         assert_eq!(files.len(), 1);
+    }
+
+    #[test]
+    fn unchanged_rollout_reuses_cached_parse() {
+        let root = tempfile::tempdir().unwrap();
+        let body = format!(
+            "{}{{\"timestamp\":\"{}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"t1\"}}}}\n",
+            header("/home/user/original-project"),
+            recent_rfc3339(60)
+        );
+        let path = root.path().join("rollout-cache.jsonl");
+        std::fs::write(&path, body).unwrap();
+        let mut provider = CodexProvider::with_root(root.path().to_path_buf());
+
+        let first = provider.poll(SystemTime::now());
+        assert_eq!(first.tasks[0].project.as_deref(), Some("original-project"));
+        provider
+            .cache
+            .get_mut(&path)
+            .unwrap()
+            .2
+            .as_mut()
+            .unwrap()
+            .project = Some("cached-project".into());
+
+        let second = provider.poll(SystemTime::now());
+        assert_eq!(second.tasks[0].project.as_deref(), Some("cached-project"));
     }
 
     #[test]
