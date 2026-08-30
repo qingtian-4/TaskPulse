@@ -153,6 +153,17 @@ impl AttentionTracker {
         Ok(self.display())
     }
 
+    pub fn restore(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {
+        let record = self
+            .records
+            .get_mut(id)
+            .ok_or_else(|| format!("unknown task id: {id}"))?;
+        record.unread = true;
+        record.task.unread = true;
+        self.save_best_effort();
+        Ok(self.display())
+    }
+
     pub fn set_pinned(&mut self, id: &str, pinned: bool) -> Result<Vec<TaskSnapshot>, String> {
         let record = self
             .records
@@ -313,6 +324,18 @@ mod tests {
         let reopened = tracker.reconcile(vec![task("a", TaskStatus::Running, Some("t2"))]);
         assert_eq!(reopened.len(), 1);
         assert!(reopened[0].unread);
+    }
+
+    #[test]
+    fn hidden_task_can_be_restored_immediately() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        tracker.reconcile(vec![task("a", TaskStatus::Running, Some("t1"))]);
+        tracker.reconcile(vec![task("a", TaskStatus::WaitingInput, Some("t1"))]);
+        assert!(tracker.hide("a").unwrap().is_empty());
+        let restored = tracker.restore("a").unwrap();
+        assert_eq!(restored.len(), 1);
+        assert!(restored[0].unread);
     }
 
     #[test]

@@ -25,8 +25,8 @@
 use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::sync::mpsc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::sync::{mpsc, OnceLock, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use crate::providers::{Provider, ProviderOutput};
@@ -47,6 +47,16 @@ const DISCOVERY_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 const APP_SERVER_REFRESH: Duration = Duration::from_secs(15);
 const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(4);
 const PROJECT_LEN: usize = 40;
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct CodexQuota {
+    pub used_5h_pct: f64,
+    pub resets_5h_at: Option<i64>,
+    pub used_1w_pct: f64,
+    pub resets_1w_at: Option<i64>,
+}
+
+static NATIVE_QUOTA: OnceLock<RwLock<Option<CodexQuota>>> = OnceLock::new();
 
 pub struct CodexProvider {
     sessions_root: PathBuf,
@@ -157,8 +167,18 @@ impl CodexProvider {
         }
         self.last_native_refresh = Some(now);
         match query_codex_app_server() {
-            Ok(rows) => {
-                self.native_metadata = rows.into_iter().map(|row| (row.id.clone(), row)).collect();
+            Ok(snapshot) => {
+                self.native_metadata = snapshot
+                    .threads
+                    .into_iter()
+                    .map(|row| (row.id.clone(), row))
+                    .collect();
+                if let Some(quota) = snapshot.quota {
+                    *NATIVE_QUOTA
+                        .get_or_init(|| RwLock::new(None))
+                        .write()
+                        .unwrap_or_else(|error| error.into_inner()) = Some(quota);
+                }
             }
             Err(error) => {
                 // app-server is optional. Keep the last successful title map,
@@ -249,6 +269,7 @@ impl CodexProvider {
         task.quota_1w_resets_at = host.quota_1w_resets_at;
         task.started_at = Some(host.updated_at);
         task.message = host.last_message.clone();
+        task.activity = host.activity.clone();
         task.turn_key = host.turn_key.clone();
         task.pinned = meta.is_some_and(|meta| meta.pinned);
         // A completed turn means the agent is waiting on the user — keep the
@@ -287,6 +308,7 @@ pub struct SessionState {
     pub updated_at: SystemTime,
     pub project: Option<String>,
     pub last_message: Option<String>,
+    pub activity: Option<String>,
     pub session_id: String,
     pub turn_key: Option<String>,
     pub first_user_message: Option<String>,
@@ -327,7 +349,13 @@ struct AppThreadMeta {
     updated_at: i64,
 }
 
-fn query_codex_app_server() -> Result<Vec<AppThreadMeta>, String> {
+#[derive(Debug)]
+struct NativeCodexSnapshot {
+    threads: Vec<AppThreadMeta>,
+    quota: Option<CodexQuota>,
+}
+
+fn query_codex_app_server() -> Result<NativeCodexSnapshot, String> {
     let executable = find_codex_executable()
         .ok_or_else(|| "Codex app-server executable was not found".to_string())?;
     let mut child = Command::new(executable)
@@ -369,10 +397,16 @@ fn query_codex_app_server() -> Result<Vec<AppThreadMeta>, String> {
             "useStateDbOnly": false
         }
     });
+    let rate_limits = serde_json::json!({
+        "id": 3,
+        "method": "account/rateLimits/read",
+        "params": null
+    });
     for message in [
         initialize,
         serde_json::json!({"method": "initialized", "params": {}}),
         list,
+        rate_limits,
     ] {
         writeln!(stdin, "{message}")
             .and_then(|_| stdin.flush())
@@ -386,20 +420,33 @@ fn query_codex_app_server() -> Result<Vec<AppThreadMeta>, String> {
             let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
                 continue;
             };
-            if value.get("id").and_then(|id| id.as_i64()) == Some(2) {
+            if matches!(value.get("id").and_then(|id| id.as_i64()), Some(2 | 3)) {
                 let _ = sender.send(value);
-                break;
             }
         }
     });
 
-    let response = receiver
-        .recv_timeout(APP_SERVER_TIMEOUT)
-        .map_err(|error| format!("app-server thread/list timed out: {error}"));
+    let deadline = Instant::now() + APP_SERVER_TIMEOUT;
+    let mut list_response = None;
+    let mut quota_response = None;
+    while Instant::now() < deadline && (list_response.is_none() || quota_response.is_none()) {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        let Ok(response) = receiver.recv_timeout(remaining) else {
+            break;
+        };
+        match response.get("id").and_then(|id| id.as_i64()) {
+            Some(2) => list_response = Some(response),
+            Some(3) => quota_response = Some(response),
+            _ => {}
+        }
+    }
     let _ = child.kill();
     let _ = child.wait();
-    let response = response?;
-    parse_app_server_thread_list(response)
+    let threads = parse_app_server_thread_list(
+        list_response.ok_or_else(|| "app-server thread/list timed out".to_string())?,
+    )?;
+    let quota = quota_response.and_then(|response| parse_app_server_rate_limits(response).ok());
+    Ok(NativeCodexSnapshot { threads, quota })
 }
 
 fn parse_app_server_thread_list(value: serde_json::Value) -> Result<Vec<AppThreadMeta>, String> {
@@ -414,6 +461,53 @@ fn parse_app_server_thread_list(value: serde_json::Value) -> Result<Vec<AppThrea
             .ok_or_else(|| "app-server thread/list returned no data".to_string())?,
     )
     .map_err(|error| format!("parse app-server thread/list failed: {error}"))
+}
+
+fn parse_app_server_rate_limits(value: serde_json::Value) -> Result<CodexQuota, String> {
+    if let Some(error) = value.get("error") {
+        return Err(format!("app-server rate limits error: {error}"));
+    }
+    let limits = value
+        .get("result")
+        .and_then(|result| result.get("rateLimits"))
+        .ok_or_else(|| "app-server rate limits returned no data".to_string())?;
+    let primary = limits
+        .get("primary")
+        .ok_or_else(|| "app-server rate limits returned no 5-hour window".to_string())?;
+    let secondary = limits
+        .get("secondary")
+        .ok_or_else(|| "app-server rate limits returned no weekly window".to_string())?;
+    Ok(CodexQuota {
+        used_5h_pct: primary
+            .get("usedPercent")
+            .and_then(|value| value.as_f64())
+            .ok_or_else(|| "5-hour usedPercent was missing".to_string())?,
+        resets_5h_at: primary.get("resetsAt").and_then(|value| value.as_i64()),
+        used_1w_pct: secondary
+            .get("usedPercent")
+            .and_then(|value| value.as_f64())
+            .ok_or_else(|| "weekly usedPercent was missing".to_string())?,
+        resets_1w_at: secondary.get("resetsAt").and_then(|value| value.as_i64()),
+    })
+}
+
+/// Apply the account-level app-server quota to every Codex task. Rollout
+/// token events are per-thread and may be stale, while this endpoint is the
+/// same authoritative account source used by Codex Desktop.
+pub(crate) fn apply_authoritative_quota(tasks: &mut [TaskSnapshot]) {
+    let quota = NATIVE_QUOTA
+        .get()
+        .and_then(|quota| *quota.read().unwrap_or_else(|error| error.into_inner()));
+    let Some(quota) = quota else { return };
+    for task in tasks
+        .iter_mut()
+        .filter(|task| task.source == TaskSource::Codex)
+    {
+        task.quota_5h_used_pct = Some(quota.used_5h_pct);
+        task.quota_5h_resets_at = quota.resets_5h_at;
+        task.quota_1w_used_pct = Some(quota.used_1w_pct);
+        task.quota_1w_resets_at = quota.resets_1w_at;
+    }
 }
 
 fn find_codex_executable() -> Option<PathBuf> {
@@ -547,6 +641,7 @@ pub fn parse_codex_rollout(
     let mut status = TaskStatus::Unknown;
     let mut updated_at = now;
     let mut last_message: Option<String> = None;
+    let mut activity: Option<String> = None;
     let mut session_id = default_session_id.to_string();
     let mut turn_key: Option<String> = None;
     let mut first_user_message: Option<String> = None;
@@ -659,8 +754,16 @@ pub fn parse_codex_rollout(
                     updated_at = t;
                 }
             }
+            "function_call" | "custom_tool_call" => {
+                status = TaskStatus::Running;
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+                activity = summarize_tool_activity(payload);
+            }
             "task_complete" => {
                 status = TaskStatus::WaitingInput;
+                activity = None;
                 if let Some(t) = payload
                     .get("completed_at")
                     .and_then(parse_rfc3339_value)
@@ -674,6 +777,7 @@ pub fn parse_codex_rollout(
             }
             "turn_aborted" | "thread_rolled_back" => {
                 status = TaskStatus::WaitingInput;
+                activity = None;
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -687,6 +791,7 @@ pub fn parse_codex_rollout(
         updated_at,
         project,
         last_message,
+        activity,
         session_id,
         turn_key,
         first_user_message,
@@ -696,6 +801,69 @@ pub fn parse_codex_rollout(
         quota_1w_resets_at,
     };
     session_is_live(&state, now).then_some(state)
+}
+
+fn summarize_tool_activity(payload: &serde_json::Value) -> Option<String> {
+    let name = payload
+        .get("name")
+        .and_then(|value| value.as_str())
+        .unwrap_or("tool");
+    let arguments = payload
+        .get("arguments")
+        .or_else(|| payload.get("input"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("");
+    let command = serde_json::from_str::<serde_json::Value>(arguments)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("command")
+                .or_else(|| value.get("cmd"))
+                .and_then(|value| value.as_str())
+                .map(str::to_string)
+        })
+        .or_else(|| extract_js_string(arguments, "cmd"))
+        .or_else(|| extract_js_string(arguments, "command"));
+    let label = match name {
+        "exec" | "exec_command" | "shell_command" => "执行命令",
+        "apply_patch" => "应用代码修改",
+        "update_plan" => "更新任务计划",
+        "web_search" | "search_query" => "搜索资料",
+        other => other,
+    };
+    Some(match command {
+        Some(command) if !command.trim().is_empty() => {
+            format!(
+                "{label} · {}",
+                truncate(&collapse_whitespace(&command), 180)
+            )
+        }
+        _ => label.to_string(),
+    })
+}
+
+fn extract_js_string(input: &str, key: &str) -> Option<String> {
+    let start = input.find(&format!("{key}:"))? + key.len() + 1;
+    let value = input[start..].trim_start();
+    if !value.starts_with('"') {
+        return None;
+    }
+    let mut escaped = false;
+    for (index, ch) in value[1..].char_indices() {
+        if ch == '"' && !escaped {
+            let quoted = &value[..index + 2];
+            return serde_json::from_str::<String>(quoted).ok();
+        }
+        escaped = ch == '\\' && !escaped;
+        if ch != '\\' {
+            escaped = false;
+        }
+    }
+    None
+}
+
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 fn value_timestamp_key(timestamp: Option<SystemTime>) -> Option<String> {
@@ -918,9 +1086,18 @@ fn flush_codex(
         )
         .with_host(ssh_host.to_string())
         .with_remote();
-        t.project = state.project.or_else(|| Some(slug.clone()));
+        // Remote tails usually do not include the file's early session_meta
+        // record. The authoritative cwd travels with META; use it before the
+        // date-directory slug from the rollout header, otherwise project
+        // scoping can incorrectly filter a valid task (for example HyperMem).
+        t.project = titles
+            .get(&sid)
+            .and_then(|(_, cwd, _)| project_from_cwd(Some(cwd)))
+            .or(state.project)
+            .or_else(|| Some(slug.clone()));
         t.updated_at = state.updated_at;
         t.message = state.last_message;
+        t.activity = state.activity;
         t.cli = Some("codex".into());
         t.session_id = Some(sid);
         t.turn_key = state.turn_key;
@@ -1287,7 +1464,7 @@ mod tests {
     #[test]
     fn codex_section_builds_remote_tasks() {
         let section = format!(
-            "META\t{{\"id\":\"sess-1\",\"t\":\"研究 Game 记忆机制\"}}\n===S:--home-ai-projects-Game--===\n{}\n{}\n",
+            "META\t{{\"id\":\"sess-1\",\"t\":\"研究 Game 记忆机制\",\"cwd\":\"/home/ai/projects/Game\"}}\n===S:08===F:rollout-2026-08-27T23-12-16-sess-1.jsonl===\n{}\n{}\n",
             header("/home/ai/projects/Game"),
             format!(
                 "{{\"timestamp\":\"{ts}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"t1\",\"completed_at\":\"{ts}\"}}}}\n",
@@ -1303,6 +1480,7 @@ mod tests {
         assert_eq!(t.host.as_deref(), Some("Server3"));
         assert!(t.remote);
         assert_eq!(t.name, "研究 Game 记忆机制");
+        assert_eq!(t.project.as_deref(), Some("Game"));
     }
 
     #[test]
@@ -1352,5 +1530,37 @@ mod tests {
             Some("Implement TaskPulse Windows MVP")
         );
         assert_eq!(rows[0].cwd.as_deref(), Some(r"D:\Project\agenttray"));
+    }
+
+    #[test]
+    fn parses_native_rate_limits_as_used_percent() {
+        let quota = parse_app_server_rate_limits(serde_json::json!({
+            "id": 3,
+            "result": {
+                "rateLimits": {
+                    "primary": { "usedPercent": 3, "resetsAt": 1788110671 },
+                    "secondary": { "usedPercent": 31, "resetsAt": 1788660994 }
+                }
+            }
+        }))
+        .unwrap();
+        assert_eq!(quota.used_5h_pct, 3.0);
+        assert_eq!(quota.used_1w_pct, 31.0);
+        assert_eq!(quota.resets_5h_at, Some(1788110671));
+        assert_eq!(quota.resets_1w_at, Some(1788660994));
+    }
+
+    #[test]
+    fn custom_exec_call_is_exposed_as_current_activity() {
+        let ts = recent_rfc3339(1);
+        let body = format!(
+            "{{\"timestamp\":\"{ts}\",\"type\":\"response_item\",\"payload\":{{\"type\":\"custom_tool_call\",\"name\":\"exec\",\"arguments\":\"const r=await tools.exec_command({{cmd:\\\"git diff --check\\\",workdir:\\\"/tmp/project\\\"}});\"}}}}\n"
+        );
+        let state = parse_codex_rollout(&body, SystemTime::now(), "session").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(
+            state.activity.as_deref(),
+            Some("执行命令 · git diff --check")
+        );
     }
 }

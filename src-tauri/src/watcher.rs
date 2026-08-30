@@ -91,6 +91,7 @@ impl From<AgentStatus> for TaskSnapshot {
             host: None,
             project: None,
             message: (!a.message.is_empty()).then_some(a.message),
+            activity: None,
             started_at: None,
             updated_at: a.mtime.unwrap_or(now),
             finished_at: None,
@@ -142,6 +143,8 @@ static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
 static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
+    let mut tasks = tasks;
+    crate::providers::codex::apply_authoritative_quota(&mut tasks);
     let Some(tracker) = ATTENTION_TRACKER.get() else {
         return tasks;
     };
@@ -170,6 +173,7 @@ pub fn update_task_attention(
         match action.as_str() {
             "viewed" => tracker.mark_viewed(&id)?,
             "hide" => tracker.hide(&id)?,
+            "restore" => tracker.restore(&id)?,
             "pin" => tracker.set_pinned(&id, pinned.unwrap_or(true))?,
             _ => return Err(format!("unsupported attention action: {action}")),
         }
@@ -449,7 +453,8 @@ struct LocalProviders {
     file: LocalFileProvider,
     codex: CodexProvider,
     hermes: HermesProvider,
-    dsh: DeepSeekHarnessProvider,
+    dsh_rx: std::sync::mpsc::Receiver<ProviderOutput>,
+    dsh_latest: Option<ProviderOutput>,
     scanner: Scanner,
     health: Vec<ProviderHealth>,
     monitoring: MonitoringConfig,
@@ -457,11 +462,25 @@ struct LocalProviders {
 
 impl LocalProviders {
     fn new(monitoring: MonitoringConfig) -> Self {
+        // WSL startup can take tens of seconds on Windows. Keep the DeepSeek
+        // probe off the local refresh path so Codex/Hermes appear immediately.
+        let (dsh_tx, dsh_rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut dsh = DeepSeekHarnessProvider::new();
+            loop {
+                let output = dsh.poll(SystemTime::now());
+                if dsh_tx.send(output).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_secs(2));
+            }
+        });
         Self {
             file: LocalFileProvider::new(),
             codex: CodexProvider::new(),
             hermes: HermesProvider::new(),
-            dsh: DeepSeekHarnessProvider::new(),
+            dsh_rx,
+            dsh_latest: None,
             scanner: Scanner::new(),
             health: Vec::new(),
             monitoring,
@@ -479,8 +498,12 @@ impl LocalProviders {
         update_provider_health(&mut self.health, "codex", &codex, now);
         let hermes = self.hermes.poll(now);
         update_provider_health(&mut self.health, "hermes", &hermes, now);
-        let dsh = self.dsh.poll(now);
-        update_provider_health(&mut self.health, "deepseek_harness", &dsh, now);
+        while let Ok(output) = self.dsh_rx.try_recv() {
+            self.dsh_latest = Some(output);
+        }
+        if let Some(dsh) = &self.dsh_latest {
+            update_provider_health(&mut self.health, "deepseek_harness", dsh, now);
+        }
 
         let mut authoritative_sources = HashSet::from([TaskSource::ClaudeCode, TaskSource::Gemini]);
         if file.authoritative {
@@ -492,14 +515,20 @@ impl LocalProviders {
         if hermes.authoritative {
             authoritative_sources.insert(TaskSource::Hermes);
         }
-        if dsh.authoritative {
+        if self
+            .dsh_latest
+            .as_ref()
+            .is_some_and(|output| output.authoritative)
+        {
             authoritative_sources.insert(TaskSource::DeepSeekHarness);
         }
 
         let mut tasks = file.tasks;
         tasks.extend(codex.tasks);
         tasks.extend(hermes.tasks);
-        tasks.extend(dsh.tasks);
+        if let Some(dsh) = &self.dsh_latest {
+            tasks.extend(dsh.tasks.clone());
+        }
         let scanned_agents = self.scanner.scan();
         let scanned: Vec<TaskSnapshot> = scanned_agents.iter().cloned().map(Into::into).collect();
         crate::heuristics::cross_validate_tasks(&mut tasks, &scanned);

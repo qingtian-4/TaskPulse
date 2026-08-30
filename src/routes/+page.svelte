@@ -14,6 +14,7 @@
   import EyeOff from '@lucide/svelte/icons/eye-off';
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
+  import Undo2 from '@lucide/svelte/icons/undo-2';
   import Server from '@lucide/svelte/icons/server';
 
   const WIN_W = 400;
@@ -62,6 +63,8 @@
   let selectedId = $state<string | null>(null);
   let demoMode = $state(false);
   let panelEl = $state<HTMLDivElement | null>(null);
+  let lastHidden = $state<{ id: string; name: string } | null>(null);
+  let hideTimer: ReturnType<typeof setTimeout> | null = null;
 
   let locals = $derived(localTasks(tasks));
   let remotes = $derived(remoteByHost(tasks));
@@ -222,6 +225,10 @@
     }
   }
 
+  function quotaRemaining(used: number): number {
+    return Math.max(0, Math.min(100, 100 - used));
+  }
+
   async function updateAttention(task: TaskSnapshot, action: 'viewed' | 'hide' | 'pin', nextPinned?: boolean) {
     if (!isTauri()) return;
     try {
@@ -230,9 +237,31 @@
         action,
         pinned: nextPinned,
       });
+      if (action === 'hide') {
+        lastHidden = { id: task.id, name: task.name };
+        if (hideTimer) clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => (lastHidden = null), 8000);
+      }
       if (!tasks.some((item) => item.id === selectedId)) selectedId = null;
     } catch (error) {
       focusError = `无法更新关注状态：${error}`;
+      setTimeout(() => (focusError = ''), 4000);
+    }
+  }
+
+
+  async function undoHidden() {
+    if (!lastHidden || !isTauri()) return;
+    try {
+      tasks = await invoke<TaskSnapshot[]>('update_task_attention', {
+        id: lastHidden.id,
+        action: 'restore',
+      });
+      selectedId = lastHidden.id;
+      lastHidden = null;
+      if (hideTimer) clearTimeout(hideTimer);
+    } catch (error) {
+      focusError = `无法恢复关注任务：${error}`;
       setTimeout(() => (focusError = ''), 4000);
     }
   }
@@ -266,6 +295,16 @@
   {#if focusError || ipcError}
     <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate shrink-0">
       {focusError || ipcError}
+    </div>
+  {/if}
+
+
+  {#if lastHidden}
+    <div class="px-3 py-1.5 border-b border-white/[0.06] bg-[#25272a] flex items-center gap-2 text-[10px] text-[#bbb8b0] shrink-0">
+      <span class="flex-1 min-w-0 truncate">已隐藏：{lastHidden.name}</span>
+      <button type="button" class="flex items-center gap-1 text-[#8fc4e8] hover:text-[#b6daf2]" onclick={undoHidden}>
+        <Undo2 size={11} /> 撤销
+      </button>
     </div>
   {/if}
 
@@ -336,32 +375,40 @@
   {/if}
 
   {#if selectedTask}
-    <div class="px-3.5 py-2 border-t border-white/[0.06] flex items-center gap-2" style="background:rgba(74,158,234,0.06)">
-      <span class="text-[9px] tracking-widest text-[#8f8d86]">详情</span>
-      <span class="flex-1 min-w-0 truncate text-[11px] text-[#e4e2dd] font-medium">
-        {selectedTask.project ? `${selectedTask.project} · ` : ''}{selectedTask.name}
-      </span>
-      <span class="text-[9px] text-[#8f8d86] tabular-nums">{STATUS_LABEL[selectedTask.status]}</span>
-      {#if selectedTask.unread}
-        <button type="button" class="p-1 rounded text-[#d8c66d] hover:bg-white/10" title="标记已查看" aria-label="标记已查看" onclick={() => updateAttention(selectedTask!, 'viewed')}>
-          <Check size={12} />
-        </button>
-      {/if}
-      <button type="button" class="p-1 rounded hover:bg-white/10 {selectedTask.pinned ? 'text-[#8fc4e8]' : 'text-[#8f8d86]'}" title={selectedTask.pinned ? '取消固定任务' : '固定任务'} aria-label={selectedTask.pinned ? '取消固定任务' : '固定任务'} onclick={() => updateAttention(selectedTask!, 'pin', !selectedTask!.pinned)}>
-        <Pin size={12} />
-      </button>
-      {#if selectedTask.status !== 'running'}
-        <button type="button" class="p-1 rounded text-[#8f8d86] hover:text-[#d89191] hover:bg-white/10" title="从关注列表隐藏" aria-label="从关注列表隐藏" onclick={() => updateAttention(selectedTask!, 'hide')}>
-          <EyeOff size={12} />
-        </button>
-      {/if}
-      {#if selectedTask.quota_5h_used_pct != null || selectedTask.quota_1w_used_pct != null}
-        <span class="text-[9px] text-[#c9c161] tabular-nums">
-          {selectedTask.quota_5h_used_pct != null ? `5h ${Math.round(selectedTask.quota_5h_used_pct)}%` : ''}
-          {selectedTask.quota_5h_used_pct != null && selectedTask.quota_1w_used_pct != null ? ' · ' : ''}
-          {selectedTask.quota_1w_used_pct != null ? `1周 ${Math.round(selectedTask.quota_1w_used_pct)}%` : ''}
+    <div class="px-3.5 py-2 border-t border-white/[0.06]" style="background:rgba(74,158,234,0.06)">
+      <div class="flex items-center gap-2">
+        <span class="text-[9px] tracking-widest text-[#8f8d86]">详情</span>
+        <span class="flex-1 min-w-0 truncate text-[11px] text-[#e4e2dd] font-medium">
+          {selectedTask.project ? `${selectedTask.project} · ` : ''}{selectedTask.name}
         </span>
-      {/if}
+        <span class="text-[9px] text-[#8f8d86] tabular-nums">{STATUS_LABEL[selectedTask.status]}</span>
+        {#if selectedTask.unread}
+          <button type="button" class="p-1 rounded text-[#d8c66d] hover:bg-white/10" title="标记已查看" aria-label="标记已查看" onclick={() => updateAttention(selectedTask!, 'viewed')}>
+            <Check size={12} />
+          </button>
+        {/if}
+        <button type="button" class="p-1 rounded hover:bg-white/10 {selectedTask.pinned ? 'text-[#8fc4e8]' : 'text-[#8f8d86]'}" title={selectedTask.pinned ? '取消固定任务' : '固定任务'} aria-label={selectedTask.pinned ? '取消固定任务' : '固定任务'} onclick={() => updateAttention(selectedTask!, 'pin', !selectedTask!.pinned)}>
+          <Pin size={12} />
+        </button>
+        {#if selectedTask.status !== 'running'}
+          <button type="button" class="p-1 rounded text-[#8f8d86] hover:text-[#d89191] hover:bg-white/10" title="从关注列表隐藏" aria-label="从关注列表隐藏" onclick={() => updateAttention(selectedTask!, 'hide')}>
+            <EyeOff size={12} />
+          </button>
+        {/if}
+      </div>
+      <div class="mt-1 flex items-center gap-2 text-[9px] min-w-0">
+        <span class="text-[#77756f] shrink-0">当前指令</span>
+        <span class="flex-1 min-w-0 truncate text-[#aaa89f]" title={selectedTask.activity ?? selectedTask.message ?? ''}>
+          {selectedTask.activity ?? selectedTask.message ?? (selectedTask.status === 'running' ? '正在分析' : '当前无运行指令')}
+        </span>
+        {#if selectedTask.quota_5h_used_pct != null || selectedTask.quota_1w_used_pct != null}
+          <span class="text-[#c9c161] tabular-nums shrink-0" title="Codex 剩余用量">
+            {selectedTask.quota_5h_used_pct != null ? `5h ${Math.round(quotaRemaining(selectedTask.quota_5h_used_pct))}%` : ''}
+            {selectedTask.quota_5h_used_pct != null && selectedTask.quota_1w_used_pct != null ? ' · ' : ''}
+            {selectedTask.quota_1w_used_pct != null ? `1周 ${Math.round(quotaRemaining(selectedTask.quota_1w_used_pct))}%` : ''}
+          </span>
+        {/if}
+      </div>
     </div>
   {/if}
 </div>

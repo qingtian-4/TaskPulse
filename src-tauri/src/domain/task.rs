@@ -215,6 +215,10 @@ pub struct TaskSnapshot {
     pub project: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+    /// Concrete tool/command activity observed during the current agent turn.
+    /// Kept separate from `message`, which is the latest agent prose.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub activity: Option<String>,
     #[serde(
         default,
         with = "opt_epoch_ms",
@@ -305,6 +309,7 @@ impl TaskSnapshot {
             host: None,
             project: None,
             message: None,
+            activity: None,
             started_at: None,
             updated_at: now,
             finished_at: None,

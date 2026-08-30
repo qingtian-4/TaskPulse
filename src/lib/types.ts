@@ -36,6 +36,7 @@ export interface TaskSnapshot {
   host?: string;
   project?: string;
   message?: string;
+  activity?: string;
   started_at?: number; // epoch ms
   updated_at: number; // epoch ms
   finished_at?: number; // epoch ms

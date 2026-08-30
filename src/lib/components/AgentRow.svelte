@@ -36,6 +36,10 @@
     if (task.stale) parts.push('信息可能已过期');
     return parts.join(' · ');
   }
+
+  function quotaRemaining(used: number): number {
+    return Math.max(0, Math.min(100, 100 - used));
+  }
 </script>
 
 <li
@@ -56,10 +60,10 @@
         >{sourceLabel}</span>
       {/if}
       {#if task.quota_5h_used_pct != null || task.quota_1w_used_pct != null}
-        <span class="text-[9px] text-[#c9c161] flex-shrink-0 tabular-nums" title="Codex 用量：5 小时 / 1 周">
-          {task.quota_5h_used_pct != null ? `5h ${Math.round(task.quota_5h_used_pct)}%` : ''}
+        <span class="text-[9px] text-[#c9c161] flex-shrink-0 tabular-nums" title="Codex 剩余用量：5 小时 / 1 周">
+          {task.quota_5h_used_pct != null ? `5h ${Math.round(quotaRemaining(task.quota_5h_used_pct))}%` : ''}
           {task.quota_5h_used_pct != null && task.quota_1w_used_pct != null ? ' · ' : ''}
-          {task.quota_1w_used_pct != null ? `1周 ${Math.round(task.quota_1w_used_pct)}%` : ''}
+          {task.quota_1w_used_pct != null ? `1周 ${Math.round(quotaRemaining(task.quota_1w_used_pct))}%` : ''}
         </span>
       {/if}
     </div>
