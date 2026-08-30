@@ -109,6 +109,7 @@ fn main() {
             watcher::get_agents,
             watcher::get_hosts,
             watcher::get_providers,
+            watcher::request_refresh,
             watcher::get_status_dir,
             watcher::update_task_attention,
             watcher::install_hooks,

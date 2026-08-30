@@ -16,6 +16,7 @@
   import PinOff from '@lucide/svelte/icons/pin-off';
   import Undo2 from '@lucide/svelte/icons/undo-2';
   import Server from '@lucide/svelte/icons/server';
+  import RefreshCw from '@lucide/svelte/icons/refresh-cw';
 
   const WIN_W = 400;
   const MAX_WIN_H = screen.availHeight - 16;
@@ -60,6 +61,7 @@
   let ipcError = $state('');
   let focusError = $state('');
   let focusing = $state(false);
+  let refreshing = $state(false);
   let selectedId = $state<string | null>(null);
   let demoMode = $state(false);
   let panelEl = $state<HTMLDivElement | null>(null);
@@ -102,6 +104,23 @@
     hosts = nextHosts;
     providers = nextProviders;
     ipcError = '';
+  }
+
+  async function requestRefresh() {
+    if (refreshing || !isTauri()) return;
+    refreshing = true;
+    try {
+      await invoke('request_refresh');
+      // Local sources refresh immediately; DSH runs in its own WSL worker and
+      // publishes asynchronously, so keep the affordance active long enough
+      // for that forced probe and then reconcile the cached snapshots once.
+      await new Promise((resolve) => setTimeout(resolve, 2500));
+      await refreshSnapshots();
+    } catch (error) {
+      ipcError = `刷新失败：${error}`;
+    } finally {
+      refreshing = false;
+    }
   }
 
   $effect(() => {
@@ -280,6 +299,16 @@
     <span data-tauri-drag-region class="text-[11px] font-semibold tracking-[0.16em] uppercase text-[#bbb8b0]">TaskPulse</span>
     <div class="flex items-center gap-1.5">
       <AggregatePill state={aggregateState} />
+      <button
+        type="button"
+        onclick={requestRefresh}
+        disabled={refreshing || demoMode}
+        class="p-0.5 rounded text-[#a5a39b] hover:text-white/80 hover:bg-white/10 transition-colors disabled:opacity-50"
+        aria-label="立即刷新所有数据源"
+        title="立即刷新所有数据源"
+      >
+        <RefreshCw size={12} class={refreshing ? 'animate-spin' : ''} />
+      </button>
       <button
         type="button"
         onclick={() => invoke('toggle_pin')}

@@ -14,6 +14,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
@@ -141,6 +142,7 @@ static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
 static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
 static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
 static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
+static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     let mut tasks = tasks;
@@ -301,6 +303,14 @@ pub fn get_providers() -> Vec<ProviderHealth> {
         .clone()
 }
 
+/// Tauri command: ask every provider to poll again instead of merely returning
+/// the last cached snapshot. The watcher owns provider state, so the command is
+/// intentionally non-blocking and fresh results arrive through update events.
+#[tauri::command]
+pub fn request_refresh() {
+    MANUAL_REFRESH_REQUESTED.store(true, Ordering::Release);
+}
+
 /// Tauri command: install or uninstall AgentTray/TaskPulse hooks for a CLI
 /// tool. `cli` = "claude", "codex", "gemini", or "all"; `uninstall` removes.
 #[tauri::command]
@@ -454,6 +464,7 @@ struct LocalProviders {
     codex: CodexProvider,
     hermes: HermesProvider,
     dsh_rx: std::sync::mpsc::Receiver<ProviderOutput>,
+    dsh_refresh_tx: std::sync::mpsc::Sender<()>,
     dsh_latest: Option<ProviderOutput>,
     scanner: Scanner,
     health: Vec<ProviderHealth>,
@@ -465,6 +476,7 @@ impl LocalProviders {
         // WSL startup can take tens of seconds on Windows. Keep the DeepSeek
         // probe off the local refresh path so Codex/Hermes appear immediately.
         let (dsh_tx, dsh_rx) = std::sync::mpsc::channel();
+        let (dsh_refresh_tx, dsh_refresh_rx) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let mut dsh = DeepSeekHarnessProvider::new();
             loop {
@@ -472,7 +484,14 @@ impl LocalProviders {
                 if dsh_tx.send(output).is_err() {
                     break;
                 }
-                std::thread::sleep(Duration::from_secs(2));
+                match dsh_refresh_rx.recv_timeout(Duration::from_secs(2)) {
+                    Ok(()) => {
+                        while dsh_refresh_rx.try_recv().is_ok() {}
+                        dsh.force_refresh();
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+                }
             }
         });
         Self {
@@ -480,6 +499,7 @@ impl LocalProviders {
             codex: CodexProvider::new(),
             hermes: HermesProvider::new(),
             dsh_rx,
+            dsh_refresh_tx,
             dsh_latest: None,
             scanner: Scanner::new(),
             health: Vec::new(),
@@ -489,6 +509,10 @@ impl LocalProviders {
 
     fn primary_dir(&self) -> PathBuf {
         self.file.primary_dir()
+    }
+
+    fn request_dsh_refresh(&self) {
+        let _ = self.dsh_refresh_tx.send(());
     }
 
     fn poll(&mut self, now: SystemTime) -> LocalBatch {
@@ -668,6 +692,7 @@ pub fn watch(app: AppHandle) {
     let mut remote = RemoteTmuxProvider::new(taskpulse_config, Arc::new(SystemSshExecutor::new()));
     let remote_interval = remote_interval_ms(&remote);
     let (remote_tx, remote_rx) = std::sync::mpsc::channel::<ProviderOutput>();
+    let (remote_refresh_tx, remote_refresh_rx) = std::sync::mpsc::channel::<()>();
     std::thread::spawn(move || {
         log::info!("Remote tmux poller started (interval {remote_interval:?})");
         loop {
@@ -678,7 +703,11 @@ pub fn watch(app: AppHandle) {
                 log::warn!("Remote poller channel closed, exiting");
                 break;
             }
-            std::thread::sleep(remote_interval);
+            match remote_refresh_rx.recv_timeout(remote_interval) {
+                Ok(()) => while remote_refresh_rx.try_recv().is_ok() {},
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
         }
     });
 
@@ -710,6 +739,10 @@ pub fn watch(app: AppHandle) {
                 log::info!("Falling back to scan-only mode");
                 loop {
                     std::thread::sleep(scan_interval);
+                    if MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
+                        local_providers.request_dsh_refresh();
+                        let _ = remote_refresh_tx.send(());
+                    }
                     let now = SystemTime::now();
                     refresh_local(
                         &app,
@@ -780,6 +813,23 @@ pub fn watch(app: AppHandle) {
                     std::thread::sleep(Duration::from_secs(2));
                     break;
                 }
+            }
+
+            if MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
+                local_providers.request_dsh_refresh();
+                let _ = remote_refresh_tx.send(());
+                let now = SystemTime::now();
+                refresh_local(
+                    &app,
+                    &mut store,
+                    &mut engine,
+                    &mut local_providers,
+                    &mut history,
+                    &hosts,
+                    now,
+                );
+                last_scan = Instant::now();
+                last_emit = Instant::now();
             }
 
             // Drain remote poll results (parallel SSH polling thread).

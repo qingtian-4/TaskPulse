@@ -44,6 +44,13 @@ struct CachedSession {
     turn_key: Option<String>,
 }
 
+#[derive(Debug, Clone, Default, PartialEq)]
+struct SessionMetadata {
+    cwd: Option<String>,
+    title: Option<String>,
+    status: Option<TaskStatus>,
+}
+
 pub struct DeepSeekHarnessProvider {
     distro: String,
     /// path → parsed state; unchanged logs are not re-parsed.
@@ -86,6 +93,20 @@ impl DeepSeekHarnessProvider {
             "find \"$HOME/.dsh/sessions\" -type f -name session.jsonl.zstd -printf '%T@\\t%p\\0' 2>/dev/null | sort -z -nr"
         ))?;
         Ok(parse_discovery_output(&out))
+    }
+
+    /// Read DSH's projection cache. The native UI writes session renames and
+    /// live step state here; neither is guaranteed to be appended to the
+    /// compressed event log.
+    fn session_metadata(
+        &self,
+    ) -> std::io::Result<std::collections::HashMap<String, SessionMetadata>> {
+        let out = self.wsl("cat \"$HOME/.dsh/storages/session_projcache.json\" 2>/dev/null")?;
+        Ok(parse_session_metadata(&out))
+    }
+
+    pub fn force_refresh(&mut self) {
+        self.last_probe = None;
     }
 
     /// Read + decompress + parse a session log, returning inferred status.
@@ -305,6 +326,13 @@ impl Provider for DeepSeekHarnessProvider {
                 return ProviderOutput::degraded(tasks, error.to_string());
             }
         };
+        let metadata = match self.session_metadata() {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                log::warn!("deepseek-harness: metadata projection unavailable: {error}");
+                std::collections::HashMap::new()
+            }
+        };
 
         let mut tasks = Vec::new();
         let mut live_paths = std::collections::HashSet::new();
@@ -317,7 +345,7 @@ impl Provider for DeepSeekHarnessProvider {
             live_paths.insert(path.clone());
 
             let cached = self.cache.get(&path).cloned();
-            let (state, stale) = match cached {
+            let (mut state, stale) = match cached {
                 Some(cached) if (cached.mtime - mtime).abs() < 0.5 => (cached, false),
                 previous => match self.parse_session(&path) {
                     Some((status, cwd, name, message, turn_key)) => {
@@ -340,6 +368,22 @@ impl Provider for DeepSeekHarnessProvider {
                     }
                 },
             };
+            let session_id = session_id_from_path(&path);
+            if let Some(native) = metadata.get(&session_id) {
+                if let Some(title) = native
+                    .title
+                    .as_deref()
+                    .filter(|title| !title.trim().is_empty())
+                {
+                    state.name = title.trim().to_string();
+                }
+                if let Some(cwd) = native.cwd.as_deref().filter(|cwd| !cwd.trim().is_empty()) {
+                    state.cwd = cwd.to_string();
+                }
+                if let Some(status) = native.status {
+                    state.status = status;
+                }
+            }
             let mut task = self.session_to_task(
                 &path,
                 state.status,
@@ -361,6 +405,62 @@ impl Provider for DeepSeekHarnessProvider {
             ..ProviderOutput::default()
         }
     }
+}
+
+fn parse_session_metadata(out: &[u8]) -> std::collections::HashMap<String, SessionMetadata> {
+    let Ok(root) = serde_json::from_slice::<serde_json::Value>(out) else {
+        return Default::default();
+    };
+    let Some(sessions) = root
+        .pointer("/tables/sessions")
+        .and_then(serde_json::Value::as_object)
+    else {
+        return Default::default();
+    };
+
+    sessions
+        .iter()
+        .map(|(id, session)| {
+            let rows = session.get("rows").unwrap_or(&serde_json::Value::Null);
+            let cwd = session
+                .pointer("/identity/cwd")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let title = rows
+                .pointer("/title/val")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string);
+            let stats = rows.pointer("/sessionStats/val");
+            let open_step = stats.and_then(|value| value.get("openStep"));
+            let has_pending_calls = stats
+                .and_then(|value| value.get("pendingCalls"))
+                .and_then(serde_json::Value::as_object)
+                .is_some_and(|calls| !calls.is_empty());
+            let turns = stats
+                .and_then(|value| value.get("turns"))
+                .and_then(serde_json::Value::as_u64)
+                .unwrap_or(0);
+            let goal_phase = rows
+                .pointer("/goal/val/goal/phase")
+                .and_then(serde_json::Value::as_str);
+
+            // sessionStats is the UI's live projection. An open step or tool
+            // call means work is active; a closed projection means the latest
+            // turn has settled. Goal completion/failure is more specific than
+            // the generic waiting-for-user state.
+            let status = if open_step.is_some_and(|step| !step.is_null()) || has_pending_calls {
+                Some(TaskStatus::Running)
+            } else {
+                match goal_phase {
+                    Some("complete" | "completed" | "succeeded") => Some(TaskStatus::Succeeded),
+                    Some("failed" | "error") => Some(TaskStatus::Failed),
+                    _ if stats.is_some() && turns > 0 => Some(TaskStatus::WaitingInput),
+                    _ => None,
+                }
+            };
+            (id.clone(), SessionMetadata { cwd, title, status })
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -448,5 +548,37 @@ mod tests {
     fn shell_quote_handles_spaces_and_apostrophes() {
         assert_eq!(shell_quote("/tmp/My Project/a"), "'/tmp/My Project/a'");
         assert_eq!(shell_quote("/tmp/a'b"), "'/tmp/a'\"'\"'b'");
+    }
+
+    #[test]
+    fn projection_cache_overrides_title_and_completed_state() {
+        let json = r#"{
+          "tables":{"sessions":{"session-123":{
+            "identity":{"cwd":"/home/q/projects/Game"},
+            "rows":{
+              "title":{"val":"大富翁"},
+              "sessionStats":{"val":{"turns":18,"openStep":null,"pendingCalls":{}}},
+              "goal":{"val":{"goal":{"phase":"complete"}}}
+            }
+          }}}
+        }"#;
+        let metadata = parse_session_metadata(json.as_bytes());
+        assert_eq!(metadata["session-123"].title.as_deref(), Some("大富翁"));
+        assert_eq!(
+            metadata["session-123"].cwd.as_deref(),
+            Some("/home/q/projects/Game")
+        );
+        assert_eq!(metadata["session-123"].status, Some(TaskStatus::Succeeded));
+    }
+
+    #[test]
+    fn projection_cache_detects_open_step_as_running() {
+        let json = br#"{
+          "tables":{"sessions":{"session-123":{"rows":{
+            "sessionStats":{"val":{"turns":2,"openStep":7,"pendingCalls":{}}}
+          }}}}
+        }"#;
+        let metadata = parse_session_metadata(json);
+        assert_eq!(metadata["session-123"].status, Some(TaskStatus::Running));
     }
 }
