@@ -408,38 +408,10 @@ pub fn tasks_from_codex_section(
         &titles,
         &mut out,
     );
-    // Fill the project tree with EVERY readable thread (from META), so a
-    // project shows its full task list even if a thread has no recent rollout.
-    let present: std::collections::HashSet<String> =
-        out.iter().filter_map(|t| t.session_id.clone()).collect();
-    for (id, (title, cwd)) in &titles {
-        if present.contains(id) {
-            continue;
-        }
-        if title.trim().is_empty() || is_synthetic_title(title) {
-            continue;
-        }
-        let project = cwd
-            .rsplit(['/', '\\'])
-            .next()
-            .filter(|s| !s.is_empty())
-            .unwrap_or_else(|| cwd.as_str())
-            .to_string();
-        let mut t = TaskSnapshot::new(
-            format!("codex-remote:{host_id}:{id}"),
-            clean_task_name(title),
-            TaskSource::Codex,
-            TaskStatus::Idle,
-            DetectionConfidence::Hook,
-            now,
-        )
-        .with_host(ssh_host.to_string())
-        .with_remote();
-        t.project = Some(project);
-        t.cli = Some("codex".into());
-        t.session_id = Some(id.clone());
-        out.push(t);
-    }
+    // Metadata is lookup-only. Do not synthesize an Idle task for every
+    // non-archived thread in state_5.sqlite: that list can contain hundreds
+    // of dormant sessions and bypasses both the rollout limit and lifecycle
+    // TTL. Only the recent rollout bodies above are eligible for display.
     propagate_freshest_quota(&mut out);
     out
 }
@@ -878,5 +850,13 @@ mod tests {
         assert_eq!(t.host.as_deref(), Some("Server3"));
         assert!(t.remote);
         assert_eq!(t.name, "研究 Game 记忆机制");
+    }
+
+    #[test]
+    fn metadata_only_remote_threads_are_not_synthesized_as_idle_tasks() {
+        let section =
+            "META\t{\"id\":\"old-session\",\"t\":\"Dormant task\",\"cwd\":\"/tmp/project\"}\n";
+        let tasks = tasks_from_codex_section(section, "Server3", "server3", SystemTime::now());
+        assert!(tasks.is_empty());
     }
 }
