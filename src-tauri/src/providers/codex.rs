@@ -929,7 +929,7 @@ pub fn tasks_from_codex_section(
             flush_codex(
                 &current_slug,
                 &current_uuid,
-                &mut buf,
+                &buf,
                 now,
                 ssh_host,
                 host_id,
@@ -947,7 +947,7 @@ pub fn tasks_from_codex_section(
     flush_codex(
         &current_slug,
         &current_uuid,
-        &mut buf,
+        &buf,
         now,
         ssh_host,
         host_id,
@@ -1048,10 +1048,11 @@ fn clean_task_name(s: &str) -> String {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn flush_codex(
     slug: &Option<String>,
     uuid: &Option<String>,
-    buf: &mut String,
+    buf: &str,
     now: SystemTime,
     ssh_host: &str,
     host_id: &str,

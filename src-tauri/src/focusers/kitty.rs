@@ -1,6 +1,5 @@
-/// Focus a Kitty terminal window via its remote-control protocol.
-/// `focus_id` is the KITTY_WINDOW_ID (integer string).
-
+//! Focus a Kitty terminal window via its remote-control protocol.
+//! `focus_id` is the KITTY_WINDOW_ID (integer string).
 pub fn focus(focus_id: &str, _outer_id: &str) -> Result<(), String> {
     if focus_id.is_empty() {
         return Ok(());

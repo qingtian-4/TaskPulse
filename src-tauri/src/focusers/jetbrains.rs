@@ -1,6 +1,5 @@
-/// Focus a JetBrains IDE terminal window.
-/// Falls back to platform-specific window activation.
-
+//! Focus a JetBrains IDE terminal window.
+//! Falls back to platform-specific window activation.
 pub fn focus(_focus_id: &str, _outer_id: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {

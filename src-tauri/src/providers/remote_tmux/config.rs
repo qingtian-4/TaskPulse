@@ -42,7 +42,7 @@ fn default_poll_ms() -> u64 {
     3000
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TaskPulseConfig {
     #[serde(default)]
     pub remote_hosts: Vec<RemoteHostConfig>,
@@ -89,15 +89,6 @@ impl Default for MonitoringConfig {
             hermes_projects: wildcard_projects(),
             deepseek_harness_projects: wildcard_projects(),
             remote_codex: wildcard_remote_codex(),
-        }
-    }
-}
-
-impl Default for TaskPulseConfig {
-    fn default() -> Self {
-        Self {
-            remote_hosts: Vec::new(),
-            monitoring: MonitoringConfig::default(),
         }
     }
 }

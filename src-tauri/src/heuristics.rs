@@ -25,7 +25,7 @@ const HIGH_CPU_THRESHOLD: f64 = 10.0;
 ///
 /// Called after dedup, before sorting and emission.
 #[cfg_attr(not(test), allow(dead_code))]
-pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
+pub fn cross_validate(agents: &mut [AgentStatus], scanned: &[AgentStatus]) {
     let now = SystemTime::now();
 
     for agent in agents.iter_mut() {

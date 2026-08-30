@@ -108,6 +108,7 @@ impl RemoteTmuxProvider {
 
     /// Convert a successful remote snapshot into tasks + host health,
     /// handling finish detection.
+    #[allow(clippy::too_many_arguments)]
     fn process_snapshot(
         &mut self,
         ssh_host: &str,

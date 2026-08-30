@@ -5,10 +5,11 @@ use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 use super::{known_terminal, ProcInfo, WindowCache};
 use crate::watcher::TerminalInfo;
 
+type StrategyMatch<'a> = (ProcInfo, &'a dyn CliStrategy);
+type ProcessScan<'a> = (Vec<StrategyMatch<'a>>, HashMap<u32, u32>);
+
 /// Find CLI processes matching any registered strategy.
-pub fn find_cli_processes(
-    strategies: &[Box<dyn CliStrategy>],
-) -> (Vec<(ProcInfo, &dyn CliStrategy)>, HashMap<u32, u32>) {
+pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_> {
     // Build wmic filter for all strategy process names + script runtimes
     let all_names: Vec<&str> = strategies
         .iter()

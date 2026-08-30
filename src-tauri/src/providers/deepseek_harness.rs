@@ -89,9 +89,9 @@ impl DeepSeekHarnessProvider {
     /// Paths + mtimes of the most recently written session logs. NUL-delimited
     /// output preserves workspaces containing spaces or shell punctuation.
     fn recent_sessions(&self) -> std::io::Result<Vec<(String, f64)>> {
-        let out = self.wsl(&format!(
-            "find \"$HOME/.dsh/sessions\" -type f -name session.jsonl.zstd -printf '%T@\\t%p\\0' 2>/dev/null | sort -z -nr"
-        ))?;
+        let out = self.wsl(
+            "find \"$HOME/.dsh/sessions\" -type f -name session.jsonl.zstd -printf '%T@\\t%p\\0' 2>/dev/null | sort -z -nr",
+        )?;
         Ok(parse_discovery_output(&out))
     }
 
@@ -110,6 +110,7 @@ impl DeepSeekHarnessProvider {
     }
 
     /// Read + decompress + parse a session log, returning inferred status.
+    #[allow(clippy::type_complexity)]
     fn parse_session(
         &self,
         path: &str,
@@ -199,6 +200,7 @@ impl DeepSeekHarnessProvider {
         Some((status, cwd, name, last_msg, turn_key))
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn session_to_task(
         &self,
         path: &str,
@@ -213,7 +215,7 @@ impl DeepSeekHarnessProvider {
         let session_id = session_id_from_path(path);
         let mut task = TaskSnapshot::new(
             format!("dsh:{session_id}"),
-            truncate(&name, NAME_LEN),
+            truncate(name, NAME_LEN),
             TaskSource::DeepSeekHarness,
             status,
             DetectionConfidence::Hook,

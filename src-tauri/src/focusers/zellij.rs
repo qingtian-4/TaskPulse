@@ -1,6 +1,5 @@
-/// Focus a Zellij session.
-/// `focus_id` is the session name (from ZELLIJ_SESSION_NAME).
-
+//! Focus a Zellij session.
+//! `focus_id` is the session name (from ZELLIJ_SESSION_NAME).
 pub fn focus(focus_id: &str, _outer_id: &str) -> Result<(), String> {
     if focus_id.is_empty() {
         return Ok(());

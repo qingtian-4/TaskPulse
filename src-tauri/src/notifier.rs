@@ -370,17 +370,6 @@ mod tests {
         }
     }
 
-    fn task(id: &str, status: TaskStatus) -> TaskSnapshot {
-        TaskSnapshot::new(
-            id,
-            id,
-            crate::domain::TaskSource::LocalFile,
-            status,
-            crate::domain::DetectionConfidence::Hook,
-            std::time::SystemTime::now(),
-        )
-    }
-
     #[test]
     fn reminder_fires_after_interval() {
         let n = CountingNotifier(AtomicUsize::new(0));

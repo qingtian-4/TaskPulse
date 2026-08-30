@@ -1,6 +1,5 @@
-/// Activates a Windows terminal window using PowerShell and Win32 SetForegroundWindow.
-/// `focus_id` is the terminal process ID as a string.
-
+//! Activates a Windows terminal window using PowerShell and Win32 SetForegroundWindow.
+//! `focus_id` is the terminal process ID as a string.
 pub fn focus(focus_id: &str, _outer_id: &str) -> Result<(), String> {
     if focus_id.is_empty() {
         return Ok(());

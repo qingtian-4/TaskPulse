@@ -602,6 +602,7 @@ fn update_provider_health(
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn merge_and_emit(
     app: &AppHandle,
     store: &mut TaskStore,
