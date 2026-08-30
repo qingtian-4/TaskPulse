@@ -20,10 +20,10 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use crate::providers::{Provider, ProviderOutput};
 
-/// A session whose last activity is WAITING_INPUT stays visible this long.
-const WAITING_TTL: Duration = Duration::from_secs(24 * 3600);
-/// A session we believe is RUNNING must have had activity recently.
-const RUNNING_TTL: Duration = Duration::from_secs(10 * 60);
+/// Discovery horizon only. It is not a UI retention rule: unread/pinned tasks
+/// are persisted by the attention tracker, while an old session becomes
+/// eligible again as soon as Hermes updates its activity or turn lease.
+const DISCOVERY_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 const NAME_LEN: usize = 40;
 
 pub struct HermesProvider {
@@ -90,30 +90,62 @@ struct SessionRow {
     name: Option<String>,
     title: Option<String>,
     last_activity_at: Option<f64>,
+    started_at: Option<f64>,
     cwd: Option<String>,
+    git_repo_root: Option<String>,
     ended_at: Option<f64>,
+    end_reason: Option<String>,
     archived: bool,
+    hidden: bool,
+    pinned: bool,
+    last_read_at: Option<f64>,
     description: Option<String>,
 }
 
-fn row_to_snapshot(row: &SessionRow, running: bool, now: SystemTime) -> TaskSnapshot {
+#[derive(Debug, Clone, Copy)]
+struct TurnLease {
+    acquired_at: f64,
+    live: bool,
+}
+
+fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) -> TaskSnapshot {
     let name = row
         .name
         .clone()
         .or_else(|| row.title.clone())
-        .unwrap_or_else(|| "Hermes".to_string());
+        .unwrap_or_else(|| {
+            let short: String = row.id.chars().take(8).collect();
+            format!("未命名任务 · {short}")
+        });
     let name = truncate(&name, NAME_LEN);
-    let status = if running {
+    let status = if lease.is_some_and(|lease| lease.live) {
         TaskStatus::Running
+    } else if row.ended_at.and_then(epoch_to_time).is_some() {
+        let failed = row.end_reason.as_deref().is_some_and(|reason| {
+            let reason = reason.to_ascii_lowercase();
+            reason.contains("fail")
+                || reason.contains("error")
+                || reason.contains("panic")
+                || reason.contains("crash")
+        });
+        if failed {
+            TaskStatus::Failed
+        } else {
+            TaskStatus::Idle
+        }
     } else {
         TaskStatus::WaitingInput
     };
     let at = row.last_activity_at.and_then(epoch_to_time).unwrap_or(now);
-    let project = row.cwd.as_deref().and_then(|c| {
-        Path::new(c)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-    });
+    let project = row
+        .cwd
+        .as_deref()
+        .or(row.git_repo_root.as_deref())
+        .and_then(|c| {
+            Path::new(c)
+                .file_name()
+                .map(|n| n.to_string_lossy().into_owned())
+        });
 
     let mut task = TaskSnapshot::new(
         format!("hermes:{}", row.id),
@@ -126,8 +158,14 @@ fn row_to_snapshot(row: &SessionRow, running: bool, now: SystemTime) -> TaskSnap
     task.project = project;
     task.cli = Some("hermes".into());
     task.session_id = Some(row.id.clone());
-    task.started_at = Some(at);
+    task.started_at = row.started_at.and_then(epoch_to_time).or(Some(at));
     task.updated_at = at;
+    task.finished_at = row.ended_at.and_then(epoch_to_time);
+    task.turn_key = lease.map(|lease| format!("lease:{:.6}", lease.acquired_at));
+    task.native_unread = row
+        .last_read_at
+        .map(|read| row.last_activity_at.is_some_and(|activity| activity > read));
+    task.pinned = row.pinned;
     if let Some(d) = &row.description {
         task.message = Some(truncate(d, 120));
     }
@@ -142,11 +180,12 @@ fn epoch_to_time(secs: f64) -> Option<SystemTime> {
     }
 }
 
-fn read_live_leases(
+fn read_turn_leases(
     conn: &rusqlite::Connection,
     now: SystemTime,
-) -> Result<std::collections::HashSet<String>, String> {
-    let mut stmt = match conn.prepare("SELECT conversation_id, expires_at FROM session_turn_leases")
+) -> Result<std::collections::HashMap<String, TurnLease>, String> {
+    let mut stmt = match conn
+        .prepare("SELECT conversation_id, acquired_at, expires_at FROM session_turn_leases")
     {
         Ok(stmt) => stmt,
         Err(error) if error.to_string().contains("no such table") => return Ok(Default::default()),
@@ -154,18 +193,26 @@ fn read_live_leases(
     };
     let rows = stmt
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, f64>(1)?,
+                row.get::<_, f64>(2)?,
+            ))
         })
         .map_err(|error| format!("read turn leases failed: {error}"))?;
-    let mut live = std::collections::HashSet::new();
+    let mut leases = std::collections::HashMap::new();
     for row in rows {
-        let (conversation, expires) =
+        let (conversation, acquired, expires) =
             row.map_err(|error| format!("parse turn lease failed: {error}"))?;
-        if epoch_to_time(expires).is_some_and(|expires_at| expires_at > now) {
-            live.insert(conversation);
-        }
+        leases.insert(
+            conversation,
+            TurnLease {
+                acquired_at: acquired,
+                live: epoch_to_time(expires).is_some_and(|expires_at| expires_at > now),
+            },
+        );
     }
-    Ok(live)
+    Ok(leases)
 }
 
 fn truncate(s: &str, max: usize) -> String {
@@ -196,8 +243,8 @@ impl Provider for HermesProvider {
         };
 
         // Turn leases → the set of conversation_ids currently in-flight.
-        let live = match read_live_leases(&conn, now) {
-            Ok(live) => live,
+        let leases = match read_turn_leases(&conn, now) {
+            Ok(leases) => leases,
             Err(error) => {
                 log::warn!("hermes: {error}");
                 return self.degraded(error);
@@ -206,7 +253,8 @@ impl Provider for HermesProvider {
 
         // Active sessions, newest activity first.
         let mut stmt = match conn.prepare(
-            "SELECT id, display_name, title, last_activity_at, cwd, ended_at, archived, \
+            "SELECT id, display_name, title, last_activity_at, started_at, cwd, git_repo_root, \
+             ended_at, end_reason, archived, hidden, pinned, last_read_at, \
              last_activity_description FROM sessions ORDER BY last_activity_at DESC",
         ) {
             Ok(stmt) => stmt,
@@ -222,10 +270,16 @@ impl Provider for HermesProvider {
                 name: r.get(1)?,
                 title: r.get(2)?,
                 last_activity_at: r.get(3)?,
-                cwd: r.get(4)?,
-                ended_at: r.get(5)?,
-                archived: r.get(6)?,
-                description: r.get(7)?,
+                started_at: r.get(4)?,
+                cwd: r.get(5)?,
+                git_repo_root: r.get(6)?,
+                ended_at: r.get(7)?,
+                end_reason: r.get(8)?,
+                archived: r.get(9)?,
+                hidden: r.get(10)?,
+                pinned: r.get(11)?,
+                last_read_at: r.get(12)?,
+                description: r.get(13)?,
             })
         }) {
             Ok(mapped) => match mapped.collect::<rusqlite::Result<Vec<_>>>() {
@@ -245,26 +299,23 @@ impl Provider for HermesProvider {
 
         let mut tasks = Vec::new();
         for row in rows {
-            // Ended conversations are not waiting for user input even when
-            // Hermes has not archived them yet.
-            if row.archived || row.ended_at.and_then(epoch_to_time).is_some() {
+            if row.archived {
                 continue;
             }
             let Some(at) = row.last_activity_at.and_then(epoch_to_time) else {
                 continue;
             };
-            let running = live.contains(&row.id);
-            let age = now.duration_since(at).unwrap_or_default();
-            // Lifecycle gate: running sessions must be recent; waiting sessions
-            // must have been touched within the TTL.
-            if running {
-                if age > RUNNING_TTL {
-                    continue;
-                }
-            } else if age > WAITING_TTL {
+            let lease = leases.get(&row.id).copied();
+            let running = lease.is_some_and(|lease| lease.live);
+            // A native-hidden session stays hidden until a new turn starts.
+            if row.hidden && !running {
                 continue;
             }
-            tasks.push(row_to_snapshot(&row, running, now));
+            let age = now.duration_since(at).unwrap_or_default();
+            if !running && age > DISCOVERY_TTL && !row.pinned {
+                continue;
+            }
+            tasks.push(row_to_snapshot(&row, lease, now));
         }
 
         self.last_tasks = tasks.clone();
@@ -285,14 +336,17 @@ mod tests {
         let conn = rusqlite::Connection::open(&p).unwrap();
         conn.execute_batch(
             "CREATE TABLE sessions (id TEXT, display_name TEXT, title TEXT, last_activity_at REAL, \
-             cwd TEXT, ended_at REAL, archived INTEGER, last_activity_description TEXT); \
+             started_at REAL, cwd TEXT, git_repo_root TEXT, ended_at REAL, end_reason TEXT, \
+             archived INTEGER, hidden INTEGER, pinned INTEGER, last_read_at REAL, \
+             last_activity_description TEXT); \
              CREATE TABLE session_turn_leases (conversation_id TEXT, holder TEXT, acquired_at REAL, expires_at REAL);",
         )
         .unwrap();
         for (id, name, act, cwd, archived, ended) in sessions {
             conn.execute(
-                "INSERT INTO sessions (id, display_name, title, last_activity_at, cwd, ended_at, archived, last_activity_description) \
-                 VALUES (?1, ?2, ?2, ?3, ?4, ?6, ?5, 'last activity')",
+                "INSERT INTO sessions (id, display_name, title, last_activity_at, started_at, cwd, \
+                 git_repo_root, ended_at, end_reason, archived, hidden, pinned, last_read_at, last_activity_description) \
+                 VALUES (?1, ?2, ?2, ?3, ?3, ?4, NULL, ?6, NULL, ?5, 0, 0, NULL, 'last activity')",
                 rusqlite::params![id, name, act, cwd, archived, ended],
             )
             .unwrap();
@@ -355,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn ended_session_skipped_even_when_not_archived() {
+    fn ended_session_is_reported_as_finished_metadata() {
         let now = now_secs();
         let (_dir, db) = make_db(
             &[("s-ended", "ended", now - 5.0, "/tmp/proj", false, now)],
@@ -363,14 +417,19 @@ mod tests {
         );
         let mut p = HermesProvider::with_db_path(db);
         let out = p.poll(SystemTime::now());
-        assert!(out.tasks.is_empty());
+        assert_eq!(out.tasks.len(), 1);
+        assert_eq!(out.tasks[0].status, TaskStatus::Idle);
+        assert!(out.tasks[0].finished_at.is_some());
     }
 
     #[test]
     fn stale_waiting_session_dropped() {
         let now = now_secs();
-        // last activity long ago, no lease → beyond WAITING_TTL → dropped
-        let (_dir, db) = make_db(&[("s4", "Old", now - 48.0 * 3600.0, "/x", false, 0.0)], &[]);
+        // last activity long ago, no lease → beyond discovery horizon → dropped
+        let (_dir, db) = make_db(
+            &[("s4", "Old", now - 8.0 * 24.0 * 3600.0, "/x", false, 0.0)],
+            &[],
+        );
         let mut provider = HermesProvider::with_db_path(db);
         let out = provider.poll(SystemTime::now());
         assert!(out.tasks.is_empty());

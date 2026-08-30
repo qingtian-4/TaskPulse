@@ -32,15 +32,16 @@ const STALE_TTL: Duration = Duration::from_secs(24 * 3600);
 /// probes we re-emit the last known state (avoids spawning wsl.exe each poll).
 const PROBE_INTERVAL: Duration = Duration::from_secs(6);
 const WSL_DISTRO: &str = "Ubuntu";
-const NAME_LEN: usize = 40;
-const MAX_SESSIONS: usize = 6;
+const NAME_LEN: usize = 56;
 
 #[derive(Debug, Clone)]
 struct CachedSession {
     mtime: f64,
     status: TaskStatus,
     cwd: String,
+    name: String,
     message: Option<String>,
+    turn_key: Option<String>,
 }
 
 pub struct DeepSeekHarnessProvider {
@@ -82,15 +83,19 @@ impl DeepSeekHarnessProvider {
     /// output preserves workspaces containing spaces or shell punctuation.
     fn recent_sessions(&self) -> std::io::Result<Vec<(String, f64)>> {
         let out = self.wsl(&format!(
-            "find \"$HOME/.dsh/sessions\" -type f -name session.jsonl.zstd -printf '%T@\\t%p\\0' 2>/dev/null | sort -z -nr | head -z -n {MAX_SESSIONS}"
+            "find \"$HOME/.dsh/sessions\" -type f -name session.jsonl.zstd -printf '%T@\\t%p\\0' 2>/dev/null | sort -z -nr"
         ))?;
         Ok(parse_discovery_output(&out))
     }
 
     /// Read + decompress + parse a session log, returning inferred status.
-    fn parse_session(&self, path: &str) -> Option<(TaskStatus, String, Option<String>)> {
+    fn parse_session(
+        &self,
+        path: &str,
+    ) -> Option<(TaskStatus, String, String, Option<String>, Option<String>)> {
         // base64 to avoid any binary/CRLF mangling through wsl.exe stdio.
-        let path = shell_quote(path);
+        let session_path = path;
+        let path = shell_quote(session_path);
         let b64 = self
             .wsl(&format!("base64 -w0 -- {path} 2>/dev/null; echo"))
             .ok()?;
@@ -103,6 +108,8 @@ impl DeepSeekHarnessProvider {
         let mut last_turn_start_seq = -1i64;
         let mut last_turn_end_seq = -1i64;
         let mut cwd: Option<String> = None;
+        let mut native_title: Option<String> = None;
+        let mut first_user_message: Option<String> = None;
         let mut last_msg: Option<String> = None;
         for line in text.lines() {
             let line = line.trim_start();
@@ -121,9 +128,20 @@ impl DeepSeekHarnessProvider {
                     if cwd.is_none() {
                         cwd = v.get("cwd").and_then(|c| c.as_str()).map(String::from);
                     }
+                    native_title = native_title.or_else(|| {
+                        v.get("name")
+                            .or_else(|| v.get("title"))
+                            .and_then(|value| value.as_str())
+                            .map(str::to_string)
+                    });
                 }
                 "turn/start" => last_turn_start_seq = seq,
                 "turn/end" => last_turn_end_seq = seq,
+                "user/message" => {
+                    if first_user_message.is_none() {
+                        first_user_message = extract_text(&v).map(str::to_string);
+                    }
+                }
                 "assistant/message" => {
                     if let Some(msg) = v
                         .get("data")
@@ -148,7 +166,16 @@ impl DeepSeekHarnessProvider {
         } else {
             TaskStatus::Running
         };
-        Some((status, cwd.unwrap_or_default(), last_msg))
+        let cwd = cwd.unwrap_or_default();
+        let session_id = session_id_from_path(session_path);
+        let name = native_title
+            .as_deref()
+            .or(first_user_message.as_deref())
+            .map(summarize_name)
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| format!("未命名任务 · {}", &session_id[..session_id.len().min(8)]));
+        let turn_key = (last_turn_start_seq >= 0).then(|| format!("turn:{last_turn_start_seq}"));
+        Some((status, cwd, name, last_msg, turn_key))
     }
 
     fn session_to_task(
@@ -156,16 +183,15 @@ impl DeepSeekHarnessProvider {
         path: &str,
         status: TaskStatus,
         cwd: &str,
+        name: &str,
         message: Option<String>,
+        turn_key: Option<String>,
         updated_at: SystemTime,
         now: SystemTime,
     ) -> TaskSnapshot {
-        let name = PathBuf::from(cwd)
-            .file_name()
-            .map(|n| n.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "DeepSeek Harness".to_string());
+        let session_id = session_id_from_path(path);
         let mut task = TaskSnapshot::new(
-            format!("dsh:{path}"),
+            format!("dsh:{session_id}"),
             truncate(&name, NAME_LEN),
             TaskSource::DeepSeekHarness,
             status,
@@ -177,10 +203,44 @@ impl DeepSeekHarnessProvider {
             .map(|n| n.to_string_lossy().into_owned());
         task.project = project;
         task.message = message;
+        task.turn_key = turn_key;
+        task.session_id = Some(session_id);
         task.updated_at = updated_at;
         task.cli = Some("dsh".into());
         task
     }
+}
+
+fn session_id_from_path(path: &str) -> String {
+    PathBuf::from(path)
+        .parent()
+        .and_then(|parent| parent.file_name())
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.to_string())
+}
+
+fn extract_text(value: &serde_json::Value) -> Option<&str> {
+    value
+        .get("text")
+        .or_else(|| value.get("message"))
+        .or_else(|| value.get("content"))
+        .and_then(|value| value.as_str())
+        .or_else(|| {
+            value
+                .get("data")
+                .and_then(|data| data.get("message"))
+                .and_then(|message| message.get("content"))
+                .and_then(|content| content.as_str())
+        })
+}
+
+fn summarize_name(value: &str) -> String {
+    let collapsed = value.split_whitespace().collect::<Vec<_>>().join(" ");
+    let clause = collapsed
+        .split(['。', '！', '？', ';', '；'])
+        .find(|part| !part.trim().is_empty())
+        .unwrap_or(&collapsed);
+    truncate(clause.trim(), NAME_LEN)
 }
 
 fn parse_discovery_output(out: &[u8]) -> Vec<(String, f64)> {
@@ -260,12 +320,14 @@ impl Provider for DeepSeekHarnessProvider {
             let (state, stale) = match cached {
                 Some(cached) if (cached.mtime - mtime).abs() < 0.5 => (cached, false),
                 previous => match self.parse_session(&path) {
-                    Some((status, cwd, message)) => {
+                    Some((status, cwd, name, message, turn_key)) => {
                         let parsed = CachedSession {
                             mtime,
                             status,
                             cwd,
+                            name,
                             message,
+                            turn_key,
                         };
                         self.cache.insert(path.clone(), parsed.clone());
                         (parsed, false)
@@ -282,7 +344,9 @@ impl Provider for DeepSeekHarnessProvider {
                 &path,
                 state.status,
                 &state.cwd,
+                &state.name,
                 state.message,
+                state.turn_key,
                 mtime_time,
                 now,
             );

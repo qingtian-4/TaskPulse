@@ -6,12 +6,12 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import type { HostHealth, ProviderHealth, Source, TaskSnapshot } from '$lib/types';
   import { SOURCE_LABEL, STATUS_LABEL, formatAgo } from '$lib/types';
-  import { aggregate, localTasks, recentTasks, remoteByHost } from '$lib/utils';
-  import AgentRow from '$lib/components/AgentRow.svelte';
+  import { aggregate, localTasks, remoteByHost } from '$lib/utils';
   import AggregatePill from '$lib/components/AggregatePill.svelte';
   import ProjectTree from '$lib/components/ProjectTree.svelte';
   import StatusDot from '$lib/components/StatusDot.svelte';
-  import Clock from '@lucide/svelte/icons/clock';
+  import Check from '@lucide/svelte/icons/check';
+  import EyeOff from '@lucide/svelte/icons/eye-off';
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
   import Server from '@lucide/svelte/icons/server';
@@ -28,13 +28,10 @@
     'local_file',
   ];
   const DEMO_TASKS: TaskSnapshot[] = [
-    { id: 'demo-hermes', name: '实现监控状态协议', source: 'hermes', status: 'waiting_input', message: '等待确认状态字段', updated_at: Date.now() - 45_000, confidence: 'exact', remote: false },
-    { id: 'demo-deepseek', name: '修复登录回归', source: 'deepseek_harness', status: 'running', project: 'dashboard', message: '正在运行测试', started_at: Date.now() - 520_000, updated_at: Date.now() - 8_000, confidence: 'inferred', remote: false },
-    { id: 'demo-codex-1', name: '整理任务列表', source: 'codex', status: 'running', project: 'agenttray', message: '正在更新前端', started_at: Date.now() - 300_000, updated_at: Date.now() - 3_000, confidence: 'exact', remote: false, quota_5h_used_pct: 28, quota_1w_used_pct: 41 },
-    { id: 'demo-codex-2', name: '补充 Rust 测试', source: 'codex', status: 'idle', project: 'agenttray', message: '等待下一步', updated_at: Date.now() - 80_000, confidence: 'exact', remote: false },
-    { id: 'demo-remote-codex', name: '训练任务日志检查', source: 'codex', status: 'running', host: 'Server1', project: 'model-run', message: '正在分析输出', started_at: Date.now() - 1_800_000, updated_at: Date.now() - 12_000, confidence: 'exact', remote: true },
-    { id: 'demo-tmux', name: 'tmux:3.0', source: 'remote_tmux', status: 'waiting_input', host: 'Server3', project: 'benchmark', message: '终端等待输入', started_at: Date.now() - 740_000, updated_at: Date.now() - 20_000, confidence: 'inferred', remote: true, stale: true },
-    { id: 'demo-recent', name: '更新安装说明', source: 'codex', status: 'succeeded', project: 'agenttray', message: '任务已完成', updated_at: Date.now() - 180_000, finished_at: Date.now() - 180_000, confidence: 'exact', remote: false, recent: true, exit_code: 0 },
+    { id: 'demo-hermes', name: '演示：Hermes 等待确认', source: 'hermes', status: 'waiting_input', message: '非真实采集数据', updated_at: Date.now() - 45_000, confidence: 'exact', remote: false, unread: true },
+    { id: 'demo-deepseek', name: '演示：DeepSeek 正在执行', source: 'deepseek_harness', status: 'running', project: 'demo-project', message: '非真实采集数据', started_at: Date.now() - 520_000, updated_at: Date.now() - 8_000, confidence: 'inferred', remote: false, unread: true },
+    { id: 'demo-codex-1', name: '演示：Codex 会话标题', source: 'codex', status: 'running', project: 'demo-project', message: '非真实采集数据', started_at: Date.now() - 300_000, updated_at: Date.now() - 3_000, confidence: 'exact', remote: false, quota_5h_used_pct: 28, quota_1w_used_pct: 41, unread: true },
+    { id: 'demo-remote-codex', name: '演示：远程 Codex 会话', source: 'codex', status: 'waiting_input', host: 'DemoServer', project: 'demo-remote', message: '非真实采集数据', updated_at: Date.now() - 12_000, confidence: 'exact', remote: true, unread: true },
   ];
   const DEMO_HOSTS: HostHealth[] = [
     { host: 'Server1', status: 'connected', last_seen: Date.now() - 12_000 },
@@ -63,11 +60,11 @@
   let focusError = $state('');
   let focusing = $state(false);
   let selectedId = $state<string | null>(null);
+  let demoMode = $state(false);
   let panelEl = $state<HTMLDivElement | null>(null);
 
   let locals = $derived(localTasks(tasks));
   let remotes = $derived(remoteByHost(tasks));
-  let recents = $derived(recentTasks(tasks));
   let aggregateState = $derived(aggregate(tasks, hosts));
   let selectedTask = $derived(tasks.find((task) => task.id === selectedId) ?? null);
   let degradedProviders = $derived(providers.filter((provider) => provider.status === 'degraded'));
@@ -123,6 +120,7 @@
   onMount(() => {
     if (!isTauri()) {
       if (import.meta.env.DEV) {
+        demoMode = true;
         tasks = DEMO_TASKS;
         hosts = DEMO_HOSTS;
         providers = DEMO_PROVIDERS;
@@ -211,12 +209,31 @@
           outer_id: task.terminal.outer_id,
         },
       });
+      tasks = await invoke<TaskSnapshot[]>('update_task_attention', {
+        id: task.id,
+        action: 'viewed',
+      });
       if (!pinned) invoke('close_popup');
     } catch (error) {
       focusError = String(error);
       setTimeout(() => (focusError = ''), 4000);
     } finally {
       focusing = false;
+    }
+  }
+
+  async function updateAttention(task: TaskSnapshot, action: 'viewed' | 'hide' | 'pin', nextPinned?: boolean) {
+    if (!isTauri()) return;
+    try {
+      tasks = await invoke<TaskSnapshot[]>('update_task_attention', {
+        id: task.id,
+        action,
+        pinned: nextPinned,
+      });
+      if (!tasks.some((item) => item.id === selectedId)) selectedId = null;
+    } catch (error) {
+      focusError = `无法更新关注状态：${error}`;
+      setTimeout(() => (focusError = ''), 4000);
     }
   }
 </script>
@@ -249,6 +266,12 @@
   {#if focusError || ipcError}
     <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate shrink-0">
       {focusError || ipcError}
+    </div>
+  {/if}
+
+  {#if demoMode}
+    <div class="px-3 py-1.5 bg-[#243348] border-b border-sky-400/20 text-[10px] text-[#8fc4e8] shrink-0">
+      浏览器演示模式 · 以下均为示例数据，真实任务请运行托盘应用
     </div>
   {/if}
 
@@ -309,17 +332,6 @@
         {/each}
       {/if}
 
-      {#if recents.length > 0}
-        <p class="text-[10px] font-semibold tracking-[0.16em] uppercase text-[#8f8d86] px-4 pt-2 pb-0.5">最近完成</p>
-        <ul class="m-0 p-0">
-          {#each recents as task (task.id)}
-            <AgentRow {task} onFocus={() => focusAgent(task)} />
-          {/each}
-        </ul>
-        <p class="text-[9px] text-[#77756f] px-4 pb-1 flex items-center gap-1">
-          <Clock size={9} /> 完成的任务保留 30 分钟
-        </p>
-      {/if}
     </div>
   {/if}
 
@@ -330,6 +342,19 @@
         {selectedTask.project ? `${selectedTask.project} · ` : ''}{selectedTask.name}
       </span>
       <span class="text-[9px] text-[#8f8d86] tabular-nums">{STATUS_LABEL[selectedTask.status]}</span>
+      {#if selectedTask.unread}
+        <button type="button" class="p-1 rounded text-[#d8c66d] hover:bg-white/10" title="标记已查看" aria-label="标记已查看" onclick={() => updateAttention(selectedTask!, 'viewed')}>
+          <Check size={12} />
+        </button>
+      {/if}
+      <button type="button" class="p-1 rounded hover:bg-white/10 {selectedTask.pinned ? 'text-[#8fc4e8]' : 'text-[#8f8d86]'}" title={selectedTask.pinned ? '取消固定任务' : '固定任务'} aria-label={selectedTask.pinned ? '取消固定任务' : '固定任务'} onclick={() => updateAttention(selectedTask!, 'pin', !selectedTask!.pinned)}>
+        <Pin size={12} />
+      </button>
+      {#if selectedTask.status !== 'running'}
+        <button type="button" class="p-1 rounded text-[#8f8d86] hover:text-[#d89191] hover:bg-white/10" title="从关注列表隐藏" aria-label="从关注列表隐藏" onclick={() => updateAttention(selectedTask!, 'hide')}>
+          <EyeOff size={12} />
+        </button>
+      {/if}
       {#if selectedTask.quota_5h_used_pct != null || selectedTask.quota_1w_used_pct != null}
         <span class="text-[9px] text-[#c9c161] tabular-nums">
           {selectedTask.quota_5h_used_pct != null ? `5h ${Math.round(selectedTask.quota_5h_used_pct)}%` : ''}

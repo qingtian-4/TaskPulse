@@ -14,16 +14,21 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 
+use crate::attention::AttentionTracker;
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
 use crate::history::HistoryStore;
 use crate::providers::codex::CodexProvider;
 use crate::providers::deepseek_harness::DeepSeekHarnessProvider;
 use crate::providers::hermes::HermesProvider;
 use crate::providers::local_file::LocalFileProvider;
-use crate::providers::remote_tmux::{ssh::SystemSshExecutor, RemoteTmuxProvider};
+use crate::providers::remote_tmux::{
+    config::{self, MonitoringConfig},
+    ssh::SystemSshExecutor,
+    RemoteTmuxProvider,
+};
 use crate::providers::{HostHealth, Provider, ProviderHealth, ProviderOutput, ProviderStatus};
 use crate::scanner::Scanner;
 use crate::store::TaskStore;
@@ -95,6 +100,10 @@ impl From<AgentStatus> for TaskSnapshot {
             remote: false,
             stale: false,
             recent: false,
+            unread: false,
+            pinned: false,
+            turn_key: None,
+            native_unread: None,
             terminal: a.terminal,
             can_focus: a.can_focus,
             cpu: a.cpu,
@@ -130,6 +139,46 @@ pub fn status_dir() -> Option<PathBuf> {
 static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
 static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
 static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
+static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
+
+fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
+    let Some(tracker) = ATTENTION_TRACKER.get() else {
+        return tasks;
+    };
+    tracker
+        .lock()
+        .unwrap_or_else(|error| {
+            log::warn!("ATTENTION_TRACKER mutex poisoned, recovering");
+            error.into_inner()
+        })
+        .reconcile(tasks)
+}
+
+/// Update one task's TaskPulse-owned attention state.
+#[tauri::command]
+pub fn update_task_attention(
+    app: AppHandle,
+    id: String,
+    action: String,
+    pinned: Option<bool>,
+) -> Result<Vec<TaskSnapshot>, String> {
+    let tracker = ATTENTION_TRACKER
+        .get()
+        .ok_or_else(|| "attention tracker is still starting".to_string())?;
+    let tasks = {
+        let mut tracker = tracker.lock().unwrap_or_else(|error| error.into_inner());
+        match action.as_str() {
+            "viewed" => tracker.mark_viewed(&id)?,
+            "hide" => tracker.hide(&id)?,
+            "pin" => tracker.set_pinned(&id, pinned.unwrap_or(true))?,
+            _ => return Err(format!("unsupported attention action: {action}")),
+        }
+    };
+    let hosts = get_hosts();
+    let providers = get_providers();
+    emit_agents(&app, &tasks, &hosts, &providers);
+    Ok(tasks)
+}
 
 fn emit_agents(
     app: &AppHandle,
@@ -403,10 +452,11 @@ struct LocalProviders {
     dsh: DeepSeekHarnessProvider,
     scanner: Scanner,
     health: Vec<ProviderHealth>,
+    monitoring: MonitoringConfig,
 }
 
 impl LocalProviders {
-    fn new() -> Self {
+    fn new(monitoring: MonitoringConfig) -> Self {
         Self {
             file: LocalFileProvider::new(),
             codex: CodexProvider::new(),
@@ -414,6 +464,7 @@ impl LocalProviders {
             dsh: DeepSeekHarnessProvider::new(),
             scanner: Scanner::new(),
             health: Vec::new(),
+            monitoring,
         }
     }
 
@@ -457,6 +508,7 @@ impl LocalProviders {
         dedup_codex_over_scan(&mut tasks);
         dedup_hermes_over_scan(&mut tasks);
         dedup_dsh_over_scan(&mut tasks);
+        tasks.retain(|task| self.monitoring.allows(task));
 
         LocalBatch {
             tasks,
@@ -517,7 +569,8 @@ fn merge_and_emit(
     if let Err(error) = history.save_if_changed(store.recent()) {
         log::warn!("failed to persist recent task history: {error}");
     }
-    emit_agents(app, &merged, hosts, providers);
+    let display = reconcile_attention(merged);
+    emit_agents(app, &display, hosts, providers);
 }
 
 /// Refresh local sources (file provider + Codex session metadata + scanner),
@@ -541,7 +594,8 @@ fn refresh_local(
     if let Err(error) = history.save_if_changed(store.recent()) {
         log::warn!("failed to persist recent task history: {error}");
     }
-    emit_agents(app, &merged, hosts, &providers.health);
+    let display = reconcile_attention(merged);
+    emit_agents(app, &display, hosts, &providers.health);
 }
 
 fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
@@ -559,6 +613,11 @@ pub fn watch(app: AppHandle) {
         let _ = std::fs::create_dir_all(&dir);
     }
 
+    let attention_path = dirs_next::home_dir()
+        .map(|home| home.join(".taskpulse/attention.json"))
+        .unwrap_or_else(|| PathBuf::from(".taskpulse/attention.json"));
+    let _ = ATTENTION_TRACKER.set(Mutex::new(AttentionTracker::open(attention_path)));
+
     let history_path = dirs_next::home_dir()
         .map(|home| home.join(".taskpulse/recent.json"))
         .unwrap_or_else(|| PathBuf::from(".taskpulse/recent.json"));
@@ -566,18 +625,26 @@ pub fn watch(app: AppHandle) {
     let mut store = TaskStore::default();
     store.restore_recent(restored_recent, SystemTime::now());
     let mut engine = TransitionEngine::new();
-    let mut local_providers = LocalProviders::new();
+    let taskpulse_config = config::load_config();
+    let monitoring = taskpulse_config.monitoring.clone();
+    if let Some(tracker) = ATTENTION_TRACKER.get() {
+        if let Ok(mut tracker) = tracker.lock() {
+            tracker.retain(|task| monitoring.allows(task));
+        }
+    }
+    let mut local_providers = LocalProviders::new(monitoring.clone());
     let scan_interval = Duration::from_secs(2);
 
     // Remote polling on its own thread (SSH can block for seconds).
-    let mut remote = RemoteTmuxProvider::from_config(Arc::new(SystemSshExecutor::new()));
+    let mut remote = RemoteTmuxProvider::new(taskpulse_config, Arc::new(SystemSshExecutor::new()));
     let remote_interval = remote_interval_ms(&remote);
     let (remote_tx, remote_rx) = std::sync::mpsc::channel::<ProviderOutput>();
     std::thread::spawn(move || {
         log::info!("Remote tmux poller started (interval {remote_interval:?})");
         loop {
             let now = SystemTime::now();
-            let out = remote.poll(now);
+            let mut out = remote.poll(now);
+            out.tasks.retain(|task| monitoring.allows(task));
             if remote_tx.send(out).is_err() {
                 log::warn!("Remote poller channel closed, exiting");
                 break;

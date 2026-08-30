@@ -1,5 +1,6 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod attention;
 mod domain;
 mod focus;
 mod focusers;
@@ -109,6 +110,7 @@ fn main() {
             watcher::get_hosts,
             watcher::get_providers,
             watcher::get_status_dir,
+            watcher::update_task_attention,
             watcher::install_hooks,
             tray::toggle_pin,
             tray::close_popup

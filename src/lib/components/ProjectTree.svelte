@@ -47,7 +47,9 @@
   }
 
   function shouldOpen(groupTasks: TaskSnapshot[]): boolean {
-    return groupTasks.some((task) => task.status === 'failed' || task.status === 'waiting_input');
+    // The backend has already reduced history to an attention list, so every
+    // remaining task deserves to be visible without another click.
+    return groupTasks.length > 0;
   }
 </script>
 
@@ -86,7 +88,9 @@
                   onclick={() => onSelect?.(task.id)}
                 >
                   <StatusDot status={task.status} />
-                  <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}">{task.name}</span>
+                  <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}" title={task.name}>{task.name}</span>
+                  {#if task.pinned}<span class="text-[9px] text-[#8fb6d8]">固定</span>{/if}
+                  {#if task.unread}<span class="w-[5px] h-[5px] rounded-full bg-[#e8c840]" title="尚未查看"></span>{/if}
                   <span class="text-[9px] text-[#77756f] flex-shrink-0">{STATUS_LABEL[task.status]}</span>
                 </button>
               </li>
@@ -105,7 +109,9 @@
           onclick={() => onSelect?.(task.id)}
         >
           <StatusDot status={task.status} />
-          <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}">{task.name}</span>
+          <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}" title={task.name}>{task.name}</span>
+          {#if task.pinned}<span class="text-[9px] text-[#8fb6d8]">固定</span>{/if}
+          {#if task.unread}<span class="w-[5px] h-[5px] rounded-full bg-[#e8c840]" title="尚未查看"></span>{/if}
           <span class="text-[9px] text-[#77756f] flex-shrink-0">{STATUS_LABEL[task.status]}</span>
         </button>
       </li>

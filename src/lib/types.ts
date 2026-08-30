@@ -45,6 +45,10 @@ export interface TaskSnapshot {
   remote: boolean;
   stale?: boolean;
   recent?: boolean;
+  unread?: boolean;
+  pinned?: boolean;
+  turn_key?: string;
+  native_unread?: boolean;
   terminal?: TerminalInfo | null;
   can_focus?: boolean;
   cpu?: number;

@@ -14,7 +14,9 @@ export function aggregate(tasks: TaskSnapshot[], hosts: HostHealth[] = []): Stat
 
 /** Active tasks (not finished / not RECENT). */
 export function activeTasks(tasks: TaskSnapshot[]): TaskSnapshot[] {
-  return tasks.filter((t) => !t.recent && !(t.status === 'succeeded' || t.status === 'failed'));
+  // Backend already returns the dynamic attention list. Terminal/unread tasks
+  // remain first-class rows until viewed, so the frontend must not hide them.
+  return tasks;
 }
 
 /** RECENT completed tasks. */
@@ -26,13 +28,13 @@ export function recentTasks(tasks: TaskSnapshot[]): TaskSnapshot[] {
 
 /** Local (non-remote) active tasks. */
 export function localTasks(tasks: TaskSnapshot[]): TaskSnapshot[] {
-  return activeTasks(tasks).filter((t) => !t.remote);
+  return tasks.filter((t) => !t.remote);
 }
 
 /** Remote active tasks grouped by host (insertion order = priority order). */
 export function remoteByHost(tasks: TaskSnapshot[]): Map<string, TaskSnapshot[]> {
   const map = new Map<string, TaskSnapshot[]>();
-  for (const t of activeTasks(tasks).filter((t) => t.remote)) {
+  for (const t of tasks.filter((t) => t.remote)) {
     const host = t.host ?? 'unknown';
     const list = map.get(host) ?? [];
     list.push(t);

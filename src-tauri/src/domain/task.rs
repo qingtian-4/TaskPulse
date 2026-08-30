@@ -243,6 +243,20 @@ pub struct TaskSnapshot {
     /// Shown in the RECENT completed section.
     #[serde(default)]
     pub recent: bool,
+    /// TaskPulse attention state. These fields are owned by the attention
+    /// tracker, not by providers, and are persisted by stable task id.
+    #[serde(default)]
+    pub unread: bool,
+    #[serde(default)]
+    pub pinned: bool,
+    /// Stable identity of the latest observed turn. A changed key re-opens a
+    /// dismissed task without changing the session/task id.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub turn_key: Option<String>,
+    /// Best-effort unread signal from the native agent. `None` means the
+    /// provider cannot determine it reliably.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub native_unread: Option<bool>,
     // ---- legacy passthrough (focus / scanner extras) ----
     #[serde(skip_serializing_if = "Option::is_none")]
     pub terminal: Option<TerminalInfo>,
@@ -300,6 +314,10 @@ impl TaskSnapshot {
             remote: false,
             stale: false,
             recent: false,
+            unread: false,
+            pinned: false,
+            turn_key: None,
+            native_unread: None,
             terminal: None,
             can_focus: false,
             cpu: None,

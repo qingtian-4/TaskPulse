@@ -59,6 +59,10 @@ install -m 755 scripts/tp-run ~/.local/bin/tp-run
 
 Tauri 2 · Rust · Svelte 5 / SvelteKit · TypeScript · Tailwind 4
 
+## Dynamic attention list
+
+Task/session visibility, native-title sources, fallback behavior, and project/server/tmux scope configuration are documented in [docs/ATTENTION_LIST.md](docs/ATTENTION_LIST.md).
+
 ## License
 
 MIT。TaskPulse 派生自 [AgentTray](https://github.com/sprklai/agenttray)（MIT, © sprklai）——保留原作者版权与授权。参考项目：AgentMonitor、tmux-monitor、tmux-agent、tmux-notify（均为 MIT，仅参考未 vendoring）。

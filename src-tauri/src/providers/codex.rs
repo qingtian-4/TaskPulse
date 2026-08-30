@@ -22,7 +22,10 @@
 //! non-invasive and stays behind this adapter, so a Codex format change only
 //! touches this file (plus the shared parses below).
 
+use std::io::{BufRead, BufReader, Write};
 use std::path::{Path, PathBuf};
+use std::process::{Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
@@ -35,12 +38,20 @@ const WAITING_TTL: Duration = Duration::from_secs(24 * 3600);
 /// An actively-running session must have been written recently, else we treat
 /// the transcript as stale (a crashed/abandoned turn).
 const RUNNING_TTL: Duration = Duration::from_secs(10 * 60);
-/// Cap on how many recent sessions we surface at once.
-const MAX_SESSIONS: usize = 6;
+/// Metadata discovery horizon, not a UI retention limit. New turns update the
+/// thread/rollout timestamp and immediately become eligible again.
+const DISCOVERY_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
+/// Native titles change rarely, and starting app-server is materially more
+/// expensive than reading an appended rollout. Keep runtime state polling
+/// fast while still synchronizing sidebar renames promptly.
+const APP_SERVER_REFRESH: Duration = Duration::from_secs(15);
+const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(4);
 const PROJECT_LEN: usize = 40;
 
 pub struct CodexProvider {
     sessions_root: PathBuf,
+    state_db: Option<PathBuf>,
+    use_app_server: bool,
     /// session id → last-seen mtime, so we can emit a terminal snapshot when a
     /// session stops being updated (it finished).
     seen: std::collections::HashMap<String, SystemTime>,
@@ -48,24 +59,112 @@ pub struct CodexProvider {
     /// unchanged signature can reuse the previous parse instead of rereading
     /// multi-megabyte JSONL files every two seconds.
     cache: std::collections::HashMap<PathBuf, (SystemTime, u64, Option<SessionState>)>,
+    native_metadata: HashMap<String, AppThreadMeta>,
+    last_native_refresh: Option<SystemTime>,
     last_tasks: Vec<TaskSnapshot>,
 }
 
 impl CodexProvider {
     pub fn new() -> Self {
-        Self::with_root(
-            dirs_next::home_dir()
-                .map(|h| h.join(".codex/sessions"))
-                .unwrap_or_default(),
-        )
+        let home = dirs_next::home_dir().unwrap_or_default();
+        let mut provider = Self::with_root(home.join(".codex/sessions"));
+        let db = home.join(".codex/state_5.sqlite");
+        provider.state_db = db.exists().then_some(db);
+        provider.use_app_server = true;
+        provider
     }
 
     pub fn with_root(root: PathBuf) -> Self {
         Self {
             sessions_root: root,
+            state_db: None,
+            use_app_server: false,
             seen: Default::default(),
             cache: Default::default(),
+            native_metadata: Default::default(),
+            last_native_refresh: None,
             last_tasks: Vec::new(),
+        }
+    }
+
+    fn thread_metadata(&mut self, now: SystemTime) -> Result<HashMap<String, ThreadMeta>, String> {
+        self.refresh_native_metadata(now);
+        let Some(path) = &self.state_db else {
+            return Ok(self
+                .native_metadata
+                .values()
+                .map(ThreadMeta::from_app_server)
+                .map(|meta| (meta.id.clone(), meta))
+                .collect());
+        };
+        let conn = rusqlite::Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|error| format!("open state_5.sqlite failed: {error}"))?;
+        let mut stmt = conn
+            .prepare(
+                "SELECT id, name, title, first_user_message, cwd, rollout_path, updated_at, is_pinned \
+                 FROM threads WHERE archived = 0",
+            )
+            .map_err(|error| format!("query Codex thread metadata failed: {error}"))?;
+        let rows = stmt
+            .query_map([], |row| {
+                Ok(ThreadMeta {
+                    id: row.get(0)?,
+                    manual_name: row.get(1)?,
+                    native_name: None,
+                    title: row.get(2)?,
+                    first_user_message: row.get(3)?,
+                    cwd: row.get(4)?,
+                    rollout_path: row.get(5)?,
+                    updated_at: row.get(6)?,
+                    pinned: row.get(7)?,
+                })
+            })
+            .map_err(|error| format!("read Codex thread metadata failed: {error}"))?;
+        let mut metadata: HashMap<String, ThreadMeta> = rows
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .map_err(|error| format!("parse Codex thread metadata failed: {error}"))
+            .map(|rows| rows.into_iter().map(|row| (row.id.clone(), row)).collect())?;
+        for native in self.native_metadata.values() {
+            if let Some(meta) = metadata.get_mut(&native.id) {
+                meta.native_name = native.name.clone();
+                if meta.cwd.as_deref().is_none_or(str::is_empty) {
+                    meta.cwd = native.cwd.clone();
+                }
+                if meta.rollout_path.as_deref().is_none_or(str::is_empty) {
+                    meta.rollout_path = native.path.clone();
+                }
+                meta.updated_at = meta.updated_at.max(native.updated_at);
+            } else {
+                let meta = ThreadMeta::from_app_server(native);
+                metadata.insert(meta.id.clone(), meta);
+            }
+        }
+        Ok(metadata)
+    }
+
+    fn refresh_native_metadata(&mut self, now: SystemTime) {
+        if !self.use_app_server {
+            return;
+        }
+        let fresh = self
+            .last_native_refresh
+            .is_some_and(|last| now.duration_since(last).unwrap_or_default() < APP_SERVER_REFRESH);
+        if fresh {
+            return;
+        }
+        self.last_native_refresh = Some(now);
+        match query_codex_app_server() {
+            Ok(rows) => {
+                self.native_metadata = rows.into_iter().map(|row| (row.id.clone(), row)).collect();
+            }
+            Err(error) => {
+                // app-server is optional. Keep the last successful title map,
+                // then fall back through state DB and rollout metadata.
+                log::debug!("codex: native app-server metadata unavailable: {error}");
+            }
         }
     }
 
@@ -120,8 +219,17 @@ impl CodexProvider {
         state
     }
 
-    fn session_to_task(&self, host: &SessionState, now: SystemTime) -> TaskSnapshot {
-        let name = host.project.clone().unwrap_or_else(|| "Codex".to_string());
+    fn session_to_task(
+        &self,
+        host: &SessionState,
+        meta: Option<&ThreadMeta>,
+        now: SystemTime,
+    ) -> TaskSnapshot {
+        let name = meta
+            .map(thread_task_name)
+            .or_else(|| host.first_user_message.as_deref().map(summarize_prompt))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| unnamed_task(&host.session_id));
         let mut task = TaskSnapshot::new(
             format!("codex:{}", host.session_id),
             name,
@@ -130,7 +238,9 @@ impl CodexProvider {
             DetectionConfidence::Hook,
             now,
         );
-        task.project = host.project.clone();
+        task.project = meta
+            .and_then(|meta| project_from_cwd(meta.cwd.as_deref()))
+            .or_else(|| host.project.clone());
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
         task.quota_5h_used_pct = host.quota_5h_used_pct;
@@ -139,6 +249,8 @@ impl CodexProvider {
         task.quota_1w_resets_at = host.quota_1w_resets_at;
         task.started_at = Some(host.updated_at);
         task.message = host.last_message.clone();
+        task.turn_key = host.turn_key.clone();
+        task.pinned = meta.is_some_and(|meta| meta.pinned);
         // A completed turn means the agent is waiting on the user — keep the
         // timestamp reflecting the moment the turn finished.
         if host.status == TaskStatus::WaitingInput {
@@ -164,6 +276,10 @@ fn walk(root: &Path) -> std::io::Result<Vec<PathBuf>> {
     Ok(out)
 }
 
+fn normalize_windows_path(path: &str) -> PathBuf {
+    PathBuf::from(path.strip_prefix(r"\\?\").unwrap_or(path))
+}
+
 /// Derived live state of one Codex session.
 #[derive(Debug, Clone)]
 pub struct SessionState {
@@ -172,10 +288,237 @@ pub struct SessionState {
     pub project: Option<String>,
     pub last_message: Option<String>,
     pub session_id: String,
+    pub turn_key: Option<String>,
+    pub first_user_message: Option<String>,
     pub quota_5h_used_pct: Option<f64>,
     pub quota_5h_resets_at: Option<i64>,
     pub quota_1w_used_pct: Option<f64>,
     pub quota_1w_resets_at: Option<i64>,
+}
+
+#[derive(Debug, Clone)]
+struct ThreadMeta {
+    id: String,
+    manual_name: Option<String>,
+    native_name: Option<String>,
+    title: Option<String>,
+    first_user_message: Option<String>,
+    cwd: Option<String>,
+    rollout_path: Option<String>,
+    updated_at: i64,
+    pinned: bool,
+}
+
+/// Metadata exposed by Codex's own app-server. Its `name` field is the same
+/// title shown by the native sidebar, including user renames.
+#[derive(Debug, Clone, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AppThreadMeta {
+    id: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    preview: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    path: Option<String>,
+    #[serde(default)]
+    updated_at: i64,
+}
+
+fn query_codex_app_server() -> Result<Vec<AppThreadMeta>, String> {
+    let executable = find_codex_executable()
+        .ok_or_else(|| "Codex app-server executable was not found".to_string())?;
+    let mut child = Command::new(executable)
+        .args(["app-server", "--stdio"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|error| format!("start app-server failed: {error}"))?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| "app-server stdin was unavailable".to_string())?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| "app-server stdout was unavailable".to_string())?;
+
+    let initialize = serde_json::json!({
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "clientInfo": {
+                "name": "taskpulse",
+                "title": "TaskPulse",
+                "version": env!("CARGO_PKG_VERSION")
+            },
+            "capabilities": { "experimentalApi": true }
+        }
+    });
+    let list = serde_json::json!({
+        "id": 2,
+        "method": "thread/list",
+        "params": {
+            "limit": 100,
+            "sortKey": "updated_at",
+            "sortDirection": "desc",
+            "archived": false,
+            "useStateDbOnly": false
+        }
+    });
+    for message in [
+        initialize,
+        serde_json::json!({"method": "initialized", "params": {}}),
+        list,
+    ] {
+        writeln!(stdin, "{message}")
+            .and_then(|_| stdin.flush())
+            .map_err(|error| format!("write app-server request failed: {error}"))?;
+    }
+
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in BufReader::new(stdout).lines() {
+            let Ok(line) = line else { break };
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(&line) else {
+                continue;
+            };
+            if value.get("id").and_then(|id| id.as_i64()) == Some(2) {
+                let _ = sender.send(value);
+                break;
+            }
+        }
+    });
+
+    let response = receiver
+        .recv_timeout(APP_SERVER_TIMEOUT)
+        .map_err(|error| format!("app-server thread/list timed out: {error}"));
+    let _ = child.kill();
+    let _ = child.wait();
+    let response = response?;
+    parse_app_server_thread_list(response)
+}
+
+fn parse_app_server_thread_list(value: serde_json::Value) -> Result<Vec<AppThreadMeta>, String> {
+    if let Some(error) = value.get("error") {
+        return Err(format!("app-server thread/list error: {error}"));
+    }
+    serde_json::from_value(
+        value
+            .get("result")
+            .and_then(|result| result.get("data"))
+            .cloned()
+            .ok_or_else(|| "app-server thread/list returned no data".to_string())?,
+    )
+    .map_err(|error| format!("parse app-server thread/list failed: {error}"))
+}
+
+fn find_codex_executable() -> Option<PathBuf> {
+    if let Ok(path) = std::env::var("TASKPULSE_CODEX_EXECUTABLE") {
+        let path = PathBuf::from(path);
+        if path.is_file() {
+            return Some(path);
+        }
+    }
+    let root = dirs_next::data_local_dir()?.join("OpenAI/Codex/bin");
+    walk(&root)
+        .ok()?
+        .into_iter()
+        .filter(|path| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.eq_ignore_ascii_case("codex.exe"))
+        })
+        .max_by_key(|path| {
+            path.metadata()
+                .and_then(|metadata| metadata.modified())
+                .unwrap_or(UNIX_EPOCH)
+        })
+}
+
+impl ThreadMeta {
+    fn from_app_server(meta: &AppThreadMeta) -> Self {
+        Self {
+            id: meta.id.clone(),
+            manual_name: None,
+            native_name: meta.name.clone(),
+            title: None,
+            first_user_message: meta.preview.clone(),
+            cwd: meta.cwd.clone(),
+            rollout_path: meta.path.clone(),
+            updated_at: meta.updated_at,
+            pinned: false,
+        }
+    }
+}
+
+fn project_from_cwd(cwd: Option<&str>) -> Option<String> {
+    cwd.and_then(|cwd| {
+        Path::new(cwd)
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+    })
+}
+
+fn thread_task_name(meta: &ThreadMeta) -> String {
+    if let Some(name) = meta
+        .manual_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        return clean_task_name(name);
+    }
+    if let Some(name) = meta
+        .native_name
+        .as_deref()
+        .filter(|name| !name.trim().is_empty())
+    {
+        return clean_task_name(name);
+    }
+    let title = meta
+        .title
+        .as_deref()
+        .filter(|title| !title.trim().is_empty());
+    let first = meta
+        .first_user_message
+        .as_deref()
+        .filter(|message| !message.trim().is_empty());
+    match (title, first) {
+        // Current Codex builds sometimes persist the raw first prompt as
+        // `title`; treat that as fallback content, not a formal sidebar name.
+        (Some(title), Some(first)) if title.trim() == first.trim() => summarize_prompt(first),
+        (Some(title), _) => clean_task_name(title),
+        (None, Some(first)) => summarize_prompt(first),
+        _ => unnamed_task(&meta.id),
+    }
+}
+
+fn unnamed_task(session_id: &str) -> String {
+    let short: String = session_id.chars().take(8).collect();
+    format!("未命名任务 · {short}")
+}
+
+fn summarize_prompt(prompt: &str) -> String {
+    let cleaned = prompt
+        .lines()
+        .map(str::trim)
+        .find(|line| {
+            !line.is_empty()
+                && !line.starts_with('#')
+                && !line.starts_with('<')
+                && !line.starts_with("Files mentioned")
+        })
+        .unwrap_or(prompt);
+    let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+    let first_clause = collapsed
+        .split(['。', '！', '？', ';', '；', '\n'])
+        .find(|part| !part.trim().is_empty())
+        .unwrap_or(&collapsed)
+        .trim();
+    clean_task_name(first_clause)
 }
 
 fn session_is_live(state: &SessionState, now: SystemTime) -> bool {
@@ -205,6 +548,8 @@ pub fn parse_codex_rollout(
     let mut updated_at = now;
     let mut last_message: Option<String> = None;
     let mut session_id = default_session_id.to_string();
+    let mut turn_key: Option<String> = None;
+    let mut first_user_message: Option<String> = None;
     let mut quota_5h_used_pct: Option<f64> = None;
     let mut quota_5h_resets_at: Option<i64> = None;
     let mut quota_1w_used_pct: Option<f64> = None;
@@ -251,10 +596,30 @@ pub fn parse_codex_rollout(
         };
 
         match ptype {
-            "task_started" | "user_message" => {
+            "task_started" => {
                 status = TaskStatus::Running;
                 if let Some(t) = ts {
                     updated_at = t;
+                }
+                turn_key = payload
+                    .get("turn_id")
+                    .and_then(|value| value.as_str())
+                    .map(str::to_string)
+                    .or_else(|| value_timestamp_key(ts));
+            }
+            "user_message" => {
+                status = TaskStatus::Running;
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+                if first_user_message.is_none() {
+                    first_user_message = payload
+                        .get("message")
+                        .and_then(|value| value.as_str())
+                        .map(str::to_string);
+                }
+                if turn_key.is_none() {
+                    turn_key = value_timestamp_key(ts);
                 }
             }
             "agent_message" => {
@@ -323,12 +688,24 @@ pub fn parse_codex_rollout(
         project,
         last_message,
         session_id,
+        turn_key,
+        first_user_message,
         quota_5h_used_pct,
         quota_5h_resets_at,
         quota_1w_used_pct,
         quota_1w_resets_at,
     };
     session_is_live(&state, now).then_some(state)
+}
+
+fn value_timestamp_key(timestamp: Option<SystemTime>) -> Option<String> {
+    timestamp.map(|timestamp| {
+        let millis = timestamp
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        format!("turn:{millis}")
+    })
 }
 
 /// Build remote Codex tasks from the snapshot's `__TP_CODEX__` section.
@@ -342,7 +719,7 @@ pub fn tasks_from_codex_section(
     host_id: &str,
     now: SystemTime,
 ) -> Vec<TaskSnapshot> {
-    let mut titles: HashMap<String, (String, String)> = HashMap::new();
+    let mut titles: HashMap<String, (String, String, bool)> = HashMap::new();
     for line in section.lines() {
         if let Some(rest) = line.strip_prefix("META\t") {
             if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
@@ -356,7 +733,8 @@ pub fn tasks_from_codex_section(
                             .and_then(|x| x.as_str())
                             .unwrap_or("")
                             .to_string();
-                        titles.insert(id.to_string(), (t.to_string(), cwd));
+                        let pinned = v.get("p").and_then(|x| x.as_bool()).unwrap_or(false);
+                        titles.insert(id.to_string(), (t.to_string(), cwd, pinned));
                     }
                 }
             }
@@ -408,6 +786,29 @@ pub fn tasks_from_codex_section(
         &titles,
         &mut out,
     );
+    let emitted: std::collections::HashSet<String> = out
+        .iter()
+        .filter_map(|task| task.session_id.clone())
+        .collect();
+    for (id, (title, cwd, pinned)) in &titles {
+        if !*pinned || emitted.contains(id) || title.trim().is_empty() {
+            continue;
+        }
+        let mut task = TaskSnapshot::new(
+            format!("codex-remote:{host_id}:{id}"),
+            clean_task_name(title),
+            TaskSource::Codex,
+            TaskStatus::Idle,
+            DetectionConfidence::Hook,
+            now,
+        )
+        .with_host(ssh_host.to_string())
+        .with_remote();
+        task.project = project_from_cwd(Some(cwd));
+        task.session_id = Some(id.clone());
+        task.pinned = true;
+        out.push(task);
+    }
     // Metadata is lookup-only. Do not synthesize an Idle task for every
     // non-archived thread in state_5.sqlite: that list can contain hundreds
     // of dormant sessions and bypasses both the rollout limit and lifecycle
@@ -486,7 +887,7 @@ fn flush_codex(
     now: SystemTime,
     ssh_host: &str,
     host_id: &str,
-    titles: &HashMap<String, (String, String)>,
+    titles: &HashMap<String, (String, String, bool)>,
     out: &mut Vec<TaskSnapshot>,
 ) {
     if buf.trim().is_empty() {
@@ -500,7 +901,7 @@ fn flush_codex(
             .as_deref()
             .map(str::to_string)
             .unwrap_or_else(|| state.session_id.clone());
-        let title = titles.get(&sid).map(|(t, _)| t.as_str());
+        let title = titles.get(&sid).map(|(t, _, _)| t.as_str());
         // A1: only surface sessions that carry a readable task title; drop the
         // synthetic sub-agent boilerplate so the view stays clean.
         if title.is_none_or(|t| t.trim().is_empty() || is_synthetic_title(t)) {
@@ -522,6 +923,10 @@ fn flush_codex(
         t.message = state.last_message;
         t.cli = Some("codex".into());
         t.session_id = Some(sid);
+        t.turn_key = state.turn_key;
+        t.pinned = titles
+            .get(t.session_id.as_deref().unwrap_or(""))
+            .is_some_and(|(_, _, pinned)| *pinned);
         t.quota_5h_used_pct = state.quota_5h_used_pct;
         t.quota_5h_resets_at = state.quota_5h_resets_at;
         t.quota_1w_used_pct = state.quota_1w_used_pct;
@@ -536,7 +941,7 @@ impl Provider for CodexProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
-        let files = match self.discover() {
+        let discovered = match self.discover() {
             Ok(files) => files,
             Err(error) => {
                 let message = format!("session discovery failed: {error}");
@@ -553,17 +958,65 @@ impl Provider for CodexProvider {
                 return ProviderOutput::degraded(tasks, message);
             }
         };
+        let metadata = match self.thread_metadata(now) {
+            Ok(metadata) => metadata,
+            Err(error) => {
+                log::warn!("codex: {error}; falling back to rollout metadata");
+                self.native_metadata
+                    .values()
+                    .map(ThreadMeta::from_app_server)
+                    .map(|meta| (meta.id.clone(), meta))
+                    .collect()
+            }
+        };
+        let now_secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
+        let eligible_paths: std::collections::HashSet<PathBuf> = metadata
+            .values()
+            .filter(|meta| {
+                meta.pinned
+                    || now_secs.saturating_sub(meta.updated_at) <= DISCOVERY_TTL.as_secs() as i64
+            })
+            .filter_map(|meta| meta.rollout_path.as_deref())
+            .map(normalize_windows_path)
+            .collect();
+        let files: Vec<PathBuf> = if eligible_paths.is_empty() {
+            discovered
+        } else {
+            discovered
+                .into_iter()
+                .filter(|path| eligible_paths.contains(path))
+                .collect()
+        };
         let mut tasks = Vec::new();
         let mut live: std::collections::HashMap<String, SystemTime> = Default::default();
-        let selected: Vec<PathBuf> = files.into_iter().take(MAX_SESSIONS).collect();
-
-        for path in &selected {
+        for path in &files {
             if let Some(state) = self.cached_session_state(path, now) {
                 live.insert(state.session_id.clone(), state.updated_at);
-                tasks.push(self.session_to_task(&state, now));
+                tasks.push(self.session_to_task(&state, metadata.get(&state.session_id), now));
             }
         }
-        let selected: std::collections::HashSet<PathBuf> = selected.into_iter().collect();
+        let emitted: std::collections::HashSet<String> = tasks
+            .iter()
+            .filter_map(|task| task.session_id.clone())
+            .collect();
+        for meta in metadata.values().filter(|meta| meta.pinned) {
+            if emitted.contains(&meta.id) {
+                continue;
+            }
+            let mut task = TaskSnapshot::new(
+                format!("codex:{}", meta.id),
+                thread_task_name(meta),
+                TaskSource::Codex,
+                TaskStatus::Idle,
+                DetectionConfidence::Hook,
+                now,
+            );
+            task.project = project_from_cwd(meta.cwd.as_deref());
+            task.session_id = Some(meta.id.clone());
+            task.pinned = true;
+            tasks.push(task);
+        }
+        let selected: std::collections::HashSet<PathBuf> = files.into_iter().collect();
         self.cache.retain(|path, _| selected.contains(path));
         propagate_freshest_quota(&mut tasks);
 
@@ -858,5 +1311,46 @@ mod tests {
             "META\t{\"id\":\"old-session\",\"t\":\"Dormant task\",\"cwd\":\"/tmp/project\"}\n";
         let tasks = tasks_from_codex_section(section, "Server3", "server3", SystemTime::now());
         assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn app_server_name_has_priority_over_prompt_title() {
+        let meta = ThreadMeta {
+            id: "01abcdef".into(),
+            manual_name: None,
+            native_name: Some("评审 AgentTray 监控界面".into()),
+            title: Some("请你 review 一下这个项目并指出问题".into()),
+            first_user_message: Some("请你 review 一下这个项目并指出问题".into()),
+            cwd: Some(r"D:\Project\agenttray".into()),
+            rollout_path: None,
+            updated_at: 0,
+            pinned: false,
+        };
+        assert_eq!(thread_task_name(&meta), "评审 AgentTray 监控界面");
+    }
+
+    #[test]
+    fn parses_native_app_server_thread_list() {
+        let response = serde_json::json!({
+            "id": 2,
+            "result": {
+                "data": [{
+                    "id": "01abcdef",
+                    "name": "Implement TaskPulse Windows MVP",
+                    "preview": "Long first user prompt",
+                    "cwd": "D:\\Project\\agenttray",
+                    "path": "C:\\Users\\tester\\.codex\\sessions\\rollout.jsonl",
+                    "updatedAt": 1_788_000_000
+                }],
+                "nextCursor": null
+            }
+        });
+        let rows = parse_app_server_thread_list(response).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0].name.as_deref(),
+            Some("Implement TaskPulse Windows MVP")
+        );
+        assert_eq!(rows[0].cwd.as_deref(), Some(r"D:\Project\agenttray"));
     }
 }

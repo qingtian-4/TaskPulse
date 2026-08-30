@@ -53,6 +53,7 @@ enum EventKind {
 #[derive(Default)]
 pub struct TransitionEngine {
     prev: HashMap<String, TaskStatus>,
+    prev_turns: HashMap<String, Option<String>>,
     prev_hosts: HashMap<String, HostStatus>,
     notified: HashSet<(String, EventKind)>,
 }
@@ -77,23 +78,37 @@ impl TransitionEngine {
         // ---- task transitions ----
         let baseline = self.prev.is_empty();
         let mut current: HashMap<String, TaskStatus> = HashMap::new();
+        let mut current_turns: HashMap<String, Option<String>> = HashMap::new();
 
         for task in tasks {
             let id = task.id.clone();
             let status = task.status;
             current.insert(id.clone(), status);
+            current_turns.insert(id.clone(), task.turn_key.clone());
 
             let Some(prev_status) = self.prev.get(&id).copied() else {
                 continue; // new task: no notification on first sighting
             };
-            if prev_status == status {
-                continue;
-            }
+            let turn_changed = task.turn_key.is_some()
+                && self
+                    .prev_turns
+                    .get(&id)
+                    .is_some_and(|previous| previous != &task.turn_key);
 
             // A new run started in the same id — reset notification memory.
-            if (prev_status.is_terminal() || prev_status == TaskStatus::Idle) && status.is_active()
+            if turn_changed
+                || (prev_status.is_terminal() || prev_status == TaskStatus::Idle)
+                    && status.is_active()
             {
                 reset_task_notifications(&mut self.notified, &id);
+            }
+            if prev_status == status && !turn_changed {
+                continue;
+            }
+            if !turn_changed
+                && (prev_status.is_terminal() || prev_status == TaskStatus::Idle)
+                && status.is_active()
+            {
                 continue;
             }
 
@@ -162,6 +177,7 @@ impl TransitionEngine {
         }
 
         self.prev = current;
+        self.prev_turns = current_turns;
 
         // ---- host transitions ----
         for host in hosts {
@@ -200,6 +216,7 @@ impl TransitionEngine {
     #[allow(dead_code)]
     pub fn reset(&mut self) {
         self.prev.clear();
+        self.prev_turns.clear();
         self.prev_hosts.clear();
         self.notified.clear();
     }
@@ -228,6 +245,12 @@ mod tests {
             DetectionConfidence::Inferred,
             SystemTime::now(),
         )
+    }
+
+    fn task_turn(id: &str, status: TaskStatus, turn: &str) -> TaskSnapshot {
+        let mut snapshot = task(id, status);
+        snapshot.turn_key = Some(turn.to_string());
+        snapshot
     }
 
     fn apply_once(engine: &mut TransitionEngine, tasks: &[TaskSnapshot]) -> Vec<TaskEvent> {
@@ -309,6 +332,27 @@ mod tests {
         let events = apply_once(&mut engine, &[task("t1", TaskStatus::WaitingInput)]);
         assert_eq!(events.len(), 1); // notified again for the new run
         assert!(matches!(events[0], TaskEvent::WaitingInput { .. }));
+    }
+
+    #[test]
+    fn completed_turn_between_polls_notifies_again() {
+        let mut engine = TransitionEngine::new();
+        apply_once(
+            &mut engine,
+            &[task_turn("t1", TaskStatus::WaitingInput, "turn-1")],
+        );
+        // The next turn both started and completed between provider polls.
+        let events = apply_once(
+            &mut engine,
+            &[task_turn("t1", TaskStatus::WaitingInput, "turn-2")],
+        );
+        assert_eq!(events.len(), 1);
+        assert!(matches!(events[0], TaskEvent::WaitingInput { .. }));
+        assert!(apply_once(
+            &mut engine,
+            &[task_turn("t1", TaskStatus::WaitingInput, "turn-2")]
+        )
+        .is_empty());
     }
 
     #[test]

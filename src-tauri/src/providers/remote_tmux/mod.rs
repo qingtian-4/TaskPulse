@@ -72,6 +72,7 @@ impl RemoteTmuxProvider {
         }
     }
 
+    #[cfg(test)]
     pub fn from_config(executor: Arc<dyn SshExecutor>) -> Self {
         Self::new(config::load_config(), executor)
     }
@@ -85,7 +86,7 @@ impl RemoteTmuxProvider {
     /// (avoids stdio quote-nesting) then cats it, so each remote Codex session
     /// can be named by its task title. No-op if there's no Codex state DB.
     fn codex_meta_cmd() -> &'static str {
-        "python3 -c 'import sqlite3,json,os;c=sqlite3.connect(os.path.expanduser(\"~/.codex/state_5.sqlite\"));[print(\"META\\t\"+json.dumps({\"id\":r[0],\"t\":(r[1] or \"\")[:120],\"cwd\":(r[2] or \"\")},ensure_ascii=False)) for r in c.execute(\"SELECT id,title,cwd FROM threads WHERE archived=0 AND title IS NOT NULL\")]' 2>/dev/null"
+        "python3 -c 'import sqlite3,json,os;c=sqlite3.connect(os.path.expanduser(\"~/.codex/state_5.sqlite\"));[print(\"META\\t\"+json.dumps({\"id\":r[0],\"t\":(r[1] or \"\")[:240],\"cwd\":(r[2] or \"\"),\"p\":bool(r[3])},ensure_ascii=False)) for r in c.execute(\"SELECT id,CASE WHEN length(name)>0 THEN name WHEN length(title)>0 THEN title ELSE first_user_message END,cwd,is_pinned FROM threads WHERE archived=0\")]' 2>/dev/null"
     }
 
     /// The single remote command that returns panes + process table + recent
@@ -97,7 +98,7 @@ impl RemoteTmuxProvider {
         // backslash escapes, so the remote output must contain actual tabs.
         let fmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{window_name}";
         format!(
-            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -4 | cut -d' ' -f2- | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===F:$(basename \"$f\")===\"; tail -c 8192 \"$f\"; done; {}; true",
+            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2- | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===F:$(basename \"$f\")===\"; tail -c 8192 \"$f\"; done; {}; true",
             parser::PS_MARKER,
             runfile::RUNS_MARKER,
             runfile::CODEX_MARKER,
@@ -128,15 +129,25 @@ impl RemoteTmuxProvider {
             .find(|h| h.id == host_id)
             .map(|h| h.tmux_sessions.clone())
             .unwrap_or_default();
-        let panes: Vec<PaneInfo> = if whitelist.is_empty() {
-            panes.to_vec()
-        } else {
-            panes
-                .iter()
-                .filter(|p| session_allowed(&p.session_name, &whitelist))
-                .cloned()
-                .collect()
-        };
+        let pane_whitelist = self
+            .config
+            .remote_hosts
+            .iter()
+            .find(|h| h.id == host_id)
+            .map(|h| h.tmux_panes.clone())
+            .unwrap_or_default();
+        let panes: Vec<PaneInfo> = panes
+            .iter()
+            .filter(|pane| {
+                (whitelist.is_empty() || session_allowed(&pane.session_name, &whitelist))
+                    && (pane_whitelist.is_empty()
+                        || pane_whitelist.iter().any(|pattern| {
+                            config::wildcard_match(pattern, &pane.pane_id)
+                                || config::wildcard_match(pattern, &pane.target())
+                        }))
+            })
+            .cloned()
+            .collect();
 
         let mut tasks: Vec<TaskSnapshot> = Vec::new();
         let mut seen_panes: std::collections::HashSet<String> = std::collections::HashSet::new();
@@ -521,6 +532,7 @@ mod tests {
                     enabled: true,
                     poll_interval_ms: 3000,
                     tmux_sessions: vec![],
+                    tmux_panes: vec![],
                 },
                 RemoteHostConfig {
                     id: "server3".into(),
@@ -528,8 +540,10 @@ mod tests {
                     enabled: true,
                     poll_interval_ms: 3000,
                     tmux_sessions: vec![],
+                    tmux_panes: vec![],
                 },
             ],
+            monitoring: Default::default(),
         }
     }
 
@@ -541,7 +555,9 @@ mod tests {
                 enabled: true,
                 poll_interval_ms: 3000,
                 tmux_sessions: vec![],
+                tmux_panes: vec![],
             }],
+            monitoring: Default::default(),
         }
     }
 
@@ -575,7 +591,9 @@ mod tests {
                 enabled: true,
                 poll_interval_ms: 3000,
                 tmux_sessions: vec!["allowed".into()],
+                tmux_panes: vec![],
             }],
+            monitoring: Default::default(),
         };
         let fake = FakeSshExecutor::new()
             .with(
