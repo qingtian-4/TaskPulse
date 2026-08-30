@@ -4,6 +4,7 @@ mod domain;
 mod focus;
 mod focusers;
 mod heuristics;
+mod history;
 mod notifier;
 mod providers;
 mod scanner;

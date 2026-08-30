@@ -12,8 +12,8 @@
                                            │ TaskSnapshot（统一模型）
                                            ▼
                     ┌────────────────────────────────────────────────┐
-                    │  TaskStore（按 id 合并；EXACT>HOOK>INFERRED；    │
-                    │   RECENT 完成历史 30 分钟 TTL）                  │
+                    │  TaskStore（按来源健康状态对账；按 id 合并；       │
+                    │   EXACT>HOOK>INFERRED；RECENT 30 分钟 TTL）      │
                     └──────────────────────┬─────────────────────────┘
                                            ▼
                     ┌────────────────────────────────────────────────┐
@@ -41,6 +41,7 @@ providers/
     runfile.rs     tp-run run 文件解析 + EXACT 合并 + 存活校验
     state.rs       每 Host 失败计数 / DISCONNECTED 阈值(3) / running_panes
 store/             TaskStore：按 id 合并、置信度覆盖、RECENT TTL
+history.rs          ~/.taskpulse/recent.json：版本化 RECENT 原子持久化
 transition/        TransitionEngine：状态迁移 → TaskEvent（通知去重）
 notifier.rs        beep + Windows 通知 + 等待输入 10s 提醒
 tray.rs            聚合优先级 → 图标；popup 窗口生命周期
@@ -56,6 +57,8 @@ watcher.rs         编排循环：文件监听 + 2s 进程扫描 + 3s 远端轮�
 5. 每个 Host 每轮 1 条 SSH；Host 之间并行。
 6. 不存凭据；不 OCR；不截屏；不读 pane 内容（MVP）；无云端依赖。
 7. 状态文件一律原子写（tmp + rename）。
+8. Provider 降级时缺失任务不参与完成判定；仅健康来源可清理消失任务。
+9. 只持久化 RECENT，运行中任务必须在应用重启后由 Provider 重新发现。
 
 ## 与 AgentTray 的关系
 

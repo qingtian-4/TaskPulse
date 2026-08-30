@@ -178,6 +178,25 @@ impl TaskStore {
         out.sort_by_key(|t| std::cmp::Reverse(t.finished_at.unwrap_or(SystemTime::UNIX_EPOCH)));
         out
     }
+
+    /// Restore only valid, non-expired recent entries from the on-disk cache.
+    /// Active snapshots are intentionally ignored and must be rediscovered by
+    /// their providers after startup.
+    pub fn restore_recent(&mut self, tasks: Vec<TaskSnapshot>, now: SystemTime) {
+        for mut task in tasks {
+            let Some(finished_at) = task.finished_at else {
+                continue;
+            };
+            if now.duration_since(finished_at).unwrap_or_default() > self.recent_ttl {
+                continue;
+            }
+            task.recent = true;
+            self.recent.retain(|existing| existing.id != task.id);
+            self.recent.push(task);
+        }
+        self.recent
+            .sort_by_key(|task| std::cmp::Reverse(task.finished_at.unwrap_or(now)));
+    }
 }
 
 /// Merge a new observation into an existing task.  Rules:
@@ -440,6 +459,35 @@ mod tests {
         let out = store.merge(Vec::new(), late);
         assert!(out.is_empty());
         assert!(store.recent().is_empty());
+    }
+
+    #[test]
+    fn restore_recent_ignores_active_and_expired_snapshots() {
+        let mut store = TaskStore::new(Duration::from_secs(30));
+        let now = SystemTime::now();
+        let active = t0(
+            "codex:active",
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+        );
+        let recent = t0(
+            "codex:recent",
+            TaskStatus::Succeeded,
+            DetectionConfidence::Exact,
+        )
+        .with_finished_at(secs(now, 0));
+        let expired = t0(
+            "codex:expired",
+            TaskStatus::Succeeded,
+            DetectionConfidence::Exact,
+        )
+        .with_finished_at(now - Duration::from_secs(31));
+
+        store.restore_recent(vec![active, recent, expired], now);
+        let restored = store.recent();
+        assert_eq!(restored.len(), 1);
+        assert_eq!(restored[0].id, "codex:recent");
+        assert!(restored[0].recent);
     }
 
     #[test]

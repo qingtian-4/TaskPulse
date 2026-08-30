@@ -18,6 +18,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
+use crate::history::HistoryStore;
 use crate::providers::codex::CodexProvider;
 use crate::providers::deepseek_harness::DeepSeekHarnessProvider;
 use crate::providers::hermes::HermesProvider;
@@ -503,6 +504,7 @@ fn merge_and_emit(
     tasks: Vec<TaskSnapshot>,
     hosts: &[HostHealth],
     providers: &[ProviderHealth],
+    history: &mut HistoryStore,
     now: SystemTime,
     remote: bool,
 ) {
@@ -512,6 +514,9 @@ fn merge_and_emit(
         log::info!("transition event: {e:?}");
     }
     crate::notifier::handle_events(app, &events, &merged);
+    if let Err(error) = history.save_if_changed(store.recent()) {
+        log::warn!("failed to persist recent task history: {error}");
+    }
     emit_agents(app, &merged, hosts, providers);
 }
 
@@ -522,6 +527,7 @@ fn refresh_local(
     store: &mut TaskStore,
     engine: &mut TransitionEngine,
     providers: &mut LocalProviders,
+    history: &mut HistoryStore,
     hosts: &[HostHealth],
     now: SystemTime,
 ) {
@@ -532,6 +538,9 @@ fn refresh_local(
         log::info!("transition event: {event:?}");
     }
     crate::notifier::handle_events(app, &events, &merged);
+    if let Err(error) = history.save_if_changed(store.recent()) {
+        log::warn!("failed to persist recent task history: {error}");
+    }
     emit_agents(app, &merged, hosts, &providers.health);
 }
 
@@ -550,7 +559,12 @@ pub fn watch(app: AppHandle) {
         let _ = std::fs::create_dir_all(&dir);
     }
 
+    let history_path = dirs_next::home_dir()
+        .map(|home| home.join(".taskpulse/recent.json"))
+        .unwrap_or_else(|| PathBuf::from(".taskpulse/recent.json"));
+    let (mut history, restored_recent) = HistoryStore::open(history_path);
     let mut store = TaskStore::default();
+    store.restore_recent(restored_recent, SystemTime::now());
     let mut engine = TransitionEngine::new();
     let mut local_providers = LocalProviders::new();
     let scan_interval = Duration::from_secs(2);
@@ -582,6 +596,7 @@ pub fn watch(app: AppHandle) {
         &mut store,
         &mut engine,
         &mut local_providers,
+        &mut history,
         &hosts,
         now,
     );
@@ -605,6 +620,7 @@ pub fn watch(app: AppHandle) {
                         &mut store,
                         &mut engine,
                         &mut local_providers,
+                        &mut history,
                         &hosts,
                         now,
                     );
@@ -617,6 +633,7 @@ pub fn watch(app: AppHandle) {
                             out.tasks,
                             &out.hosts,
                             &local_providers.health,
+                            &mut history,
                             now,
                             true,
                         );
@@ -653,6 +670,7 @@ pub fn watch(app: AppHandle) {
                             &mut store,
                             &mut engine,
                             &mut local_providers,
+                            &mut history,
                             &hosts,
                             now,
                         );
@@ -679,6 +697,7 @@ pub fn watch(app: AppHandle) {
                     out.tasks,
                     &out.hosts,
                     &local_providers.health,
+                    &mut history,
                     now,
                     true,
                 );
@@ -692,6 +711,7 @@ pub fn watch(app: AppHandle) {
                     &mut store,
                     &mut engine,
                     &mut local_providers,
+                    &mut history,
                     &hosts,
                     now,
                 );

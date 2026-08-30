@@ -58,6 +58,7 @@ cd .. && bun run tauri dev        # 或: cd src-tauri && cargo tauri dev
 
 - 远端：`~/.taskpulse/config.toml`（首启自动生成 Server1/Server3 示例）
 - 本地状态目录：`~/.agent-monitor/`（兼容）+ `~/.taskpulse/`
+- 最近完成缓存：`~/.taskpulse/recent.json`（版本化 JSON，仅保存 RECENT，原子替换）
 - 日志：`RUST_LOG=debug` 前缀运行可看细节（env_logger）
 
 ## Git 工作流
