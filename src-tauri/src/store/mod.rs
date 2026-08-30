@@ -8,10 +8,10 @@
 //! * Keep finished tasks in a RECENT list for a TTL (30 min default) instead
 //!   of deleting them the moment they finish (AgentTray's wrap behavior).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, SystemTime};
 
-use crate::domain::{DetectionConfidence, TaskSnapshot};
+use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
 use crate::providers::sort_tasks;
 
 pub const DEFAULT_RECENT_TTL: Duration = Duration::from_secs(30 * 60);
@@ -109,6 +109,37 @@ impl TaskStore {
             .map(|(id, _)| id.clone())
             .collect();
 
+        self.reconcile_vanished(vanished, now);
+
+        self.merge(incoming, now)
+    }
+
+    /// Reconcile only the local sources whose provider polls were complete.
+    /// Degraded providers may still contribute stale snapshots, but their
+    /// missing task IDs are deliberately non-authoritative.
+    pub fn merge_sources(
+        &mut self,
+        incoming: Vec<TaskSnapshot>,
+        authoritative_sources: &HashSet<TaskSource>,
+        now: SystemTime,
+    ) -> Vec<TaskSnapshot> {
+        let incoming_ids: HashSet<&str> = incoming.iter().map(|task| task.id.as_str()).collect();
+        let vanished: Vec<String> = self
+            .active
+            .iter()
+            .filter(|(id, task)| {
+                !task.remote
+                    && authoritative_sources.contains(&task.source)
+                    && !incoming_ids.contains(id.as_str())
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+
+        self.reconcile_vanished(vanished, now);
+        self.merge(incoming, now)
+    }
+
+    fn reconcile_vanished(&mut self, vanished: Vec<String>, now: SystemTime) {
         for id in vanished {
             let Some(mut task) = self.active.remove(&id) else {
                 continue;
@@ -125,8 +156,6 @@ impl TaskStore {
                 self.recent.push(task);
             }
         }
-
-        self.merge(incoming, now)
     }
 
     /// Active (non-finished) tasks only.
@@ -493,6 +522,41 @@ mod tests {
 
         let out = store.merge_partition(Vec::new(), false, secs(now, 5));
         assert!(out.iter().any(|task| task.id == "ssh:Server3:%0"));
+    }
+
+    #[test]
+    fn source_reconciliation_preserves_degraded_provider_tasks() {
+        let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
+        let now = SystemTime::now();
+        let mut hermes = t0(
+            "hermes:local-1",
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+        );
+        hermes.source = TaskSource::Hermes;
+        store.merge(vec![hermes], now);
+
+        let authoritative = HashSet::from([TaskSource::Codex]);
+        let out = store.merge_sources(Vec::new(), &authoritative, secs(now, 5));
+        assert_eq!(out.len(), 1);
+        assert_eq!(out[0].id, "hermes:local-1");
+    }
+
+    #[test]
+    fn source_reconciliation_removes_missing_task_from_healthy_provider() {
+        let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
+        let now = SystemTime::now();
+        let mut hermes = t0(
+            "hermes:local-1",
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+        );
+        hermes.source = TaskSource::Hermes;
+        store.merge(vec![hermes], now);
+
+        let authoritative = HashSet::from([TaskSource::Hermes]);
+        let out = store.merge_sources(Vec::new(), &authoritative, secs(now, 5));
+        assert!(out.is_empty());
     }
 
     #[test]

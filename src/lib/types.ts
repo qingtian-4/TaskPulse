@@ -167,3 +167,10 @@ export function formatAgo(ms: number | undefined, nowMs: number = Date.now()): s
   if (secs < 86400) return `${Math.floor(secs / 3600)} 小时前`;
   return `${Math.floor(secs / 86400)} 天前`;
 }
+
+export interface ProviderHealth {
+  provider: string;
+  status: 'connected' | 'degraded';
+  last_success?: number;
+  message?: string;
+}

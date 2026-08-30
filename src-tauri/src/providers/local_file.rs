@@ -24,6 +24,7 @@ const V2_STALE_TTL: Duration = Duration::from_secs(30 * 60);
 
 pub struct LocalFileProvider {
     dirs: Vec<PathBuf>,
+    last_tasks: Vec<TaskSnapshot>,
 }
 
 impl LocalFileProvider {
@@ -34,7 +35,10 @@ impl LocalFileProvider {
             dirs.push(h.join(".agent-monitor"));
             dirs.push(h.join(".taskpulse"));
         }
-        Self { dirs }
+        Self {
+            dirs,
+            last_tasks: Vec::new(),
+        }
     }
 
     #[allow(dead_code)]
@@ -63,10 +67,32 @@ impl Provider for LocalFileProvider {
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
         let mut tasks = Vec::new();
+        let mut errors = Vec::new();
         for dir in &self.dirs {
-            tasks.extend(read_dir_tasks(dir, now));
+            match read_dir_tasks(dir, now) {
+                Ok(found) => tasks.extend(found),
+                Err(error) => errors.push(format!("{}: {error}", dir.display())),
+            }
         }
-        ProviderOutput::tasks(tasks)
+        if errors.is_empty() {
+            self.last_tasks = tasks.clone();
+            return ProviderOutput::tasks(tasks);
+        }
+
+        let mut fallback = self
+            .last_tasks
+            .iter()
+            .cloned()
+            .map(|mut task| {
+                task.stale = true;
+                task
+            })
+            .collect::<Vec<_>>();
+        for task in tasks {
+            fallback.retain(|previous| previous.id != task.id);
+            fallback.push(task);
+        }
+        ProviderOutput::degraded(fallback, errors.join("; "))
     }
 }
 
@@ -269,14 +295,15 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> Option<i64> {
 }
 
 /// Read all `*.status` files in a directory, cleaning up stale ones.
-fn read_dir_tasks(dir: &Path, now: SystemTime) -> Vec<TaskSnapshot> {
-    let entries = match std::fs::read_dir(dir) {
-        Ok(e) => e,
-        Err(_) => return Vec::new(),
-    };
+fn read_dir_tasks(dir: &Path, now: SystemTime) -> std::io::Result<Vec<TaskSnapshot>> {
+    if !dir.exists() {
+        return Ok(Vec::new());
+    }
+    let entries = std::fs::read_dir(dir)?;
 
     let mut tasks = Vec::new();
-    for entry in entries.flatten() {
+    for entry in entries {
+        let entry = entry?;
         let path = entry.path();
         if path.extension().and_then(|e| e.to_str()) != Some("status") {
             continue;
@@ -306,7 +333,7 @@ fn read_dir_tasks(dir: &Path, now: SystemTime) -> Vec<TaskSnapshot> {
         }
         tasks.push(task);
     }
-    tasks
+    Ok(tasks)
 }
 
 /// Map a legacy (or v2) status string to the unified enum.

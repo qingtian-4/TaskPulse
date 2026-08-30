@@ -4,7 +4,7 @@
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import type { HostHealth, Source, TaskSnapshot } from '$lib/types';
+  import type { HostHealth, ProviderHealth, Source, TaskSnapshot } from '$lib/types';
   import { SOURCE_LABEL, STATUS_LABEL, formatAgo } from '$lib/types';
   import { aggregate, localTasks, recentTasks, remoteByHost } from '$lib/utils';
   import AgentRow from '$lib/components/AgentRow.svelte';
@@ -40,9 +40,22 @@
     { host: 'Server1', status: 'connected', last_seen: Date.now() - 12_000 },
     { host: 'Server3', status: 'disconnected', last_seen: Date.now() - 240_000 },
   ];
+  const DEMO_PROVIDERS: ProviderHealth[] = [
+    { provider: 'local_file', status: 'connected', last_success: Date.now() },
+    { provider: 'codex', status: 'connected', last_success: Date.now() },
+    { provider: 'hermes', status: 'connected', last_success: Date.now() },
+    { provider: 'deepseek_harness', status: 'degraded', last_success: Date.now() - 120_000, message: 'WSL session discovery timed out' },
+  ];
+  const PROVIDER_LABEL: Record<string, string> = {
+    local_file: '本地 Hooks',
+    codex: 'Codex',
+    hermes: 'Hermes',
+    deepseek_harness: 'DeepSeek Harness',
+  };
 
   let tasks = $state<TaskSnapshot[]>([]);
   let hosts = $state<HostHealth[]>([]);
+  let providers = $state<ProviderHealth[]>([]);
   let pinned = $state(false);
   let overPopup = $state(false);
   let statusDir = $state('~/.agent-monitor');
@@ -57,6 +70,7 @@
   let recents = $derived(recentTasks(tasks));
   let aggregateState = $derived(aggregate(tasks, hosts));
   let selectedTask = $derived(tasks.find((task) => task.id === selectedId) ?? null);
+  let degradedProviders = $derived(providers.filter((provider) => provider.status === 'degraded'));
   let remoteHosts = $derived.by(() => {
     const names = [...hosts.map((host) => host.host), ...remotes.keys()];
     return [...new Set(names)].map((host) => ({
@@ -79,12 +93,14 @@
   }
 
   async function refreshSnapshots() {
-    const [nextTasks, nextHosts] = await Promise.all([
+    const [nextTasks, nextHosts, nextProviders] = await Promise.all([
       invoke<TaskSnapshot[]>('get_agents'),
       invoke<HostHealth[]>('get_hosts'),
+      invoke<ProviderHealth[]>('get_providers'),
     ]);
     tasks = nextTasks;
     hosts = nextHosts;
+    providers = nextProviders;
     ipcError = '';
   }
 
@@ -109,6 +125,7 @@
       if (import.meta.env.DEV) {
         tasks = DEMO_TASKS;
         hosts = DEMO_HOSTS;
+        providers = DEMO_PROVIDERS;
       }
       return;
     }
@@ -129,6 +146,9 @@
       }));
       await addListener(listen<HostHealth[]>('hosts-updated', (event) => {
         hosts = event.payload;
+      }));
+      await addListener(listen<ProviderHealth[]>('providers-updated', (event) => {
+        providers = event.payload;
       }));
       await emit('popup-ready', null);
 
@@ -229,6 +249,21 @@
   {#if focusError || ipcError}
     <div class="px-3 py-1.5 bg-[#3a2020] border-b border-red-500/20 text-[10px] text-red-400 truncate shrink-0">
       {focusError || ipcError}
+    </div>
+  {/if}
+
+  {#if degradedProviders.length > 0}
+    <div class="px-3 py-1.5 bg-[#3a3020] border-b border-amber-400/20 text-[10px] text-[#d8b96a] shrink-0">
+      {#each degradedProviders as provider (provider.provider)}
+        <p class="flex items-center gap-1.5 min-w-0" title={provider.message ?? ''}>
+          <span class="w-[6px] h-[6px] rounded-full bg-[#d8b96a] flex-shrink-0"></span>
+          <span class="font-medium">{PROVIDER_LABEL[provider.provider] ?? provider.provider}</span>
+          <span class="truncate">数据源降级，保留上次状态</span>
+          {#if provider.last_success}
+            <span class="ml-auto flex-shrink-0 text-[#9f885b]">{formatAgo(provider.last_success)}</span>
+          {/if}
+        </p>
+      {/each}
     </div>
   {/if}
 

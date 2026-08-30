@@ -80,10 +80,26 @@ impl HostHealth {
 
 /// Output of one provider poll: normalized tasks plus (for remote providers)
 /// per-host health.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ProviderOutput {
     pub tasks: Vec<TaskSnapshot>,
     pub hosts: Vec<HostHealth>,
+    /// Whether this poll is a complete, authoritative view of the provider.
+    /// A degraded poll may re-emit stale tasks, but must never reconcile away
+    /// tasks that are absent from its partial result.
+    pub authoritative: bool,
+    pub error: Option<String>,
+}
+
+impl Default for ProviderOutput {
+    fn default() -> Self {
+        Self {
+            tasks: Vec::new(),
+            hosts: Vec::new(),
+            authoritative: true,
+            error: None,
+        }
+    }
 }
 
 impl ProviderOutput {
@@ -91,6 +107,17 @@ impl ProviderOutput {
         Self {
             tasks,
             hosts: Vec::new(),
+            authoritative: true,
+            error: None,
+        }
+    }
+
+    pub fn degraded(tasks: Vec<TaskSnapshot>, error: impl Into<String>) -> Self {
+        Self {
+            tasks,
+            hosts: Vec::new(),
+            authoritative: false,
+            error: Some(error.into()),
         }
     }
 
@@ -98,6 +125,29 @@ impl ProviderOutput {
     pub fn is_empty(&self) -> bool {
         self.tasks.is_empty() && self.hosts.is_empty()
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ProviderStatus {
+    Connected,
+    Degraded,
+}
+
+/// Health shown for local data sources. Remote availability remains modeled
+/// per host through `HostHealth`.
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct ProviderHealth {
+    pub provider: String,
+    pub status: ProviderStatus,
+    #[serde(
+        default,
+        with = "opt_epoch_ms",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub last_success: Option<SystemTime>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message: Option<String>,
 }
 
 /// A pollable data source.

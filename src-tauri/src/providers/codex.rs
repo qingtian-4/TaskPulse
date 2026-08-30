@@ -48,6 +48,7 @@ pub struct CodexProvider {
     /// unchanged signature can reuse the previous parse instead of rereading
     /// multi-megabyte JSONL files every two seconds.
     cache: std::collections::HashMap<PathBuf, (SystemTime, u64, Option<SessionState>)>,
+    last_tasks: Vec<TaskSnapshot>,
 }
 
 impl CodexProvider {
@@ -64,18 +65,17 @@ impl CodexProvider {
             sessions_root: root,
             seen: Default::default(),
             cache: Default::default(),
+            last_tasks: Vec::new(),
         }
     }
 
-    fn discover(&self) -> Vec<PathBuf> {
+    fn discover(&self) -> std::io::Result<Vec<PathBuf>> {
         let mut files = Vec::new();
-        if let Ok(entries) = walk(&self.sessions_root) {
-            for path in entries {
-                if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                    let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-                    if name.starts_with("rollout-") {
-                        files.push(path);
-                    }
+        for path in walk(&self.sessions_root)? {
+            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
+                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
+                if name.starts_with("rollout-") {
+                    files.push(path);
                 }
             }
         }
@@ -91,7 +91,7 @@ impl CodexProvider {
                 .unwrap_or(UNIX_EPOCH);
             bm.cmp(&am)
         });
-        files
+        Ok(files)
     }
 
     fn parse_session_state(&self, path: &Path, now: SystemTime) -> Option<SessionState> {
@@ -564,7 +564,23 @@ impl Provider for CodexProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
-        let files = self.discover();
+        let files = match self.discover() {
+            Ok(files) => files,
+            Err(error) => {
+                let message = format!("session discovery failed: {error}");
+                log::warn!("codex: {message}");
+                let tasks = self
+                    .last_tasks
+                    .iter()
+                    .cloned()
+                    .map(|mut task| {
+                        task.stale = true;
+                        task
+                    })
+                    .collect();
+                return ProviderOutput::degraded(tasks, message);
+            }
+        };
         let mut tasks = Vec::new();
         let mut live: std::collections::HashMap<String, SystemTime> = Default::default();
         let selected: Vec<PathBuf> = files.into_iter().take(MAX_SESSIONS).collect();
@@ -583,10 +599,8 @@ impl Provider for CodexProvider {
         // terminal snapshot needed (the store's TTL handles the drop). We only
         // track them so a re-appearing session keeps its identity.
         self.seen = live;
-        ProviderOutput {
-            tasks,
-            hosts: vec![],
-        }
+        self.last_tasks = tasks.clone();
+        ProviderOutput::tasks(tasks)
     }
 }
 
@@ -814,7 +828,7 @@ mod tests {
         });
         f.write_all(b"{}").unwrap();
         let provider = CodexProvider::with_root(root.path().to_path_buf());
-        let files = provider.discover();
+        let files = provider.discover().unwrap();
         assert_eq!(files.len(), 1);
     }
 

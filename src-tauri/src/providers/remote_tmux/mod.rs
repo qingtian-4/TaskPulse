@@ -290,6 +290,7 @@ impl RemoteTmuxProvider {
         ProviderOutput {
             tasks,
             hosts: vec![HostHealth::connected(ssh_host.to_string(), now)],
+            ..ProviderOutput::default()
         }
     }
 

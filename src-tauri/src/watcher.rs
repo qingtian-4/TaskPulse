@@ -12,6 +12,7 @@
 //! The `agents-updated` event contract, tray icon updates, and the popup
 //! commands are preserved from AgentTray.
 
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime};
@@ -22,7 +23,7 @@ use crate::providers::deepseek_harness::DeepSeekHarnessProvider;
 use crate::providers::hermes::HermesProvider;
 use crate::providers::local_file::LocalFileProvider;
 use crate::providers::remote_tmux::{ssh::SystemSshExecutor, RemoteTmuxProvider};
-use crate::providers::{HostHealth, Provider, ProviderOutput};
+use crate::providers::{HostHealth, Provider, ProviderHealth, ProviderOutput, ProviderStatus};
 use crate::scanner::Scanner;
 use crate::store::TaskStore;
 use crate::transition::TransitionEngine;
@@ -127,8 +128,14 @@ pub fn status_dir() -> Option<PathBuf> {
 /// Cached latest merged task list for on-demand popup refresh.
 static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
 static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
+static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
 
-fn emit_agents(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
+fn emit_agents(
+    app: &AppHandle,
+    tasks: &[TaskSnapshot],
+    hosts: &[HostHealth],
+    providers: &[ProviderHealth],
+) {
     log::info!("emit_agents: {} tasks, {} hosts", tasks.len(), hosts.len());
     for t in tasks {
         log::debug!(
@@ -152,9 +159,17 @@ fn emit_agents(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
         });
         *cache = hosts.to_vec();
     }
+    {
+        let mut cache = LATEST_PROVIDERS.lock().unwrap_or_else(|e| {
+            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
+            e.into_inner()
+        });
+        *cache = providers.to_vec();
+    }
     crate::tray::update_icon(app, tasks, hosts);
     let _ = app.emit("agents-updated", tasks);
     let _ = app.emit("hosts-updated", hosts);
+    let _ = app.emit("providers-updated", providers);
 }
 
 /// Re-emit the last known task list (used when popup opens).
@@ -173,9 +188,17 @@ pub fn emit_latest(app: &AppHandle) {
             e.into_inner()
         })
         .clone();
+    let providers = LATEST_PROVIDERS
+        .lock()
+        .unwrap_or_else(|e| {
+            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
+            e.into_inner()
+        })
+        .clone();
     crate::tray::update_icon(app, &tasks, &hosts);
     let _ = app.emit("agents-updated", &tasks);
     let _ = app.emit("hosts-updated", &hosts);
+    let _ = app.emit("providers-updated", &providers);
 }
 
 /// Tauri command: return the platform-appropriate status directory path.
@@ -207,6 +230,18 @@ pub fn get_hosts() -> Vec<HostHealth> {
         .lock()
         .unwrap_or_else(|e| {
             log::warn!("LATEST_HOSTS mutex poisoned, recovering");
+            e.into_inner()
+        })
+        .clone()
+}
+
+/// Tauri command: return cached local-provider health.
+#[tauri::command]
+pub fn get_providers() -> Vec<ProviderHealth> {
+    LATEST_PROVIDERS
+        .lock()
+        .unwrap_or_else(|e| {
+            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
             e.into_inner()
         })
         .clone()
@@ -355,12 +390,119 @@ fn dedup_dsh_over_scan(tasks: &mut Vec<TaskSnapshot>) {
     }
 }
 
+struct LocalBatch {
+    tasks: Vec<TaskSnapshot>,
+    authoritative_sources: HashSet<TaskSource>,
+}
+
+struct LocalProviders {
+    file: LocalFileProvider,
+    codex: CodexProvider,
+    hermes: HermesProvider,
+    dsh: DeepSeekHarnessProvider,
+    scanner: Scanner,
+    health: Vec<ProviderHealth>,
+}
+
+impl LocalProviders {
+    fn new() -> Self {
+        Self {
+            file: LocalFileProvider::new(),
+            codex: CodexProvider::new(),
+            hermes: HermesProvider::new(),
+            dsh: DeepSeekHarnessProvider::new(),
+            scanner: Scanner::new(),
+            health: Vec::new(),
+        }
+    }
+
+    fn primary_dir(&self) -> PathBuf {
+        self.file.primary_dir()
+    }
+
+    fn poll(&mut self, now: SystemTime) -> LocalBatch {
+        let file = self.file.poll(now);
+        update_provider_health(&mut self.health, "local_file", &file, now);
+        let codex = self.codex.poll(now);
+        update_provider_health(&mut self.health, "codex", &codex, now);
+        let hermes = self.hermes.poll(now);
+        update_provider_health(&mut self.health, "hermes", &hermes, now);
+        let dsh = self.dsh.poll(now);
+        update_provider_health(&mut self.health, "deepseek_harness", &dsh, now);
+
+        let mut authoritative_sources = HashSet::from([TaskSource::ClaudeCode, TaskSource::Gemini]);
+        if file.authoritative {
+            authoritative_sources.insert(TaskSource::LocalFile);
+        }
+        if codex.authoritative {
+            authoritative_sources.insert(TaskSource::Codex);
+        }
+        if hermes.authoritative {
+            authoritative_sources.insert(TaskSource::Hermes);
+        }
+        if dsh.authoritative {
+            authoritative_sources.insert(TaskSource::DeepSeekHarness);
+        }
+
+        let mut tasks = file.tasks;
+        tasks.extend(codex.tasks);
+        tasks.extend(hermes.tasks);
+        tasks.extend(dsh.tasks);
+        let scanned_agents = self.scanner.scan();
+        let scanned: Vec<TaskSnapshot> = scanned_agents.iter().cloned().map(Into::into).collect();
+        crate::heuristics::cross_validate_tasks(&mut tasks, &scanned);
+        tasks.extend(scanned);
+        dedup_by_terminal(&mut tasks);
+        dedup_codex_over_scan(&mut tasks);
+        dedup_hermes_over_scan(&mut tasks);
+        dedup_dsh_over_scan(&mut tasks);
+
+        LocalBatch {
+            tasks,
+            authoritative_sources,
+        }
+    }
+}
+
+fn update_provider_health(
+    health: &mut Vec<ProviderHealth>,
+    provider: &str,
+    output: &ProviderOutput,
+    now: SystemTime,
+) {
+    let previous_success = health
+        .iter()
+        .find(|item| item.provider == provider)
+        .and_then(|item| item.last_success);
+    let next = if output.authoritative {
+        ProviderHealth {
+            provider: provider.to_string(),
+            status: ProviderStatus::Connected,
+            last_success: Some(now),
+            message: None,
+        }
+    } else {
+        ProviderHealth {
+            provider: provider.to_string(),
+            status: ProviderStatus::Degraded,
+            last_success: previous_success,
+            message: output.error.clone(),
+        }
+    };
+    if let Some(existing) = health.iter_mut().find(|item| item.provider == provider) {
+        *existing = next;
+    } else {
+        health.push(next);
+    }
+}
+
 fn merge_and_emit(
     app: &AppHandle,
     store: &mut TaskStore,
     engine: &mut TransitionEngine,
     tasks: Vec<TaskSnapshot>,
     hosts: &[HostHealth],
+    providers: &[ProviderHealth],
     now: SystemTime,
     remote: bool,
 ) {
@@ -370,7 +512,7 @@ fn merge_and_emit(
         log::info!("transition event: {e:?}");
     }
     crate::notifier::handle_events(app, &events, &merged);
-    emit_agents(app, &merged, hosts);
+    emit_agents(app, &merged, hosts, providers);
 }
 
 /// Refresh local sources (file provider + Codex session metadata + scanner),
@@ -379,32 +521,18 @@ fn refresh_local(
     app: &AppHandle,
     store: &mut TaskStore,
     engine: &mut TransitionEngine,
-    file_provider: &mut LocalFileProvider,
-    codex: &mut CodexProvider,
-    hermes: &mut HermesProvider,
-    dsh: &mut DeepSeekHarnessProvider,
-    scanner: &mut Scanner,
+    providers: &mut LocalProviders,
     hosts: &[HostHealth],
     now: SystemTime,
 ) {
-    let mut tasks = file_provider.poll(now).tasks;
-    let codex_tasks = codex.poll(now).tasks;
-    tasks.extend(codex_tasks);
-    let hermes_tasks = hermes.poll(now).tasks;
-    tasks.extend(hermes_tasks);
-    let dsh_tasks = dsh.poll(now).tasks;
-    tasks.extend(dsh_tasks);
-    let scanned_agents = scanner.scan();
-    let scanned: Vec<TaskSnapshot> = scanned_agents.iter().cloned().map(Into::into).collect();
-    // Second heuristic layer: cross-validate hook file statuses against live
-    // process data (stale "working" hooks, missed activity, etc.).
-    crate::heuristics::cross_validate_tasks(&mut tasks, &scanned);
-    tasks.extend(scanned);
-    dedup_by_terminal(&mut tasks);
-    dedup_codex_over_scan(&mut tasks);
-    dedup_hermes_over_scan(&mut tasks);
-    dedup_dsh_over_scan(&mut tasks);
-    merge_and_emit(app, store, engine, tasks, hosts, now, false);
+    let batch = providers.poll(now);
+    let merged = store.merge_sources(batch.tasks, &batch.authoritative_sources, now);
+    let events = engine.apply(&merged, hosts, now);
+    for event in &events {
+        log::info!("transition event: {event:?}");
+    }
+    crate::notifier::handle_events(app, &events, &merged);
+    emit_agents(app, &merged, hosts, &providers.health);
 }
 
 fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
@@ -424,11 +552,7 @@ pub fn watch(app: AppHandle) {
 
     let mut store = TaskStore::default();
     let mut engine = TransitionEngine::new();
-    let mut file_provider = LocalFileProvider::new();
-    let mut codex = CodexProvider::new();
-    let mut hermes = HermesProvider::new();
-    let mut dsh = DeepSeekHarnessProvider::new();
-    let mut scanner = Scanner::new();
+    let mut local_providers = LocalProviders::new();
     let scan_interval = Duration::from_secs(2);
 
     // Remote polling on its own thread (SSH can block for seconds).
@@ -457,16 +581,12 @@ pub fn watch(app: AppHandle) {
         &app,
         &mut store,
         &mut engine,
-        &mut file_provider,
-        &mut codex,
-        &mut hermes,
-        &mut dsh,
-        &mut scanner,
+        &mut local_providers,
         &hosts,
         now,
     );
 
-    let dir = file_provider.primary_dir();
+    let dir = local_providers.primary_dir();
 
     // Outer restart loop: recreates the file watcher whenever the channel
     // disconnects (inotify watch limit exhausted, OS resource pressure).
@@ -484,11 +604,7 @@ pub fn watch(app: AppHandle) {
                         &app,
                         &mut store,
                         &mut engine,
-                        &mut file_provider,
-                        &mut codex,
-                        &mut hermes,
-                        &mut dsh,
-                        &mut scanner,
+                        &mut local_providers,
                         &hosts,
                         now,
                     );
@@ -500,6 +616,7 @@ pub fn watch(app: AppHandle) {
                             &mut engine,
                             out.tasks,
                             &out.hosts,
+                            &local_providers.health,
                             now,
                             true,
                         );
@@ -535,11 +652,7 @@ pub fn watch(app: AppHandle) {
                             &app,
                             &mut store,
                             &mut engine,
-                            &mut file_provider,
-                            &mut codex,
-                            &mut hermes,
-                            &mut dsh,
-                            &mut scanner,
+                            &mut local_providers,
                             &hosts,
                             now,
                         );
@@ -565,6 +678,7 @@ pub fn watch(app: AppHandle) {
                     &mut engine,
                     out.tasks,
                     &out.hosts,
+                    &local_providers.health,
                     now,
                     true,
                 );
@@ -577,11 +691,7 @@ pub fn watch(app: AppHandle) {
                     &app,
                     &mut store,
                     &mut engine,
-                    &mut file_provider,
-                    &mut codex,
-                    &mut hermes,
-                    &mut dsh,
-                    &mut scanner,
+                    &mut local_providers,
                     &hosts,
                     now,
                 );
@@ -721,5 +831,31 @@ mod tests {
         assert!(status_priority_num("needs-input") < status_priority_num("error"));
         assert!(status_priority_num("error") < status_priority_num("working"));
         assert!(status_priority_num("working") < status_priority_num("idle"));
+    }
+
+    #[test]
+    fn provider_health_preserves_last_success_during_degradation() {
+        let mut health = Vec::new();
+        let now = SystemTime::now();
+        update_provider_health(&mut health, "hermes", &ProviderOutput::default(), now);
+        assert_eq!(health[0].status, ProviderStatus::Connected);
+        assert_eq!(health[0].last_success, Some(now));
+
+        let later = now + Duration::from_secs(5);
+        update_provider_health(
+            &mut health,
+            "hermes",
+            &ProviderOutput::degraded(Vec::new(), "database locked"),
+            later,
+        );
+        assert_eq!(health[0].status, ProviderStatus::Degraded);
+        assert_eq!(health[0].last_success, Some(now));
+        assert_eq!(health[0].message.as_deref(), Some("database locked"));
+
+        let recovered = later + Duration::from_secs(5);
+        update_provider_health(&mut health, "hermes", &ProviderOutput::default(), recovered);
+        assert_eq!(health[0].status, ProviderStatus::Connected);
+        assert_eq!(health[0].last_success, Some(recovered));
+        assert!(health[0].message.is_none());
     }
 }

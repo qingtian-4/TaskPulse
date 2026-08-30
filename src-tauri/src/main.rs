@@ -106,6 +106,7 @@ fn main() {
             focus::focus_terminal,
             watcher::get_agents,
             watcher::get_hosts,
+            watcher::get_providers,
             watcher::get_status_dir,
             watcher::install_hooks,
             tray::toggle_pin,

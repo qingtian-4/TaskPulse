@@ -223,6 +223,7 @@ impl Provider for DeepSeekHarnessProvider {
                 return ProviderOutput {
                     tasks: self.last_tasks.clone(),
                     hosts: vec![],
+                    ..ProviderOutput::default()
                 };
             }
         }
@@ -241,10 +242,7 @@ impl Provider for DeepSeekHarnessProvider {
                         task
                     })
                     .collect();
-                return ProviderOutput {
-                    tasks,
-                    hosts: vec![],
-                };
+                return ProviderOutput::degraded(tasks, error.to_string());
             }
         };
 
@@ -296,6 +294,7 @@ impl Provider for DeepSeekHarnessProvider {
         ProviderOutput {
             tasks,
             hosts: vec![],
+            ..ProviderOutput::default()
         }
     }
 }

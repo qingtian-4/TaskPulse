@@ -28,12 +28,14 @@ const NAME_LEN: usize = 40;
 
 pub struct HermesProvider {
     db_path: Option<PathBuf>,
+    last_tasks: Vec<TaskSnapshot>,
 }
 
 impl HermesProvider {
     pub fn new() -> Self {
         Self {
             db_path: discover_db(),
+            last_tasks: Vec::new(),
         }
     }
 
@@ -42,7 +44,21 @@ impl HermesProvider {
     pub fn with_db_path(path: PathBuf) -> Self {
         Self {
             db_path: Some(path),
+            last_tasks: Vec::new(),
         }
+    }
+
+    fn degraded(&self, error: impl Into<String>) -> ProviderOutput {
+        let tasks = self
+            .last_tasks
+            .iter()
+            .cloned()
+            .map(|mut task| {
+                task.stale = true;
+                task
+            })
+            .collect();
+        ProviderOutput::degraded(tasks, error)
     }
 }
 
@@ -126,6 +142,32 @@ fn epoch_to_time(secs: f64) -> Option<SystemTime> {
     }
 }
 
+fn read_live_leases(
+    conn: &rusqlite::Connection,
+    now: SystemTime,
+) -> Result<std::collections::HashSet<String>, String> {
+    let mut stmt = match conn.prepare("SELECT conversation_id, expires_at FROM session_turn_leases")
+    {
+        Ok(stmt) => stmt,
+        Err(error) if error.to_string().contains("no such table") => return Ok(Default::default()),
+        Err(error) => return Err(format!("query turn leases failed: {error}")),
+    };
+    let rows = stmt
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, f64>(1)?))
+        })
+        .map_err(|error| format!("read turn leases failed: {error}"))?;
+    let mut live = std::collections::HashSet::new();
+    for row in rows {
+        let (conversation, expires) =
+            row.map_err(|error| format!("parse turn lease failed: {error}"))?;
+        if epoch_to_time(expires).is_some_and(|expires_at| expires_at > now) {
+            live.insert(conversation);
+        }
+    }
+    Ok(live)
+}
+
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -147,51 +189,59 @@ impl Provider for HermesProvider {
         let conn = match rusqlite::Connection::open(&db_path) {
             Ok(c) => c,
             Err(e) => {
-                log::debug!("hermes: open state.db failed: {e}");
-                return ProviderOutput::default();
+                let error = format!("open state.db failed: {e}");
+                log::warn!("hermes: {error}");
+                return self.degraded(error);
             }
         };
 
         // Turn leases → the set of conversation_ids currently in-flight.
-        let mut live: std::collections::HashSet<String> = Default::default();
-        if let Ok(mut stmt) =
-            conn.prepare("SELECT conversation_id, expires_at FROM session_turn_leases")
-        {
-            if let Ok(rows) =
-                stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, f64>(1)?)))
-            {
-                for row in rows.flatten() {
-                    let (conv, expires) = row;
-                    if let Some(t) = epoch_to_time(expires) {
-                        if t > now {
-                            live.insert(conv);
-                        }
-                    }
-                }
+        let live = match read_live_leases(&conn, now) {
+            Ok(live) => live,
+            Err(error) => {
+                log::warn!("hermes: {error}");
+                return self.degraded(error);
             }
-        }
+        };
 
         // Active sessions, newest activity first.
-        let mut rows: Vec<SessionRow> = Vec::new();
-        if let Ok(mut stmt) = conn.prepare(
+        let mut stmt = match conn.prepare(
             "SELECT id, display_name, title, last_activity_at, cwd, ended_at, archived, \
              last_activity_description FROM sessions ORDER BY last_activity_at DESC",
         ) {
-            if let Ok(mapped) = stmt.query_map([], |r| {
-                Ok(SessionRow {
-                    id: r.get(0)?,
-                    name: r.get(1)?,
-                    title: r.get(2)?,
-                    last_activity_at: r.get(3)?,
-                    cwd: r.get(4)?,
-                    ended_at: r.get(5)?,
-                    archived: r.get(6)?,
-                    description: r.get(7)?,
-                })
-            }) {
-                rows = mapped.flatten().collect();
+            Ok(stmt) => stmt,
+            Err(error) => {
+                let error = format!("query sessions failed: {error}");
+                log::warn!("hermes: {error}");
+                return self.degraded(error);
             }
-        }
+        };
+        let rows: Vec<SessionRow> = match stmt.query_map([], |r| {
+            Ok(SessionRow {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                title: r.get(2)?,
+                last_activity_at: r.get(3)?,
+                cwd: r.get(4)?,
+                ended_at: r.get(5)?,
+                archived: r.get(6)?,
+                description: r.get(7)?,
+            })
+        }) {
+            Ok(mapped) => match mapped.collect::<rusqlite::Result<Vec<_>>>() {
+                Ok(rows) => rows,
+                Err(error) => {
+                    let error = format!("parse sessions failed: {error}");
+                    log::warn!("hermes: {error}");
+                    return self.degraded(error);
+                }
+            },
+            Err(error) => {
+                let error = format!("read sessions failed: {error}");
+                log::warn!("hermes: {error}");
+                return self.degraded(error);
+            }
+        };
 
         let mut tasks = Vec::new();
         for row in rows {
@@ -217,10 +267,8 @@ impl Provider for HermesProvider {
             tasks.push(row_to_snapshot(&row, running, now));
         }
 
-        ProviderOutput {
-            tasks,
-            hosts: vec![],
-        }
+        self.last_tasks = tasks.clone();
+        ProviderOutput::tasks(tasks)
     }
 }
 
@@ -333,5 +381,21 @@ mod tests {
         let mut provider = HermesProvider::with_db_path(PathBuf::from("/nonexistent/state.db"));
         let out = provider.poll(SystemTime::now());
         assert!(out.tasks.is_empty());
+        assert!(!out.authoritative);
+    }
+
+    #[test]
+    fn schema_error_is_degraded_not_authoritative_empty() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.db");
+        rusqlite::Connection::open(&db).unwrap();
+        let mut provider = HermesProvider::with_db_path(db);
+        let out = provider.poll(SystemTime::now());
+        assert!(out.tasks.is_empty());
+        assert!(!out.authoritative);
+        assert!(out
+            .error
+            .as_deref()
+            .is_some_and(|error| error.contains("sessions")));
     }
 }
