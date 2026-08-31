@@ -1,20 +1,15 @@
 //! Notification plumbing.
 //!
 //! The Transition Engine decides WHAT happened; this module decides how it
-//! is surfaced: system beep + desktop notification, with a 10 s reminder
-//! beep while an agent keeps waiting for input.
+//! is surfaced: a one-shot system sound and native desktop notification.
 
-use std::collections::{HashMap, HashSet};
-use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
+use std::sync::LazyLock;
 
 use tauri::AppHandle;
 use tauri_plugin_notification::NotificationExt;
 
-use crate::domain::{TaskSnapshot, TaskStatus};
+use crate::domain::TaskSnapshot;
 use crate::transition::TaskEvent;
-
-const NEEDS_INPUT_REMINDER_INTERVAL: Duration = Duration::from_secs(10);
 
 /// A concrete notification to surface.
 #[derive(Debug, Clone)]
@@ -22,10 +17,6 @@ pub enum NotifyEvent {
     WaitingInput {
         task: TaskSnapshot,
         reason: Option<String>,
-    },
-    /// Periodic beep-only reminder while an agent stays waiting.
-    WaitingInputReminder {
-        task: TaskSnapshot,
     },
     Succeeded {
         task: TaskSnapshot,
@@ -43,6 +34,7 @@ pub enum NotifyEvent {
     HostReconnected {
         host: String,
     },
+    Test,
 }
 
 /// Swappable notification backend.
@@ -64,8 +56,8 @@ impl Notifier for SystemBeepNotifier {
                 );
                 play_system_beep();
             }
-            NotifyEvent::WaitingInputReminder { task } => {
-                log::info!("'{}' still waiting — reminder beep", task.name);
+            NotifyEvent::Succeeded { task } | NotifyEvent::InferredFinished { task } => {
+                log::info!("'{}' finished — playing alert", task.name);
                 play_system_beep();
             }
             NotifyEvent::Failed { task } => {
@@ -76,6 +68,7 @@ impl Notifier for SystemBeepNotifier {
                 log::info!("Host {host} disconnected — playing alert");
                 play_system_beep();
             }
+            NotifyEvent::Test => play_system_beep(),
             _ => {}
         }
     }
@@ -91,47 +84,7 @@ impl Notifier for DesktopNotifier {
             return;
         };
 
-        let (title, body) = match event {
-            NotifyEvent::WaitingInput { task, reason } => {
-                let body = match reason {
-                    Some(r) => format!("{} needs your input ({})", task.name, r),
-                    None => format!("{} needs your input", task.name),
-                };
-                ("TaskPulse".to_string(), body)
-            }
-            NotifyEvent::WaitingInputReminder { .. } => return, // beep only
-            NotifyEvent::Succeeded { task } => (
-                "TaskPulse".to_string(),
-                match task.exit_code {
-                    Some(0) => format!("✓ {} finished (exit 0)", task.name),
-                    _ => format!("✓ {} finished", task.name),
-                },
-            ),
-            NotifyEvent::Failed { task } => (
-                "TaskPulse".to_string(),
-                match task.exit_code {
-                    Some(code) => format!("✗ {} failed (exit {})", task.name, code),
-                    None => format!("✗ {} failed", task.name),
-                },
-            ),
-            NotifyEvent::InferredFinished { task } => (
-                "TaskPulse".to_string(),
-                format!("{} finished (inferred — exit code unknown)", task.name),
-            ),
-            NotifyEvent::HostDisconnected {
-                host,
-                last_seen_label,
-            } => (
-                "TaskPulse".to_string(),
-                match last_seen_label {
-                    Some(ls) => format!("{host} disconnected — last seen {ls}"),
-                    None => format!("{host} disconnected"),
-                },
-            ),
-            NotifyEvent::HostReconnected { host } => {
-                ("TaskPulse".to_string(), format!("{host} reconnected"))
-            }
-        };
+        let (title, body) = notification_copy(event);
 
         let mut builder = app.notification().builder().title(&title).body(&body);
         if let Some(icon_path) = notification_icon_path() {
@@ -141,6 +94,73 @@ impl Notifier for DesktopNotifier {
             log::warn!("Desktop notification failed: {e}");
         }
     }
+}
+
+fn notification_copy(event: &NotifyEvent) -> (String, String) {
+    match event {
+        NotifyEvent::WaitingInput { task, reason } => {
+            if let Some(reason) = reason {
+                log::debug!("Waiting-input reason for '{}': {reason}", task.name);
+            }
+            (
+                "TaskPulse · 任务已完成，等待输入".to_string(),
+                task_notification_label(task),
+            )
+        }
+        NotifyEvent::Succeeded { task } => (
+            "TaskPulse · 任务已完成".to_string(),
+            task_notification_label(task),
+        ),
+        NotifyEvent::Failed { task } => {
+            let mut body = task_notification_label(task);
+            if let Some(code) = task.exit_code {
+                body.push_str(&format!(" · 退出码 {code}"));
+            }
+            ("TaskPulse · 任务失败，需要处理".to_string(), body)
+        }
+        NotifyEvent::InferredFinished { task } => (
+            "TaskPulse · 任务可能已结束".to_string(),
+            format!("{} · 状态来自推断，请确认", task_notification_label(task)),
+        ),
+        NotifyEvent::HostDisconnected {
+            host,
+            last_seen_label,
+        } => (
+            "TaskPulse · 远程主机已断开".to_string(),
+            match last_seen_label {
+                Some(last_seen) => format!("{host} · 最后在线 {last_seen}"),
+                None => host.clone(),
+            },
+        ),
+        NotifyEvent::HostReconnected { host } => {
+            ("TaskPulse · 远程主机已恢复".to_string(), host.clone())
+        }
+        NotifyEvent::Test => (
+            "TaskPulse · 通知测试成功".to_string(),
+            "任务完成或需要你输入时，将在这里提醒。".to_string(),
+        ),
+    }
+}
+
+fn task_notification_label(task: &TaskSnapshot) -> String {
+    let mut context = Vec::with_capacity(4);
+    if let Some(host) = task
+        .host
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        context.push(host);
+    }
+    context.push(task.source.label());
+    if let Some(project) = task
+        .project
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        context.push(project);
+    }
+    context.push(&task.name);
+    context.join(" · ")
 }
 
 /// Returns an absolute path to the notification icon, writing it to a cache
@@ -173,32 +193,6 @@ impl Notifier for CompositeNotifier {
         }
     }
 }
-
-#[derive(Debug, Clone, Copy)]
-struct ReminderState {
-    entered_at: Instant,
-    last_reminder_at: Option<Instant>,
-}
-
-#[derive(Default)]
-struct NeedsInputReminderTracker {
-    active: HashMap<String, ReminderState>,
-}
-
-impl NeedsInputReminderTracker {
-    fn mark_entered(&mut self, id: &str, now: Instant) {
-        self.active.insert(
-            id.to_string(),
-            ReminderState {
-                entered_at: now,
-                last_reminder_at: None,
-            },
-        );
-    }
-}
-
-static REMINDER_TRACKER: LazyLock<Mutex<NeedsInputReminderTracker>> =
-    LazyLock::new(|| Mutex::new(NeedsInputReminderTracker::default()));
 
 static NOTIFIER: LazyLock<CompositeNotifier> = LazyLock::new(|| {
     CompositeNotifier::new(vec![
@@ -267,35 +261,14 @@ fn platform_beep() -> Result<(), String> {
     Ok(())
 }
 
-/// Drive notifications from engine events + the current waiting set.
-///
-/// * Engine events → one-shot notifications (beep + banner as appropriate).
-/// * Tasks still `WAITING_INPUT` → periodic reminder beeps (10 s).
-pub fn handle_events(app: &AppHandle, events: &[TaskEvent], tasks: &[TaskSnapshot]) {
-    let mut tracker = REMINDER_TRACKER.lock().unwrap_or_else(|e| {
-        log::warn!("REMINDER_TRACKER mutex poisoned, recovering");
-        e.into_inner()
-    });
-    let now = Instant::now();
-
-    // Drop reminder state for tasks that are no longer waiting.
-    let waiting_ids: HashSet<String> = tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::WaitingInput)
-        .map(|t| t.id.clone())
-        .collect();
-    tracker.active.retain(|id, _| waiting_ids.contains(id));
-
-    // One-shot notifications from engine transitions.
+/// Drive one-shot notifications from transition-engine events.
+pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapshot]) {
     for event in events {
         let notify_event = match event {
-            TaskEvent::WaitingInput { task, reason } => {
-                tracker.mark_entered(&task.id, now);
-                NotifyEvent::WaitingInput {
-                    task: task.clone(),
-                    reason: reason.clone(),
-                }
-            }
+            TaskEvent::WaitingInput { task, reason } => NotifyEvent::WaitingInput {
+                task: task.clone(),
+                reason: reason.clone(),
+            },
             TaskEvent::Succeeded { task } => NotifyEvent::Succeeded { task: task.clone() },
             TaskEvent::Failed { task } => NotifyEvent::Failed { task: task.clone() },
             TaskEvent::InferredFinished { task } => {
@@ -311,32 +284,12 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], tasks: &[TaskSnapsho
         };
         NOTIFIER.notify(&notify_event, Some(app));
     }
+}
 
-    // Periodic reminders while an agent keeps waiting.
-    for task in tasks
-        .iter()
-        .filter(|t| t.status == TaskStatus::WaitingInput)
-    {
-        let entry = tracker
-            .active
-            .entry(task.id.clone())
-            .or_insert(ReminderState {
-                entered_at: now,
-                last_reminder_at: None,
-            });
-        let has_waited = now.duration_since(entry.entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL;
-        let reminder_due = entry
-            .last_reminder_at
-            .map(|last| now.duration_since(last) >= NEEDS_INPUT_REMINDER_INTERVAL)
-            .unwrap_or(true);
-        if has_waited && reminder_due {
-            entry.last_reminder_at = Some(now);
-            NOTIFIER.notify(
-                &NotifyEvent::WaitingInputReminder { task: task.clone() },
-                Some(app),
-            );
-        }
-    }
+/// Let users verify Windows notification settings without waiting for a task.
+#[tauri::command]
+pub fn test_notification(app: AppHandle) {
+    NOTIFIER.notify(&NotifyEvent::Test, Some(&app));
 }
 
 fn fmt_last_seen(t: std::time::SystemTime) -> String {
@@ -361,38 +314,43 @@ fn fmt_last_seen(t: std::time::SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::domain::{DetectionConfidence, TaskSource, TaskStatus};
+    use std::time::{Duration, SystemTime};
 
-    struct CountingNotifier(AtomicUsize);
-    impl Notifier for CountingNotifier {
-        fn notify(&self, _event: &NotifyEvent, _app: Option<&AppHandle>) {
-            self.0.fetch_add(1, Ordering::Relaxed);
-        }
+    #[test]
+    fn task_label_preserves_source_project_and_native_title() {
+        let mut task = TaskSnapshot::new(
+            "codex:thread-1",
+            "研究 HyperMem 记忆机制",
+            TaskSource::Codex,
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Exact,
+            SystemTime::now(),
+        );
+        task.host = Some("Server3".into());
+        task.project = Some("HyperMem".into());
+        assert_eq!(
+            task_notification_label(&task),
+            "Server3 · Codex · HyperMem · 研究 HyperMem 记忆机制"
+        );
     }
 
     #[test]
-    fn reminder_fires_after_interval() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let start = Instant::now();
-
-        tracker.mark_entered("a", start);
-        // not due yet
-        let due = {
-            let entry = tracker.active.get("a").unwrap();
-            start.duration_since(entry.entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL
-        };
-        assert!(!due);
-
-        // pretend 10s passed
-        let later = start + NEEDS_INPUT_REMINDER_INTERVAL;
-        let mut entry = *tracker.active.get("a").unwrap();
-        entry.entered_at = later - NEEDS_INPUT_REMINDER_INTERVAL;
-        tracker.active.insert("a".into(), entry);
-        let due =
-            later.duration_since(tracker.active["a"].entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL;
-        assert!(due);
-        let _ = n.0.load(Ordering::Relaxed);
+    fn waiting_notification_says_task_finished_and_needs_input() {
+        let task = TaskSnapshot::new(
+            "hermes:session-1",
+            "Install image-to-editable-ppt skill",
+            TaskSource::Hermes,
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Exact,
+            SystemTime::now(),
+        );
+        let (title, body) = notification_copy(&NotifyEvent::WaitingInput {
+            task,
+            reason: Some("provider event".into()),
+        });
+        assert_eq!(title, "TaskPulse · 任务已完成，等待输入");
+        assert_eq!(body, "Hermes · Install image-to-editable-ppt skill");
     }
 
     #[test]

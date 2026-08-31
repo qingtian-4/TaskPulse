@@ -14,7 +14,7 @@
 | Shell | `src-tauri/src/main.rs` | Tauri 2 builder, tray menu (Show/Pin/Hide/Quit), tray left-click toggle, global shortcut `Ctrl+Shift+A`, spawns watcher thread, invoke handlers |
 | Watcher | `src-tauri/src/watcher.rs` (885 lines) | `AgentStatus` model, status file parse (JSON v1 + legacy pipe), `~/.agent-monitor/` watch, stale TTL (10 min), orphan hook-file cleanup (session-id cross-check), hook>wrap>scan dedup, focus_id budget suppression, sort by status priority, emit `agents-updated`, merge loop (file watcher + 2 s process scan) |
 | Tray | `src-tauri/src/tray.rs` | Aggregate state (needs-input>error>working>starting>idle>offline), per-state icon swap, popup window (400 px, transparent, always-on-top, skip-taskbar), pin, hide, window-state position restore |
-| Notifier | `src-tauri/src/notifier.rs` | `Notifier` trait; beep + desktop notification; 10 s needs-input reminders; transition-only notify by task id |
+| Notifier | `src-tauri/src/notifier.rs` | `Notifier` trait; beep + desktop notification; one-shot transition notifications deduped by task id and turn |
 | Scanner | `src-tauri/src/scanner/*` | Per-OS process scan (linux/macos/windows), CLI strategies (claude_code/codex/gemini), CPU smoothing, subagent filtering, multiplexer focus via env vars (tmux/kitty/wezterm), tmux pane title read |
 | Heuristics | `src-tauri/src/heuristics.rs` | Cross-validate hook status vs scanner data |
 | Focus | `src-tauri/src/focusers/*`, `focus.rs` | Jump to terminal/session (VS Code, kitty, tmux, wezterm, …) |
@@ -40,7 +40,7 @@
 |---|---|
 | `main.rs` tray lifecycle | Tray menu, left-click popup toggle, global shortcut, exit-on-last-window prevention — mature, platform-tested |
 | `tray.rs` popup machinery | Popup create/show/hide/pin, auto-resize, transparent window, position restore |
-| `notifier.rs` Notifier trait + beep/desktop backends + needs-input reminder tracker | Battle-tested notification plumbing; extended with new event types |
+| `notifier.rs` Notifier trait + beep/desktop backends | Battle-tested notification plumbing; extended with one-shot lifecycle events and a user test action |
 | Status-file format (v1 JSON, `~/.agent-monitor/`) | Backward compat: existing AgentTray hooks/wrappers keep working |
 | `scanner/*` process scanning | Local agent process detection stays (source of `scan`-class signals) |
 | `heuristics.rs` cross-validation | Kept as an additional signal layer |

@@ -17,7 +17,7 @@ TaskPulse 是 [AgentTray](https://github.com/sprklai/agenttray)（MIT）的 Wind
 | 远端 tmux 监控（精确） | `tp-run "label" -- python eval.py`：完整保留 stdio + 真实退出码 → SUCCEEDED/FAILED / EXACT |
 | 服务器健康 | SSH 失败保留状态（stale）→ 连续 3 次失败 → DISCONNECTED（带 last seen）；恢复自动回来 |
 | 数据源健康 | 本地 Provider 读取失败时保留上次状态并显示降级提示，不会把读取失败误判为任务结束 |
-| 通知 | 只在有意义迁移通知一次：等输入 / 成功 / 失败 / 推断完成 / 断连 / 恢复；等输入 10s 提醒 |
+| 通知 | 只在有意义迁移通知一次：等输入 / 成功 / 失败 / 推断完成 / 断连 / 恢复；可在监控窗口或托盘菜单测试 Windows 通知 |
 | 完成历史 | 完成任务保留在 RECENT 30 分钟并跨应用重启恢复（`~/.taskpulse/recent.json`） |
 | 托盘聚合 | FAILED > WAITING_INPUT > DISCONNECTED > RUNNING > SUCCEEDED/IDLE |
 

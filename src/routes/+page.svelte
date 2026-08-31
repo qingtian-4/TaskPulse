@@ -17,6 +17,7 @@
   import Undo2 from '@lucide/svelte/icons/undo-2';
   import Server from '@lucide/svelte/icons/server';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
+  import BellRing from '@lucide/svelte/icons/bell-ring';
 
   const WIN_W = 400;
   const MAX_WIN_H = screen.availHeight - 16;
@@ -62,6 +63,7 @@
   let focusError = $state('');
   let focusing = $state(false);
   let refreshing = $state(false);
+  let testingNotification = $state(false);
   let selectedId = $state<string | null>(null);
   let demoMode = $state(false);
   let panelEl = $state<HTMLDivElement | null>(null);
@@ -120,6 +122,18 @@
       ipcError = `刷新失败：${error}`;
     } finally {
       refreshing = false;
+    }
+  }
+
+  async function testNotification() {
+    if (testingNotification || !isTauri()) return;
+    testingNotification = true;
+    try {
+      await invoke('test_notification');
+    } catch (error) {
+      ipcError = `发送测试通知失败：${error}`;
+    } finally {
+      setTimeout(() => (testingNotification = false), 1000);
     }
   }
 
@@ -299,6 +313,16 @@
     <span data-tauri-drag-region class="text-[11px] font-semibold tracking-[0.16em] uppercase text-[#bbb8b0]">TaskPulse</span>
     <div class="flex items-center gap-1.5">
       <AggregatePill state={aggregateState} />
+      <button
+        type="button"
+        onclick={testNotification}
+        disabled={testingNotification || demoMode}
+        class="p-0.5 rounded text-[#a5a39b] hover:text-white/80 hover:bg-white/10 transition-colors disabled:opacity-50"
+        aria-label="测试系统通知"
+        title="测试系统通知"
+      >
+        <BellRing size={12} />
+      </button>
       <button
         type="button"
         onclick={requestRefresh}

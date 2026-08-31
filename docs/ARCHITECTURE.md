@@ -22,7 +22,7 @@
                     └──────────────────────┬─────────────────────────┘
                                            ▼
               Tray 图标（聚合优先级）    Windows 通知 + beep     Popup UI
-              FAILED > WAITING_INPUT >  （等待输入 10s 提醒）   (Svelte 5)
+              FAILED > WAITING_INPUT >  （每个 turn 一次）      (Svelte 5)
               DISCONNECTED > RUNNING >
               SUCCEEDED/IDLE > UNKNOWN
 ```
@@ -43,7 +43,7 @@ providers/
 store/             TaskStore：按 id 合并、置信度覆盖、RECENT TTL
 history.rs          ~/.taskpulse/recent.json：版本化 RECENT 原子持久化
 transition/        TransitionEngine：状态迁移 → TaskEvent（通知去重）
-notifier.rs        beep + Windows 通知 + 等待输入 10s 提醒
+notifier.rs        beep + Windows 原生通知（每个 turn 一次）
 tray.rs            聚合优先级 → 图标；popup 窗口生命周期
 watcher.rs         编排循环：文件监听 + 2s 进程扫描 + 3s 远端轮询线程
 ```

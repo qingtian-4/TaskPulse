@@ -51,11 +51,25 @@ fn main() {
             let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
             let pin_item = MenuItem::with_id(app, "pin", "Pin", true, None::<&str>)?;
             let hide_item = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+            let test_notification_item = MenuItem::with_id(
+                app,
+                "test-notification",
+                "Test notification",
+                true,
+                None::<&str>,
+            )?;
             let separator = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
-                &[&show_item, &pin_item, &hide_item, &separator, &quit_item],
+                &[
+                    &show_item,
+                    &pin_item,
+                    &hide_item,
+                    &test_notification_item,
+                    &separator,
+                    &quit_item,
+                ],
             )?;
 
             TrayIconBuilder::with_id("main")
@@ -71,6 +85,7 @@ fn main() {
                         "show" => tray::toggle_popup(&h_show),
                         "pin" => tray::pin_popup(&h_pin),
                         "hide" => tray::hide_popup(&h_hide),
+                        "test-notification" => notifier::test_notification(app.clone()),
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -113,6 +128,7 @@ fn main() {
             watcher::get_status_dir,
             watcher::update_task_attention,
             watcher::install_hooks,
+            notifier::test_notification,
             tray::toggle_pin,
             tray::close_popup
         ])

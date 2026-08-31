@@ -16,7 +16,7 @@
 
 | AgentTray 旧状态 | TaskPulse 新状态 | 语义 |
 |---|---|---|
-| needs-input | `WAITING_INPUT` | 完成当前 turn，等用户 → 通知 + 10s 提醒 beep |
+| needs-input | `WAITING_INPUT` | 完成当前 turn，等用户 → 每个 turn 通知一次 |
 | working / starting | `RUNNING` | 正在执行 |
 | error | `FAILED` | wrapper 捕获的非零退出码 |
 | idle | `IDLE` | 运行中、低 CPU |
