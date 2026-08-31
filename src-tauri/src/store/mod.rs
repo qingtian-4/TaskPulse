@@ -43,7 +43,7 @@ impl TaskStore {
         for snap in incoming {
             let id = snap.id.clone();
             if let Some(existing) = self.active.get_mut(&id) {
-                merge_into(existing, snap, now);
+                merge_into(existing, snap);
             } else if let Some(pos) = self.recent.iter().position(|r| r.id == id) {
                 // The same pane/agent started a NEW run: drop the old RECENT
                 // entry and treat this as an active task again.
@@ -201,22 +201,34 @@ impl TaskStore {
 
 /// Merge a new observation into an existing task.  Rules:
 /// 1. Higher confidence wins outright (EXACT beats HOOK beats INFERRED).
-/// 2. Tie → the more recent observation wins.
-/// 3. Tie → prefer an active status over a terminal/idle one (never let a
-///    stale observation falsely complete a task).
-fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot, now: SystemTime) {
+/// 2. At equal confidence, a fresh observation from the same provider/source
+///    wins even when its native activity timestamp did not change. Lifecycle
+///    metadata (for example a released Hermes turn lease) can change without
+///    appending another message.
+/// 3. A stale observation never replaces a non-stale one. Cross-source ties
+///    still use the provider timestamp and prefer active state on an exact tie.
+fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot) {
     let existing_beats = match confidence_cmp(existing.confidence, new.confidence) {
         std::cmp::Ordering::Less => true,
         std::cmp::Ordering::Greater => false,
         std::cmp::Ordering::Equal => {
-            // Same confidence: prefer the newer update.
-            if new.updated_at > existing.updated_at {
+            if existing.stale != new.stale {
+                !existing.stale
+            } else if existing.source == new.source {
+                // This is the next poll from the same authority. Accept its
+                // lifecycle state even if updated_at still points at the last
+                // message/tool event.
                 false
-            } else if new.updated_at < existing.updated_at {
-                true
             } else {
-                // Tie on time: prefer active over terminal/idle.
-                !new.status.is_active()
+                // Conflicting observations from different sources retain the
+                // old safety rule.
+                if new.updated_at > existing.updated_at {
+                    false
+                } else if new.updated_at < existing.updated_at {
+                    true
+                } else {
+                    !new.status.is_active()
+                }
             }
         }
     };
@@ -240,7 +252,6 @@ fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot, now: SystemTime) {
     } else {
         merged.finished_at = merged.finished_at.or(existing.finished_at);
     }
-    merged.updated_at = now;
     *existing = merged;
 }
 
@@ -621,6 +632,59 @@ mod tests {
         let out = store.merge(Vec::new(), secs(now, 5));
         assert_eq!(out.len(), 1);
         assert_eq!(out[0].status, TaskStatus::WaitingInput);
+    }
+
+    #[test]
+    fn same_provider_can_finish_turn_without_activity_timestamp_change() {
+        let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
+        let observed_at = SystemTime::now();
+        let mut running = t0(
+            "hermes:session-1",
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+        );
+        running.source = TaskSource::Hermes;
+        running.updated_at = observed_at;
+        store.merge(vec![running], observed_at);
+
+        // Hermes releases its turn lease after writing the final assistant
+        // message, so status changes but last_activity_at remains identical.
+        let mut waiting = t0(
+            "hermes:session-1",
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+        );
+        waiting.source = TaskSource::Hermes;
+        waiting.updated_at = observed_at;
+        let out = store.merge(vec![waiting], secs(observed_at, 5));
+
+        assert_eq!(out[0].status, TaskStatus::WaitingInput);
+        assert_eq!(out[0].updated_at, observed_at);
+    }
+
+    #[test]
+    fn stale_same_provider_observation_cannot_replace_fresh_state() {
+        let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
+        let now = SystemTime::now();
+        let mut waiting = t0(
+            "hermes:session-1",
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+        );
+        waiting.source = TaskSource::Hermes;
+        store.merge(vec![waiting], now);
+
+        let mut stale_running = t0(
+            "hermes:session-1",
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+        );
+        stale_running.source = TaskSource::Hermes;
+        stale_running.stale = true;
+        let out = store.merge(vec![stale_running], secs(now, 5));
+
+        assert_eq!(out[0].status, TaskStatus::WaitingInput);
+        assert!(!out[0].stale);
     }
 
     #[test]

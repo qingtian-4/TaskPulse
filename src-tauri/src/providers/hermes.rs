@@ -118,7 +118,16 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
             format!("未命名任务 · {short}")
         });
     let name = truncate(&name, NAME_LEN);
-    let status = if lease.is_some_and(|lease| lease.live) {
+    let waiting_for_user = row
+        .description
+        .as_deref()
+        .is_some_and(description_waits_for_user);
+    let status = if waiting_for_user {
+        // Hermes can keep the turn lease while an approval/input gate is
+        // open. The native activity description is more specific than the
+        // coarse lease and represents a user-blocked turn.
+        TaskStatus::WaitingInput
+    } else if lease.is_some_and(|lease| lease.live) {
         TaskStatus::Running
     } else if row.ended_at.and_then(epoch_to_time).is_some() {
         let failed = row.end_reason.as_deref().is_some_and(|reason| {
@@ -170,6 +179,25 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
         task.message = Some(truncate(d, 120));
     }
     task
+}
+
+fn description_waits_for_user(description: &str) -> bool {
+    let description = description.trim().to_ascii_lowercase();
+    [
+        "waiting for user approval",
+        "waiting for approval",
+        "awaiting user approval",
+        "awaiting approval",
+        "waiting for user input",
+        "awaiting user input",
+        "needs user input",
+        "requires user input",
+        "tool running: clarify",
+        "tool running: ask_user",
+        "tool running: request_user_input",
+    ]
+    .iter()
+    .any(|marker| description.contains(marker))
 }
 
 fn epoch_to_time(secs: f64) -> Option<SystemTime> {
@@ -397,6 +425,40 @@ mod tests {
     }
 
     #[test]
+    fn live_lease_waiting_for_approval_is_waiting_input() {
+        let now = now_secs();
+        let (_dir, db) = make_db(
+            &[("s-approval", "Approval", now, "/home/user/proj", false, 0.0)],
+            &[("s-approval", now + 300.0)],
+        );
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute(
+            "UPDATE sessions SET last_activity_description = 'waiting for user approval (20s elapsed)' WHERE id = 's-approval'",
+            [],
+        )
+        .unwrap();
+
+        let mut provider = HermesProvider::with_db_path(db);
+        let out = provider.poll(SystemTime::now());
+        assert_eq!(out.tasks.len(), 1);
+        assert_eq!(out.tasks[0].status, TaskStatus::WaitingInput);
+        assert_eq!(
+            out.tasks[0].message.as_deref(),
+            Some("waiting for user approval (20s elapsed)")
+        );
+    }
+
+    #[test]
+    fn clarify_tool_is_a_user_input_gate() {
+        assert!(description_waits_for_user("tool running: clarify"));
+        assert!(description_waits_for_user(
+            "waiting for user approval (20s elapsed)"
+        ));
+        assert!(!description_waits_for_user("terminal command running"));
+        assert!(!description_waits_for_user("tool running: read_file"));
+    }
+
+    #[test]
     fn archived_session_skipped() {
         let now = now_secs();
         let (_dir, db) = make_db(
@@ -456,5 +518,21 @@ mod tests {
             .error
             .as_deref()
             .is_some_and(|error| error.contains("sessions")));
+    }
+
+    #[test]
+    #[ignore = "requires a real local Hermes state database"]
+    fn live_hermes_snapshot_against_real_db() {
+        let mut provider = HermesProvider::new();
+        let out = provider.poll(SystemTime::now());
+        println!("authoritative={} error={:?}", out.authoritative, out.error);
+        for task in &out.tasks {
+            println!(
+                "task: id={} name={:?} status={:?} message={:?}",
+                task.id, task.name, task.status, task.message
+            );
+        }
+        assert!(out.authoritative);
+        assert!(out.tasks.iter().all(|task| !task.id.is_empty()));
     }
 }
