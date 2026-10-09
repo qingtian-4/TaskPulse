@@ -72,3 +72,23 @@ tmux_panes = ["%12", "3:0.1"]
 项目、服务器、session 和 pane 匹配均不区分大小写，支持 `*` 通配符。项目列表为空表示禁用该类别；`["*"]` 表示全部。旧配置未声明 `[monitoring]` 时继续监控全部项目，以保持向后兼容。
 
 当前配置在托盘进程启动时读取；修改后重启 `bun run tauri dev` 或生产托盘程序生效。
+
+SSH 别名必须与实际运行 Agent 的账号一致。同一机器的两个别名可以使用不同用户，例如 `Server1` 与 `Server1_wanghy`；只连接到机器并不能读取另一个用户的 `~/.codex`。`remote_hosts.ssh_host` 和 `monitoring.remote_codex.host` 应指向相同别名，同时启用主机并将项目加入范围。远程 Codex 不要求运行在 tmux 中，IDE Remote SSH 的原生 rollout 也可以采集。
+
+## Codex 剩余额度
+
+额度是账号级数据，不是会话进度。面板底部独立显示“本地 Codex 账号剩余额度”，来自本机登录账号的 `account/rateLimits/read`，约每 10 秒发起一次只读查询。刷新按钮会唤醒额度采集线程，不再只刷新会话列表。界面显示成功读取时间；查询失败或超过 60 秒未更新时标记“待更新”，不把旧日志百分比伪装成实时额度。读取中显示“刷新中”。
+
+额度查询不依赖任务是否运行或是否被隐藏，标题列表查询失败也不会丢弃成功的额度响应。优先读取 `codex` 额度桶，校验 5 小时/7 天窗口；不把其他模型的额度套用到这两个标签。
+
+远程 SSH 用户可能登录不同 Codex 账号，因此不再将本地账号额度或某个旧远程会话的 token_count 复制到所有任务。当前版本未单独展示各远程账号额度；底部明确标注本地来源。账号切换、网络故障和 Codex 服务端缓存仍会影响读数，轮询不等于服务端实时推送。
+
+只读诊断（不会标记任务已查看）：
+
+```powershell
+.\src-tauri\target\debug\agent-tray.exe --diagnose --diagnose-seconds=25 --refresh-quota
+powershell -ExecutionPolicy Bypass -File scripts/probe-codex.ps1
+powershell -ExecutionPolicy Bypass -File scripts/probe-codex.ps1 -RemoteHost YourSshAlias
+```
+
+诊断结果包含 `quota_observations` 的成功读取时间，可检查自动轮询与第 5 秒手动唤醒是否真正获得新响应。原生元数据兼容测试：`python3 scripts/test-codex-metadata.py`（也可通过 WSL 执行）。

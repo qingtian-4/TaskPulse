@@ -4,7 +4,7 @@
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import type { HostHealth, ProviderHealth, Source, TaskSnapshot } from '$lib/types';
+  import type { CodexAccountQuota, HostHealth, ProviderHealth, Source, TaskSnapshot } from '$lib/types';
   import { SOURCE_LABEL, STATUS_LABEL, formatAgo } from '$lib/types';
   import { aggregate, localTasks, remoteByHost } from '$lib/utils';
   import AggregatePill from '$lib/components/AggregatePill.svelte';
@@ -57,6 +57,7 @@
   let tasks = $state<TaskSnapshot[]>([]);
   let hosts = $state<HostHealth[]>([]);
   let providers = $state<ProviderHealth[]>([]);
+  let codexQuota = $state<CodexAccountQuota | null>(null);
   let pinned = $state(false);
   let overPopup = $state(false);
   let statusDir = $state('~/.agent-monitor');
@@ -99,14 +100,16 @@
   }
 
   async function refreshSnapshots() {
-    const [nextTasks, nextHosts, nextProviders] = await Promise.all([
+    const [nextTasks, nextHosts, nextProviders, nextQuota] = await Promise.all([
       invoke<TaskSnapshot[]>('get_agents'),
       invoke<HostHealth[]>('get_hosts'),
       invoke<ProviderHealth[]>('get_providers'),
+      invoke<CodexAccountQuota>('get_codex_quota'),
     ]);
     tasks = nextTasks;
     hosts = nextHosts;
     providers = nextProviders;
+    codexQuota = nextQuota;
     ipcError = '';
   }
 
@@ -187,6 +190,9 @@
       }));
       await addListener(listen<ProviderHealth[]>('providers-updated', (event) => {
         providers = event.payload;
+      }));
+      await addListener(listen<CodexAccountQuota>('codex-quota-updated', (event) => {
+        codexQuota = event.payload;
       }));
       await emit('popup-ready', null);
 
@@ -469,14 +475,21 @@
         <span class="flex-1 min-w-0 truncate text-[#aaa89f]" title={selectedTask.activity ?? selectedTask.message ?? ''}>
           {selectedTask.activity ?? selectedTask.message ?? (selectedTask.status === 'running' ? '正在分析' : '当前无运行指令')}
         </span>
-        {#if selectedTask.quota_5h_used_pct != null || selectedTask.quota_1w_used_pct != null}
-          <span class="text-[#c9c161] tabular-nums shrink-0" title="Codex 剩余用量">
-            {selectedTask.quota_5h_used_pct != null ? `5h ${Math.round(quotaRemaining(selectedTask.quota_5h_used_pct))}%` : ''}
-            {selectedTask.quota_5h_used_pct != null && selectedTask.quota_1w_used_pct != null ? ' · ' : ''}
-            {selectedTask.quota_1w_used_pct != null ? `1周 ${Math.round(quotaRemaining(selectedTask.quota_1w_used_pct))}%` : ''}
-          </span>
-        {/if}
       </div>
+    </div>
+  {/if}
+  {#if !demoMode}
+    <div class="border-t border-[#ffffff10] px-4 py-2 flex items-center gap-2 text-[9px] text-[#8f8d86]"
+      title={codexQuota?.error ?? (codexQuota?.observed_at ? `本机登录的 Codex 账号；读取于 ${new Date(codexQuota.observed_at).toLocaleTimeString()}。不代表远程服务器账号额度。` : '正在读取本机 Codex 账号额度')}>
+      <span class="flex-1">本地 Codex 账号剩余额度</span>
+      {#if codexQuota?.quota}
+        <span class="tabular-nums {codexQuota.stale ? 'text-[#8f8d86]' : 'text-[#c9c161]'}">
+          5h {Math.round(quotaRemaining(codexQuota.quota.used_5h_pct))}% · 7天 {Math.round(quotaRemaining(codexQuota.quota.used_1w_pct))}%
+        </span>
+        <span>{codexQuota.refreshing ? '刷新中' : codexQuota.stale ? '待更新' : new Date(codexQuota.observed_at!).toLocaleTimeString([], { hour12: false })}</span>
+      {:else}
+        <span>{codexQuota?.error ? '读取失败' : '读取中'}</span>
+      {/if}
     </div>
   {/if}
 </div>

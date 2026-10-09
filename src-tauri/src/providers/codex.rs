@@ -44,11 +44,11 @@ const DISCOVERY_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
 /// Native titles change rarely, and starting app-server is materially more
 /// expensive than reading an appended rollout. Keep runtime state polling
 /// fast while still synchronizing sidebar renames promptly.
-const APP_SERVER_REFRESH: Duration = Duration::from_secs(15);
-const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(4);
+const APP_SERVER_REFRESH: Duration = Duration::from_secs(10);
+const APP_SERVER_TIMEOUT: Duration = Duration::from_secs(12);
 const PROJECT_LEN: usize = 40;
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, serde::Serialize)]
 pub(crate) struct CodexQuota {
     pub used_5h_pct: f64,
     pub resets_5h_at: Option<i64>,
@@ -56,7 +56,62 @@ pub(crate) struct CodexQuota {
     pub resets_1w_at: Option<i64>,
 }
 
-static NATIVE_QUOTA: OnceLock<RwLock<Option<CodexQuota>>> = OnceLock::new();
+/// Account quota is not a task property: remote SSH users can have different
+/// accounts, and idle rollout logs are not a live usage endpoint.
+#[derive(Debug, Clone, Default, serde::Serialize)]
+pub(crate) struct AccountQuota {
+    quota: Option<CodexQuota>,
+    pub(crate) observed_at: Option<u64>,
+    error: Option<String>,
+    stale: bool,
+    refreshing: bool,
+}
+
+static NATIVE_QUOTA: OnceLock<RwLock<AccountQuota>> = OnceLock::new();
+static NATIVE_REFRESH: OnceLock<mpsc::SyncSender<()>> = OnceLock::new();
+
+#[tauri::command]
+pub(crate) fn get_codex_quota() -> AccountQuota {
+    let state = NATIVE_QUOTA
+        .get_or_init(|| RwLock::new(AccountQuota::default()))
+        .read()
+        .unwrap_or_else(|error| error.into_inner())
+        .clone();
+    quota_at(state, SystemTime::now())
+}
+
+fn quota_at(mut state: AccountQuota, now: SystemTime) -> AccountQuota {
+    let now = epoch_millis(now);
+    state.stale = state.error.is_some()
+        || state
+            .observed_at
+            .is_none_or(|at| now.saturating_sub(at) > 60_000);
+    state
+}
+
+pub(crate) fn request_quota_refresh() {
+    if let Some(sender) = NATIVE_REFRESH.get() {
+        let _ = sender.try_send(());
+    }
+}
+
+fn epoch_millis(now: SystemTime) -> u64 {
+    now.duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn record_quota(state: &mut AccountQuota, result: Result<CodexQuota, String>, now: SystemTime) {
+    state.refreshing = false;
+    match result {
+        Ok(quota) => {
+            state.quota = Some(quota);
+            state.observed_at = Some(epoch_millis(now));
+            state.error = None;
+        }
+        Err(error) => state.error = Some(error),
+    }
+}
 
 pub struct CodexProvider {
     sessions_root: PathBuf,
@@ -80,12 +135,34 @@ impl CodexProvider {
         let db = home.join(".codex/state_5.sqlite");
         provider.state_db = db.exists().then_some(db);
         let (tx, rx) = mpsc::sync_channel(1);
+        let (refresh_tx, refresh_rx) = mpsc::sync_channel(1);
+        let _ = NATIVE_REFRESH.set(refresh_tx);
         provider.native_rx = Some(rx);
         std::thread::spawn(move || loop {
-            if tx.send(query_codex_app_server()).is_err() {
+            let started = Instant::now();
+            NATIVE_QUOTA
+                .get_or_init(|| RwLock::new(AccountQuota::default()))
+                .write()
+                .unwrap_or_else(|error| error.into_inner())
+                .refreshing = true;
+            let result = query_codex_app_server();
+            let quota = match &result {
+                Ok(snapshot) => snapshot.quota.clone(),
+                Err(error) => Err(error.clone()),
+            };
+            record_quota(
+                &mut NATIVE_QUOTA
+                    .get_or_init(|| RwLock::new(AccountQuota::default()))
+                    .write()
+                    .unwrap_or_else(|error| error.into_inner()),
+                quota,
+                SystemTime::now(),
+            );
+            if let Err(mpsc::TrySendError::Disconnected(_)) = tx.try_send(result) {
                 break;
             }
-            std::thread::sleep(APP_SERVER_REFRESH);
+            let _ = refresh_rx.recv_timeout(APP_SERVER_REFRESH.saturating_sub(started.elapsed()));
+            while refresh_rx.try_recv().is_ok() {}
         });
         provider
     }
@@ -165,16 +242,11 @@ impl CodexProvider {
         while let Ok(result) = rx.try_recv() {
             match result {
                 Ok(snapshot) => {
-                    self.native_metadata = snapshot
-                        .threads
-                        .into_iter()
-                        .map(|row| (row.id.clone(), row))
-                        .collect();
-                    if let Some(quota) = snapshot.quota {
-                        *NATIVE_QUOTA
-                            .get_or_init(|| RwLock::new(None))
-                            .write()
-                            .unwrap_or_else(|error| error.into_inner()) = Some(quota);
+                    if let Ok(threads) = snapshot.threads {
+                        self.native_metadata = threads
+                            .into_iter()
+                            .map(|row| (row.id.clone(), row))
+                            .collect();
                     }
                 }
                 Err(error) => {
@@ -351,8 +423,8 @@ struct AppThreadMeta {
 
 #[derive(Debug)]
 struct NativeCodexSnapshot {
-    threads: Vec<AppThreadMeta>,
-    quota: Option<CodexQuota>,
+    threads: Result<Vec<AppThreadMeta>, String>,
+    quota: Result<CodexQuota, String>,
 }
 
 fn query_codex_app_server() -> Result<NativeCodexSnapshot, String> {
@@ -442,10 +514,12 @@ fn query_codex_app_server() -> Result<NativeCodexSnapshot, String> {
     }
     let _ = child.kill();
     let _ = child.wait();
-    let threads = parse_app_server_thread_list(
-        list_response.ok_or_else(|| "app-server thread/list timed out".to_string())?,
-    )?;
-    let quota = quota_response.and_then(|response| parse_app_server_rate_limits(response).ok());
+    let threads = list_response
+        .ok_or_else(|| "app-server thread/list timed out".to_string())
+        .and_then(parse_app_server_thread_list);
+    let quota = quota_response
+        .ok_or_else(|| "app-server account/rateLimits/read timed out".to_string())
+        .and_then(parse_app_server_rate_limits);
     Ok(NativeCodexSnapshot { threads, quota })
 }
 
@@ -469,7 +543,12 @@ fn parse_app_server_rate_limits(value: serde_json::Value) -> Result<CodexQuota, 
     }
     let limits = value
         .get("result")
-        .and_then(|result| result.get("rateLimits"))
+        .and_then(|result| {
+            result
+                .get("rateLimitsByLimitId")
+                .and_then(|limits| limits.get("codex"))
+                .or_else(|| result.get("rateLimits"))
+        })
         .ok_or_else(|| "app-server rate limits returned no data".to_string())?;
     let primary = limits
         .get("primary")
@@ -477,6 +556,22 @@ fn parse_app_server_rate_limits(value: serde_json::Value) -> Result<CodexQuota, 
     let secondary = limits
         .get("secondary")
         .ok_or_else(|| "app-server rate limits returned no weekly window".to_string())?;
+    if limits
+        .get("limitId")
+        .and_then(|value| value.as_str())
+        .is_some_and(|id| id != "codex")
+    {
+        return Err("app-server returned a different model's quota bucket".into());
+    }
+    for (window, expected) in [(primary, 300), (secondary, 10080)] {
+        if window
+            .get("windowDurationMins")
+            .and_then(|value| value.as_i64())
+            .is_some_and(|minutes| minutes != expected)
+        {
+            return Err("app-server quota window is not 5 hours / 7 days".into());
+        }
+    }
     Ok(CodexQuota {
         used_5h_pct: primary
             .get("usedPercent")
@@ -491,22 +586,17 @@ fn parse_app_server_rate_limits(value: serde_json::Value) -> Result<CodexQuota, 
     })
 }
 
-/// Apply the account-level app-server quota to every Codex task. Rollout
-/// token events are per-thread and may be stale, while this endpoint is the
-/// same authoritative account source used by Codex Desktop.
-pub(crate) fn apply_authoritative_quota(tasks: &mut [TaskSnapshot]) {
-    let quota = NATIVE_QUOTA
-        .get()
-        .and_then(|quota| *quota.read().unwrap_or_else(|error| error.into_inner()));
-    let Some(quota) = quota else { return };
+/// Remove legacy per-task quota from the UI. The account-level endpoint is
+/// presented separately with its own successful-read timestamp and errors.
+pub(crate) fn clear_legacy_quota(tasks: &mut [TaskSnapshot]) {
     for task in tasks
         .iter_mut()
         .filter(|task| task.source == TaskSource::Codex)
     {
-        task.quota_5h_used_pct = Some(quota.used_5h_pct);
-        task.quota_5h_resets_at = quota.resets_5h_at;
-        task.quota_1w_used_pct = Some(quota.used_1w_pct);
-        task.quota_1w_resets_at = quota.resets_1w_at;
+        task.quota_5h_used_pct = None;
+        task.quota_5h_resets_at = None;
+        task.quota_1w_used_pct = None;
+        task.quota_1w_resets_at = None;
     }
 }
 
@@ -992,7 +1082,6 @@ pub fn tasks_from_codex_section(
     // non-archived thread in state_5.sqlite: that list can contain hundreds
     // of dormant sessions and bypasses both the rollout limit and lifecycle
     // TTL. Only the recent rollout bodies above are eligible for display.
-    propagate_freshest_quota(&mut out);
     out
 }
 
@@ -1009,33 +1098,6 @@ fn uuid_from_filename(name: &str) -> Option<String> {
         return None;
     }
     Some(parts[5..].join("-"))
-}
-
-/// Copy the freshest rate-limit quota (from the most-recently-updated codex
-/// session) onto every codex task, so the displayed `5h / 1周` usage reflects
-/// the newest codex self-report instead of a stale session's cached value.
-pub(crate) fn propagate_freshest_quota(tasks: &mut [TaskSnapshot]) {
-    let Some(newest) = tasks
-        .iter()
-        .filter(|t| t.source == TaskSource::Codex)
-        .max_by_key(|t| t.updated_at)
-    else {
-        return;
-    };
-    let (h5, r5, h1, r1) = (
-        newest.quota_5h_used_pct,
-        newest.quota_5h_resets_at,
-        newest.quota_1w_used_pct,
-        newest.quota_1w_resets_at,
-    );
-    for t in tasks.iter_mut() {
-        if t.source == TaskSource::Codex {
-            t.quota_5h_used_pct = h5;
-            t.quota_5h_resets_at = r5;
-            t.quota_1w_used_pct = h1;
-            t.quota_1w_resets_at = r1;
-        }
-    }
 }
 
 fn is_synthetic_title(t: &str) -> bool {
@@ -1082,12 +1144,16 @@ fn flush_codex(
             .map(str::to_string)
             .unwrap_or_else(|| state.session_id.clone());
         let title = titles.get(&sid).map(|(t, _, _)| t.as_str());
-        // A1: only surface sessions that carry a readable task title; drop the
-        // synthetic sub-agent boilerplate so the view stays clean.
-        if title.is_none_or(|t| t.trim().is_empty() || is_synthetic_title(t)) {
+        // Drop explicit synthetic sub-agent boilerplate, but never lose an
+        // actual live task just because its title is temporarily unavailable.
+        if title.is_some_and(is_synthetic_title) {
             return;
         }
-        let name = title.map(clean_task_name).unwrap_or_else(|| slug.clone());
+        let name = title
+            .filter(|title| !title.trim().is_empty())
+            .map(clean_task_name)
+            .or_else(|| state.first_user_message.as_deref().map(summarize_prompt))
+            .unwrap_or_else(|| unnamed_task(&sid));
         let mut t = TaskSnapshot::new(
             format!("codex-remote:{host_id}:{sid}"),
             name,
@@ -1208,7 +1274,6 @@ impl Provider for CodexProvider {
         }
         let selected: std::collections::HashSet<PathBuf> = files.into_iter().collect();
         self.cache.retain(|path, _| selected.contains(path));
-        propagate_freshest_quota(&mut tasks);
 
         // Sessions we previously knew but that vanished / went stale → no
         // terminal snapshot needed (the store's TTL handles the drop). We only
@@ -1660,6 +1725,108 @@ mod tests {
         assert_eq!(quota.used_1w_pct, 31.0);
         assert_eq!(quota.resets_5h_at, Some(1788110671));
         assert_eq!(quota.resets_1w_at, Some(1788660994));
+    }
+
+    #[test]
+    fn quota_selects_codex_bucket_not_another_model() {
+        let quota = parse_app_server_rate_limits(serde_json::json!({"result": {
+            "rateLimits": {"primary":{"usedPercent":99},"secondary":{"usedPercent":99}},
+            "rateLimitsByLimitId": {"codex": {
+                "primary":{"usedPercent":7},"secondary":{"usedPercent":75}
+            }}
+        }}))
+        .unwrap();
+        assert_eq!(quota.used_5h_pct, 7.0);
+        assert_eq!(quota.used_1w_pct, 75.0);
+    }
+
+    #[test]
+    fn quota_rejects_wrong_bucket_or_window_instead_of_mislabeling() {
+        for limits in [
+            serde_json::json!({"limitId":"another-model","primary":{"usedPercent":1},"secondary":{"usedPercent":2}}),
+            serde_json::json!({"primary":{"usedPercent":1,"windowDurationMins":60},"secondary":{"usedPercent":2}}),
+            serde_json::json!({"primary":{"usedPercent":1},"secondary":{"usedPercent":2,"windowDurationMins":1440}}),
+        ] {
+            assert!(parse_app_server_rate_limits(
+                serde_json::json!({"result":{"rateLimits":limits}})
+            )
+            .is_err());
+        }
+    }
+
+    #[test]
+    fn failed_quota_refresh_preserves_timestamp_and_marks_cache_stale() {
+        let now = SystemTime::now();
+        let quota = CodexQuota {
+            used_5h_pct: 7.0,
+            used_1w_pct: 75.0,
+            resets_5h_at: None,
+            resets_1w_at: None,
+        };
+        let mut state = AccountQuota::default();
+        record_quota(&mut state, Ok(quota), now);
+        assert!(!quota_at(state.clone(), now).stale);
+        assert!(quota_at(state.clone(), now + Duration::from_secs(61)).stale);
+        record_quota(
+            &mut state,
+            Err("endpoint unavailable".into()),
+            now + Duration::from_secs(2),
+        );
+        assert!(quota_at(state.clone(), now + Duration::from_secs(2)).stale);
+        assert_eq!(state.observed_at, Some(epoch_millis(now)));
+        assert_eq!(state.quota, Some(quota));
+        record_quota(&mut state, Ok(quota), now + Duration::from_secs(3));
+        assert!(state.error.is_none());
+        assert!(!quota_at(state, now + Duration::from_secs(3)).stale);
+    }
+
+    #[test]
+    fn legacy_task_quota_is_not_presented_as_live_account_usage() {
+        let now = SystemTime::now();
+        let mut tasks = vec![
+            TaskSnapshot::new(
+                "local",
+                "local",
+                TaskSource::Codex,
+                TaskStatus::Idle,
+                DetectionConfidence::Hook,
+                now,
+            ),
+            TaskSnapshot::new(
+                "remote",
+                "remote",
+                TaskSource::Codex,
+                TaskStatus::Running,
+                DetectionConfidence::Hook,
+                now,
+            )
+            .with_remote()
+            .with_host("different-account"),
+        ];
+        for task in &mut tasks {
+            task.quota_5h_used_pct = Some(0.0);
+            task.quota_1w_used_pct = Some(5.0);
+        }
+        clear_legacy_quota(&mut tasks);
+        assert!(tasks
+            .iter()
+            .all(|task| task.quota_5h_used_pct.is_none() && task.quota_1w_used_pct.is_none()));
+    }
+
+    #[test]
+    fn remote_session_without_sidebar_title_still_has_stable_id_and_project() {
+        let section = format!("===S:10===F:rollout-2026-10-09T20-12-14-01a12094-0536-7b01-bbb0-c3dc63696fac.jsonl===\n{}\n{}\n",
+            header("/home/user/YOLO-RDD"), serde_json::json!({"timestamp":recent_rfc3339(0),"payload":{"type":"task_started"}}));
+        let tasks =
+            tasks_from_codex_section(&section, "Server1_wanghy", "server1", SystemTime::now());
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+        assert_eq!(tasks[0].project.as_deref(), Some("YOLO-RDD"));
+        assert_eq!(
+            tasks[0].session_id.as_deref(),
+            Some("01a12094-0536-7b01-bbb0-c3dc63696fac")
+        );
+        assert!(tasks[0].name.starts_with("未命名任务"));
     }
 
     #[test]

@@ -37,9 +37,6 @@
     return parts.join(' · ');
   }
 
-  function quotaRemaining(used: number): number {
-    return Math.max(0, Math.min(100, 100 - used));
-  }
 </script>
 
 <li
@@ -58,13 +55,6 @@
           class="text-[9px] font-semibold px-[5px] py-[1px] rounded-[3px] flex-shrink-0 tracking-wide"
           style="color: {sourceColor}; background: {sourceColor}18; border: 0.5px solid {sourceColor}30;"
         >{sourceLabel}</span>
-      {/if}
-      {#if task.quota_5h_used_pct != null || task.quota_1w_used_pct != null}
-        <span class="text-[9px] text-[#c9c161] flex-shrink-0 tabular-nums" title="Codex 剩余用量：5 小时 / 1 周">
-          {task.quota_5h_used_pct != null ? `5h ${Math.round(quotaRemaining(task.quota_5h_used_pct))}%` : ''}
-          {task.quota_5h_used_pct != null && task.quota_1w_used_pct != null ? ' · ' : ''}
-          {task.quota_1w_used_pct != null ? `1周 ${Math.round(quotaRemaining(task.quota_1w_used_pct))}%` : ''}
-        </span>
       {/if}
     </div>
 

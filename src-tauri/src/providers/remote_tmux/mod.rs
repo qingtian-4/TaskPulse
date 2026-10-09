@@ -82,11 +82,13 @@ impl RemoteTmuxProvider {
         self.config.enabled_hosts()
     }
 
-    /// Remote Codex thread-title probe: writes id→title to a temp file
-    /// (avoids stdio quote-nesting) then cats it, so each remote Codex session
-    /// can be named by its task title. No-op if there's no Codex state DB.
-    fn codex_meta_cmd() -> &'static str {
-        "python3 -c 'import sqlite3,json,os;ip=os.path.expanduser(\"~/.codex/session_index.jsonl\");idx={o.get(\"id\"):o.get(\"thread_name\") for o in map(json.loads,open(ip,encoding=\"utf-8\")) if o.get(\"id\")} if os.path.exists(ip) else {};c=sqlite3.connect(os.path.expanduser(\"~/.codex/state_5.sqlite\"));[print(\"META\\t\"+json.dumps({\"id\":r[0],\"t\":(idx.get(r[0]) or r[1] or \"\")[:240],\"cwd\":(r[2] or \"\"),\"p\":bool(r[3])},ensure_ascii=False)) for r in c.execute(\"SELECT id,CASE WHEN length(name)>0 THEN name WHEN length(title)>0 THEN title ELSE first_user_message END,cwd,is_pinned FROM threads WHERE archived=0\")]' 2>/dev/null"
+    /// Base64 avoids nested shell quoting on Windows OpenSSH. The script is
+    /// schema-adaptive and read-only, including on older IDE installations.
+    fn codex_meta_cmd() -> String {
+        use base64::Engine;
+        let script =
+            base64::engine::general_purpose::STANDARD.encode(include_str!("codex_metadata.py"));
+        format!("echo {script} | base64 -d | python3")
     }
 
     /// The single remote command that returns panes + process table + recent
@@ -98,7 +100,7 @@ impl RemoteTmuxProvider {
         // backslash escapes, so the remote output must contain actual tabs.
         let fmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{window_name}";
         format!(
-            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 -printf '%T@ %p\n' 2>/dev/null | sort -rn | head -20 | cut -d' ' -f2- | while read f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===F:$(basename \"$f\")===\"; tail -c 65536 \"$f\"; done; {}; true",
+            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2- | while IFS= read -r f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===F:$(basename \"$f\")===\"; head -n 1 \"$f\"; tail -c 65536 \"$f\"; printf '\n'; done; {}; true",
             parser::PS_MARKER,
             runfile::RUNS_MARKER,
             runfile::CODEX_MARKER,
@@ -988,6 +990,23 @@ mod tests {
         // and every task must carry a stable id.
         for t in &out.tasks {
             assert!(!t.id.is_empty());
+        }
+        if let Ok(project) = std::env::var("TASKPULSE_EXPECT_REMOTE_PROJECT") {
+            assert!(
+                out.tasks
+                    .iter()
+                    .any(|task| task.project.as_deref() == Some(project.as_str())
+                        && provider.config.monitoring.allows(task)),
+                "expected remote project {project} was not discovered"
+            );
+        }
+        if let Ok(title) = std::env::var("TASKPULSE_EXPECT_REMOTE_TITLE") {
+            assert!(
+                out.tasks
+                    .iter()
+                    .any(|task| task.name == title && provider.config.monitoring.allows(task)),
+                "expected native remote title {title} was not discovered"
+            );
         }
     }
 }

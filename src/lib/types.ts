@@ -179,3 +179,15 @@ export interface ProviderHealth {
   last_success?: number;
   message?: string;
 }
+export interface CodexAccountQuota {
+  quota: {
+    used_5h_pct: number;
+    resets_5h_at: number | null;
+    used_1w_pct: number;
+    resets_1w_at: number | null;
+  } | null;
+  observed_at: number | null;
+  error: string | null;
+  stale: boolean;
+  refreshing: boolean;
+}

@@ -146,7 +146,7 @@ static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     let mut tasks = tasks;
-    crate::providers::codex::apply_authoritative_quota(&mut tasks);
+    crate::providers::codex::clear_legacy_quota(&mut tasks);
     let Some(tracker) = ATTENTION_TRACKER.get() else {
         return tasks;
     };
@@ -226,6 +226,10 @@ fn emit_agents(
     let _ = app.emit("agents-updated", tasks);
     let _ = app.emit("hosts-updated", hosts);
     let _ = app.emit("providers-updated", providers);
+    let _ = app.emit(
+        "codex-quota-updated",
+        crate::providers::codex::get_codex_quota(),
+    );
 }
 
 /// Re-emit the last known task list (used when popup opens).
@@ -308,6 +312,7 @@ pub fn get_providers() -> Vec<ProviderHealth> {
 /// intentionally non-blocking and fresh results arrive through update events.
 #[tauri::command]
 pub fn request_refresh() {
+    crate::providers::codex::request_quota_refresh();
     MANUAL_REFRESH_REQUESTED.store(true, Ordering::Release);
 }
 
@@ -777,6 +782,7 @@ pub fn watch(app: AppHandle) {
     std::thread::spawn(move || {
         log::info!("Remote tmux poller started (interval {remote_interval:?})");
         loop {
+            let started = Instant::now();
             let now = SystemTime::now();
             let mut out = remote.poll(now);
             out.tasks.retain(|task| monitoring.allows(task));
@@ -784,7 +790,10 @@ pub fn watch(app: AppHandle) {
                 log::warn!("Remote poller channel closed, exiting");
                 break;
             }
-            match remote_refresh_rx.recv_timeout(remote_interval) {
+            // Start-to-start cadence: do not add SSH execution time on top
+            // of the configured polling interval.
+            match remote_refresh_rx.recv_timeout(remote_interval.saturating_sub(started.elapsed()))
+            {
                 Ok(()) => while remote_refresh_rx.try_recv().is_ok() {},
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
@@ -962,6 +971,17 @@ pub fn diagnose() {
     let config = config::load_config();
     let mut providers = LocalProviders::new(config.monitoring.clone());
     let started = Instant::now();
+    let seconds = std::env::args()
+        .find_map(|arg| {
+            arg.strip_prefix("--diagnose-seconds=")
+                .and_then(|value| value.parse::<u64>().ok())
+        })
+        .unwrap_or(10)
+        .clamp(1, 60);
+    let force_quota_refresh = std::env::args().any(|arg| arg == "--refresh-quota");
+    let mut requested_quota_refresh = false;
+    let mut quota_observations = Vec::new();
+    let mut last_quota_at = None;
     let mut samples = std::collections::HashMap::new();
     let mut first_ready = std::collections::HashMap::new();
     let mut durations = std::collections::HashMap::new();
@@ -972,7 +992,20 @@ pub fn diagnose() {
     let mut store = TaskStore::default();
     let mut engine = TransitionEngine::new();
     let mut event_count = 0;
-    while started.elapsed() < Duration::from_secs(10) {
+    while started.elapsed() < Duration::from_secs(seconds) {
+        if force_quota_refresh
+            && !requested_quota_refresh
+            && started.elapsed() >= Duration::from_secs(5)
+        {
+            crate::providers::codex::request_quota_refresh();
+            requested_quota_refresh = true;
+        }
+        let quota = crate::providers::codex::get_codex_quota();
+        let observed_at = quota.observed_at;
+        if observed_at.is_some() && observed_at != last_quota_at {
+            last_quota_at = observed_at;
+            quota_observations.push(quota);
+        }
         for (name, _, worker) in &providers.workers {
             while let Ok(observation) = worker.observations.try_recv() {
                 *samples.entry(*name).or_insert(0u32) += 1;
@@ -1016,6 +1049,8 @@ pub fn diagnose() {
             "sample_window_ms": started.elapsed().as_millis(), "samples": samples,
             "first_ready_ms": first_ready, "last_poll_ms": durations,
             "providers": providers.health, "tasks": tasks, "transition_count": event_count,
+            "codex_account_quota": crate::providers::codex::get_codex_quota(),
+            "quota_observations": quota_observations, "requested_quota_refresh": requested_quota_refresh,
         })
     );
 }

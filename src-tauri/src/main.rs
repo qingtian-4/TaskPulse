@@ -150,6 +150,7 @@ fn main() {
             watcher::get_agents,
             watcher::get_hosts,
             watcher::get_providers,
+            providers::codex::get_codex_quota,
             watcher::request_refresh,
             watcher::get_status_dir,
             watcher::update_task_attention,
