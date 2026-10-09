@@ -14,7 +14,7 @@ use std::time::SystemTime;
 use crate::domain::TaskSnapshot;
 
 /// Health of a remote host as seen by a provider.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HostStatus {
     Connected,
@@ -84,6 +84,7 @@ impl HostHealth {
 #[derive(Debug)]
 pub struct ProviderOutput {
     pub tasks: Vec<TaskSnapshot>,
+    pub catalog: Vec<TaskSnapshot>,
     pub hosts: Vec<HostHealth>,
     /// Whether this poll is a complete, authoritative view of the provider.
     /// A degraded poll may re-emit stale tasks, but must never reconcile away
@@ -96,6 +97,7 @@ impl Default for ProviderOutput {
     fn default() -> Self {
         Self {
             tasks: Vec::new(),
+            catalog: Vec::new(),
             hosts: Vec::new(),
             authoritative: true,
             error: None,
@@ -107,6 +109,7 @@ impl ProviderOutput {
     pub fn tasks(tasks: Vec<TaskSnapshot>) -> Self {
         Self {
             tasks,
+            catalog: vec![],
             hosts: Vec::new(),
             authoritative: true,
             error: None,
@@ -116,6 +119,7 @@ impl ProviderOutput {
     pub fn degraded(tasks: Vec<TaskSnapshot>, error: impl Into<String>) -> Self {
         Self {
             tasks,
+            catalog: vec![],
             hosts: Vec::new(),
             authoritative: false,
             error: Some(error.into()),

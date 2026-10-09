@@ -6,6 +6,7 @@ mod focus;
 mod focusers;
 mod heuristics;
 mod history;
+mod monitoring;
 mod notifier;
 mod providers;
 mod scanner;
@@ -154,6 +155,10 @@ fn main() {
             watcher::request_refresh,
             watcher::get_status_dir,
             watcher::update_task_attention,
+            monitoring::get_monitoring_settings,
+            monitoring::save_monitoring_settings,
+            monitoring::discover_sources,
+            monitoring::list_discovered_sessions,
             watcher::install_hooks,
             notifier::test_notification,
             tray::toggle_pin,

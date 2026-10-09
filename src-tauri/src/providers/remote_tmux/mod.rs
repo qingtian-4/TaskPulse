@@ -59,6 +59,15 @@ pub struct RemoteTmuxProvider {
 }
 
 impl RemoteTmuxProvider {
+    pub fn reconfigure(&mut self, config: TaskPulseConfig) {
+        let enabled: std::collections::HashSet<_> =
+            config.enabled_hosts().into_iter().map(|h| h.id).collect();
+        self.hosts.retain(|id, _| enabled.contains(id));
+        for id in enabled {
+            self.hosts.entry(id).or_default();
+        }
+        self.config = config;
+    }
     pub fn new(config: TaskPulseConfig, executor: Arc<dyn SshExecutor>) -> Self {
         let mut hosts = HashMap::new();
         for h in &config.remote_hosts {

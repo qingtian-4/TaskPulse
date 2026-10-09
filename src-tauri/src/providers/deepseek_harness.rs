@@ -27,7 +27,6 @@ use crate::providers::{Provider, ProviderOutput};
 use base64::Engine;
 
 /// A session with no activity within this window is treated as dormant.
-const STALE_TTL: Duration = Duration::from_secs(24 * 3600);
 const WSL_TIMEOUT: Duration = Duration::from_secs(15);
 const WSL_DISTRO: &str = "Ubuntu";
 const NAME_LEN: usize = 56;
@@ -88,9 +87,16 @@ impl DeepSeekHarnessProvider {
         Self::with_native_root(Self::desktop_root())
     }
 
-    fn with_native_root(root: PathBuf) -> Self {
+    pub fn with_native_root(root: PathBuf) -> Self {
         Self {
             native_root: Some(root),
+            ..Self::new()
+        }
+    }
+
+    pub fn with_distro(distro: String) -> Self {
+        Self {
+            distro,
             ..Self::new()
         }
     }
@@ -610,10 +616,6 @@ impl Provider for DeepSeekHarnessProvider {
         let mut live_paths = std::collections::HashSet::new();
         for (path, mtime) in sessions {
             let mtime_time = UNIX_EPOCH + Duration::from_secs_f64(mtime);
-            let age = now.duration_since(mtime_time).unwrap_or_default();
-            if age > STALE_TTL {
-                continue;
-            }
             live_paths.insert(path.clone());
 
             let cached = self.cache.get(&path).cloned();
@@ -678,6 +680,10 @@ impl Provider for DeepSeekHarnessProvider {
                 now,
             );
             task.started_at = state.started_at;
+            task.project_path = (!state.cwd.is_empty()).then_some(state.cwd.clone());
+            if task.status == TaskStatus::WaitingInput {
+                task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+            }
             task.activity = if state.status == TaskStatus::Running {
                 state.activity.or_else(|| Some("正在分析".into()))
             } else {

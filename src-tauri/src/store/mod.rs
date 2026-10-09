@@ -29,6 +29,30 @@ impl Default for TaskStore {
 }
 
 impl TaskStore {
+    pub fn retain(&mut self, mut predicate: impl FnMut(&TaskSnapshot) -> bool) {
+        self.active.retain(|_, task| predicate(task));
+        self.recent.retain(|task| predicate(task));
+    }
+
+    pub fn merge_instances(
+        &mut self,
+        incoming: Vec<TaskSnapshot>,
+        authoritative: &HashSet<String>,
+        now: SystemTime,
+    ) -> Vec<TaskSnapshot> {
+        let ids: HashSet<_> = incoming.iter().map(|task| task.id.as_str()).collect();
+        let vanished = self
+            .active
+            .iter()
+            .filter(|(id, task)| {
+                authoritative.contains(&crate::monitoring::source_id(task))
+                    && !ids.contains(id.as_str())
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        self.reconcile_vanished(vanished, now);
+        self.merge(incoming, now)
+    }
     pub fn new(recent_ttl: Duration) -> Self {
         Self {
             active: HashMap::new(),
@@ -262,6 +286,23 @@ fn confidence_cmp(a: DetectionConfidence, b: DetectionConfidence) -> std::cmp::O
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wsl_authority_cannot_reconcile_native_desktop_tasks() {
+        let now = SystemTime::now();
+        let mut store = TaskStore::default();
+        let mut native = TaskSnapshot::new(
+            "native",
+            "native",
+            TaskSource::DeepSeekHarness,
+            crate::domain::TaskStatus::Running,
+            DetectionConfidence::Hook,
+            now,
+        );
+        native.source_instance = Some("desktop".into());
+        store.merge_instances(vec![native], &HashSet::from(["desktop".into()]), now);
+        let out = store.merge_instances(vec![], &HashSet::from(["wsl".into()]), now);
+        assert_eq!(out[0].status, crate::domain::TaskStatus::Running);
+    }
     use crate::domain::{TaskSource, TaskStatus, TerminalInfo};
 
     fn t0(id: &str, status: TaskStatus, conf: DetectionConfidence) -> TaskSnapshot {

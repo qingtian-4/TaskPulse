@@ -4,4 +4,6 @@
 
 pub mod task;
 
-pub use task::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus, TerminalInfo};
+pub use task::{
+    DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus, TerminalInfo, WaitingReason,
+};

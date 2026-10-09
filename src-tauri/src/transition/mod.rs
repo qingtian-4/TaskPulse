@@ -40,7 +40,7 @@ pub enum TaskEvent {
     HostReconnected { host: String },
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 enum EventKind {
     WaitingInput,
     Succeeded,
@@ -50,17 +50,56 @@ enum EventKind {
     HostReconnected,
 }
 
-#[derive(Default)]
+#[derive(Default, serde::Serialize, serde::Deserialize)]
 pub struct TransitionEngine {
     prev: HashMap<String, TaskStatus>,
     prev_turns: HashMap<String, Option<String>>,
     prev_hosts: HashMap<String, HostStatus>,
     notified: HashSet<(String, EventKind)>,
+    #[serde(skip)]
+    path: Option<std::path::PathBuf>,
 }
 
 impl TransitionEngine {
+    pub fn forget(&mut self, ids: &HashSet<String>) {
+        self.prev.retain(|id, _| !ids.contains(id));
+        self.prev_turns.retain(|id, _| !ids.contains(id));
+        self.notified.retain(|(id, _)| !ids.contains(id));
+    }
     pub fn new() -> Self {
         Self::default()
+    }
+
+    pub fn open(path: std::path::PathBuf) -> Self {
+        let mut engine: Self = std::fs::read(&path)
+            .ok()
+            .and_then(|body| serde_json::from_slice(&body).ok())
+            .unwrap_or_default();
+        engine.path = Some(path);
+        engine
+    }
+
+    fn persist(&self) {
+        use std::io::Write;
+        let Some(path) = &self.path else {
+            return;
+        };
+        let result = (|| -> std::io::Result<()> {
+            let body = serde_json::to_vec(self)?;
+            if std::fs::read(path).ok().as_deref() == Some(body.as_slice()) {
+                return Ok(());
+            }
+            let mut file = tempfile::NamedTempFile::new_in(
+                path.parent().unwrap_or(std::path::Path::new(".")),
+            )?;
+            file.write_all(&body)?;
+            file.as_file().sync_all()?;
+            file.persist(path).map_err(|e| e.error)?;
+            Ok(())
+        })();
+        if let Err(error) = result {
+            log::warn!("notification state not persisted: {error}");
+        }
     }
 
     /// Compare the merged task list + host health against the previous
@@ -86,8 +125,12 @@ impl TransitionEngine {
             current.insert(id.clone(), status);
             current_turns.insert(id.clone(), task.turn_key.clone());
 
-            let Some(prev_status) = self.prev.get(&id).copied() else {
-                continue; // new task: no notification on first sighting
+            let prev_status = match self.prev.get(&id).copied() {
+                Some(status) => status,
+                None if task.new_execution && task.turn_key.is_some() && !task.stale => {
+                    TaskStatus::Running
+                }
+                None => continue,
             };
             let turn_changed = task.turn_key.is_some()
                 && self
@@ -112,7 +155,7 @@ impl TransitionEngine {
                 continue;
             }
 
-            if baseline {
+            if baseline && !task.unread || task.stale {
                 continue;
             }
 
@@ -209,6 +252,7 @@ impl TransitionEngine {
         }
         // Hosts no longer reported (provider removed them) are dropped.
 
+        self.persist();
         events
     }
 

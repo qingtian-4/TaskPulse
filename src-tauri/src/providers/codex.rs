@@ -331,6 +331,7 @@ impl CodexProvider {
         task.project = meta
             .and_then(|meta| project_from_cwd(meta.cwd.as_deref()))
             .or_else(|| host.project.clone());
+        task.project_path = meta.and_then(|meta| meta.cwd.clone());
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
         task.quota_5h_used_pct = host.quota_5h_used_pct;
@@ -342,11 +343,16 @@ impl CodexProvider {
         task.message = host.last_message.clone();
         task.activity = host.activity.clone();
         task.turn_key = host.turn_key.clone();
+        task.waiting_reason = host.waiting_reason;
+        task.input_request_id = host.input_request_id.clone();
         task.pinned = meta.is_some_and(|meta| meta.pinned);
         // A completed turn means the agent is waiting on the user — keep the
         // timestamp reflecting the moment the turn finished.
         if host.status == TaskStatus::WaitingInput {
             task.updated_at = host.updated_at;
+            task.waiting_reason = host
+                .waiting_reason
+                .or(Some(crate::domain::WaitingReason::TurnEnded));
         }
         task
     }
@@ -376,6 +382,8 @@ fn normalize_windows_path(path: &str) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct SessionState {
     pub status: TaskStatus,
+    pub waiting_reason: Option<crate::domain::WaitingReason>,
+    pub input_request_id: Option<String>,
     pub started_at: Option<SystemTime>,
     pub updated_at: SystemTime,
     pub project: Option<String>,
@@ -729,6 +737,8 @@ pub fn parse_codex_rollout(
     }
     let mut project: Option<String> = None;
     let mut status = TaskStatus::Unknown;
+    let mut waiting_reason = None;
+    let mut input_request_id = None;
     let mut started_at = None;
     let mut updated_at = now;
     let mut last_message: Option<String> = None;
@@ -784,6 +794,8 @@ pub fn parse_codex_rollout(
         match ptype {
             "task_started" => {
                 status = TaskStatus::Running;
+                waiting_reason = None;
+                input_request_id = None;
                 started_at = ts;
                 activity = None;
                 if let Some(t) = ts {
@@ -860,9 +872,35 @@ pub fn parse_codex_rollout(
                     updated_at = t;
                 }
                 activity = summarize_tool_activity(payload);
+                if payload
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|name| {
+                        name == "request_user_input" || name.ends_with(".request_user_input")
+                    })
+                {
+                    status = TaskStatus::WaitingInput;
+                    waiting_reason = Some(crate::domain::WaitingReason::Question);
+                    input_request_id = payload
+                        .get("call_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_string);
+                }
+            }
+            "function_call_output" => {
+                if input_request_id.is_some()
+                    && payload.get("call_id").and_then(|v| v.as_str())
+                        == input_request_id.as_deref()
+                {
+                    status = TaskStatus::Running;
+                    waiting_reason = None;
+                    input_request_id = None;
+                }
             }
             "task_complete" => {
                 status = TaskStatus::WaitingInput;
+                waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+                input_request_id = None;
                 activity = None;
                 if let Some(t) = payload
                     .get("completed_at")
@@ -877,6 +915,8 @@ pub fn parse_codex_rollout(
             }
             "turn_aborted" | "thread_rolled_back" => {
                 status = TaskStatus::WaitingInput;
+                waiting_reason = Some(crate::domain::WaitingReason::Unknown);
+                input_request_id = None;
                 activity = None;
                 if let Some(t) = ts {
                     updated_at = t;
@@ -888,6 +928,8 @@ pub fn parse_codex_rollout(
 
     let state = SessionState {
         status,
+        waiting_reason,
+        input_request_id,
         started_at,
         updated_at,
         project,
@@ -1074,6 +1116,7 @@ pub fn tasks_from_codex_section(
         .with_host(ssh_host.to_string())
         .with_remote();
         task.project = project_from_cwd(Some(cwd));
+        task.project_path = Some(cwd.clone());
         task.session_id = Some(id.clone());
         task.pinned = true;
         out.push(task);
@@ -1174,6 +1217,9 @@ fn flush_codex(
             .or(state.project)
             .or_else(|| Some(slug.clone()));
         t.updated_at = state.updated_at;
+        t.project_path = titles.get(&sid).map(|(_, cwd, _)| cwd.clone());
+        t.waiting_reason = state.waiting_reason;
+        t.input_request_id = state.input_request_id;
         t.started_at = state.started_at;
         t.message = state.last_message;
         t.activity = state.activity;
@@ -1280,7 +1326,27 @@ impl Provider for CodexProvider {
         // track them so a re-appearing session keeps its identity.
         self.seen = live;
         self.last_tasks = tasks.clone();
-        ProviderOutput::tasks(tasks)
+        let catalog = metadata
+            .values()
+            .map(|meta| {
+                let mut task = TaskSnapshot::new(
+                    format!("codex:{}", meta.id),
+                    thread_task_name(meta),
+                    TaskSource::Codex,
+                    TaskStatus::Unknown,
+                    DetectionConfidence::Hook,
+                    UNIX_EPOCH + Duration::from_secs(meta.updated_at.max(0) as u64),
+                );
+                task.project = project_from_cwd(meta.cwd.as_deref());
+                task.project_path = meta.cwd.clone();
+                task.session_id = Some(meta.id.clone());
+                task
+            })
+            .collect();
+        ProviderOutput {
+            catalog,
+            ..ProviderOutput::tasks(tasks)
+        }
     }
 }
 

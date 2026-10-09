@@ -159,7 +159,13 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             _ => name.clone(),
         };
 
-        let snapshot = TaskSnapshot {
+        let mut snapshot = TaskSnapshot {
+            source_instance: None,
+            project_path: None,
+            waiting_reason: None,
+            input_request_id: None,
+            attention_since: 0,
+            new_execution: false,
             id: format!("file:{name}"),
             name: display_name,
             source: TaskSource::LocalFile,
@@ -202,6 +208,25 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             quota_1w_used_pct: None,
             quota_1w_resets_at: None,
         };
+        snapshot.project_path = val.get("cwd").and_then(|v| v.as_str()).map(str::to_string);
+        snapshot.source = match snapshot.cli.as_deref() {
+            Some("codex") => TaskSource::Codex,
+            Some("hermes") => TaskSource::Hermes,
+            Some("dsh") => TaskSource::DeepSeekHarness,
+            Some("claude-code") => TaskSource::ClaudeCode,
+            Some("gemini") => TaskSource::Gemini,
+            _ => TaskSource::LocalFile,
+        };
+        if snapshot.status == TaskStatus::WaitingInput {
+            snapshot.waiting_reason = val
+                .get("waiting_reason")
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .or(Some(crate::domain::WaitingReason::Unknown));
+            snapshot.input_request_id = val
+                .get("input_request_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+        }
         Some(snapshot)
     } else {
         // Legacy pipe format: "status|message"
@@ -210,6 +235,12 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             None => (status_from_legacy(trimmed), None),
         };
         Some(TaskSnapshot {
+            source_instance: None,
+            project_path: None,
+            waiting_reason: None,
+            input_request_id: None,
+            attention_since: 0,
+            new_execution: false,
             id: format!("file:{name}"),
             name,
             source: TaskSource::LocalFile,

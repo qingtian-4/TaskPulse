@@ -35,7 +35,7 @@ use crate::scanner::Scanner;
 use crate::store::TaskStore;
 use crate::transition::TransitionEngine;
 
-use notify::{Config, EventKind, RecommendedWatcher, RecursiveMode, Watcher};
+use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
@@ -89,6 +89,12 @@ impl From<AgentStatus> for TaskSnapshot {
             name: a.name,
             source,
             status,
+            source_instance: None,
+            project_path: None,
+            waiting_reason: None,
+            input_request_id: None,
+            attention_since: 0,
+            new_execution: false,
             host: None,
             project: None,
             message: (!a.message.is_empty()).then_some(a.message),
@@ -150,13 +156,29 @@ fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     let Some(tracker) = ATTENTION_TRACKER.get() else {
         return tasks;
     };
-    tracker
+    let mut display = tracker
         .lock()
         .unwrap_or_else(|error| {
             log::warn!("ATTENTION_TRACKER mutex poisoned, recovering");
             error.into_inner()
         })
-        .reconcile(tasks)
+        .reconcile(tasks);
+    display.retain(crate::monitoring::allows);
+    display
+}
+
+pub fn known_sessions() -> Vec<TaskSnapshot> {
+    ATTENTION_TRACKER
+        .get()
+        .map(|tracker| tracker.lock().unwrap_or_else(|e| e.into_inner()).known())
+        .unwrap_or_default()
+}
+
+pub fn attention_reason(id: &str) -> String {
+    ATTENTION_TRACKER
+        .get()
+        .map(|tracker| tracker.lock().unwrap_or_else(|e| e.into_inner()).reason(id))
+        .unwrap_or_else(|| "首次采集中".into())
 }
 
 /// Update one task's TaskPulse-owned attention state.
@@ -167,12 +189,24 @@ pub fn update_task_attention(
     action: String,
     pinned: Option<bool>,
 ) -> Result<Vec<TaskSnapshot>, String> {
+    if matches!(action.as_str(), "follow" | "restore" | "pin") {
+        if let Some(task) = crate::monitoring::find_session(&id) {
+            if !crate::monitoring::allows(&task) {
+                return Err("请先启用来源并将项目加入监控范围".into());
+            }
+        }
+    }
     let tracker = ATTENTION_TRACKER
         .get()
         .ok_or_else(|| "attention tracker is still starting".to_string())?;
     let tasks = {
         let mut tracker = tracker.lock().unwrap_or_else(|error| error.into_inner());
         match action.as_str() {
+            "follow" => {
+                tracker.follow(crate::monitoring::find_session(&id).ok_or("未发现该会话")?)?
+            }
+            "ignore" => tracker.set_ignored(&id, true)?,
+            "unignore" => tracker.set_ignored(&id, false)?,
             "viewed" => tracker.mark_viewed(&id)?,
             "hide" => tracker.hide(&id)?,
             "restore" => tracker.restore(&id)?,
@@ -180,6 +214,10 @@ pub fn update_task_attention(
             _ => return Err(format!("unsupported attention action: {action}")),
         }
     };
+    let tasks: Vec<_> = tasks
+        .into_iter()
+        .filter(crate::monitoring::allows)
+        .collect();
     let hosts = get_hosts();
     let providers = get_providers();
     emit_agents(&app, &tasks, &hosts, &providers);
@@ -462,87 +500,135 @@ fn dedup_dsh_over_scan(tasks: &mut Vec<TaskSnapshot>) {
 struct LocalBatch {
     tasks: Vec<TaskSnapshot>,
     authoritative_sources: HashSet<TaskSource>,
+    authoritative_instances: HashSet<String>,
 }
 
 struct LocalProviders {
     file: LocalFileProvider,
-    workers: Vec<(
-        &'static str,
-        Vec<TaskSource>,
-        crate::providers::worker::Worker,
-    )>,
-    latest: std::collections::HashMap<&'static str, ProviderOutput>,
-    observed_at: std::collections::HashMap<&'static str, Instant>,
+    workers: Vec<(String, Vec<TaskSource>, crate::providers::worker::Worker)>,
+    latest: std::collections::HashMap<String, ProviderOutput>,
+    observed_at: std::collections::HashMap<String, Instant>,
     started_at: Instant,
     health: Vec<ProviderHealth>,
-    monitoring: MonitoringConfig,
+    configured: Vec<crate::monitoring::SourceConfig>,
 }
 
 impl LocalProviders {
-    fn new(monitoring: MonitoringConfig) -> Self {
-        use crate::providers::worker::Worker;
-        let mut codex = CodexProvider::new();
-        let mut hermes = HermesProvider::new();
-        let mut dsh = DeepSeekHarnessProvider::new();
-        let mut desktop_dsh = DeepSeekHarnessProvider::desktop();
-        let mut scanner = Scanner::new();
-        Self {
+    fn new(_monitoring: MonitoringConfig) -> Self {
+        let mut providers = Self {
             file: LocalFileProvider::new(),
-            workers: vec![
-                (
-                    "deepseek_harness_desktop",
-                    vec![TaskSource::DeepSeekHarness],
-                    Worker::spawn(Duration::from_secs(1), move |_| {
-                        desktop_dsh.poll(SystemTime::now())
-                    }),
-                ),
-                (
-                    "codex",
-                    vec![TaskSource::Codex],
-                    Worker::spawn(Duration::from_secs(1), move |_| {
-                        codex.poll(SystemTime::now())
-                    }),
-                ),
-                (
-                    "hermes",
-                    vec![TaskSource::Hermes],
-                    Worker::spawn(Duration::from_secs(1), move |_| {
-                        hermes.poll(SystemTime::now())
-                    }),
-                ),
-                (
-                    "deepseek_harness",
-                    vec![TaskSource::DeepSeekHarness],
-                    Worker::spawn(Duration::from_secs(2), move |_| dsh.poll(SystemTime::now())),
-                ),
-                (
-                    "scanner",
-                    vec![TaskSource::ClaudeCode, TaskSource::Gemini],
-                    Worker::spawn(Duration::from_secs(2), move |_| {
-                        ProviderOutput::tasks(scanner.scan().into_iter().map(Into::into).collect())
-                    }),
-                ),
-            ],
+            workers: vec![],
             latest: Default::default(),
             observed_at: Default::default(),
             started_at: Instant::now(),
-            health: [
-                "codex",
-                "hermes",
-                "deepseek_harness",
-                "deepseek_harness_desktop",
-                "scanner",
-            ]
-            .into_iter()
-            .map(|provider| ProviderHealth {
-                provider: provider.to_string(),
+            health: vec![],
+            configured: vec![],
+        };
+        providers.configure(&crate::monitoring::get_monitoring_settings());
+        providers
+    }
+
+    fn configure(&mut self, settings: &crate::monitoring::DashboardSettings) {
+        use crate::monitoring::SourceKind;
+        use crate::providers::worker::Worker;
+        let desired: Vec<_> = settings
+            .sources
+            .iter()
+            .filter(|s| {
+                s.enabled
+                    && !matches!(
+                        s.kind,
+                        SourceKind::RemoteCodex | SourceKind::Tmux | SourceKind::Hooks
+                    )
+            })
+            .cloned()
+            .collect();
+        self.workers.retain(|(id, _, _)| {
+            desired.iter().any(|s| {
+                &s.id == id
+                    && self.configured.iter().any(|old| {
+                        old.id == s.id && old.kind == s.kind && old.location == s.location
+                    })
+            })
+        });
+        let live: HashSet<_> = self.workers.iter().map(|(id, _, _)| id.clone()).collect();
+        self.latest.retain(|id, _| live.contains(id));
+        self.observed_at.retain(|id, _| live.contains(id));
+        self.health.retain(|h| live.contains(&h.provider));
+        for source in &desired {
+            if live.contains(&source.id) {
+                continue;
+            }
+            let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::Codex => Box::new(CodexProvider::new()),
+                SourceKind::Hermes => Box::new(if source.location.is_empty() {
+                    HermesProvider::new()
+                } else {
+                    HermesProvider::with_db_path(PathBuf::from(&source.location))
+                }),
+                SourceKind::DeepseekDesktop => Box::new(if source.location.is_empty() {
+                    DeepSeekHarnessProvider::desktop()
+                } else {
+                    DeepSeekHarnessProvider::with_native_root(PathBuf::from(&source.location))
+                }),
+                SourceKind::DeepseekWsl => Box::new(DeepSeekHarnessProvider::with_distro(
+                    source.location.clone(),
+                )),
+                SourceKind::Scanner => {
+                    let mut scanner = Scanner::new();
+                    let id = source.id.clone();
+                    self.workers.push((
+                        id.clone(),
+                        vec![TaskSource::ClaudeCode, TaskSource::Gemini],
+                        Worker::spawn(Duration::from_secs(2), move |_| {
+                            ProviderOutput::tasks(
+                                scanner.scan().into_iter().map(Into::into).collect(),
+                            )
+                        }),
+                    ));
+                    self.health.push(ProviderHealth {
+                        provider: id,
+                        status: ProviderStatus::Degraded,
+                        last_success: None,
+                        message: Some("首次采集中".into()),
+                    });
+                    continue;
+                }
+                _ => continue,
+            };
+            let source = source.clone();
+            let id = source.id.clone();
+            let interval = if source.kind == SourceKind::DeepseekWsl {
+                2
+            } else {
+                1
+            };
+            self.workers.push((
+                id.clone(),
+                vec![],
+                Worker::spawn(Duration::from_secs(interval), move |_| {
+                    let mut output = provider.poll(SystemTime::now());
+                    for task in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
+                        task.source_instance = Some(source.id.clone());
+                        if !matches!(
+                            source.id.as_str(),
+                            "codex" | "hermes" | "deepseek_harness" | "deepseek_harness_desktop"
+                        ) {
+                            task.id = format!("{}:{}", source.id, task.id);
+                        }
+                    }
+                    crate::monitoring::observe(&output.catalog);
+                    output
+                }),
+            ));
+            self.health.push(ProviderHealth {
+                provider: id,
                 status: ProviderStatus::Degraded,
                 last_success: None,
                 message: Some("首次采集中".into()),
-            })
-            .collect(),
-            monitoring,
+            });
         }
+        self.configured = desired;
     }
 
     fn watch_paths(&self) -> Vec<(PathBuf, RecursiveMode)> {
@@ -569,9 +655,17 @@ impl LocalProviders {
                 paths.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
             }
         }
-        let desktop_root = DeepSeekHarnessProvider::desktop_root();
-        paths.push((desktop_root.join("sessions"), RecursiveMode::Recursive));
-        paths.push((desktop_root.join("storages"), RecursiveMode::Recursive));
+        for source in &self.configured {
+            if source.kind == crate::monitoring::SourceKind::DeepseekDesktop {
+                let root = if source.location.is_empty() {
+                    DeepSeekHarnessProvider::desktop_root()
+                } else {
+                    PathBuf::from(&source.location)
+                };
+                paths.push((root.join("sessions"), RecursiveMode::Recursive));
+                paths.push((root.join("storages"), RecursiveMode::Recursive));
+            }
+        }
         paths
     }
 
@@ -583,7 +677,7 @@ impl LocalProviders {
 
     fn request_native_refresh(&self) {
         for (name, _, worker) in &self.workers {
-            if *name == "codex" || *name == "hermes" || *name == "deepseek_harness_desktop" {
+            if name == "codex" || name == "hermes" || name == "deepseek_harness_desktop" {
                 worker.request_refresh();
             }
         }
@@ -600,8 +694,8 @@ impl LocalProviders {
                     &observation.output,
                     observation.completed_at,
                 );
-                self.latest.insert(name, observation.output);
-                self.observed_at.insert(name, Instant::now());
+                self.latest.insert(name.clone(), observation.output);
+                self.observed_at.insert(name.clone(), Instant::now());
                 changed = true;
             }
             let last = self
@@ -635,20 +729,32 @@ impl LocalProviders {
     }
 
     fn poll(&mut self, now: SystemTime) -> LocalBatch {
+        self.configure(&crate::monitoring::get_monitoring_settings());
         self.collect_ready();
-        let file = self.file.poll(now);
+        let file = if crate::monitoring::get_monitoring_settings()
+            .sources
+            .iter()
+            .any(|s| s.enabled && s.kind == crate::monitoring::SourceKind::Hooks)
+        {
+            self.file.poll(now)
+        } else {
+            ProviderOutput::default()
+        };
         update_provider_health(&mut self.health, "local_file", &file, now);
         let mut authoritative_sources = HashSet::new();
+        let mut authoritative_instances = HashSet::new();
         if file.authoritative {
             authoritative_sources.insert(TaskSource::LocalFile);
+            authoritative_instances.insert("local_file".into());
         }
         let mut tasks = file.tasks;
         for (name, sources, _) in &self.workers {
             if let Some(output) = self.latest.get(name) {
                 if output.authoritative {
                     authoritative_sources.extend(sources.iter().copied());
+                    authoritative_instances.insert(name.clone());
                 }
-                if *name != "scanner" {
+                if name != "scanner" {
                     tasks.extend(output.tasks.clone());
                 }
             }
@@ -664,10 +770,12 @@ impl LocalProviders {
         dedup_codex_over_scan(&mut tasks);
         dedup_hermes_over_scan(&mut tasks);
         dedup_dsh_over_scan(&mut tasks);
-        tasks.retain(|task| self.monitoring.allows(task));
+        crate::monitoring::observe(&tasks);
+        tasks.retain(crate::monitoring::allows);
         LocalBatch {
             tasks,
             authoritative_sources,
+            authoritative_instances,
         }
     }
 }
@@ -705,6 +813,7 @@ fn update_provider_health(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[allow(dead_code)]
 fn merge_and_emit(
     app: &AppHandle,
     store: &mut TaskStore,
@@ -731,6 +840,7 @@ fn merge_and_emit(
 
 /// Refresh local sources (file provider + Codex session metadata + scanner),
 /// dedup, and emit.
+#[allow(dead_code)]
 fn refresh_local(
     app: &AppHandle,
     store: &mut TaskStore,
@@ -761,225 +871,188 @@ fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
 }
 
 pub fn watch(app: AppHandle) {
-    // Ensure status directories exist.
-    if let Some(dir) = status_dir() {
-        let _ = std::fs::create_dir_all(&dir);
+    let dir = config::config_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    if let Some(status) = status_dir() {
+        let _ = std::fs::create_dir_all(status);
     }
-    if let Some(dir) = dirs_next::home_dir().map(|h| h.join(".taskpulse")) {
-        let _ = std::fs::create_dir_all(&dir);
-    }
-
-    let attention_path = dirs_next::home_dir()
-        .map(|home| home.join(".taskpulse/attention.json"))
-        .unwrap_or_else(|| PathBuf::from(".taskpulse/attention.json"));
-    let _ = ATTENTION_TRACKER.set(Mutex::new(AttentionTracker::open(attention_path)));
-
-    let history_path = dirs_next::home_dir()
-        .map(|home| home.join(".taskpulse/recent.json"))
-        .unwrap_or_else(|| PathBuf::from(".taskpulse/recent.json"));
-    let (mut history, restored_recent) = HistoryStore::open(history_path);
+    let settings = crate::monitoring::initialize();
+    let _ = ATTENTION_TRACKER.set(Mutex::new(AttentionTracker::open(
+        dir.join("attention.json"),
+    )));
+    let (mut history, restored) = HistoryStore::open(dir.join("recent.json"));
     let mut store = TaskStore::default();
-    store.restore_recent(restored_recent, SystemTime::now());
-    let mut engine = TransitionEngine::new();
-    let taskpulse_config = config::load_config();
-    let monitoring = taskpulse_config.monitoring.clone();
-    if let Some(tracker) = ATTENTION_TRACKER.get() {
-        if let Ok(mut tracker) = tracker.lock() {
-            tracker.retain(|task| monitoring.allows(task));
-        }
-    }
-    let mut local_providers = LocalProviders::new(monitoring.clone());
-    let scan_interval = Duration::from_secs(2);
-
-    // Remote polling on its own thread (SSH can block for seconds).
-    let mut remote = RemoteTmuxProvider::new(taskpulse_config, Arc::new(SystemSshExecutor::new()));
-    let remote_interval = remote_interval_ms(&remote);
-    let (remote_tx, remote_rx) = std::sync::mpsc::channel::<ProviderOutput>();
-    let (remote_refresh_tx, remote_refresh_rx) = std::sync::mpsc::channel::<()>();
+    store.restore_recent(restored, SystemTime::now());
+    let mut engine = TransitionEngine::open(dir.join("notifications.json"));
+    let mut providers = LocalProviders::new(MonitoringConfig::default());
+    let (remote_tx, remote_rx) = std::sync::mpsc::sync_channel::<(u64, ProviderOutput)>(4);
+    let (refresh_tx, refresh_rx) = std::sync::mpsc::sync_channel::<()>(1);
     std::thread::spawn(move || {
-        log::info!("Remote tmux poller started (interval {remote_interval:?})");
+        let mut revision = crate::monitoring::revision();
+        let mut remote = RemoteTmuxProvider::new(
+            crate::monitoring::remote_config(&settings),
+            Arc::new(SystemSshExecutor::new()),
+        );
         loop {
+            let current = crate::monitoring::revision();
+            if current != revision {
+                remote.reconfigure(crate::monitoring::remote_config(
+                    &crate::monitoring::get_monitoring_settings(),
+                ));
+                revision = current;
+            }
             let started = Instant::now();
-            let now = SystemTime::now();
-            let mut out = remote.poll(now);
-            out.tasks.retain(|task| monitoring.allows(task));
-            if remote_tx.send(out).is_err() {
-                log::warn!("Remote poller channel closed, exiting");
+            let mut output = remote.poll(SystemTime::now());
+            let settings = crate::monitoring::get_monitoring_settings();
+            for task in &mut output.tasks {
+                if let Some(source) = crate::monitoring::source_for(&settings, task) {
+                    task.source_instance = Some(source.id.clone());
+                }
+            }
+            if remote_tx.send((revision, output)).is_err() {
                 break;
             }
-            // Start-to-start cadence: do not add SSH execution time on top
-            // of the configured polling interval.
-            match remote_refresh_rx.recv_timeout(remote_interval.saturating_sub(started.elapsed()))
+            match refresh_rx
+                .recv_timeout(remote_interval_ms(&remote).saturating_sub(started.elapsed()))
             {
-                Ok(()) => while remote_refresh_rx.try_recv().is_ok() {},
+                Ok(()) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
                 Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
             }
         }
     });
-
-    // Last known host health (kept so local refreshes don't lose it).
-    let mut hosts: Vec<HostHealth> = Vec::new();
-
-    // Initial full refresh.
-    let now = SystemTime::now();
-    refresh_local(
-        &app,
-        &mut store,
-        &mut engine,
-        &mut local_providers,
-        &mut history,
-        &hosts,
-        now,
-    );
-
-    let watch_paths = local_providers.watch_paths();
-
-    // Outer restart loop: recreates the file watcher whenever the channel
-    // disconnects (inotify watch limit exhausted, OS resource pressure).
+    let mut hosts = Vec::new();
+    let mut revision = crate::monitoring::revision();
+    let mut active_settings = crate::monitoring::get_monitoring_settings();
+    let mut watcher: Option<RecommendedWatcher> = None;
+    let (watch_tx, watch_rx) = std::sync::mpsc::channel();
+    let mut watch_revision = None;
+    let mut last_scan = Instant::now() - Duration::from_secs(2);
     loop {
-        let (tx, rx) = std::sync::mpsc::channel();
-        let mut watcher = match RecommendedWatcher::new(tx, Config::default()) {
-            Ok(w) => w,
-            Err(e) => {
-                log::error!("Failed to create file watcher: {e}");
-                log::info!("Falling back to scan-only mode");
-                loop {
-                    std::thread::sleep(scan_interval);
-                    if MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
-                        local_providers.request_refresh();
-                        let _ = remote_refresh_tx.send(());
+        let current = crate::monitoring::revision();
+        if revision != current {
+            let next = crate::monitoring::get_monitoring_settings();
+            let affected: HashSet<_> = active_settings
+                .sources
+                .iter()
+                .chain(next.sources.iter())
+                .filter(|source| {
+                    active_settings.sources.iter().find(|s| s.id == source.id)
+                        != next.sources.iter().find(|s| s.id == source.id)
+                })
+                .map(|source| source.id.clone())
+                .collect();
+            if let Some(tracker) = ATTENTION_TRACKER.get() {
+                tracker
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .reset_baselines(&affected);
+            }
+            let removed: HashSet<_> = known_sessions()
+                .iter()
+                .filter(|task| !crate::monitoring::allows(task))
+                .map(|task| task.id.clone())
+                .collect();
+            engine.forget(&removed);
+            store.retain(crate::monitoring::allows);
+            providers.configure(&next);
+            hosts.retain(|host: &HostHealth| {
+                next.sources
+                    .iter()
+                    .any(|s| s.enabled && s.location == host.host)
+            });
+            active_settings = next;
+            revision = current;
+            let _ = refresh_tx.try_send(());
+            last_scan = Instant::now() - Duration::from_secs(2);
+        }
+        if watch_revision != Some(revision) {
+            watcher.take();
+            match RecommendedWatcher::new(watch_tx.clone(), Config::default()) {
+                Ok(mut next) => {
+                    for (path, mode) in providers.watch_paths() {
+                        if path.exists() {
+                            let _ = next.watch(&path, mode);
+                        }
                     }
-                    let now = SystemTime::now();
-                    refresh_local(
-                        &app,
-                        &mut store,
-                        &mut engine,
-                        &mut local_providers,
-                        &mut history,
-                        &hosts,
-                        now,
-                    );
-                    while let Ok(out) = remote_rx.try_recv() {
-                        hosts = out.hosts.clone();
-                        merge_and_emit(
-                            &app,
-                            &mut store,
-                            &mut engine,
-                            out.tasks,
-                            &out.hosts,
-                            &local_providers.health,
-                            &mut history,
-                            now,
-                            true,
-                        );
-                    }
+                    watcher = Some(next);
+                }
+                Err(error) => {
+                    log::warn!("file watcher unavailable; polling remains active: {error}")
                 }
             }
-        };
-
-        for (path, mode) in &watch_paths {
-            if path.exists() {
-                if let Err(error) = watcher.watch(path, *mode) {
-                    log::warn!(
-                        "Failed to watch {}: {error}; polling remains active",
-                        path.display()
-                    );
-                }
+            watch_revision = Some(revision);
+        }
+        let mut force = MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel);
+        while let Ok(event) = watch_rx.try_recv() {
+            if event.is_ok() {
+                providers.request_native_refresh();
+                force = true;
             }
         }
-
-        log::info!(
-            "Watching {:?} + scanning processes + polling remote hosts",
-            watch_paths
-        );
-
-        let debounce = Duration::from_millis(50);
-        let mut last_emit = Instant::now() - debounce;
-        let mut last_scan = Instant::now();
-
-        loop {
-            match rx.recv_timeout(Duration::from_millis(100)) {
-                Ok(Ok(event)) => {
-                    if matches!(
-                        event.kind,
-                        EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
-                    ) && last_emit.elapsed() >= debounce
-                    {
-                        local_providers.request_native_refresh();
-                        let now = SystemTime::now();
-                        refresh_local(
-                            &app,
-                            &mut store,
-                            &mut engine,
-                            &mut local_providers,
-                            &mut history,
-                            &hosts,
-                            now,
-                        );
-                        last_emit = Instant::now();
-                    }
-                }
-                Ok(Err(e)) => log::warn!("Watch error: {e}"),
-                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
-                    log::warn!("File watcher channel disconnected, restarting watcher in 2s");
-                    std::thread::sleep(Duration::from_secs(2));
-                    break;
-                }
-            }
-
-            if MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
-                local_providers.request_refresh();
-                let _ = remote_refresh_tx.send(());
-                let now = SystemTime::now();
-                refresh_local(
-                    &app,
-                    &mut store,
-                    &mut engine,
-                    &mut local_providers,
-                    &mut history,
-                    &hosts,
-                    now,
-                );
-                last_scan = Instant::now();
-                last_emit = Instant::now();
-            }
-
-            // Drain remote poll results (parallel SSH polling thread).
-            while let Ok(out) = remote_rx.try_recv() {
-                let now = SystemTime::now();
-                hosts = out.hosts.clone();
-                merge_and_emit(
-                    &app,
-                    &mut store,
-                    &mut engine,
-                    out.tasks,
-                    &out.hosts,
-                    &local_providers.health,
-                    &mut history,
-                    now,
-                    true,
-                );
-            }
-
-            // Publish worker results immediately, even when another source is slow.
-            if local_providers.collect_ready() || last_scan.elapsed() >= scan_interval {
-                let now = SystemTime::now();
-                refresh_local(
-                    &app,
-                    &mut store,
-                    &mut engine,
-                    &mut local_providers,
-                    &mut history,
-                    &hosts,
-                    now,
-                );
-                last_scan = Instant::now();
-                last_emit = Instant::now();
-            }
+        if force {
+            providers.request_refresh();
+            let _ = refresh_tx.try_send(());
         }
+        let mut changed = force;
+        while let Ok((generation, output)) = remote_rx.try_recv() {
+            if generation != revision {
+                continue;
+            }
+            hosts = output.hosts;
+            crate::monitoring::observe(&output.tasks);
+            let tasks: Vec<_> = output
+                .tasks
+                .into_iter()
+                .filter(crate::monitoring::allows)
+                .collect();
+            if output.authoritative {
+                store.merge_partition(tasks, true, SystemTime::now());
+            } else {
+                store.merge(tasks, SystemTime::now());
+            }
+            changed = true;
+        }
+        if providers.collect_ready() || last_scan.elapsed() >= Duration::from_secs(2) || force {
+            let batch = providers.poll(SystemTime::now());
+            store.retain(crate::monitoring::allows);
+            store.merge_instances(
+                batch.tasks,
+                &batch.authoritative_instances,
+                SystemTime::now(),
+            );
+            last_scan = Instant::now();
+            changed = true;
+        }
+        if changed {
+            let merged = store.merge(Vec::new(), SystemTime::now());
+            let display = reconcile_attention(merged);
+            let mut tracked = known_sessions();
+            tracked.retain(|task| crate::monitoring::allows(task) && !is_ignored(&task.id));
+            let excluded: HashSet<_> = known_sessions()
+                .iter()
+                .filter(|task| !crate::monitoring::allows(task) || is_ignored(&task.id))
+                .map(|task| task.id.clone())
+                .collect();
+            engine.forget(&excluded);
+            let events = engine.apply(&tracked, &hosts, SystemTime::now());
+            crate::notifier::handle_events(&app, &events, &tracked);
+            if let Err(error) = history.save_if_changed(store.recent()) {
+                log::warn!("recent history: {error}");
+            }
+            emit_agents(&app, &display, &hosts, &providers.health);
+        }
+        std::thread::sleep(Duration::from_millis(100));
     }
+}
+
+pub fn is_ignored(id: &str) -> bool {
+    ATTENTION_TRACKER.get().is_some_and(|tracker| {
+        tracker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .ignored(id)
+    })
 }
 
 /// Read-only, bounded sampling of the same workers used by the tray. This
@@ -1005,6 +1078,7 @@ pub fn diagnose() {
     let mut latest = LocalBatch {
         tasks: Vec::new(),
         authoritative_sources: HashSet::new(),
+        authoritative_instances: HashSet::new(),
     };
     let mut store = TaskStore::default();
     let mut engine = TransitionEngine::new();
@@ -1025,19 +1099,19 @@ pub fn diagnose() {
         }
         for (name, _, worker) in &providers.workers {
             while let Ok(observation) = worker.observations.try_recv() {
-                *samples.entry(*name).or_insert(0u32) += 1;
+                *samples.entry(name.clone()).or_insert(0u32) += 1;
                 first_ready
-                    .entry(*name)
+                    .entry(name.clone())
                     .or_insert(started.elapsed().as_millis());
-                durations.insert(*name, observation.duration_ms);
+                durations.insert(name.clone(), observation.duration_ms);
                 update_provider_health(
                     &mut providers.health,
                     name,
                     &observation.output,
                     observation.completed_at,
                 );
-                providers.latest.insert(name, observation.output);
-                providers.observed_at.insert(name, Instant::now());
+                providers.latest.insert(name.clone(), observation.output);
+                providers.observed_at.insert(name.clone(), Instant::now());
             }
         }
         latest = providers.poll(SystemTime::now());

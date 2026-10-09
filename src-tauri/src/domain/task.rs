@@ -45,6 +45,15 @@ pub enum TaskStatus {
     Unknown,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WaitingReason {
+    TurnEnded,
+    Approval,
+    Question,
+    Unknown,
+}
+
 impl TaskStatus {
     /// Attention priority: lower = more urgent.
     /// FAILED > WAITING_INPUT > DISCONNECTED > RUNNING > SUCCEEDED/IDLE > UNKNOWN
@@ -207,6 +216,18 @@ pub struct TaskSnapshot {
     pub name: String,
     pub source: TaskSource,
     pub status: TaskStatus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_instance: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub project_path: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub waiting_reason: Option<WaitingReason>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub input_request_id: Option<String>,
+    #[serde(default)]
+    pub attention_since: u64,
+    #[serde(default)]
+    pub new_execution: bool,
     /// Remote host alias, e.g. "Server3".
     #[serde(skip_serializing_if = "Option::is_none")]
     pub host: Option<String>,
@@ -291,6 +312,12 @@ pub struct TaskSnapshot {
 }
 
 impl TaskSnapshot {
+    pub fn requires_action(&self) -> bool {
+        matches!(
+            self.waiting_reason,
+            Some(WaitingReason::Approval | WaitingReason::Question)
+        )
+    }
     /// Small constructor for tests and providers.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -306,6 +333,12 @@ impl TaskSnapshot {
             name: name.into(),
             source,
             status,
+            source_instance: None,
+            project_path: None,
+            waiting_reason: None,
+            input_request_id: None,
+            attention_since: 0,
+            new_execution: false,
             host: None,
             project: None,
             message: None,

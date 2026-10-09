@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{TaskSnapshot, TaskStatus};
 use crate::providers::sort_tasks;
 
-const ATTENTION_VERSION: u8 = 1;
+const ATTENTION_VERSION: u8 = 2;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AttentionRecord {
@@ -25,33 +25,42 @@ struct AttentionRecord {
     pinned: bool,
     last_turn_key: Option<String>,
     last_status: TaskStatus,
+    #[serde(default)]
+    ignored: bool,
+    #[serde(default)]
+    hidden: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 struct PersistedAttention {
     version: u8,
     records: HashMap<String, AttentionRecord>,
+    #[serde(default)]
+    baselines: HashMap<String, u64>,
 }
 
 pub struct AttentionTracker {
     path: PathBuf,
     records: HashMap<String, AttentionRecord>,
     last_payload: Option<Vec<u8>>,
+    baselines: HashMap<String, u64>,
 }
 
 impl AttentionTracker {
     pub fn open(path: PathBuf) -> Self {
         let payload = std::fs::read(&path).ok();
-        let records = payload
+        let persisted = payload
             .as_deref()
             .and_then(|bytes| serde_json::from_slice::<PersistedAttention>(bytes).ok())
-            .filter(|state| state.version == ATTENTION_VERSION)
-            .map(|state| state.records)
+            .filter(|state| state.version <= ATTENTION_VERSION);
+        let (records, baselines) = persisted
+            .map(|state| (state.records, state.baselines))
             .unwrap_or_default();
         Self {
             path,
             records,
             last_payload: payload,
+            baselines,
         }
     }
 
@@ -66,6 +75,12 @@ impl AttentionTracker {
             let provider_pinned = task.pinned;
             let native_unread = task.native_unread == Some(true);
             let turn_key = effective_turn_key(&task);
+            let now = millis(SystemTime::now());
+            let source = crate::monitoring::source_id(&task);
+            let baseline = self.baselines.entry(source).or_insert(now);
+            let short_finished = turn_key.is_some()
+                && task.status != TaskStatus::Running
+                && millis(task.updated_at) > *baseline;
 
             if let Some(record) = self.records.get_mut(&id) {
                 let changed_turn = turn_key.is_some() && turn_key != record.last_turn_key;
@@ -73,8 +88,12 @@ impl AttentionTracker {
                     task.status == TaskStatus::Running && record.last_status != TaskStatus::Running;
                 let completed =
                     record.last_status == TaskStatus::Running && task.status != TaskStatus::Running;
-                if changed_turn || resumed || completed || native_unread {
+                task.new_execution = !task.stale && (changed_turn || resumed || completed);
+                if !task.stale && (changed_turn || resumed || completed || native_unread) {
                     record.unread = true;
+                }
+                if changed_turn || resumed {
+                    record.hidden = false;
                 }
                 if provider_pinned {
                     record.pinned = true;
@@ -83,6 +102,12 @@ impl AttentionTracker {
                 // Native title/project refreshes update the same record only.
                 task.unread = record.unread;
                 task.pinned = record.pinned;
+                let previous_section = section(&record.task);
+                task.attention_since = if section(&task) != previous_section {
+                    now
+                } else {
+                    record.task.attention_since
+                };
                 record.task = task;
                 if turn_key.is_some() {
                     record.last_turn_key = turn_key;
@@ -93,12 +118,14 @@ impl AttentionTracker {
 
             // Startup baseline: only active/native-unread/native-pinned rows
             // enter the attention list. This prevents bulk history import.
-            if task.status != TaskStatus::Running && !native_unread && !provider_pinned {
-                continue;
-            }
-            let unread = task.status == TaskStatus::Running || native_unread;
+            let unread = task.status == TaskStatus::Running
+                || native_unread
+                || short_finished
+                || task.requires_action();
             task.unread = unread;
             task.pinned = provider_pinned;
+            task.attention_since = now;
+            task.new_execution = short_finished;
             self.records.insert(
                 id,
                 AttentionRecord {
@@ -107,6 +134,8 @@ impl AttentionTracker {
                     task,
                     unread,
                     pinned: provider_pinned,
+                    ignored: false,
+                    hidden: false,
                 },
             );
         }
@@ -119,9 +148,6 @@ impl AttentionTracker {
                 && (record.unread || record.pinned)
             {
                 record.task.stale = true;
-                record.task.status = TaskStatus::Idle;
-                record.task.finished_at = Some(SystemTime::now());
-                record.task.updated_at = SystemTime::now();
             }
         }
 
@@ -147,6 +173,7 @@ impl AttentionTracker {
             .ok_or_else(|| format!("unknown task id: {id}"))?;
         record.unread = false;
         record.pinned = false;
+        record.hidden = true;
         record.task.unread = false;
         record.task.pinned = false;
         self.save_best_effort();
@@ -159,6 +186,7 @@ impl AttentionTracker {
             .get_mut(id)
             .ok_or_else(|| format!("unknown task id: {id}"))?;
         record.unread = true;
+        record.hidden = false;
         record.task.unread = true;
         self.save_best_effort();
         Ok(self.display())
@@ -180,7 +208,11 @@ impl AttentionTracker {
             .records
             .values()
             .filter(|record| {
-                record.task.status == TaskStatus::Running || record.unread || record.pinned
+                !record.ignored
+                    && (record.task.status == TaskStatus::Running
+                        || (!record.hidden && record.task.requires_action())
+                        || record.unread
+                        || record.pinned)
             })
             .map(|record| {
                 let mut task = record.task.clone();
@@ -193,11 +225,82 @@ impl AttentionTracker {
         tasks
     }
 
+    #[allow(dead_code)]
     pub fn retain<F>(&mut self, mut predicate: F)
     where
         F: FnMut(&TaskSnapshot) -> bool,
     {
         self.records.retain(|_, record| predicate(&record.task));
+        self.save_best_effort();
+    }
+
+    pub fn known(&self) -> Vec<TaskSnapshot> {
+        self.records
+            .values()
+            .map(|record| record.task.clone())
+            .collect()
+    }
+
+    pub fn reason(&self, id: &str) -> String {
+        match self.records.get(id) {
+            Some(record) if record.ignored => "已设为不再监控".into(),
+            Some(record)
+                if record.task.status == TaskStatus::Running
+                    || record.task.requires_action()
+                    || record.unread
+                    || record.pinned =>
+            {
+                "正在关注".into()
+            }
+            Some(_) => "历史会话 / 已查看或隐藏本轮".into(),
+            None => "历史会话，尚未加入关注".into(),
+        }
+    }
+
+    pub fn ignored(&self, id: &str) -> bool {
+        self.records.get(id).is_some_and(|r| r.ignored)
+    }
+
+    pub fn follow(&mut self, task: TaskSnapshot) -> Result<Vec<TaskSnapshot>, String> {
+        let record = self
+            .records
+            .entry(task.id.clone())
+            .or_insert(AttentionRecord {
+                last_turn_key: effective_turn_key(&task),
+                last_status: task.status,
+                task,
+                unread: true,
+                pinned: false,
+                ignored: false,
+                hidden: false,
+            });
+        record.unread = true;
+        record.ignored = false;
+        record.hidden = false;
+        record.task.unread = true;
+        record.task.attention_since = millis(SystemTime::now());
+        self.save_best_effort();
+        Ok(self.display())
+    }
+
+    pub fn set_ignored(&mut self, id: &str, ignored: bool) -> Result<Vec<TaskSnapshot>, String> {
+        let record = self
+            .records
+            .get_mut(id)
+            .ok_or_else(|| format!("unknown task id: {id}"))?;
+        record.ignored = ignored;
+        if !ignored {
+            record.unread = true;
+        }
+        self.save_best_effort();
+        Ok(self.display())
+    }
+
+    pub fn reset_baselines(&mut self, sources: &HashSet<String>) {
+        let now = millis(SystemTime::now());
+        for source in sources {
+            self.baselines.insert(source.clone(), now);
+        }
         self.save_best_effort();
     }
 
@@ -211,6 +314,7 @@ impl AttentionTracker {
         let payload = serde_json::to_vec_pretty(&PersistedAttention {
             version: ATTENTION_VERSION,
             records: self.records.clone(),
+            baselines: self.baselines.clone(),
         })?;
         if self.last_payload.as_deref() == Some(payload.as_slice()) {
             return Ok(());
@@ -223,6 +327,25 @@ impl AttentionTracker {
         temporary.persist(&self.path).map_err(|error| error.error)?;
         self.last_payload = Some(payload);
         Ok(())
+    }
+}
+
+fn millis(time: SystemTime) -> u64 {
+    time.duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+fn section(task: &TaskSnapshot) -> u8 {
+    if task.stale {
+        0
+    } else if task.status == TaskStatus::Failed || task.requires_action() {
+        0
+    } else if task.status == TaskStatus::Running {
+        1
+    } else if task.unread {
+        2
+    } else {
+        3
     }
 }
 
@@ -243,6 +366,39 @@ fn effective_turn_key(task: &TaskSnapshot) -> Option<String> {
 mod tests {
     use super::*;
     use crate::domain::{DetectionConfidence, TaskSource};
+
+    #[test]
+    fn completed_short_task_enters_after_baseline_and_survives_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        let mut old = task("old", TaskStatus::WaitingInput, Some("old-turn"));
+        old.updated_at = SystemTime::UNIX_EPOCH;
+        assert!(tracker.reconcile(vec![old]).is_empty());
+        let mut done = task("short", TaskStatus::WaitingInput, Some("new-turn"));
+        done.updated_at = SystemTime::now() + std::time::Duration::from_secs(1);
+        let display = tracker.reconcile(vec![done.clone()]);
+        assert_eq!(display.len(), 1);
+        assert!(display[0].new_execution);
+        let mut restored = AttentionTracker::open(path);
+        restored.set_ignored("short", true).unwrap();
+        done.status = TaskStatus::Running;
+        done.turn_key = Some("another-turn".into());
+        assert!(restored.reconcile(vec![done]).is_empty());
+        assert_eq!(restored.set_ignored("short", false).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn viewing_a_gate_keeps_it_visible_but_hiding_this_turn_dismisses_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let mut gate = task("gate", TaskStatus::WaitingInput, Some("turn"));
+        gate.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        tracker.reconcile(vec![gate]);
+        assert_eq!(tracker.mark_viewed("gate").unwrap().len(), 1);
+        assert!(tracker.hide("gate").unwrap().is_empty());
+        assert_eq!(tracker.restore("gate").unwrap().len(), 1);
+    }
 
     fn task(id: &str, status: TaskStatus, turn: Option<&str>) -> TaskSnapshot {
         let mut task = TaskSnapshot::new(

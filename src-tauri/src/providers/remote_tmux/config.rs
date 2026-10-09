@@ -94,6 +94,7 @@ impl Default for MonitoringConfig {
 }
 
 impl MonitoringConfig {
+    #[allow(dead_code)]
     pub fn allows(&self, task: &TaskSnapshot) -> bool {
         match (task.source, task.remote) {
             (TaskSource::Codex, false) => {
@@ -114,6 +115,7 @@ impl MonitoringConfig {
     }
 }
 
+#[allow(dead_code)]
 fn project_allowed(project: Option<&str>, patterns: &[String]) -> bool {
     patterns.iter().any(|pattern| {
         pattern == "*" || project.is_some_and(|project| wildcard_match(pattern, project))

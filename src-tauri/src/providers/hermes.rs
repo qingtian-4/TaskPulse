@@ -40,7 +40,6 @@ impl HermesProvider {
     }
 
     /// Constructor for tests: point at a specific DB.
-    #[cfg(test)]
     pub fn with_db_path(path: PathBuf) -> Self {
         Self {
             db_path: Some(path),
@@ -63,7 +62,7 @@ impl HermesProvider {
 }
 
 /// Find the Hermes state DB across candidate locations.
-fn discover_db() -> Option<PathBuf> {
+pub fn discover_db() -> Option<PathBuf> {
     if let Some(p) = std::env::var_os("HERMES_STATE_DB").map(PathBuf::from) {
         if p.exists() {
             return Some(p);
@@ -165,6 +164,25 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
         now,
     );
     task.project = project;
+    task.project_path = row.cwd.clone().or_else(|| row.git_repo_root.clone());
+    if task.status == TaskStatus::WaitingInput {
+        task.waiting_reason = Some(if waiting_for_user {
+            if row
+                .description
+                .as_deref()
+                .is_some_and(|d| d.to_ascii_lowercase().contains("approval"))
+            {
+                crate::domain::WaitingReason::Approval
+            } else {
+                crate::domain::WaitingReason::Question
+            }
+        } else {
+            crate::domain::WaitingReason::TurnEnded
+        });
+        if waiting_for_user {
+            task.input_request_id = row.description.clone();
+        }
+    }
     task.cli = Some("hermes".into());
     task.session_id = Some(row.id.clone());
     task.started_at = row.started_at.and_then(epoch_to_time).or(Some(at));
@@ -325,6 +343,11 @@ impl Provider for HermesProvider {
             }
         };
 
+        let catalog = rows
+            .iter()
+            .filter(|row| !row.archived)
+            .map(|row| row_to_snapshot(row, leases.get(&row.id).copied(), now))
+            .collect();
         let mut tasks = Vec::new();
         for row in rows {
             if row.archived {
@@ -347,7 +370,10 @@ impl Provider for HermesProvider {
         }
 
         self.last_tasks = tasks.clone();
-        ProviderOutput::tasks(tasks)
+        ProviderOutput {
+            catalog,
+            ..ProviderOutput::tasks(tasks)
+        }
     }
 }
 
