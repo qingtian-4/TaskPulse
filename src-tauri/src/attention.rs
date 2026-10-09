@@ -83,7 +83,12 @@ impl AttentionTracker {
                 && millis(task.updated_at) > *baseline;
 
             if let Some(record) = self.records.get_mut(&id) {
-                let changed_turn = turn_key.is_some() && turn_key != record.last_turn_key;
+                let changed_turn = turn_key.is_some()
+                    && turn_key != record.last_turn_key
+                    && (task.status == TaskStatus::Running
+                        || millis(task.updated_at) > *baseline
+                        || native_unread
+                        || record.last_status == TaskStatus::Running);
                 let resumed =
                     task.status == TaskStatus::Running && record.last_status != TaskStatus::Running;
                 let completed =
@@ -473,6 +478,19 @@ mod tests {
         renamed.name = "Renamed".into();
         assert!(tracker.reconcile(vec![renamed]).is_empty());
         assert_eq!(tracker.records["a"].task.name, "Renamed");
+    }
+
+    #[test]
+    fn adopting_a_new_provider_key_for_old_viewed_history_is_not_a_new_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let mut historical = task("old", TaskStatus::WaitingInput, None);
+        historical.updated_at = SystemTime::UNIX_EPOCH;
+        tracker.reconcile(vec![historical.clone()]);
+        tracker.mark_viewed("old").unwrap();
+        historical.turn_key = Some("settled:old-activity".into());
+        assert!(tracker.reconcile(vec![historical]).is_empty());
+        assert!(!tracker.known()[0].new_execution);
     }
 
     #[test]

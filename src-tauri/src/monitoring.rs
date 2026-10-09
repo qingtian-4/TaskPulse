@@ -406,6 +406,9 @@ fn project_matches(pattern: &str, task: &TaskSnapshot) -> bool {
 }
 
 pub fn exclusion(settings: &DashboardSettings, task: &TaskSnapshot) -> Option<&'static str> {
+    if task.internal {
+        return Some("Agent 内部服务会话，不属于用户任务");
+    }
     let Some(source) = source_for(settings, task) else {
         return Some("来源已移除");
     };
@@ -454,6 +457,7 @@ pub fn observe(tasks: &[TaskSnapshot]) {
                 previous.name = task.name.clone();
                 previous.project = task.project.clone();
                 previous.project_path = task.project_path.clone();
+                previous.internal = task.internal;
                 continue;
             }
         }
@@ -469,6 +473,11 @@ pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
         .unwrap_or_else(|e| e.into_inner())
         .catalog
         .clone();
+    for task in tasks.iter_mut() {
+        if let Some(meta) = catalog.get(&task.id) {
+            task.internal = meta.internal;
+        }
+    }
     for mut known in crate::watcher::known_sessions() {
         if ids.contains(&known.id) || !allows(&known) {
             continue;
@@ -477,6 +486,7 @@ pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
             known.name = meta.name.clone();
             known.project = meta.project.clone();
             known.project_path = meta.project_path.clone();
+            known.internal = meta.internal;
             known.new_execution = false;
             if known.status == crate::domain::TaskStatus::Running {
                 known.stale = true;
@@ -519,6 +529,7 @@ pub fn list_discovered_sessions(
     let query = query.unwrap_or_default().to_lowercase();
     let mut items: Vec<_> = tasks
         .into_values()
+        .filter(|task| !task.internal)
         .filter(|task| {
             source
                 .as_ref()
@@ -568,6 +579,7 @@ pub fn find_session(id: &str) -> Option<TaskSnapshot> {
             task.name = meta.name.clone();
             task.project = meta.project.clone();
             task.project_path = meta.project_path.clone();
+            task.internal = meta.internal;
             return Some(task);
         }
     }
@@ -681,6 +693,23 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
 mod tests {
     use super::*;
     use crate::domain::{DetectionConfidence, TaskStatus};
+    #[test]
+    fn internal_service_sessions_are_outside_attention_and_notification_scope() {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        settings.sources[0].enabled = true;
+        settings.sources[0].projects = vec!["*".into()];
+        let mut task = TaskSnapshot::new(
+            "codex:a",
+            "Guardian review",
+            TaskSource::Codex,
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            std::time::SystemTime::now(),
+        );
+        assert!(exclusion(&settings, &task).is_none());
+        task.internal = true;
+        assert!(exclusion(&settings, &task).is_some());
+    }
     #[test]
     fn legacy_scopes_and_source_identity_are_preserved() {
         let mut cfg = TaskPulseConfig::default();

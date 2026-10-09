@@ -90,6 +90,7 @@ impl From<AgentStatus> for TaskSnapshot {
             source,
             status,
             source_instance: None,
+            internal: false,
             project_path: None,
             tmux_session: None,
             tmux_pane: None,
@@ -932,6 +933,41 @@ fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
     Duration::from_millis(min_ms.max(500))
 }
 
+/// Ignore read/access events and our own atomic state writes. Otherwise each
+/// attention save wakes every collector, which saves attention again.
+fn meaningful_file_event(event: &notify::Event) -> bool {
+    if !matches!(
+        event.kind,
+        notify::EventKind::Create(_) | notify::EventKind::Modify(_) | notify::EventKind::Remove(_)
+    ) {
+        return false;
+    }
+    event.paths.iter().any(|path| {
+        let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+        if name.starts_with('.')
+            || name.ends_with("-shm")
+            || matches!(
+                name,
+                "attention.json"
+                    | "recent.json"
+                    | "notifications.json"
+                    | "config.toml"
+                    | "config.toml.pre-dashboard.bak"
+            )
+        {
+            return false;
+        }
+        name.ends_with(".status")
+            || name.ends_with(".json")
+            || name.ends_with(".jsonl")
+            || name.ends_with(".zstd")
+            || name.ends_with(".db")
+            || name.ends_with(".db-wal")
+            || name.ends_with(".sqlite")
+            || name.ends_with(".sqlite-wal")
+    })
+}
+
 pub fn watch(app: AppHandle) {
     let dir = config::config_dir();
     let _ = std::fs::create_dir_all(&dir);
@@ -1061,7 +1097,7 @@ pub fn watch(app: AppHandle) {
         }
         let mut force = MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel);
         while let Ok(event) = watch_rx.try_recv() {
-            if event.is_ok() {
+            if event.as_ref().is_ok_and(meaningful_file_event) {
                 providers.request_native_refresh();
                 force = true;
             }
@@ -1251,6 +1287,42 @@ pub fn diagnose() {
 mod tests {
     use super::*;
     use crate::domain::{DetectionConfidence, TaskStatus};
+
+    #[test]
+    fn watcher_ignores_its_own_state_files_and_reads_but_keeps_native_writes() {
+        use notify::{
+            event::{AccessKind, ModifyKind},
+            Event, EventKind,
+        };
+        let write = |name: &str| {
+            Event::new(EventKind::Modify(ModifyKind::Data(
+                notify::event::DataChange::Any,
+            )))
+            .add_path(PathBuf::from(name))
+        };
+        for path in [
+            "attention.json",
+            "recent.json",
+            "notifications.json",
+            ".tmpAbcd",
+            "state_5.sqlite-shm",
+        ] {
+            assert!(!meaningful_file_event(&write(path)));
+        }
+        for path in [
+            "task.status",
+            "state_5.sqlite-wal",
+            "state.db-wal",
+            "rollout.jsonl",
+            "session.v4.jsonl.zstd",
+            "session-1.json",
+        ] {
+            assert!(meaningful_file_event(&write(path)));
+        }
+        assert!(!meaningful_file_event(
+            &Event::new(EventKind::Access(AccessKind::Any)).add_path(PathBuf::from("state.db"))
+        ));
+    }
 
     fn task_with_terminal(
         id: &str,

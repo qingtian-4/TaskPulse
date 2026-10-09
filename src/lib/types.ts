@@ -30,6 +30,7 @@ export interface TerminalInfo {
 
 export interface TaskSnapshot {
   source_instance?: string;
+  internal?: boolean;
   project_path?: string;
   tmux_session?: string;
   tmux_pane?: string;

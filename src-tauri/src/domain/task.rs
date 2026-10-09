@@ -218,6 +218,9 @@ pub struct TaskSnapshot {
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_instance: Option<String>,
+    /// Provider-identified internal service work, not a user coding task.
+    #[serde(default)]
+    pub internal: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -341,6 +344,7 @@ impl TaskSnapshot {
             source,
             status,
             source_instance: None,
+            internal: false,
             project_path: None,
             tmux_session: None,
             tmux_pane: None,

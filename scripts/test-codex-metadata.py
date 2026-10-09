@@ -30,7 +30,7 @@ class MetadataTests(unittest.TestCase):
 
     def test_older_schema_without_name_pin_or_archived(self):
         self.legacy_db()
-        self.assertEqual(self.probe(), [{'id': 'thread-1', 't': 'Native task', 'cwd': '/home/user/YOLO-RDD', 'p': False}])
+        self.assertEqual(self.probe(), [{'id': 'thread-1', 't': 'Native task', 'cwd': '/home/user/YOLO-RDD', 'p': False, 'u': 0}])
 
     def test_index_rename_and_incomplete_index_line(self):
         self.legacy_db()

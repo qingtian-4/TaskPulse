@@ -68,7 +68,7 @@ pub(crate) struct AccountQuota {
 }
 
 static NATIVE_QUOTA: OnceLock<RwLock<AccountQuota>> = OnceLock::new();
-static NATIVE_REFRESH: OnceLock<mpsc::SyncSender<()>> = OnceLock::new();
+static NATIVE_REFRESH: OnceLock<std::sync::Mutex<Option<mpsc::SyncSender<()>>>> = OnceLock::new();
 
 #[tauri::command]
 pub(crate) fn get_codex_quota() -> AccountQuota {
@@ -90,8 +90,10 @@ fn quota_at(mut state: AccountQuota, now: SystemTime) -> AccountQuota {
 }
 
 pub(crate) fn request_quota_refresh() {
-    if let Some(sender) = NATIVE_REFRESH.get() {
-        let _ = sender.try_send(());
+    if let Some(slot) = NATIVE_REFRESH.get() {
+        if let Some(sender) = slot.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+            let _ = sender.try_send(());
+        }
     }
 }
 
@@ -136,9 +138,19 @@ impl CodexProvider {
         provider.state_db = db.exists().then_some(db);
         let (tx, rx) = mpsc::sync_channel(1);
         let (refresh_tx, refresh_rx) = mpsc::sync_channel(1);
-        let _ = NATIVE_REFRESH.set(refresh_tx);
+        *NATIVE_REFRESH
+            .get_or_init(|| std::sync::Mutex::new(None))
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(refresh_tx);
         provider.native_rx = Some(rx);
         std::thread::spawn(move || loop {
+            if !crate::monitoring::get_monitoring_settings()
+                .sources
+                .iter()
+                .any(|s| s.enabled && s.kind == crate::monitoring::SourceKind::Codex)
+            {
+                break;
+            }
             let started = Instant::now();
             NATIVE_QUOTA
                 .get_or_init(|| RwLock::new(AccountQuota::default()))
@@ -162,6 +174,9 @@ impl CodexProvider {
                 break;
             }
             let _ = refresh_rx.recv_timeout(APP_SERVER_REFRESH.saturating_sub(started.elapsed()));
+            if matches!(refresh_rx.try_recv(), Err(mpsc::TryRecvError::Disconnected)) {
+                break;
+            }
             while refresh_rx.try_recv().is_ok() {}
         });
         provider
@@ -196,7 +211,7 @@ impl CodexProvider {
         .map_err(|error| format!("open state_5.sqlite failed: {error}"))?;
         let mut stmt = conn
             .prepare(
-                "SELECT id, name, title, first_user_message, cwd, rollout_path, updated_at, is_pinned \
+                "SELECT id, name, title, first_user_message, cwd, rollout_path, updated_at, is_pinned, source \
                  FROM threads WHERE archived = 0",
             )
             .map_err(|error| format!("query Codex thread metadata failed: {error}"))?;
@@ -212,6 +227,10 @@ impl CodexProvider {
                     rollout_path: row.get(5)?,
                     updated_at: row.get(6)?,
                     pinned: row.get(7)?,
+                    internal: internal_guardian(
+                        &serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(8)?)
+                            .unwrap_or_default(),
+                    ),
                 })
             })
             .map_err(|error| format!("read Codex thread metadata failed: {error}"))?;
@@ -346,6 +365,7 @@ impl CodexProvider {
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
         task.pinned = meta.is_some_and(|meta| meta.pinned);
+        task.internal = meta.is_some_and(|meta| meta.internal);
         // A completed turn means the agent is waiting on the user — keep the
         // timestamp reflecting the moment the turn finished.
         if host.status == TaskStatus::WaitingInput {
@@ -409,6 +429,7 @@ struct ThreadMeta {
     rollout_path: Option<String>,
     updated_at: i64,
     pinned: bool,
+    internal: bool,
 }
 
 /// Metadata exposed by Codex's own app-server. Its `name` field is the same
@@ -427,6 +448,12 @@ struct AppThreadMeta {
     path: Option<String>,
     #[serde(default)]
     updated_at: i64,
+    #[serde(default)]
+    source: serde_json::Value,
+}
+
+fn internal_guardian(source: &serde_json::Value) -> bool {
+    source.pointer("/subagent/other").and_then(|v| v.as_str()) == Some("guardian")
 }
 
 #[derive(Debug)]
@@ -643,6 +670,7 @@ impl ThreadMeta {
             rollout_path: meta.path.clone(),
             updated_at: meta.updated_at,
             pinned: false,
+            internal: internal_guardian(&meta.source),
         }
     }
 }
@@ -1389,6 +1417,7 @@ impl Provider for CodexProvider {
             task.project = project_from_cwd(meta.cwd.as_deref());
             task.session_id = Some(meta.id.clone());
             task.pinned = true;
+            task.internal = meta.internal;
             tasks.push(task);
         }
         let selected: std::collections::HashSet<PathBuf> = files.into_iter().collect();
@@ -1413,6 +1442,7 @@ impl Provider for CodexProvider {
                 task.project = project_from_cwd(meta.cwd.as_deref());
                 task.project_path = meta.cwd.clone();
                 task.session_id = Some(meta.id.clone());
+                task.internal = meta.internal;
                 task
             })
             .collect();
@@ -1827,8 +1857,54 @@ mod tests {
             rollout_path: None,
             updated_at: 0,
             pinned: false,
+            internal: false,
         };
         assert_eq!(thread_task_name(&meta), "评审 AgentTray 监控界面");
+    }
+
+    #[test]
+    fn guardian_is_identified_by_native_source_not_its_title() {
+        let rows = parse_app_server_thread_list(serde_json::json!({
+            "result": {"data": [
+                {"id":"internal", "name":"Renamed service", "source":{"subagent":{"other":"guardian"}}},
+                {"id":"user", "name":"Guardian review", "source":"appServer"},
+                {"id":"worker", "source":{"subagent":{"other":"coding"}}}
+            ]}
+        })).unwrap();
+        assert!(ThreadMeta::from_app_server(&rows[0]).internal);
+        assert!(!ThreadMeta::from_app_server(&rows[1]).internal);
+        assert!(!ThreadMeta::from_app_server(&rows[2]).internal);
+    }
+
+    #[test]
+    fn native_database_marks_guardian_catalog_without_hiding_user_title_matches() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = dir.path().join("state.sqlite");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE threads (id TEXT, name TEXT, title TEXT, first_user_message TEXT, cwd TEXT, rollout_path TEXT, updated_at INTEGER, is_pinned INTEGER, source TEXT, archived INTEGER);").unwrap();
+        for (id, source) in [
+            ("internal", r#"{"subagent":{"other":"guardian"}}"#),
+            ("user", "appServer"),
+        ] {
+            conn.execute("INSERT INTO threads VALUES (?, NULL, 'Guardian review', NULL, 'C:/demo', NULL, 0, 0, ?, 0)", (id, source)).unwrap();
+        }
+        let mut provider = CodexProvider::with_root(dir.path().join("sessions"));
+        provider.state_db = Some(db);
+        let catalog = provider.poll(SystemTime::now()).catalog;
+        assert!(
+            catalog
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some("internal"))
+                .unwrap()
+                .internal
+        );
+        assert!(
+            !catalog
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some("user"))
+                .unwrap()
+                .internal
+        );
     }
 
     #[test]
