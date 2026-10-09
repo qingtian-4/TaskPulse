@@ -1,5 +1,7 @@
 # TaskPulse Architecture
 
+当前实际编排顺序为 `Provider → 来源/项目范围过滤与归一化 → TaskStore → AttentionTracker → TransitionEngine → tray/UI/notifications`。关注基线先于通知迁移，才能识别采样间已结束的新 turn，同时禁止历史回灌。来源注册表 `monitoring.rs` 独立管理实例、热更新与已发现目录；`/manage/` 是单独窗口。以下图展示原有采集/Store/迁移核心；完整当前交互见 [PRODUCT_DASHBOARD.md](PRODUCT_DASHBOARD.md)。
+
 ```
                     ┌────────────────────────────────────────────────┐
                     │            Provider 层（只观察，不渲染）          │

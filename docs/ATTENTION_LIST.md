@@ -44,7 +44,7 @@ Provider 的原生事件时间用于展示最后活动时间；Store 的轮询�
 - Provider 初次启动只建立基线，不批量导入历史空闲会话。
 - 范围外任务在进入状态机前被过滤，因此既不显示也不通知。
 
-TaskPulse 自己的查看、隐藏和固定状态保存在 `~/.taskpulse/attention.json`。这是原生已查看状态缺失时的权威降级方案。
+TaskPulse 自己的查看、隐藏、固定和长期忽略状态保存在 `~/.taskpulse/attention.json`。通知去重保存在 `~/.taskpulse/notifications.json`。这是原生已查看状态缺失时的权威降级方案。聚焦 Agent 窗口不自动标记已查看。
 
 ## 监控范围
 
@@ -71,7 +71,7 @@ tmux_panes = ["%12", "3:0.1"]
 
 项目、服务器、session 和 pane 匹配均不区分大小写，支持 `*` 通配符。项目列表为空表示禁用该类别；`["*"]` 表示全部。旧配置未声明 `[monitoring]` 时继续监控全部项目，以保持向后兼容。
 
-当前配置在托盘进程启动时读取；修改后重启 `bun run tauri dev` 或生产托盘程序生效。
+以上为旧版配置格式。新版本通过齿轮打开“监控来源”管理窗口；首次保存将旧范围迁移到同文件的 `[dashboard]`，备份为 `config.toml.pre-dashboard.bak`，原有其他字段保留。保存立即生效，停用来源不触发完成通知。之后以 `[dashboard]` 为准；手动改文件仍需重启，不要同时编辑旧范围和新范围。完整规则见 [PRODUCT_DASHBOARD.md](PRODUCT_DASHBOARD.md)。
 
 SSH 别名必须与实际运行 Agent 的账号一致。同一机器的两个别名可以使用不同用户，例如 `Server1` 与 `Server1_wanghy`；只连接到机器并不能读取另一个用户的 `~/.codex`。`remote_hosts.ssh_host` 和 `monitoring.remote_codex.host` 应指向相同别名，同时启用主机并将项目加入范围。远程 Codex 不要求运行在 tmux 中，IDE Remote SSH 的原生 rollout 也可以采集。
 

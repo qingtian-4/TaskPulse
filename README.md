@@ -13,11 +13,11 @@ TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray)（MIT）�
 | 场景 | TaskPulse 扩展 |
 |---|---|
 | 多个桌面 Agent 的进程名难以对应真实任务 | Codex 原生 thread 标题、Hermes 会话与 DeepSeek Harness 元数据；项目名与任务名分开 |
-| 闲置历史掩盖需要关注的任务 | 动态关注列表：运行、未查看、失败/等输入和固定任务；隐藏后新 turn 自动回来 |
-| 工作同时在本机和服务器运行 | 服务器/项目分组，远程 Codex 与 tmux；可限定监控范围 |
+| 闲置历史掩盖需要关注的任务 | 任务优先面板：需处理 → 运行 → 结果待查看 → 固定空闲；隐藏后新 turn 自动回来 |
+| 工作同时在本机和服务器运行 | 独立来源管理窗口，按 Windows/WSL/SSH 实例启停；所有项目自动关注或指定范围，保存立即生效 |
 | 不想逐个点进去才知道在做什么 | 任务行显示当前指令/活动、状态和可获取的运行时长 |
-| 慢进程扫描、WSL 或 API 拖住其他 Agent | 独立采集线程，Codex/Hermes 1 秒轮询和文件变化触发，DeepSeek 2 秒采集周期 |
-| 完成通知重复或错误成功 | 按任务/turn 去重；区分等输入、真实退出结果、推断完成；通知发送错误可见 |
+| 慢进程扫描、WSL 或 API 拖住其他 Agent | 独立采集线程，本机 Codex/Hermes/DeepSeek Desktop 1 秒兜底采集，WSL 2 秒；原生文件变化触发刷新 |
+| 完成通知重复或错误成功 | 每任务分别通知，去重跨重启保留；区分本轮结束与授权/确认阻塞；点击 Windows 通知定位详情 |
 
 “进度”指 Agent 的当前状态和可观测活动。未提供步骤总数或完成比例的 Agent 不显示虚构百分比。支持范围、实测数据和剩余限制见 [版本审查](docs/RELEASE_READINESS.md)。
 
@@ -48,9 +48,9 @@ bun install
 bun run tauri dev
 ```
 
-首次启动生成 `~/.taskpulse/config.toml`，默认不连接远程主机。按 [监控范围配置](docs/ATTENTION_LIST.md) 添加自己的 SSH 别名与项目；已有配置不改写。DeepSeek Harness 桌面版自动读取本机 `~/.dsh`，支持 v4 日志与分片标题/状态缓存；自定义目录可设置 `TASKPULSE_DSH_HOME`。原 WSL 采集独立保留，可用 `TASKPULSE_WSL_DISTRO` 指定发行版。
+首次启动点击右上角齿轮，确认发现的本机来源并保存；未确认前不开始采集，不自动连接远程服务器。管理窗口可以添加 SSH 来源、Windows DeepSeek 或 WSL 实例，选择所有项目的新执行或指定项目范围。旧配置保留原范围，首次保存创建迁移备份。完整交互见 [任务面板与来源管理](docs/PRODUCT_DASHBOARD.md)。
 
-面板右上角铃铛或托盘菜单可发送测试通知。需要 Windows 允许通知；“请勿打扰”可能隐藏横幅。窗口关闭后采集和通知继续运行。
+管理窗口“通知与显示”或托盘菜单可发送测试通知，通知与声音分别开关。需要 Windows 允许通知；“请勿打扰”可能隐藏横幅。窗口关闭后采集和通知继续运行。点击通知会打开对应 TaskPulse 详情；通用窗口聚焦不代表已经查看结果，请手动标记“已查看”。
 
 开发者可运行已构建的 `agent-tray.exe --diagnose`，用同一套采集线程采样 10 秒，输出任务标题、状态、采集次数和耗时（不包含提示词与指令正文）。`--test-notification` 会发送一次真实系统通知并返回 API 结果。
 
@@ -72,7 +72,7 @@ install -m 755 scripts/tp-run ~/.local/bin/tp-run
 ## 语义红线
 
 - Agent turn 完成 = `WAITING_INPUT`，不是 `SUCCEEDED`。
-- 没有真实退出码就没有 SUCCEEDED/FAILED。
+- 外部命令只有真实退出码才能标记 SUCCEEDED/FAILED；Agent 原生明确失败事件可标记 FAILED，但不编造退出码。
 - SSH 超时 ≠ 任务完成。
 - 不存凭据（走系统 ssh + ~/.ssh/config）；不 OCR；不读 pane 内容；无云端。
 

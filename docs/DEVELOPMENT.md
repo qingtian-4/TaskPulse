@@ -57,13 +57,14 @@ cd .. && bun run tauri dev        # 或: cd src-tauri && cargo tauri dev
 ## 配置
 
 - 远端：`~/.taskpulse/config.toml`（首启不连接远端，按需添加 SSH 别名）
+- 新来源配置：同文件的 `[dashboard]`；齿轮管理窗口保存热更新，首次确认前不采集。旧范围首存备份迁移。
 - 本地状态目录：`~/.agent-monitor/`（兼容）+ `~/.taskpulse/`
 - 最近完成缓存：`~/.taskpulse/recent.json`（版本化 JSON，仅保存 RECENT，原子替换）
 - 日志：`RUST_LOG=debug` 前缀运行可看细节（env_logger）
 
 ## Git 工作流
 
-- 分支 `feat/taskpulse-mvp`，每个 Phase 一个逻辑 commit；不自动 push / 不开 PR。
+- 当前 `codex/*` 分支，小逻辑 commit；不自动 push / 不开 PR。
 - LICENSE（MIT）与上游 attribution 保留。
 
 ## 已知限制（MVP）
@@ -81,3 +82,26 @@ cd src-tauri && cargo test --bin agent-tray live_remote_snapshot -- --ignored --
 ```
 
 会打印当前 Server1/Server3 的真实快照解析结果（运行中的 workload 任务 + tp-run 精确任务 + 主机健康）。
+
+## 任务面板与原生窗口验收
+
+`powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend` 使用隔离 target，托盘运行时也可以执行。补充 `bun run test:ui-model` 与 WSL Python 的 `scripts/test-codex-metadata.py`。
+
+`scripts/ui-smoke.ts` 是隔离 Edge CDP（9227）+ Vite（5189）+ 模拟 IPC 的布局/交互验收，不能证明原生按钮、系统窗口或通知真的可用。
+
+`scripts/native-ui-smoke.ts` 连接真正的 Windows WebView2（9337）。先构建前端，再在已停止本项目托盘时，按本机 GNU/MSVC 工具链设置构建：
+
+```powershell
+bun run build
+$env:TAURI_CONFIG = '{"build":{"devUrl":null}}'
+cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray
+Remove-Item Env:TAURI_CONFIG
+$env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=9337 --remote-debugging-address=127.0.0.1'
+Start-Process -FilePath '.\src-tauri\target\debug\agent-tray.exe' -ArgumentList '--show' -WindowStyle Hidden
+Remove-Item Env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
+bun scripts/native-ui-smoke.ts
+```
+
+该脚本要求已有配置并启用本地 Codex；它会暂时停用/恢复来源、保存同样的项目范围，并发送一次真实通知，**不是只读脚本**。不修改 Agent 会话，也不标记已查看。结果和实际窗口截图保存在忽略提交的 `src-tauri/target/ui-smoke/`。首次保存旧配置会产生 TaskPulse 的迁移备份。完成后通过托盘 Quit 退出调试进程，再不带调试环境变量启动；切勿长期开放 CDP。
+
+实际窗口创建使用异步命令或独立线程，避免 Windows WebView2 在同步命令/事件回调内创建窗口时死锁。CSP 仅放行自身资源和本机 `ipc:` / `http://ipc.localhost`，不以关闭 CSP 绕过 IPC 错误。通知 API 接受、截图检查和真实任务的端到端 P95/横幅点击是不同证据，报告时分别注明。

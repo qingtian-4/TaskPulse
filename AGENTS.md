@@ -20,7 +20,7 @@ The main user question is: which tasks are running, failed, waiting for input, o
 
 The runtime pipeline is:
 
-`Provider -> normalization/dedup -> TaskStore -> TransitionEngine -> AttentionTracker -> tray/UI/notifications`
+`Provider -> scope filtering/normalization/dedup -> TaskStore -> AttentionTracker -> TransitionEngine -> tray/UI/notifications`
 
 Important locations:
 
@@ -29,9 +29,12 @@ Important locations:
 - `src-tauri/src/store/`: authoritative-source reconciliation and recent-task retention.
 - `src-tauri/src/transition.rs`: lifecycle transitions and one-shot notification events.
 - `src-tauri/src/attention.rs`: dynamic attention list (running, unread, failed/waiting, and pinned tasks).
+- `src-tauri/src/monitoring.rs`: source instance registry, legacy migration, hot reload and discovered-session catalog.
 - `src-tauri/src/history.rs`: recent terminal-task persistence.
 - `src-tauri/src/tray.rs`: aggregate tray state and embedded tray icons.
 - `src/routes/+page.svelte` and `src/lib/components/`: popup UI.
+- `src/routes/manage/`: independent management window; permissions include both `popup` and `management`.
+- `docs/PRODUCT_DASHBOARD.md`: task-first presentation, source configuration, blocking vs normal end, notification rules.
 - `docs/ATTENTION_LIST.md`: attention-list product rules and provider degradation behavior.
 - `docs/ARCHITECTURE.md`: detailed backend architecture.
 
@@ -40,7 +43,9 @@ Stable session/thread IDs are task identity. A title rename updates presentation
 ## Data and configuration
 
 - TaskPulse state: `~/.taskpulse/attention.json` and `~/.taskpulse/recent.json`.
+- Notification dedup: `~/.taskpulse/notifications.json` (must survive restarts).
 - Monitoring/remote configuration: `~/.taskpulse/config.toml`.
+- Source registry uses `[dashboard]` in that config; once saved it supersedes legacy scopes. UI saves apply immediately; preserve unknown config fields and create the one-time migration backup. Fresh installs require explicit onboarding confirmation.
 - Legacy/generic hook input: `~/.agent-monitor/` and `~/.taskpulse/` status files.
 - Codex: native thread/app-server metadata plus rollout logs; local and configured remote projects are supported.
 - Hermes: native SQLite session metadata and runtime lease state.
@@ -86,6 +91,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_remote_sna
 ## Windows build and tray process
 
 The tray PNGs are compile-time embedded. Do not add `icons/tray-*.png` back to Tauri `bundle.resources`; copying those redundant runtime resources caused Windows file-lock failures while the tray app was running.
+
+Windows WebView2 creation must use async commands or a separate thread, never synchronous IPC/event handlers. Keep the narrowly scoped `ipc:` / `http://ipc.localhost` CSP connect permissions; actual native IPC/window tests catch failures that browser mocks cannot.
 
 While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps1`; it builds into `src-tauri/target/codex-check`, so the linker never replaces the live executable. To rebuild the executable used by the tray itself, stop only the workspace-owned process, run the normal build, and restart it. Never kill unrelated processes by name without verifying their executable path.
 
