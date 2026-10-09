@@ -51,6 +51,7 @@
     codex: 'Codex',
     hermes: 'Hermes',
     deepseek_harness: 'DeepSeek Harness',
+    scanner: '进程扫描',
   };
 
   let tasks = $state<TaskSnapshot[]>([]);
@@ -64,6 +65,7 @@
   let focusing = $state(false);
   let refreshing = $state(false);
   let testingNotification = $state(false);
+  let notificationNotice = $state('');
   let selectedId = $state<string | null>(null);
   let demoMode = $state(false);
   let panelEl = $state<HTMLDivElement | null>(null);
@@ -130,6 +132,8 @@
     testingNotification = true;
     try {
       await invoke('test_notification');
+      notificationNotice = '通知已交给系统；若未见弹窗，请检查 Windows 通知设置';
+      setTimeout(() => (notificationNotice = ''), 7000);
     } catch (error) {
       ipcError = `发送测试通知失败：${error}`;
     } finally {
@@ -350,6 +354,17 @@
       {focusError || ipcError}
     </div>
   {/if}
+
+  {#if notificationNotice}
+    <div role="status" class="px-3 py-1.5 text-[10px] text-[#a9c5d8] border-b border-white/[0.06]">{notificationNotice}</div>
+  {/if}
+
+  <div class="flex gap-3 px-3.5 py-2 text-[10px] border-b border-white/[0.06] shrink-0" aria-label="任务总览">
+    <span class="text-[#83b6e2]">运行 {tasks.filter(task => task.status === 'running' && !task.stale).length}</span>
+    <span class="text-[#d8c66d]">等输入 {tasks.filter(task => task.status === 'waiting_input' && !task.stale).length}</span>
+    <span class="text-[#dc9090]">失败 {tasks.filter(task => task.status === 'failed').length}</span>
+    <span class="text-[#a8b59a]">待查看 {tasks.filter(task => task.unread && task.status !== 'running').length}</span>
+  </div>
 
 
   {#if lastHidden}

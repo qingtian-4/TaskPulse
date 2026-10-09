@@ -1,6 +1,6 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
-  "productName": "AgentTray",
+  "productName": "TaskPulse",
   "version": "0.1.11",
   "identifier": "com.sprklai.agenttray",
   "build": {
@@ -29,7 +29,7 @@
       "icons/icon.ico"
     ],
     "shortDescription": "System tray monitor for AI coding agents",
-    "longDescription": "AgentTray monitors AI coding agents and displays their real-time status via a colored dot in the system tray.",
+    "longDescription": "TaskPulse monitors coding-agent tasks across local projects and remote servers, shows current activity, and alerts you when tasks need attention.",
     "category": "Utility",
     "linux": {
       "deb": {

@@ -1,12 +1,29 @@
 # TaskPulse
 
-> A Windows system-tray monitor for local AI coding agents and remote tmux tasks.
+> 多个 coding agent 的任务状态和当前活动，一眼可见；结束或需要输入时主动提醒。
 
-TaskPulse 是 [AgentTray](https://github.com/sprklai/agenttray)（MIT）的 Windows-first 分支扩展：本地 AI Agent（Codex / Hermes / DeepSeek Harness / Claude Code / Gemini）+ 远端 tmux 任务（VS Code Remote-SSH → Server1/Server3 → tmux pane 里的 python / pytest / 评测脚本），统一监控。
+同时开着几个 coding agent 时，反复切换对话查看有没有完成，会打断手头工作。TaskPulse 把本地和远程任务放在一个托盘面板：谁正在执行什么指令、谁等待输入、谁失败、哪些结果还没看。任务需要关注时弹出系统通知，用户不必一直盯着窗口。
+
+TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray)（MIT）的 Windows-first 桌面伴随工具，目前为 **alpha**。当前形态是独立托盘应用，尚不是可安装到所有 IDE/Agent 的通用插件。
+
+## 与 AgentTray 的区别
+
+上游已经具备多会话托盘、Claude Code / Codex CLI / Gemini CLI hooks、进程扫描、终端跳转和桌面通知。TaskPulse 复用这些基础，在其上增加：
+
+| 场景 | TaskPulse 扩展 |
+|---|---|
+| 多个桌面 Agent 的进程名难以对应真实任务 | Codex 原生 thread 标题、Hermes 会话与 DeepSeek Harness 元数据；项目名与任务名分开 |
+| 闲置历史掩盖需要关注的任务 | 动态关注列表：运行、未查看、失败/等输入和固定任务；隐藏后新 turn 自动回来 |
+| 工作同时在本机和服务器运行 | 服务器/项目分组，远程 Codex 与 tmux；可限定监控范围 |
+| 不想逐个点进去才知道在做什么 | 任务行显示当前指令/活动、状态和可获取的运行时长 |
+| 慢进程扫描、WSL 或 API 拖住其他 Agent | 独立采集线程，Codex/Hermes 1 秒轮询和文件变化触发，DeepSeek 2 秒采集周期 |
+| 完成通知重复或错误成功 | 按任务/turn 去重；区分等输入、真实退出结果、推断完成；通知发送错误可见 |
+
+“进度”指 Agent 的当前状态和可观测活动。未提供步骤总数或完成比例的 Agent 不显示虚构百分比。支持范围、实测数据和剩余限制见 [版本审查](docs/RELEASE_READINESS.md)。
 
 在系统托盘即可知道：谁在跑、谁在等用户输入、远端哪个任务还在跑、哪个刚结束（以及精确退出码）、哪个服务器失联——任务结束或需要人工输入时主动弹 Windows 通知。
 
-![architecture](docs/ARCHITECTURE.md)
+[架构说明](docs/ARCHITECTURE.md)
 
 ## 核心能力
 
@@ -25,13 +42,17 @@ TaskPulse 是 [AgentTray](https://github.com/sprklai/agenttray)（MIT）的 Wind
 
 ```powershell
 # 前置：Rust（GNU/MSVC 均可）、bun、WebView2
-git clone https://github.com/sprklai/agenttray.git taskpulse
+git clone https://github.com/qingtian-4/TaskPulse.git taskpulse
 cd taskpulse
 bun install
 bun run tauri dev
 ```
 
-首次启动自动生成 `~/.taskpulse/config.toml`（Server1/Server3 示例，改 `ssh_host` 为你的 `~/.ssh/config` 别名即可）。
+首次启动生成 `~/.taskpulse/config.toml`，默认不连接远程主机。按 [监控范围配置](docs/ATTENTION_LIST.md) 添加自己的 SSH 别名与项目；已有配置不改写。当前 DeepSeek 适配使用 WSL 的 Ubuntu，可用 `TASKPULSE_WSL_DISTRO` 指定发行版。
+
+面板右上角铃铛或托盘菜单可发送测试通知。需要 Windows 允许通知；“请勿打扰”可能隐藏横幅。窗口关闭后采集和通知继续运行。
+
+开发者可运行已构建的 `agent-tray.exe --diagnose`，用同一套采集线程采样 10 秒，输出任务标题、状态、采集次数和耗时（不包含提示词与指令正文）。`--test-notification` 会发送一次真实系统通知并返回 API 结果。
 
 远端安装精确模式包装：
 

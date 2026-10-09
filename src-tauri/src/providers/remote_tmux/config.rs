@@ -166,8 +166,8 @@ pub fn config_path() -> PathBuf {
     config_dir().join("config.toml")
 }
 
-/// Load the config, creating a starter file with the user's real SSH aliases
-/// on first run (nothing is hardcoded in the core logic).
+/// First run enables local monitoring only. Remote hosts require explicit
+/// configuration; existing user configs are preserved.
 pub fn load_config() -> TaskPulseConfig {
     let path = config_path();
     if !path.exists() {
@@ -191,24 +191,7 @@ pub fn load_config() -> TaskPulseConfig {
 
 pub fn default_config() -> TaskPulseConfig {
     TaskPulseConfig {
-        remote_hosts: vec![
-            RemoteHostConfig {
-                id: "server1".into(),
-                ssh_host: "Server1".into(),
-                enabled: true,
-                poll_interval_ms: 3000,
-                tmux_sessions: vec![],
-                tmux_panes: vec![],
-            },
-            RemoteHostConfig {
-                id: "server3".into(),
-                ssh_host: "Server3".into(),
-                enabled: true,
-                poll_interval_ms: 3000,
-                tmux_sessions: vec![],
-                tmux_panes: vec![],
-            },
-        ],
+        remote_hosts: Vec::new(),
         monitoring: MonitoringConfig::default(),
     }
 }
@@ -224,6 +207,11 @@ pub fn atomic_write(path: &PathBuf, bytes: &[u8]) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use crate::domain::{DetectionConfidence, TaskStatus};
+
+    #[test]
+    fn fresh_install_does_not_contact_personal_servers() {
+        assert!(default_config().enabled_hosts().is_empty());
+    }
     use std::time::SystemTime;
 
     #[test]

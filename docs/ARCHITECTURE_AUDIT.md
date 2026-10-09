@@ -29,8 +29,8 @@
 - **No MSVC / no winget / no rustup / no bun initially** → toolchain installed as:
   rustup `stable-x86_64-pc-windows-gnu` + w64devkit (MinGW-w64), bun via `npm i -g bun`.
 - WebView2 runtime present (151.x) → Tauri popup works.
-- SSH config has real aliases: `Server1` (172.25.74.35:1919 user ai), `Server3` (172.25.74.35:514 user ai3), key auth OK, no password needed.
-- Remote reality check (Server1/Server3): tmux 3.0a, x86_64 Linux, Python 3.8.10; `tmux list-panes -a -F` works; live panes observed (`%0`, `%3`, bash, cwd `~/student/wanghy/HyperMem`).
+- Test SSH aliases are illustrated as `Server1` / `Server3`; deployments use their own SSH config and key authentication. Personal host addresses and usernames are omitted.
+- The original remote smoke check used tmux 3.0a and a Linux host. Current connectivity and workload must be verified again before each release; historical observations are not current evidence.
 
 ---
 
@@ -57,7 +57,7 @@
 | Status semantics | `needs-input` → `WAITING_INPUT`; `working`/`starting` → `RUNNING`; `error` → `FAILED`; `idle` → `IDLE`; `offline` → `UNKNOWN` (host-level `DISCONNECTED` for remote) |
 | Tray aggregate priority | FAILED > WAITING_INPUT > DISCONNECTED > RUNNING > SUCCEEDED/IDLE (spec §26) |
 | Notifications | Transition-driven: RUNNING→WAITING_INPUT, RUNNING→SUCCEEDED, RUNNING→FAILED, RUNNING→IDLE(inferred), CONNECTED→DISCONNECTED (debounced), DISCONNECTED→CONNECTED |
-| `tauri.conf.json` / package.json | productName TaskPulse, identifier `dev.taskpulse.app`; MIT LICENSE retained |
+| `tauri.conf.json` | productName TaskPulse; existing `com.sprklai.agenttray` identifier retained for compatibility; MIT LICENSE retained |
 | Popup UI | Sections: LOCAL AGENTS / REMOTE TMUX (per host) / RECENT completed (30 min TTL or acknowledged) |
 
 ## 4. What We Replace

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { Status, TaskSnapshot } from '$lib/types';
-  import { STATUS_LABEL, STATUS_PRIORITY } from '$lib/types';
+  import { STATUS_LABEL, STATUS_PRIORITY, formatElapsed } from '$lib/types';
   import StatusDot from './StatusDot.svelte';
 
   let {
@@ -51,7 +51,26 @@
     // remaining task deserves to be visible without another click.
     return groupTasks.length > 0;
   }
+
+  function activityLabel(task: TaskSnapshot): string {
+    if (task.stale) return '采集暂不可用，显示上次状态';
+    if (task.status === 'running') return task.activity ?? task.message ?? '正在分析 / 执行';
+    if (task.status === 'waiting_input') return '等待你的输入或确认';
+    if (task.status === 'failed') return '执行失败，需要处理';
+    if (task.status === 'succeeded') return task.unread ? '执行完成，尚未查看' : '执行完成';
+    return STATUS_LABEL[task.status];
+  }
 </script>
+
+{#snippet taskSummary(task: TaskSnapshot)}
+  <span class="flex-1 min-w-0">
+    <span class="block truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#ccc9c1]'}" title={task.name}>{task.name}</span>
+    <span class="block truncate mt-0.5 text-[10px] text-[#8f8d86]" title={activityLabel(task)}>{activityLabel(task)}</span>
+  </span>
+  {#if task.status === 'running' && task.started_at}
+    <span class="text-[9px] text-[#77756f] tabular-nums" title="本轮已运行时间">{formatElapsed(task.started_at)}</span>
+  {/if}
+{/snippet}
 
 <section class="py-1" aria-label={title}>
   <div class="flex items-center gap-2 px-4 pt-1.5 pb-1">
@@ -88,10 +107,10 @@
                   onclick={() => onSelect?.(task.id)}
                 >
                   <StatusDot status={task.status} />
-                  <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}" title={task.name}>{task.name}</span>
+                  {@render taskSummary(task)}
                   {#if task.pinned}<span class="text-[9px] text-[#8fb6d8]">固定</span>{/if}
                   {#if task.unread}<span class="w-[5px] h-[5px] rounded-full bg-[#e8c840]" title="尚未查看"></span>{/if}
-                  <span class="text-[9px] text-[#77756f] flex-shrink-0">{STATUS_LABEL[task.status]}</span>
+                  <span class="text-[9px] text-[#77756f] flex-shrink-0">{task.stale ? '待更新' : STATUS_LABEL[task.status]}</span>
                 </button>
               </li>
             {/each}
@@ -109,10 +128,10 @@
           onclick={() => onSelect?.(task.id)}
         >
           <StatusDot status={task.status} />
-          <span class="flex-1 min-w-0 truncate text-[12px] {task.id === selectedId ? 'text-[#f1eee8]' : 'text-[#aaa89f]'}" title={task.name}>{task.name}</span>
+          {@render taskSummary(task)}
           {#if task.pinned}<span class="text-[9px] text-[#8fb6d8]">固定</span>{/if}
           {#if task.unread}<span class="w-[5px] h-[5px] rounded-full bg-[#e8c840]" title="尚未查看"></span>{/if}
-          <span class="text-[9px] text-[#77756f] flex-shrink-0">{STATUS_LABEL[task.status]}</span>
+          <span class="text-[9px] text-[#77756f] flex-shrink-0">{task.stale ? '待更新' : STATUS_LABEL[task.status]}</span>
         </button>
       </li>
     {/each}
