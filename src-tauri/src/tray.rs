@@ -217,6 +217,11 @@ pub fn hide_popup(app: &AppHandle) {
 }
 
 #[tauri::command]
+pub fn get_pinned() -> bool {
+    PINNED.load(Ordering::SeqCst)
+}
+
+#[tauri::command]
 pub fn close_popup(app: AppHandle) {
     hide_popup(&app);
 }

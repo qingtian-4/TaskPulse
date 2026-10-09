@@ -166,6 +166,7 @@ fn main() {
             notifier::test_notification,
             notifier::get_notification_error,
             tray::toggle_pin,
+            tray::get_pinned,
             tray::open_management,
             tray::close_popup
         ])

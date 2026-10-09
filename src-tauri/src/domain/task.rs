@@ -319,10 +319,11 @@ pub struct TaskSnapshot {
 
 impl TaskSnapshot {
     pub fn requires_action(&self) -> bool {
-        matches!(
-            self.waiting_reason,
-            Some(WaitingReason::Approval | WaitingReason::Question)
-        )
+        self.status == TaskStatus::WaitingInput
+            && matches!(
+                self.waiting_reason,
+                Some(WaitingReason::Approval | WaitingReason::Question)
+            )
     }
     /// Small constructor for tests and providers.
     #[allow(clippy::too_many_arguments)]

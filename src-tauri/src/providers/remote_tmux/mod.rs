@@ -101,7 +101,10 @@ impl RemoteTmuxProvider {
 
     #[cfg(test)]
     pub fn from_config(executor: Arc<dyn SshExecutor>) -> Self {
-        Self::new(config::load_config(), executor)
+        Self::new(
+            crate::monitoring::remote_config(&crate::monitoring::get_monitoring_settings()),
+            executor,
+        )
     }
 
     /// Enabled host configs (used by the watcher to derive poll cadence).
@@ -1043,7 +1046,11 @@ mod tests {
         let mut provider =
             RemoteTmuxProvider::from_config(std::sync::Arc::new(ssh::SystemSshExecutor::new()));
         let out = provider.poll(SystemTime::now());
-        println!("hosts: {:?}", out.hosts);
+        println!(
+            "hosts: {:?}; discovered native sessions: {}",
+            out.hosts,
+            out.catalog.len()
+        );
         for t in &out.tasks {
             println!(
                 "  task: id={} name={:?} status={:?} conf={:?} host={:?}",

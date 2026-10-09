@@ -119,7 +119,7 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
         .description
         .as_deref()
         .is_some_and(description_waits_for_user)
-        && row.ended_at.is_none();
+        && row.ended_at.and_then(epoch_to_time).is_none();
     let status = if waiting_for_user {
         // Hermes can keep the turn lease while an approval/input gate is
         // open. The native activity description is more specific than the

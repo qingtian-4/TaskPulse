@@ -29,6 +29,14 @@ export interface TerminalInfo {
 }
 
 export interface TaskSnapshot {
+  source_instance?: string;
+  project_path?: string;
+  tmux_session?: string;
+  tmux_pane?: string;
+  tmux_target?: string;
+  waiting_reason?: 'turn_ended' | 'approval' | 'question' | 'unknown';
+  input_request_id?: string;
+  attention_since?: number;
   id: string;
   name: string;
   source: Source;
@@ -62,6 +70,18 @@ export interface TaskSnapshot {
   hook_event?: string;
   hook_matcher?: string;
 }
+
+export type SourceKind = 'codex' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner';
+export interface MonitorSource {
+  id: string; name: string; kind: SourceKind; enabled: boolean; location: string;
+  projects: string[]; excluded_projects: string[]; tmux_sessions: string[]; tmux_panes: string[]; poll_interval_ms: number;
+}
+export interface DashboardSettings {
+  version: number; onboarding_complete: boolean; sources: MonitorSource[];
+  notifications: boolean; sound: boolean; default_view: 'tasks' | 'projects';
+}
+export interface SourceDiscovery { id: string; available: boolean; detail: string }
+export interface SessionPage { items: Array<{ task: TaskSnapshot; reason: string }>; total: number }
 
 export interface HostHealth {
   host: string;
