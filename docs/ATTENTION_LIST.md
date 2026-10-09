@@ -92,3 +92,16 @@ powershell -ExecutionPolicy Bypass -File scripts/probe-codex.ps1 -RemoteHost You
 ```
 
 诊断结果包含 `quota_observations` 的成功读取时间，可检查自动轮询与第 5 秒手动唤醒是否真正获得新响应。原生元数据兼容测试：`python3 scripts/test-codex-metadata.py`（也可通过 WSL 执行）。
+
+## DeepSeek Harness 桌面版
+
+[官方桌面文档](https://github.com/deepseek-ai/deepseek-harness/blob/master/apps/desktop/README.md)说明 Desktop 与 CLI 共享 `$DSH_HOME` 下的会话与工作区数据。TaskPulse 直接只读采集这些数据，不连接桌面版的私有认证接口，不读取 `.credentials.yaml`，不修改 DeepSeek 的配置或安装文件。
+
+- 默认本机 `~/.dsh`；`TASKPULSE_DSH_HOME` 优先于 `DSH_HOME`。更改路径后重启托盘。
+- 同时识别旧 `session.jsonl.zstd` 和新 `session.v4.jsonl.zstd`；同一会话迁移后只选 v4，避免重复记录。
+- 读取逐会话 `storages/session_projcache/sessions/<id>.json` 的原生侧栏标题、cwd、turnBoundary/sessionStats；保留旧聚合缓存兼容。重命名不需要日志同时变化。
+- 标题变化不改 session ID/turn key。新 turn 开始进入关注列表；`turn/end` 后等待输入，明确错误为失败，goal 成功信号为完成。事件序号较旧的缓存不能覆盖较新的日志；步骤之间仍有 open turn 时保持运行，不误报结束。
+- 桌面采集是独立 1 秒轮询，并监听本机 sessions/storages 文件变化；WSL 继续使用独立 2 秒 worker，耗时/失败不拖住桌面版。两者按不同存储实例使用稳定 ID，历史空闲会话仍不回灌。
+- 当前工具命令写入 activity，结束后清除运行指令；缓存半写入/压缩日志暂不可读时显示降级，保留已有快照，不假装任务已结束。
+
+已完成本机 v4/投影 v7 数据验证；其他桌面分支或未来 schema 不保证自动兼容。首次安装后尚无会话会显示空列表。当前轮询和本机日志写入存在延迟，1 秒是轮询周期，不是端到端 SLA。

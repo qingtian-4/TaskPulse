@@ -14,7 +14,7 @@ The main user question is: which tasks are running, failed, waiting for input, o
 - Frontend: SvelteKit, Svelte 5 runes, Tailwind CSS 4.
 - Package manager: Bun, not npm.
 - Icons: `@lucide/svelte`; native tray PNGs are embedded with `include_bytes!`.
-- Primary host: Windows 10/11 with WSL used for DeepSeek Harness discovery.
+- Primary host: Windows 10/11; DeepSeek Harness Desktop uses native storage, and the legacy WSL installation is monitored separately.
 
 ## Architecture
 
@@ -44,7 +44,7 @@ Stable session/thread IDs are task identity. A title rename updates presentation
 - Legacy/generic hook input: `~/.agent-monitor/` and `~/.taskpulse/` status files.
 - Codex: native thread/app-server metadata plus rollout logs; local and configured remote projects are supported.
 - Hermes: native SQLite session metadata and runtime lease state.
-- DeepSeek Harness: WSL `~/.dsh/sessions/**/session.jsonl.zstd`, overlaid by `~/.dsh/storages/session_projcache.json` for native titles and live state.
+- DeepSeek Harness: native Desktop/CLI `$DSH_HOME` (default `~/.dsh`, override with `TASKPULSE_DSH_HOME`) plus an independent WSL worker. Support both `session.jsonl.zstd` and `session.v4.jsonl.zstd`. Native v4 titles/state use `storages/session_projcache/sessions/<id>.json` (`version`/`record` envelope); legacy versions use `storages/session_projcache.json`. Projection event seq must not override a newer log state. Native IDs are `dsh-native:<session-id>`; existing WSL IDs stay `dsh:<session-id>`.
 - Remote: configured SSH hosts, projects, and tmux sessions/panes.
 
 ## Commands

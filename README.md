@@ -48,7 +48,7 @@ bun install
 bun run tauri dev
 ```
 
-首次启动生成 `~/.taskpulse/config.toml`，默认不连接远程主机。按 [监控范围配置](docs/ATTENTION_LIST.md) 添加自己的 SSH 别名与项目；已有配置不改写。当前 DeepSeek 适配使用 WSL 的 Ubuntu，可用 `TASKPULSE_WSL_DISTRO` 指定发行版。
+首次启动生成 `~/.taskpulse/config.toml`，默认不连接远程主机。按 [监控范围配置](docs/ATTENTION_LIST.md) 添加自己的 SSH 别名与项目；已有配置不改写。DeepSeek Harness 桌面版自动读取本机 `~/.dsh`，支持 v4 日志与分片标题/状态缓存；自定义目录可设置 `TASKPULSE_DSH_HOME`。原 WSL 采集独立保留，可用 `TASKPULSE_WSL_DISTRO` 指定发行版。
 
 面板右上角铃铛或托盘菜单可发送测试通知。需要 Windows 允许通知；“请勿打扰”可能隐藏横幅。窗口关闭后采集和通知继续运行。
 

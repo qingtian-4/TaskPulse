@@ -484,10 +484,18 @@ impl LocalProviders {
         let mut codex = CodexProvider::new();
         let mut hermes = HermesProvider::new();
         let mut dsh = DeepSeekHarnessProvider::new();
+        let mut desktop_dsh = DeepSeekHarnessProvider::desktop();
         let mut scanner = Scanner::new();
         Self {
             file: LocalFileProvider::new(),
             workers: vec![
+                (
+                    "deepseek_harness_desktop",
+                    vec![TaskSource::DeepSeekHarness],
+                    Worker::spawn(Duration::from_secs(1), move |_| {
+                        desktop_dsh.poll(SystemTime::now())
+                    }),
+                ),
                 (
                     "codex",
                     vec![TaskSource::Codex],
@@ -518,15 +526,21 @@ impl LocalProviders {
             latest: Default::default(),
             observed_at: Default::default(),
             started_at: Instant::now(),
-            health: ["codex", "hermes", "deepseek_harness", "scanner"]
-                .into_iter()
-                .map(|provider| ProviderHealth {
-                    provider: provider.to_string(),
-                    status: ProviderStatus::Degraded,
-                    last_success: None,
-                    message: Some("首次采集中".into()),
-                })
-                .collect(),
+            health: [
+                "codex",
+                "hermes",
+                "deepseek_harness",
+                "deepseek_harness_desktop",
+                "scanner",
+            ]
+            .into_iter()
+            .map(|provider| ProviderHealth {
+                provider: provider.to_string(),
+                status: ProviderStatus::Degraded,
+                last_success: None,
+                message: Some("首次采集中".into()),
+            })
+            .collect(),
             monitoring,
         }
     }
@@ -555,6 +569,9 @@ impl LocalProviders {
                 paths.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
             }
         }
+        let desktop_root = DeepSeekHarnessProvider::desktop_root();
+        paths.push((desktop_root.join("sessions"), RecursiveMode::Recursive));
+        paths.push((desktop_root.join("storages"), RecursiveMode::Recursive));
         paths
     }
 
@@ -566,7 +583,7 @@ impl LocalProviders {
 
     fn request_native_refresh(&self) {
         for (name, _, worker) in &self.workers {
-            if *name == "codex" || *name == "hermes" {
+            if *name == "codex" || *name == "hermes" || *name == "deepseek_harness_desktop" {
                 worker.request_refresh();
             }
         }

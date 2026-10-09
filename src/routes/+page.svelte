@@ -50,7 +50,8 @@
     local_file: '本地 Hooks',
     codex: 'Codex',
     hermes: 'Hermes',
-    deepseek_harness: 'DeepSeek Harness',
+    deepseek_harness: 'DeepSeek Harness (WSL)',
+    deepseek_harness_desktop: 'DeepSeek 桌面版',
     scanner: '进程扫描',
   };
 
