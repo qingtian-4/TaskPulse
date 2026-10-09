@@ -17,7 +17,13 @@ export function taskSection(task: TaskSnapshot): number {
   return 3;
 }
 export function taskContext(task: TaskSnapshot, settings?: DashboardSettings | null): string {
-  const source = settings?.sources.find(s => s.id === task.source_instance) ?? settings?.sources.find(s => s.id === (task.source === 'deepseek_harness' ? (task.id.startsWith('dsh-native:') ? 'deepseek_harness_desktop' : 'deepseek_harness') : task.source));
+  const explicit = settings?.sources.find(s => s.id === task.source_instance);
+  const nativeId = task.source === 'deepseek_harness'
+    ? (task.id.startsWith('dsh-native:') ? 'deepseek_harness_desktop' : 'deepseek_harness')
+    : task.source;
+  const source = explicit ?? (task.remote
+    ? settings?.sources.find(s => s.location === task.host && s.kind === (task.source === 'codex' ? 'remote_codex' : 'tmux'))
+    : settings?.sources.find(s => s.id === nativeId));
   return `${task.project ?? '未关联项目'} · ${source?.name ?? `${SOURCE_LABEL[task.source]} · ${task.host ?? '本机'}`}`;
 }
 export function projectKey(task: TaskSnapshot): string {

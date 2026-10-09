@@ -19,6 +19,7 @@ use crate::providers::{HostHealth, HostStatus};
 
 static LAST_STATE: Mutex<String> = Mutex::new(String::new());
 static PINNED: AtomicBool = AtomicBool::new(false);
+static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 
 /// Aggregate attention state across tasks (and host health).
 /// Returns an icon-name string used by `icon_bytes`.
@@ -141,6 +142,19 @@ pub fn show_popup(app: &AppHandle) {
         return;
     }
 
+    // WebView2 window creation deadlocks inside synchronous IPC/event handlers.
+    // Tray clicks and notification activation can reach this before a popup exists.
+    if POPUP_CREATING.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let app = app.clone();
+    std::thread::spawn(move || {
+        create_popup(&app);
+        POPUP_CREATING.store(false, Ordering::Release);
+    });
+}
+
+fn create_popup(app: &AppHandle) {
     match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
         .title("TaskPulse")
         .inner_size(440.0, 180.0)
@@ -177,7 +191,7 @@ pub fn show_popup(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub fn open_management(app: AppHandle) -> Result<(), String> {
+pub async fn open_management(app: AppHandle) -> Result<(), String> {
     if let Some(win) = app.get_webview_window("management") {
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
