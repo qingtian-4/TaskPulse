@@ -80,6 +80,7 @@ export interface MonitorSource {
 export interface DashboardSettings {
   version: number; onboarding_complete: boolean; sources: MonitorSource[];
   notifications: boolean; sound: boolean; default_view: 'tasks' | 'projects';
+  recent_days?: number; // 0 keeps all ages; legacy configs default to 7.
 }
 export interface SourceDiscovery { id: string; available: boolean; detail: string }
 export interface SessionPage { items: Array<{ task: TaskSnapshot; reason: string }>; total: number }
@@ -198,6 +199,7 @@ export interface ProviderHealth {
   provider: string;
   status: 'connected' | 'degraded';
   last_success?: number;
+  last_attempt?: number;
   message?: string;
 }
 export interface CodexAccountQuota {

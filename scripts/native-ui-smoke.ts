@@ -68,6 +68,15 @@ try {
   await native.waitFor(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(s=>s.provider==='codex'&&s.status==='connected'))`);
   console.log('Native IPC connected');
   const initial = await native.invoke('get_agents');
+  const archived = await native.invoke('get_archived_attention');
+  if (archived.some((t:any)=>t.status==='running' || t.internal) || archived.some((t:any)=>initial.some((v:any)=>v.id===t.id))) throw Error('Archive/main overlap or live task archived');
+  if (original.recent_days && archived.some((t:any)=>t.updated_at < Date.now()-original.recent_days*86400000)) {
+    await native.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('较早关注')).click()`);
+    await native.waitFor(`document.querySelectorAll('.task-row').length===${archived.length}`);
+    await Bun.write(out + '/native-archive.png', Buffer.from((await native.send('Page.captureScreenshot', {format:'png'})).data,'base64'));
+    await native.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('近期活动')).click()`);
+    await native.waitFor(`document.querySelectorAll('.task-row').length===${initial.length}`);
+  }
   const providers = await native.invoke('get_providers');
   const directory = await native.invoke('list_discovered_sessions', { source: null, query: '', offset: 0, limit: 100 });
   if (initial.some((t: any) => t.internal) || directory.items.some((v: any) => v.task.internal)) throw Error('Internal service task leaked');
@@ -86,6 +95,18 @@ try {
     await manage.waitFor(`document.querySelectorAll('.source-item').length===${original.sources.length}`);
     if ((await manage.evaluate(`document.querySelectorAll('[role=alert]').length`)) || manage.errors.length) throw Error('Management UI error: ' + manage.errors.join(';'));
     await Bun.write(out + '/native-management.png', Buffer.from((await manage.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
+    // Actual UI switch saves immediately; restore before continuing. No task read/pin mutations.
+    changed=true;
+    await manage.evaluate(`document.querySelector('[aria-label="启用 Codex · 本机"]').click()`);
+    await manage.waitFor(`__TAURI_INTERNALS__.invoke('get_monitoring_settings').then(s=>!s.sources.find(x=>x.id==='codex').enabled)`);
+    await manage.waitFor(`document.body.textContent.includes('开关即时生效')`);
+    await manage.evaluate(`document.querySelector('[aria-label="启用 Codex · 本机"]').click()`);
+    await manage.waitFor(`__TAURI_INTERNALS__.invoke('get_monitoring_settings').then(s=>s.sources.find(x=>x.id==='codex').enabled)`);
+    await manage.waitFor(`document.querySelector('[aria-label="启用 Codex · 本机"]').disabled===false`);
+    await manage.evaluate(`document.querySelector('.editor input').value='Unsaved smoke draft';document.querySelector('.editor input').dispatchEvent(new Event('input',{bubbles:true}));`);
+    await manage.invoke('plugin:window|close',{label:'management'});
+    await manage.waitFor(`!!document.querySelector('[aria-labelledby="close-title"]')`);
+    await manage.evaluate(`[...document.querySelectorAll('dialog button')].find(b=>b.textContent==='放弃未保存编辑').click()`);
   } finally { manage.close(); }
   console.log('Native management UI rendered');
   const disabled = structuredClone(original);
@@ -106,12 +127,21 @@ try {
   if (JSON.stringify(await native.invoke('get_monitoring_settings')) !== JSON.stringify(original)) throw Error('Scope changed after restore');
   const detail = restored.find((t: any) => !t.can_focus);
   if (detail && await native.invoke('open_task', { id: detail.id }) !== 'details') throw Error('Detail fallback failed');
+  await native.evaluate(`document.querySelector('[aria-label="立即刷新"]').click()`);
+  await native.waitFor(`document.querySelector('[aria-label="立即刷新"]').disabled===true`);
+  for(let n=0;n<350;n++) {
+    if(await native.evaluate(`document.querySelector('[aria-label="立即刷新"]').disabled===false`))break;
+    if(n===349)throw Error('Manual refresh never completed');
+    await Bun.sleep(100);
+  }
+  const refreshFeedback=await native.evaluate(`document.querySelector('[role="status"]')?.textContent ?? document.querySelector('[role="alert"]')?.textContent ?? ''`);
+  if(!refreshFeedback.includes('刷新') && !refreshFeedback.includes('采集结果'))throw Error('No actual refresh feedback');
   await native.invoke('test_notification');
   if (native.errors.length) throw Error('Popup console/CSP errors: ' + native.errors.join(';'));
   const result = {
-    passed: true, layout, initialTasks: initial.length, discoveredSessions: directory.total,
+    passed: true, layout, initialTasks: initial.length, archivedTasks:archived.length, discoveredSessions: directory.total, refreshFeedback,
     providers: providers.map((p: any) => ({ provider: p.provider, status: p.status })),
-    checks: ['native embedded popup', 'management rendered with native IPC', 'unchanged scopes after save/restore', 'disable + scanner exclusion', 'restore stable Codex identity', 'internal service exclusion', 'no CSP console errors', 'native notification API accepted'],
+    checks: ['native embedded popup', 'archive separate from live main', 'management rendered with native IPC', 'immediate source toggle UI', 'unsaved close prevention', 'manual refresh actual source results', 'unchanged scopes after save/restore', 'disable + scanner exclusion', 'restore stable Codex identity', 'internal service exclusion', 'no CSP console errors', 'native notification API accepted'],
     notVerified: ['user clicked delivered banner', 'real-agent P95 latency']
   };
   await Bun.write(out + '/native-result.json', JSON.stringify(result, null, 2));

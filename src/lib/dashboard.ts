@@ -1,4 +1,4 @@
-import { SOURCE_LABEL, type DashboardSettings, type TaskSnapshot } from './types';
+import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
 export function needsAction(task: TaskSnapshot): boolean {
   return task.status === 'waiting_input' && (task.waiting_reason === 'approval' || task.waiting_reason === 'question');
@@ -16,16 +16,40 @@ export function taskSection(task: TaskSnapshot): number {
   if (task.unread) return 2;
   return 3;
 }
-export function taskContext(task: TaskSnapshot, settings?: DashboardSettings | null): string {
+export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
   const explicit = settings?.sources.find(s => s.id === task.source_instance);
   const nativeId = task.source === 'deepseek_harness'
     ? (task.id.startsWith('dsh-native:') ? 'deepseek_harness_desktop' : 'deepseek_harness')
-    : task.source;
-  const source = explicit ?? (task.remote
+    : task.source === 'claude_code' || task.source === 'gemini' ? 'scanner' : task.source;
+  return explicit ?? (task.remote
     ? settings?.sources.find(s => s.location === task.host && s.kind === (task.source === 'codex' ? 'remote_codex' : 'tmux'))
     : settings?.sources.find(s => s.id === nativeId));
+}
+export function taskContext(task: TaskSnapshot, settings?: DashboardSettings | null): string {
+  const source = taskSource(task, settings);
   return `${task.project ?? '未关联项目'} · ${source?.name ?? `${SOURCE_LABEL[task.source]} · ${task.host ?? '本机'}`}`;
 }
-export function projectKey(task: TaskSnapshot): string {
-  return `${task.source_instance ?? task.host ?? task.source}:${task.project_path ?? task.project ?? '@unassociated'}`;
+export function projectKey(task: TaskSnapshot, settings?: DashboardSettings | null): string {
+  return `${taskSource(task, settings)?.id ?? task.source_instance ?? task.host ?? task.source}:${task.project_path ?? task.project ?? '@unassociated'}`;
+}
+
+export function sourceFreshness(task: TaskSnapshot, settings: DashboardSettings | null, providers: ProviderHealth[], now: number): string {
+  const source = taskSource(task, settings);
+  const health = providers.find(p => p.provider === (source?.id ?? task.source_instance));
+  if (!health?.last_success) return '来源尚未成功采集';
+  const age = now - health.last_success;
+  const stale = health.status === 'degraded' || age > Math.max(30000, (source?.poll_interval_ms ?? 3000) * 3);
+  return `${stale ? '来源数据待更新' : '来源采集'} · ${formatAgo(health.last_success, now)}${health.message ? ' · '+health.message : ''}`;
+}
+
+export function refreshProgress(settings: DashboardSettings | null, providers: ProviderHealth[], since: number) {
+  const enabled = settings?.sources.filter(s => s.enabled) ?? [];
+  const pending = enabled.filter(s => (providers.find(p => p.provider === s.id)?.last_attempt ?? 0) < since);
+  const failed = enabled.filter(s => { const p=providers.find(p=>p.provider===s.id); return p && (p.last_attempt ?? 0) >= since && p.status==='degraded'; });
+  return { total: enabled.length, pending, failed };
+}
+
+export function isEndedResult(task: TaskSnapshot): boolean {
+  return !task.stale && !needsAction(task) && task.unread === true &&
+    (task.status === 'succeeded' || task.status === 'waiting_input' && task.waiting_reason === 'turn_ended');
 }

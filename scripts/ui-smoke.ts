@@ -11,7 +11,7 @@ const socket=new WebSocket(target.webSocketDebuggerUrl);
 await new Promise<void>((ok,fail)=>{socket.onopen=()=>ok();socket.onerror=()=>fail(Error('CDP connection failed'));});
 let seq=0;const pending=new Map<number,{ok:(v:any)=>void;fail:(e:unknown)=>void}>();
 socket.onmessage=e=>{const msg=JSON.parse(String(e.data));if(msg.id){const p=pending.get(msg.id);pending.delete(msg.id);msg.error?p?.fail(msg.error):p?.ok(msg.result);}};
-const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((ok,fail)=>{const id=++seq;pending.set(id,{ok,fail});socket.send(JSON.stringify({id,method,params}));setTimeout(()=>{if(pending.delete(id))fail(Error('CDP timeout '+method));},10000);});
+const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((ok,fail)=>{const id=++seq;pending.set(id,{ok,fail});socket.send(JSON.stringify({id,method,params}));setTimeout(()=>{if(pending.delete(id))fail(Error('CDP timeout '+method));},30000);});
 const evaluate=async(expression:string)=>{const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
 const waitFor=async(expression:string)=>{for(let n=0;n<80;n++){if(await evaluate(expression))return;await Bun.sleep(100);}throw Error('UI assertion timeout: '+expression);};
 const fixture=String.raw`
@@ -22,7 +22,7 @@ let tasks=Array.from({length:28},(_,i)=>({id:'test-'+i,name:i===0?'验收：授�
 globalThis.isTauri=true;
 const callbacks=new Map();const listeners=[];let cb=0;globalThis.__smokeCalls=[];
 globalThis.__TAURI_INTERNALS__={metadata:{currentWindow:{label:location.pathname.startsWith('/manage')?'management':'popup'},currentWebview:{label:'popup'}},transformCallback(fn){callbacks.set(++cb,fn);return cb;},unregisterCallback(id){callbacks.delete(id);},async invoke(cmd,args={}){globalThis.__smokeCalls.push({cmd,args});
-if(cmd==='get_agents')return tasks;if(cmd==='get_providers')return settings.sources.filter(s=>s.enabled).map(s=>({provider:s.id,status:'connected',last_success:now}));if(cmd==='get_monitoring_settings')return settings;if(cmd==='get_selected_task'||cmd==='get_notification_error')return null;if(cmd==='get_codex_quota')return {quota:null,observed_at:null,stale:true,error:null,refreshing:false};if(cmd==='discover_sources')return settings.sources.map(s=>({id:s.id,available:true,detail:'Read-only test fixture'}));
+if(cmd==='get_agents')return tasks;if(cmd==='get_archived_attention')return [];if(cmd==='request_refresh')return Date.now();if(cmd==='get_providers')return settings.sources.filter(s=>s.enabled).map(s=>({provider:s.id,status:'connected',last_success:Date.now(),last_attempt:Date.now()}));if(cmd==='get_monitoring_settings')return settings;if(cmd==='get_selected_task'||cmd==='get_notification_error')return null;if(cmd==='get_codex_quota')return {quota:null,observed_at:null,stale:true,error:null,refreshing:false};if(cmd==='discover_sources')return settings.sources.map(s=>({id:s.id,available:true,detail:'Read-only test fixture'}));
 if(cmd==='save_monitoring_settings'){settings=structuredClone(args.settings);return settings;}if(cmd==='list_discovered_sessions')return {total:1,items:[{task:tasks[1],reason:'历史会话，尚未加入关注'}]};if(cmd==='update_task_attention'){if(args.action==='viewed'||args.action==='hide'||args.action==='ignore')tasks=tasks.filter(t=>t.id!==args.id);return tasks;}if(cmd==='open_task')return 'details';
 if(cmd==='plugin:event|listen'){listeners.push({id:listeners.length+1,...args});return listeners.length;}return null;}};
 globalThis.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
@@ -47,6 +47,8 @@ try {
   await send('Page.navigate',{url:'http://127.0.0.1:5189/manage/'});
   await waitFor(`document.querySelectorAll('.source-item').length===2`);
   await evaluate(`document.querySelector('.source-item input').click()`);
+  await waitFor(`document.body.textContent.includes('开关即时生效')`);
+  await evaluate(`document.querySelector('.editor input').value='Edited name';document.querySelector('.editor input').dispatchEvent(new Event('input',{bubbles:true}));`);
   await evaluate(`document.querySelector('header .primary').click()`);
   await waitFor(`document.body.textContent.includes('已保存并即时生效')`);
   await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='已发现会话').click()`);
