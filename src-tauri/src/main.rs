@@ -149,6 +149,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             focus::focus_terminal,
             watcher::get_agents,
+            watcher::get_archived_attention,
             watcher::get_hosts,
             watcher::get_providers,
             providers::codex::get_codex_quota,

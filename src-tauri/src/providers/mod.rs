@@ -151,6 +151,13 @@ pub struct ProviderHealth {
         skip_serializing_if = "Option::is_none"
     )]
     pub last_success: Option<SystemTime>,
+    /// Most recent completed attempt, including failures. Never a cached read.
+    #[serde(
+        default,
+        with = "opt_epoch_ms",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub last_attempt: Option<SystemTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
 }

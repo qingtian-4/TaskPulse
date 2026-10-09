@@ -60,6 +60,12 @@ pub struct DashboardSettings {
     pub sound: bool,
     #[serde(default = "task_view")]
     pub default_view: String,
+    /// Inactive attention is archived, never deleted. Zero shows all ages.
+    #[serde(default = "recent_days_default")]
+    pub recent_days: u16,
+}
+fn recent_days_default() -> u16 {
+    7
 }
 fn yes() -> bool {
     true
@@ -146,6 +152,7 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         notifications: true,
         sound: false,
         default_view: task_view(),
+        recent_days: recent_days_default(),
     }
 }
 
@@ -239,6 +246,9 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
     }
     if !matches!(settings.default_view.as_str(), "tasks" | "projects") {
         return Err("无效的默认视图".into());
+    }
+    if settings.recent_days > 365 {
+        return Err("近期活动窗口需为 0–365 天；0 表示保留全部关注".into());
     }
     let mut ids = HashSet::new();
     let mut locations = HashSet::new();
@@ -733,6 +743,21 @@ mod tests {
             source_for(&settings, &task).unwrap().kind,
             SourceKind::DeepseekWsl
         );
+    }
+    #[test]
+    fn recent_window_is_defaulted_without_resetting_old_explicit_project_scopes() {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        settings.sources[0].projects = vec!["my-project".into()];
+        let mut value = serde_json::to_value(&settings).unwrap();
+        value.as_object_mut().unwrap().remove("recent_days");
+        let restored: DashboardSettings = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.recent_days, 7);
+        assert_eq!(restored.sources[0].projects, vec!["my-project"]);
+        assert!(validate(&restored).is_ok());
+        settings.recent_days = 366;
+        assert!(validate(&settings).is_err());
+        settings.recent_days = 0;
+        assert!(validate(&settings).is_ok());
     }
     #[test]
     fn project_paths_and_exclusions_do_not_alias_same_names() {

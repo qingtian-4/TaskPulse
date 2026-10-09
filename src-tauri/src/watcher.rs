@@ -157,19 +157,39 @@ static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     let mut tasks = tasks;
+    let settings = crate::monitoring::get_monitoring_settings();
+    for task in &mut tasks {
+        if task.source_instance.is_none() {
+            task.source_instance =
+                crate::monitoring::source_for(&settings, task).map(|s| s.id.clone());
+        }
+    }
     crate::providers::codex::clear_legacy_quota(&mut tasks);
     let Some(tracker) = ATTENTION_TRACKER.get() else {
         return tasks;
     };
-    let mut display = tracker
-        .lock()
-        .unwrap_or_else(|error| {
-            log::warn!("ATTENTION_TRACKER mutex poisoned, recovering");
-            error.into_inner()
-        })
-        .reconcile(tasks);
+    let mut tracker = tracker.lock().unwrap_or_else(|error| {
+        log::warn!("ATTENTION_TRACKER mutex poisoned, recovering");
+        error.into_inner()
+    });
+    tracker.set_recent_days(settings.recent_days);
+    tracker.normalize_source_instances(|task| {
+        crate::monitoring::source_for(&settings, task).map(|s| s.id.clone())
+    });
+    let mut display = tracker.reconcile(tasks);
     display.retain(crate::monitoring::allows);
     display
+}
+
+#[tauri::command]
+pub fn get_archived_attention() -> Vec<TaskSnapshot> {
+    ATTENTION_TRACKER
+        .get()
+        .map(|tracker| tracker.lock().unwrap_or_else(|e| e.into_inner()).archived())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(crate::monitoring::allows)
+        .collect()
 }
 
 pub fn known_sessions() -> Vec<TaskSnapshot> {
@@ -390,9 +410,14 @@ pub fn get_providers() -> Vec<ProviderHealth> {
 /// the last cached snapshot. The watcher owns provider state, so the command is
 /// intentionally non-blocking and fresh results arrive through update events.
 #[tauri::command]
-pub fn request_refresh() {
+pub fn request_refresh() -> u64 {
+    let requested_at = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64;
     crate::providers::codex::request_quota_refresh();
     MANUAL_REFRESH_REQUESTED.store(true, Ordering::Release);
+    requested_at
 }
 
 /// Tauri command: install or uninstall AgentTray/TaskPulse hooks for a CLI
@@ -631,6 +656,7 @@ impl LocalProviders {
                         provider: id,
                         status: ProviderStatus::Degraded,
                         last_success: None,
+                        last_attempt: None,
                         message: Some("首次采集中".into()),
                     });
                     continue;
@@ -666,6 +692,7 @@ impl LocalProviders {
                 provider: id,
                 status: ProviderStatus::Degraded,
                 last_success: None,
+                last_attempt: None,
                 message: Some("首次采集中".into()),
             });
         }
@@ -858,6 +885,7 @@ fn update_provider_health(
             provider: provider.to_string(),
             status: ProviderStatus::Connected,
             last_success: Some(now),
+            last_attempt: Some(now),
             message: None,
         }
     } else {
@@ -865,6 +893,7 @@ fn update_provider_health(
             provider: provider.to_string(),
             status: ProviderStatus::Degraded,
             last_success: previous_success,
+            last_attempt: Some(now),
             message: output.error.clone(),
         }
     };
@@ -1034,6 +1063,7 @@ pub fn watch(app: AppHandle) {
         }
     });
     let mut hosts = Vec::new();
+    let mut remote_attempts = std::collections::HashMap::new();
     let mut revision = crate::monitoring::revision();
     let mut active_settings = crate::monitoring::get_monitoring_settings();
     let mut watcher: Option<RecommendedWatcher> = None;
@@ -1112,6 +1142,9 @@ pub fn watch(app: AppHandle) {
                 continue;
             }
             hosts = output.hosts;
+            for host in &hosts {
+                remote_attempts.insert(host.host.clone(), SystemTime::now());
+            }
             crate::monitoring::observe(&output.catalog);
             crate::monitoring::observe(&output.tasks);
             let tasks: Vec<_> = output
@@ -1172,6 +1205,7 @@ pub fn watch(app: AppHandle) {
                             ProviderStatus::Degraded
                         },
                         last_success: host.last_seen,
+                        last_attempt: remote_attempts.get(&host.host).copied(),
                         message: (host.status == crate::providers::HostStatus::Disconnected)
                             .then(|| "SSH 连接失败；保留上次任务状态，请检查连接".into()),
                     });
@@ -1457,6 +1491,7 @@ mod tests {
         update_provider_health(&mut health, "hermes", &ProviderOutput::default(), now);
         assert_eq!(health[0].status, ProviderStatus::Connected);
         assert_eq!(health[0].last_success, Some(now));
+        assert_eq!(health[0].last_attempt, Some(now));
 
         let later = now + Duration::from_secs(5);
         update_provider_health(
@@ -1467,6 +1502,7 @@ mod tests {
         );
         assert_eq!(health[0].status, ProviderStatus::Degraded);
         assert_eq!(health[0].last_success, Some(now));
+        assert_eq!(health[0].last_attempt, Some(later));
         assert_eq!(health[0].message.as_deref(), Some("database locked"));
 
         let recovered = later + Duration::from_secs(5);
