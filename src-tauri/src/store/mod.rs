@@ -168,6 +168,19 @@ impl TaskStore {
             let Some(mut task) = self.active.remove(&id) else {
                 continue;
             };
+            if task.status == crate::domain::TaskStatus::Running
+                && matches!(
+                    task.source,
+                    TaskSource::Codex | TaskSource::Hermes | TaskSource::DeepSeekHarness
+                )
+                && task.confidence != DetectionConfidence::Inferred
+            {
+                // Missing native metadata or an expired discovery window is
+                // not an end event. Keep it uncertain until a real signal.
+                task.stale = true;
+                self.active.insert(id, task);
+                continue;
+            }
             if task.status == crate::domain::TaskStatus::Running {
                 task.status = crate::domain::TaskStatus::Idle;
                 task.confidence = DetectionConfidence::Inferred;
@@ -258,6 +271,11 @@ fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot) {
     };
 
     if existing_beats {
+        if new.stale && existing.source == new.source {
+            // Preserve the trusted lifecycle, but expose loss of freshness.
+            // A failed probe must not leave the UI claiming live coverage.
+            existing.stale = true;
+        }
         return;
     }
 
@@ -725,7 +743,7 @@ mod tests {
         let out = store.merge(vec![stale_running], secs(now, 5));
 
         assert_eq!(out[0].status, TaskStatus::WaitingInput);
-        assert!(!out[0].stale);
+        assert!(out[0].stale);
     }
 
     #[test]
@@ -749,6 +767,23 @@ mod tests {
                 TaskStatus::Idle
             ]
         );
+    }
+
+    #[test]
+    fn native_task_missing_from_snapshot_is_uncertain_not_completed() {
+        let mut store = TaskStore::default();
+        let now = SystemTime::now();
+        let mut native = t0(
+            "codex:native",
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+        );
+        native.source = TaskSource::Codex;
+        store.merge(vec![native], now);
+        let out = store.merge_sources(vec![], &HashSet::from([TaskSource::Codex]), now);
+        assert_eq!(out[0].status, TaskStatus::Running);
+        assert!(out[0].stale);
+        assert!(out[0].finished_at.is_none());
     }
 
     #[test]

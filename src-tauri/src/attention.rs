@@ -171,6 +171,9 @@ impl AttentionTracker {
             .records
             .get_mut(id)
             .ok_or_else(|| format!("unknown task id: {id}"))?;
+        if record.task.status == TaskStatus::Running {
+            return Err("运行中的任务不能隐藏；如需长期停用，请选择不再监控".into());
+        }
         record.unread = false;
         record.pinned = false;
         record.hidden = true;
@@ -246,7 +249,7 @@ impl AttentionTracker {
             Some(record) if record.ignored => "已设为不再监控".into(),
             Some(record)
                 if record.task.status == TaskStatus::Running
-                    || record.task.requires_action()
+                    || (!record.hidden && record.task.requires_action())
                     || record.unread
                     || record.pinned =>
             {
@@ -262,19 +265,22 @@ impl AttentionTracker {
     }
 
     pub fn follow(&mut self, task: TaskSnapshot) -> Result<Vec<TaskSnapshot>, String> {
+        let mut task = task;
+        task.new_execution = false;
         let record = self
             .records
             .entry(task.id.clone())
             .or_insert(AttentionRecord {
                 last_turn_key: effective_turn_key(&task),
                 last_status: task.status,
-                task,
+                task: task.clone(),
                 unread: true,
                 pinned: false,
                 ignored: false,
                 hidden: false,
             });
         record.unread = true;
+        record.task = task;
         record.ignored = false;
         record.hidden = false;
         record.task.unread = true;
@@ -336,9 +342,7 @@ fn millis(time: SystemTime) -> u64 {
         .as_millis() as u64
 }
 fn section(task: &TaskSnapshot) -> u8 {
-    if task.stale {
-        0
-    } else if task.status == TaskStatus::Failed || task.requires_action() {
+    if task.stale || task.status == TaskStatus::Failed || task.requires_action() {
         0
     } else if task.status == TaskStatus::Running {
         1
@@ -476,6 +480,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
         tracker.reconcile(vec![task("a", TaskStatus::Running, Some("t1"))]);
+        assert!(tracker.hide("a").is_err());
+        tracker.reconcile(vec![task("a", TaskStatus::WaitingInput, Some("t1"))]);
         tracker.hide("a").unwrap();
         let reopened = tracker.reconcile(vec![task("a", TaskStatus::Running, Some("t2"))]);
         assert_eq!(reopened.len(), 1);

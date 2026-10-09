@@ -155,13 +155,18 @@ fn main() {
             watcher::request_refresh,
             watcher::get_status_dir,
             watcher::update_task_attention,
+            watcher::open_task,
+            watcher::get_selected_task,
             monitoring::get_monitoring_settings,
+            monitoring::get_monitoring_error,
             monitoring::save_monitoring_settings,
             monitoring::discover_sources,
             monitoring::list_discovered_sessions,
             watcher::install_hooks,
             notifier::test_notification,
+            notifier::get_notification_error,
             tray::toggle_pin,
+            tray::open_management,
             tray::close_popup
         ])
         .build(tauri::generate_context!())

@@ -28,7 +28,10 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
     if tasks.iter().any(|t| t.status == TaskStatus::Failed) {
         return "error";
     }
-    if tasks.iter().any(|t| t.status == TaskStatus::WaitingInput) {
+    if tasks.iter().any(|t| {
+        t.status == TaskStatus::WaitingInput
+            && t.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded)
+    }) {
         return "needs-input";
     }
     if hosts.iter().any(|h| h.status == HostStatus::Disconnected)
@@ -37,11 +40,22 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
         return "disconnected";
     }
 
-    let Some(best) = tasks.iter().min_by_key(|t| t.status.priority()) else {
+    let Some(best) = tasks.iter().min_by_key(|t| {
+        if t.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
+            4
+        } else {
+            t.status.priority()
+        }
+    }) else {
         return "offline";
     };
     match best.status {
         TaskStatus::Failed => "error",
+        TaskStatus::WaitingInput
+            if best.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) =>
+        {
+            "idle"
+        }
         TaskStatus::WaitingInput => "needs-input",
         TaskStatus::Disconnected => "disconnected",
         TaskStatus::Running => "working",
@@ -115,9 +129,21 @@ pub fn toggle_popup(app: &AppHandle) {
         return;
     }
 
+    show_popup(app);
+}
+
+/// Notification activation must show, never toggle/hide an existing popup.
+pub fn show_popup(app: &AppHandle) {
+    if let Some(win) = app.get_webview_window("popup") {
+        let _ = win.show();
+        let _ = win.set_focus();
+        emit_current_state(app);
+        return;
+    }
+
     match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
         .title("TaskPulse")
-        .inner_size(400.0, 120.0)
+        .inner_size(440.0, 180.0)
         .decorations(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
@@ -148,6 +174,22 @@ pub fn toggle_popup(app: &AppHandle) {
         }
         Err(e) => log::error!("Failed to create popup window: {e}"),
     }
+}
+
+#[tauri::command]
+pub fn open_management(app: AppHandle) -> Result<(), String> {
+    if let Some(win) = app.get_webview_window("management") {
+        win.show().map_err(|e| e.to_string())?;
+        return win.set_focus().map_err(|e| e.to_string());
+    }
+    WebviewWindowBuilder::new(&app, "management", WebviewUrl::App("manage/".into()))
+        .title("TaskPulse · 管理监控来源")
+        .inner_size(900.0, 640.0)
+        .min_inner_size(720.0, 520.0)
+        .resizable(true)
+        .build()
+        .map(|_| ())
+        .map_err(|e| e.to_string())
 }
 
 fn emit_current_state(app: &AppHandle) {
@@ -188,7 +230,12 @@ fn compute_default_position(app: &AppHandle) -> (i32, i32) {
                 .ok()
                 .and_then(|m| m.into_iter().next())
         })
-        .map(|m| (m.size().width as i32 - 410, 32))
+        .map(|m| {
+            (
+                m.position().x + m.size().width as i32 - (450.0 * m.scale_factor()) as i32,
+                m.position().y + 32,
+            )
+        })
         .unwrap_or((100, 32))
 }
 
@@ -270,5 +317,16 @@ mod tests {
             aggregate_state(&[task(TaskStatus::Unknown)], &[]),
             "offline"
         );
+    }
+
+    #[test]
+    fn completed_turn_does_not_mask_a_running_task_as_blocked() {
+        let mut ended = task(TaskStatus::WaitingInput);
+        ended.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert_eq!(
+            aggregate_state(&[ended.clone(), task(TaskStatus::Running)], &[]),
+            "working"
+        );
+        assert_eq!(aggregate_state(&[ended], &[]), "idle");
     }
 }

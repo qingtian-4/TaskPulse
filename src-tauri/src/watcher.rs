@@ -91,6 +91,9 @@ impl From<AgentStatus> for TaskSnapshot {
             status,
             source_instance: None,
             project_path: None,
+            tmux_session: None,
+            tmux_pane: None,
+            tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
             attention_since: 0,
@@ -145,6 +148,7 @@ pub fn status_dir() -> Option<PathBuf> {
 
 /// Cached latest merged task list for on-demand popup refresh.
 static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
+static SELECTED_TASK: Mutex<Option<TaskSnapshot>> = Mutex::new(None);
 static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
 static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
 static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
@@ -181,6 +185,37 @@ pub fn attention_reason(id: &str) -> String {
         .unwrap_or_else(|| "首次采集中".into())
 }
 
+#[tauri::command]
+pub fn get_selected_task() -> Option<TaskSnapshot> {
+    SELECTED_TASK
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+pub fn select_task(app: &AppHandle, task: TaskSnapshot) {
+    *SELECTED_TASK.lock().unwrap_or_else(|e| e.into_inner()) = Some(task.clone());
+    crate::tray::show_popup(app);
+    let _ = app.emit("task-selected", task);
+}
+
+#[tauri::command]
+pub fn open_task(app: AppHandle, id: String) -> Result<String, String> {
+    let task = crate::monitoring::find_session(&id).ok_or("未发现该任务")?;
+    if task.can_focus {
+        if let Some(terminal) = &task.terminal {
+            if crate::focusers::dispatch(&terminal.kind, &terminal.focus_id, &terminal.outer_id)
+                .is_ok()
+            {
+                // A generic terminal/window focus is not proof that this session was read.
+                return Ok("window_focused".into());
+            }
+        }
+    }
+    select_task(&app, task);
+    Ok("details".into())
+}
+
 /// Update one task's TaskPulse-owned attention state.
 #[tauri::command]
 pub fn update_task_attention(
@@ -189,9 +224,11 @@ pub fn update_task_attention(
     action: String,
     pinned: Option<bool>,
 ) -> Result<Vec<TaskSnapshot>, String> {
+    // Resolve before locking the tracker: catalog fallback reads the same tracker.
+    let discovered = crate::monitoring::find_session(&id);
     if matches!(action.as_str(), "follow" | "restore" | "pin") {
-        if let Some(task) = crate::monitoring::find_session(&id) {
-            if !crate::monitoring::allows(&task) {
+        if let Some(task) = &discovered {
+            if !crate::monitoring::allows(task) {
                 return Err("请先启用来源并将项目加入监控范围".into());
             }
         }
@@ -202,10 +239,13 @@ pub fn update_task_attention(
     let tasks = {
         let mut tracker = tracker.lock().unwrap_or_else(|error| error.into_inner());
         match action.as_str() {
-            "follow" => {
-                tracker.follow(crate::monitoring::find_session(&id).ok_or("未发现该会话")?)?
+            "follow" => tracker.follow(discovered.ok_or("未发现该会话")?)?,
+            "ignore" => {
+                if !tracker.known().iter().any(|t| t.id == id) {
+                    tracker.follow(discovered.ok_or("未发现该会话")?)?;
+                }
+                tracker.set_ignored(&id, true)?
             }
-            "ignore" => tracker.set_ignored(&id, true)?,
             "unignore" => tracker.set_ignored(&id, false)?,
             "viewed" => tracker.mark_viewed(&id)?,
             "hide" => tracker.hide(&id)?,
@@ -628,35 +668,43 @@ impl LocalProviders {
                 message: Some("首次采集中".into()),
             });
         }
-        self.configured = desired;
+        self.configured = settings
+            .sources
+            .iter()
+            .filter(|s| s.enabled && !matches!(s.kind, SourceKind::RemoteCodex | SourceKind::Tmux))
+            .cloned()
+            .collect();
     }
 
     fn watch_paths(&self) -> Vec<(PathBuf, RecursiveMode)> {
-        let mut paths: Vec<_> = self
-            .file
-            .status_dirs()
-            .into_iter()
-            .map(|path| (path, RecursiveMode::NonRecursive))
-            .collect();
-        if let Some(home) = dirs_next::home_dir() {
-            // Rollouts and SQLite WAL writes carry start/end/rename changes.
-            paths.push((home.join(".codex/sessions"), RecursiveMode::Recursive));
-            paths.push((home.join(".codex"), RecursiveMode::NonRecursive));
-            paths.push((home.join(".hermes"), RecursiveMode::NonRecursive));
-        }
-        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
-            paths.push((
-                PathBuf::from(local).join("hermes"),
-                RecursiveMode::NonRecursive,
-            ));
-        }
-        if let Some(db) = std::env::var_os("HERMES_STATE_DB").map(PathBuf::from) {
-            if let Some(parent) = db.parent() {
-                paths.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
-            }
+        use crate::monitoring::SourceKind;
+        let mut paths = Vec::new();
+        if self.configured.iter().any(|s| s.kind == SourceKind::Hooks) {
+            paths.extend(
+                self.file
+                    .status_dirs()
+                    .into_iter()
+                    .map(|p| (p, RecursiveMode::NonRecursive)),
+            );
         }
         for source in &self.configured {
-            if source.kind == crate::monitoring::SourceKind::DeepseekDesktop {
+            if source.kind == SourceKind::Codex {
+                if let Some(home) = dirs_next::home_dir() {
+                    paths.push((home.join(".codex/sessions"), RecursiveMode::Recursive));
+                    paths.push((home.join(".codex"), RecursiveMode::NonRecursive));
+                }
+            }
+            if source.kind == SourceKind::Hermes {
+                let db = if source.location.is_empty() {
+                    crate::providers::hermes::discover_db()
+                } else {
+                    Some(PathBuf::from(&source.location))
+                };
+                if let Some(parent) = db.as_ref().and_then(|p| p.parent()) {
+                    paths.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
+                }
+            }
+            if source.kind == SourceKind::DeepseekDesktop {
                 let root = if source.location.is_empty() {
                     DeepSeekHarnessProvider::desktop_root()
                 } else {
@@ -677,7 +725,15 @@ impl LocalProviders {
 
     fn request_native_refresh(&self) {
         for (name, _, worker) in &self.workers {
-            if name == "codex" || name == "hermes" || name == "deepseek_harness_desktop" {
+            if self.configured.iter().any(|s| {
+                &s.id == name
+                    && matches!(
+                        s.kind,
+                        crate::monitoring::SourceKind::Codex
+                            | crate::monitoring::SourceKind::Hermes
+                            | crate::monitoring::SourceKind::DeepseekDesktop
+                    )
+            }) {
                 worker.request_refresh();
             }
         }
@@ -740,7 +796,13 @@ impl LocalProviders {
         } else {
             ProviderOutput::default()
         };
-        update_provider_health(&mut self.health, "local_file", &file, now);
+        if crate::monitoring::get_monitoring_settings()
+            .sources
+            .iter()
+            .any(|s| s.enabled && s.kind == crate::monitoring::SourceKind::Hooks)
+        {
+            update_provider_health(&mut self.health, "local_file", &file, now);
+        }
         let mut authoritative_sources = HashSet::new();
         let mut authoritative_instances = HashSet::new();
         if file.authoritative {
@@ -880,6 +942,19 @@ pub fn watch(app: AppHandle) {
     let _ = ATTENTION_TRACKER.set(Mutex::new(AttentionTracker::open(
         dir.join("attention.json"),
     )));
+    if let Some(tracker) = ATTENTION_TRACKER.get() {
+        tracker
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .reset_baselines(
+                &settings
+                    .sources
+                    .iter()
+                    .filter(|s| s.enabled)
+                    .map(|s| s.id.clone())
+                    .collect(),
+            );
+    }
     let (mut history, restored) = HistoryStore::open(dir.join("recent.json"));
     let mut store = TaskStore::default();
     store.restore_recent(restored, SystemTime::now());
@@ -887,8 +962,9 @@ pub fn watch(app: AppHandle) {
     let mut providers = LocalProviders::new(MonitoringConfig::default());
     let (remote_tx, remote_rx) = std::sync::mpsc::sync_channel::<(u64, ProviderOutput)>(4);
     let (refresh_tx, refresh_rx) = std::sync::mpsc::sync_channel::<()>(1);
+    let remote_revision = crate::monitoring::revision();
     std::thread::spawn(move || {
-        let mut revision = crate::monitoring::revision();
+        let mut revision = remote_revision;
         let mut remote = RemoteTmuxProvider::new(
             crate::monitoring::remote_config(&settings),
             Arc::new(SystemSshExecutor::new()),
@@ -904,7 +980,7 @@ pub fn watch(app: AppHandle) {
             let started = Instant::now();
             let mut output = remote.poll(SystemTime::now());
             let settings = crate::monitoring::get_monitoring_settings();
-            for task in &mut output.tasks {
+            for task in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
                 if let Some(source) = crate::monitoring::source_for(&settings, task) {
                     task.source_instance = Some(source.id.clone());
                 }
@@ -1000,6 +1076,7 @@ pub fn watch(app: AppHandle) {
                 continue;
             }
             hosts = output.hosts;
+            crate::monitoring::observe(&output.catalog);
             crate::monitoring::observe(&output.tasks);
             let tasks: Vec<_> = output
                 .tasks
@@ -1025,7 +1102,8 @@ pub fn watch(app: AppHandle) {
             changed = true;
         }
         if changed {
-            let merged = store.merge(Vec::new(), SystemTime::now());
+            let mut merged = store.merge(Vec::new(), SystemTime::now());
+            crate::monitoring::refresh_known_metadata(&mut merged);
             let display = reconcile_attention(merged);
             let mut tracked = known_sessions();
             tracked.retain(|task| crate::monitoring::allows(task) && !is_ignored(&task.id));
@@ -1040,7 +1118,30 @@ pub fn watch(app: AppHandle) {
             if let Err(error) = history.save_if_changed(store.recent()) {
                 log::warn!("recent history: {error}");
             }
-            emit_agents(&app, &display, &hosts, &providers.health);
+            let mut health = providers.health.clone();
+            for source in active_settings.sources.iter().filter(|s| {
+                s.enabled
+                    && matches!(
+                        s.kind,
+                        crate::monitoring::SourceKind::RemoteCodex
+                            | crate::monitoring::SourceKind::Tmux
+                    )
+            }) {
+                if let Some(host) = hosts.iter().find(|h| h.host == source.location) {
+                    health.push(ProviderHealth {
+                        provider: source.id.clone(),
+                        status: if host.status == crate::providers::HostStatus::Connected {
+                            ProviderStatus::Connected
+                        } else {
+                            ProviderStatus::Degraded
+                        },
+                        last_success: host.last_seen,
+                        message: (host.status == crate::providers::HostStatus::Disconnected)
+                            .then(|| "SSH 连接失败；保留上次任务状态，请检查连接".into()),
+                    });
+                }
+            }
+            emit_agents(&app, &display, &hosts, &health);
         }
         std::thread::sleep(Duration::from_millis(100));
     }
@@ -1058,8 +1159,8 @@ pub fn is_ignored(id: &str) -> bool {
 /// Read-only, bounded sampling of the same workers used by the tray. This
 /// reports native task titles/status and cadence, without prompts or commands.
 pub fn diagnose() {
-    let config = config::load_config();
-    let mut providers = LocalProviders::new(config.monitoring.clone());
+    crate::monitoring::initialize();
+    let mut providers = LocalProviders::new(MonitoringConfig::default());
     let started = Instant::now();
     let seconds = std::env::args()
         .find_map(|arg| {

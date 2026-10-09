@@ -24,7 +24,6 @@ use crate::providers::{Provider, ProviderOutput};
 /// are persisted by the attention tracker, while an old session becomes
 /// eligible again as soon as Hermes updates its activity or turn lease.
 const DISCOVERY_TTL: Duration = Duration::from_secs(7 * 24 * 3600);
-const NAME_LEN: usize = 40;
 
 pub struct HermesProvider {
     db_path: Option<PathBuf>,
@@ -116,11 +115,11 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
             let short: String = row.id.chars().take(8).collect();
             format!("未命名任务 · {short}")
         });
-    let name = truncate(&name, NAME_LEN);
     let waiting_for_user = row
         .description
         .as_deref()
-        .is_some_and(description_waits_for_user);
+        .is_some_and(description_waits_for_user)
+        && row.ended_at.is_none();
     let status = if waiting_for_user {
         // Hermes can keep the turn lease while an approval/input gate is
         // open. The native activity description is more specific than the
@@ -180,21 +179,38 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
             crate::domain::WaitingReason::TurnEnded
         });
         if waiting_for_user {
-            task.input_request_id = row.description.clone();
+            task.input_request_id = row.description.as_deref().map(|description| {
+                format!(
+                    "{}:{}",
+                    lease.map(|l| l.acquired_at.to_string()).unwrap_or_default(),
+                    description.split(" (").next().unwrap_or(description)
+                )
+            });
         }
     }
     task.cli = Some("hermes".into());
     task.session_id = Some(row.id.clone());
-    task.started_at = row.started_at.and_then(epoch_to_time).or(Some(at));
+    task.started_at = lease
+        .filter(|l| l.live)
+        .and_then(|l| epoch_to_time(l.acquired_at))
+        .or_else(|| row.started_at.and_then(epoch_to_time))
+        .or(Some(at));
     task.updated_at = at;
     task.finished_at = row.ended_at.and_then(epoch_to_time);
-    task.turn_key = lease.map(|lease| format!("lease:{:.6}", lease.acquired_at));
+    task.turn_key = Some(
+        lease
+            .map(|lease| format!("lease:{:.6}", lease.acquired_at))
+            .unwrap_or_else(|| format!("settled:{:.6}", row.last_activity_at.unwrap_or(0.0))),
+    );
     task.native_unread = row
         .last_read_at
         .map(|read| row.last_activity_at.is_some_and(|activity| activity > read));
     task.pinned = row.pinned;
     if let Some(d) = &row.description {
         task.message = Some(truncate(d, 120));
+        if status == TaskStatus::Running {
+            task.activity = Some(d.clone());
+        }
     }
     task
 }
@@ -279,7 +295,10 @@ impl Provider for HermesProvider {
         let Some(db_path) = self.db_path.clone() else {
             return ProviderOutput::default();
         };
-        let conn = match rusqlite::Connection::open(&db_path) {
+        let conn = match rusqlite::Connection::open_with_flags(
+            &db_path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        ) {
             Ok(c) => c,
             Err(e) => {
                 let error = format!("open state.db failed: {e}");
@@ -287,6 +306,9 @@ impl Provider for HermesProvider {
                 return self.degraded(error);
             }
         };
+        if let Err(error) = conn.busy_timeout(Duration::from_millis(200)) {
+            return self.degraded(error.to_string());
+        }
 
         // Turn leases → the set of conversation_ids currently in-flight.
         let leases = match read_turn_leases(&conn, now) {

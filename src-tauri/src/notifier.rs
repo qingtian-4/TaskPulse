@@ -3,9 +3,9 @@
 //! The Transition Engine decides WHAT happened; this module decides how it
 //! is surfaced: a one-shot system sound and native desktop notification.
 
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Mutex};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, Emitter};
 
 use crate::domain::TaskSnapshot;
 use crate::transition::TaskEvent;
@@ -46,6 +46,10 @@ pub struct SystemBeepNotifier;
 
 impl Notifier for SystemBeepNotifier {
     fn notify(&self, event: &NotifyEvent, _app: Option<&AppHandle>) {
+        // Windows toast controls sound itself; don't play a second alert.
+        if cfg!(target_os = "windows") || !crate::monitoring::get_monitoring_settings().sound {
+            return;
+        }
         match event {
             NotifyEvent::WaitingInput { task, reason } => {
                 log::info!(
@@ -86,25 +90,99 @@ impl Notifier for DesktopNotifier {
         let (title, body) = notification_copy(event);
 
         let identifier = app.config().identifier.clone();
+        let app = app.clone();
+        let task = match event {
+            NotifyEvent::WaitingInput { task, .. }
+            | NotifyEvent::Succeeded { task }
+            | NotifyEvent::Failed { task }
+            | NotifyEvent::InferredFinished { task } => Some(task.clone()),
+            _ => None,
+        };
         std::thread::spawn(move || {
-            if let Err(error) = send_desktop_notification(&title, &body, &identifier) {
+            if let Err(error) =
+                send_actionable_notification(&title, &body, &identifier, Some(app.clone()), task)
+            {
                 log::error!("Desktop notification failed: {error}");
+                *LAST_NOTIFICATION_ERROR
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
+                let _ = app.emit("notification-error", error);
             }
         });
     }
 }
 
 fn send_desktop_notification(title: &str, body: &str, identifier: &str) -> Result<(), String> {
+    send_actionable_notification(title, body, identifier, None, None)
+}
+
+static LAST_NOTIFICATION_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+#[tauri::command]
+pub fn get_notification_error() -> Option<String> {
+    LAST_NOTIFICATION_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+#[cfg(target_os = "windows")]
+fn send_actionable_notification(
+    title: &str,
+    body: &str,
+    identifier: &str,
+    app: Option<AppHandle>,
+    task: Option<TaskSnapshot>,
+) -> Result<(), String> {
+    use winrt_notification::{Sound, Toast};
+    let id = if cfg!(debug_assertions) {
+        Toast::POWERSHELL_APP_ID
+    } else {
+        identifier
+    };
+    let mut toast = Toast::new(id).title(title).text1(body).sound(
+        crate::monitoring::get_monitoring_settings()
+            .sound
+            .then_some(Sound::Default),
+    );
+    if let Some(icon) = notification_icon_path() {
+        toast = toast.icon(
+            std::path::Path::new(&icon),
+            winrt_notification::IconCrop::Square,
+            "TaskPulse",
+        );
+    }
+    if let Some(app) = app {
+        toast = toast.on_activated(move |_| {
+            let handle = app.clone();
+            let task = task.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(task) = task {
+                    // Metadata may have changed since the toast was sent.
+                    let current = crate::monitoring::find_session(&task.id).unwrap_or(task);
+                    crate::watcher::select_task(&handle, current);
+                } else {
+                    crate::tray::show_popup(&handle);
+                }
+            });
+            Ok(())
+        });
+    }
+    toast.show().map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn send_actionable_notification(
+    title: &str,
+    body: &str,
+    identifier: &str,
+    _app: Option<AppHandle>,
+    _task: Option<TaskSnapshot>,
+) -> Result<(), String> {
     let mut notification = notify_rust::Notification::new();
     notification.summary(title).body(body);
     if let Some(icon) = notification_icon_path() {
         notification.icon(&icon);
-    }
-    #[cfg(target_os = "windows")]
-    if !cfg!(debug_assertions) {
-        // Installed release builds use the registered app ID. Debug binaries
-        // (including isolated verification targets) use Windows' fallback ID.
-        notification.app_id(identifier);
     }
     #[cfg(target_os = "macos")]
     let _ = notify_rust::set_application(if cfg!(debug_assertions) {
@@ -126,7 +204,15 @@ fn notification_copy(event: &NotifyEvent) -> (String, String) {
                 log::debug!("Waiting-input reason for '{}': {reason}", task.name);
             }
             (
-                "TaskPulse · 任务已完成，等待输入".to_string(),
+                match task.waiting_reason {
+                    Some(crate::domain::WaitingReason::TurnEnded) => {
+                        "TaskPulse · 本轮结束，等待后续输入"
+                    }
+                    Some(crate::domain::WaitingReason::Approval) => "TaskPulse · 需要授权",
+                    Some(crate::domain::WaitingReason::Question) => "TaskPulse · 需要你确认",
+                    _ => "TaskPulse · 等待输入",
+                }
+                .to_string(),
                 task_notification_label(task),
             )
         }
@@ -286,7 +372,21 @@ fn platform_beep() -> Result<(), String> {
 
 /// Drive one-shot notifications from transition-engine events.
 pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapshot]) {
+    if !crate::monitoring::get_monitoring_settings().notifications {
+        return;
+    }
     for event in events {
+        let task = match event {
+            TaskEvent::WaitingInput { task, .. }
+            | TaskEvent::Succeeded { task }
+            | TaskEvent::Failed { task }
+            | TaskEvent::InferredFinished { task } => Some(task),
+            _ => None,
+        };
+        if task.is_some_and(|t| !crate::monitoring::allows(t) || crate::watcher::is_ignored(&t.id))
+        {
+            continue;
+        }
         let notify_event = match event {
             TaskEvent::WaitingInput { task, reason } => NotifyEvent::WaitingInput {
                 task: task.clone(),
@@ -313,9 +413,12 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
 #[tauri::command]
 pub async fn test_notification(app: AppHandle) -> Result<(), String> {
     let identifier = app.config().identifier.clone();
-    tauri::async_runtime::spawn_blocking(move || send_test_notification(&identifier))
-        .await
-        .map_err(|error| error.to_string())?
+    tauri::async_runtime::spawn_blocking(move || {
+        let (title, body) = notification_copy(&NotifyEvent::Test);
+        send_actionable_notification(&title, &body, &identifier, Some(app), None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
 }
 
 pub fn send_test_notification(identifier: &str) -> Result<(), String> {
@@ -367,8 +470,8 @@ mod tests {
     }
 
     #[test]
-    fn waiting_notification_says_task_finished_and_needs_input() {
-        let task = TaskSnapshot::new(
+    fn waiting_notification_does_not_invent_completion() {
+        let mut task = TaskSnapshot::new(
             "hermes:session-1",
             "Install image-to-editable-ppt skill",
             TaskSource::Hermes,
@@ -377,11 +480,25 @@ mod tests {
             SystemTime::now(),
         );
         let (title, body) = notification_copy(&NotifyEvent::WaitingInput {
-            task,
+            task: task.clone(),
             reason: Some("provider event".into()),
         });
-        assert_eq!(title, "TaskPulse · 任务已完成，等待输入");
+        assert_eq!(title, "TaskPulse · 等待输入");
         assert_eq!(body, "Hermes · Install image-to-editable-ppt skill");
+        task.waiting_reason = Some(crate::domain::WaitingReason::Question);
+        assert_eq!(
+            notification_copy(&NotifyEvent::WaitingInput {
+                task: task.clone(),
+                reason: None
+            })
+            .0,
+            "TaskPulse · 需要你确认"
+        );
+        task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert_eq!(
+            notification_copy(&NotifyEvent::WaitingInput { task, reason: None }).0,
+            "TaskPulse · 本轮结束，等待后续输入"
+        );
     }
 
     #[test]

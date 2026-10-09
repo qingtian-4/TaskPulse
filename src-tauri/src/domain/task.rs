@@ -221,6 +221,12 @@ pub struct TaskSnapshot {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub project_path: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_pane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tmux_target: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub waiting_reason: Option<WaitingReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_request_id: Option<String>,
@@ -335,6 +341,9 @@ impl TaskSnapshot {
             status,
             source_instance: None,
             project_path: None,
+            tmux_session: None,
+            tmux_pane: None,
+            tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
             attention_since: 0,

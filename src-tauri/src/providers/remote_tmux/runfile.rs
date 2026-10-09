@@ -194,6 +194,10 @@ pub fn run_file_to_task(
     if let Some(finished) = run.finished_at.and_then(epoch_to_time) {
         task.finished_at = Some(finished);
     }
+    task.project_path = run.cwd.clone();
+    task.tmux_pane = run.pane_id.clone();
+    task.turn_key = run.run_id.clone();
+    task.activity = run.command.clone();
     if let Some(pid) = run.pid {
         task.pid = Some(pid);
     }
@@ -231,7 +235,12 @@ pub fn tasks_from_run_files(
         .filter_map(|run| {
             let pane_id = run.pane_id.as_deref().unwrap_or("");
             let has_workload = !pane_id.is_empty() && pane_workload.contains(pane_id);
-            run_file_to_task(host, run, procs, has_workload, now)
+            let mut task = run_file_to_task(host, run, procs, has_workload, now)?;
+            if let Some(pane) = panes.iter().find(|p| p.pane_id == pane_id) {
+                task.tmux_session = Some(pane.session_name.clone());
+                task.tmux_target = Some(pane.target());
+            }
+            Some(task)
         })
         .collect()
 }

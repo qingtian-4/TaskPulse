@@ -290,7 +290,7 @@ impl CodexProvider {
             .and_then(|s| s.to_str())
             .unwrap_or("")
             .to_string();
-        parse_codex_rollout(&body, now, &sid)
+        parse_codex_rollout_unfiltered(&body, now, &sid)
     }
 
     fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
@@ -299,7 +299,7 @@ impl CodexProvider {
         let len = metadata.len();
         if let Some((cached_mtime, cached_len, state)) = self.cache.get(path) {
             if *cached_mtime == modified && *cached_len == len {
-                return state.clone().filter(|state| session_is_live(state, now));
+                return state.clone();
             }
         }
 
@@ -710,7 +710,7 @@ fn summarize_prompt(prompt: &str) -> String {
         .find(|part| !part.trim().is_empty())
         .unwrap_or(&collapsed)
         .trim();
-    clean_task_name(first_clause)
+    truncate(first_clause, 56)
 }
 
 fn session_is_live(state: &SessionState, now: SystemTime) -> bool {
@@ -728,6 +728,15 @@ fn session_is_live(state: &SessionState, now: SystemTime) -> bool {
 /// (which reads remote `~/.codex/sessions` rollouts). Keeps the Codex event
 /// semantics in ONE place behind an adapter boundary.
 pub fn parse_codex_rollout(
+    body: &str,
+    now: SystemTime,
+    default_session_id: &str,
+) -> Option<SessionState> {
+    let state = parse_codex_rollout_unfiltered(body, now, default_session_id)?;
+    session_is_live(&state, now).then_some(state)
+}
+
+fn parse_codex_rollout_unfiltered(
     body: &str,
     now: SystemTime,
     default_session_id: &str,
@@ -943,7 +952,7 @@ pub fn parse_codex_rollout(
         quota_1w_used_pct,
         quota_1w_resets_at,
     };
-    session_is_live(&state, now).then_some(state)
+    Some(state)
 }
 
 fn summarize_tool_activity(payload: &serde_json::Value) -> Option<String> {
@@ -1128,6 +1137,49 @@ pub fn tasks_from_codex_section(
     out
 }
 
+/// Native metadata is a discovery directory, not a request to import idle history.
+pub fn catalog_from_codex_section(
+    section: &str,
+    ssh_host: &str,
+    host_id: &str,
+) -> Vec<TaskSnapshot> {
+    section
+        .lines()
+        .filter_map(|line| {
+            let value: serde_json::Value =
+                serde_json::from_str(line.strip_prefix("META\t")?).ok()?;
+            let id = value.get("id")?.as_str()?;
+            let title = value.get("t")?.as_str()?;
+            if is_synthetic_title(title) {
+                return None;
+            }
+            let seconds = value.get("u").and_then(|v| v.as_u64()).unwrap_or(0);
+            let mut task = TaskSnapshot::new(
+                format!("codex-remote:{host_id}:{id}"),
+                if title.trim().is_empty() {
+                    unnamed_task(id)
+                } else {
+                    clean_task_name(title)
+                },
+                TaskSource::Codex,
+                TaskStatus::Unknown,
+                DetectionConfidence::Hook,
+                UNIX_EPOCH + Duration::from_secs(seconds),
+            )
+            .with_host(ssh_host)
+            .with_remote();
+            task.project_path = value
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(str::to_string);
+            task.project = project_from_cwd(task.project_path.as_deref());
+            task.session_id = Some(id.to_string());
+            Some(task)
+        })
+        .collect()
+}
+
 /// Extract the Codex thread id (uuid) from a rollout filename like
 /// `rollout-2026-08-27T23-12-16-01a0457e-da94-7711-a20f-9738009992b8.jsonl`.
 /// The tail we read for remote sessions does not include session_meta, so we
@@ -1151,17 +1203,9 @@ fn is_synthetic_title(t: &str) -> bool {
         || t.starts_with("hello") && t.len() < 20
 }
 
-/// Collapse whitespace/newlines (titles can be multi-line prompts) and clamp
-/// to a readable length for a row label.
+/// Preserve the complete native title; row ellipsis is presentation-only.
 fn clean_task_name(s: &str) -> String {
-    let collapsed: String = s.split_whitespace().collect::<Vec<_>>().join(" ");
-    if collapsed.chars().count() <= 56 {
-        collapsed
-    } else {
-        let mut t: String = collapsed.chars().take(56).collect();
-        t.push('…');
-        t
-    }
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1276,6 +1320,11 @@ impl Provider for CodexProvider {
             .values()
             .filter(|meta| {
                 meta.pinned
+                    || self.seen.contains_key(&meta.id)
+                    || crate::watcher::known_sessions().iter().any(|t| {
+                        t.id == format!("codex:{}", meta.id)
+                            && (t.unread || t.pinned || t.requires_action())
+                    })
                     || now_secs.saturating_sub(meta.updated_at) <= DISCOVERY_TTL.as_secs() as i64
             })
             .filter_map(|meta| meta.rollout_path.as_deref())
@@ -1293,8 +1342,32 @@ impl Provider for CodexProvider {
         let mut live: std::collections::HashMap<String, SystemTime> = Default::default();
         for path in &files {
             if let Some(state) = self.cached_session_state(path, now) {
+                let known = self.seen.contains_key(&state.session_id)
+                    || metadata.get(&state.session_id).is_some_and(|m| m.pinned)
+                    || crate::watcher::known_sessions().iter().any(|t| {
+                        t.id == format!("codex:{}", state.session_id)
+                            && (t.unread || t.pinned || t.requires_action())
+                    });
+                if !session_is_live(&state, now)
+                    && !known
+                    && !matches!(
+                        state.waiting_reason,
+                        Some(
+                            crate::domain::WaitingReason::Approval
+                                | crate::domain::WaitingReason::Question
+                        )
+                    )
+                {
+                    continue;
+                }
                 live.insert(state.session_id.clone(), state.updated_at);
-                tasks.push(self.session_to_task(&state, metadata.get(&state.session_id), now));
+                let mut task = self.session_to_task(&state, metadata.get(&state.session_id), now);
+                if state.status == TaskStatus::Running
+                    && now.duration_since(state.updated_at).unwrap_or_default() > RUNNING_TTL
+                {
+                    task.stale = true;
+                }
+                tasks.push(task);
             }
         }
         let emitted: std::collections::HashSet<String> = tasks
@@ -1631,7 +1704,7 @@ mod tests {
     }
 
     #[test]
-    fn stale_running_session_dropped() {
+    fn stale_running_state_is_retained_but_not_treated_as_fresh_discovery() {
         let body = format!(
             "{}{}",
             header("/home/user/proj"),
@@ -1642,9 +1715,13 @@ mod tests {
         );
         let (_d, p) = temp_rollout(&body);
         let provider = CodexProvider::with_root(PathBuf::from("/nonexistent"));
-        // now is far in the future → the running session is stale → dropped
+        // Preserve raw events for already tracked sessions. Fresh discovery
+        // still applies TTL, while known sessions can display uncertainty.
         let fut = SystemTime::now() + Duration::from_secs(3600 * 30);
-        assert!(provider.parse_session_state(&p, fut).is_none());
+        let state = provider.parse_session_state(&p, fut).unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert!(!session_is_live(&state, fut));
+        assert!(parse_codex_rollout(&body, fut, "test").is_none());
     }
 
     #[test]
@@ -1732,6 +1809,10 @@ mod tests {
             "META\t{\"id\":\"old-session\",\"t\":\"Dormant task\",\"cwd\":\"/tmp/project\"}\n";
         let tasks = tasks_from_codex_section(section, "Server3", "server3", SystemTime::now());
         assert!(tasks.is_empty());
+        let catalog = catalog_from_codex_section(section, "Server3", "server3");
+        assert_eq!(catalog.len(), 1);
+        assert_eq!(catalog[0].id, "codex-remote:server3:old-session");
+        assert_eq!(catalog[0].status, TaskStatus::Unknown);
     }
 
     #[test]

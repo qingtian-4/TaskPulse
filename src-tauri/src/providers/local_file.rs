@@ -162,6 +162,9 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
         let mut snapshot = TaskSnapshot {
             source_instance: None,
             project_path: None,
+            tmux_session: None,
+            tmux_pane: None,
+            tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
             attention_since: 0,
@@ -237,6 +240,9 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
         Some(TaskSnapshot {
             source_instance: None,
             project_path: None,
+            tmux_session: None,
+            tmux_pane: None,
+            tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
             attention_since: 0,

@@ -73,6 +73,7 @@ struct Runtime {
     settings: Option<DashboardSettings>,
     revision: u64,
     catalog: HashMap<String, TaskSnapshot>,
+    config_error: Option<String>,
 }
 static RUNTIME: OnceLock<Mutex<Runtime>> = OnceLock::new();
 fn runtime() -> &'static Mutex<Runtime> {
@@ -164,17 +165,55 @@ fn source(id: &str, name: &str, kind: SourceKind, location: &str) -> SourceConfi
 }
 
 pub fn initialize() -> DashboardSettings {
+    let mut runtime = runtime().lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(settings) = &runtime.settings {
+        return settings.clone();
+    }
     let path = config::config_path();
     let existed = path.exists();
     let cfg = config::load_config();
-    let settings = std::fs::read_to_string(&path)
-        .ok()
-        .and_then(|body| toml::from_str::<toml::Value>(&body).ok())
-        .and_then(|value| value.get("dashboard").cloned())
-        .and_then(|value| value.try_into().ok())
-        .unwrap_or_else(|| from_legacy(&cfg, existed));
-    runtime().lock().unwrap_or_else(|e| e.into_inner()).settings = Some(settings.clone());
+    let parsed = (|| -> Result<DashboardSettings, String> {
+        let body = std::fs::read_to_string(&path).map_err(|e| e.to_string())?;
+        let value: toml::Value = toml::from_str(&body).map_err(|e| format!("配置无法解析：{e}"))?;
+        let settings: DashboardSettings = if let Some(dashboard) = value.get("dashboard") {
+            dashboard
+                .clone()
+                .try_into()
+                .map_err(|e| format!("来源配置无效：{e}"))?
+        } else {
+            from_legacy(&cfg, existed)
+        };
+        validate(&settings)?;
+        Ok(settings)
+    })();
+    let settings = match parsed {
+        Ok(settings) => settings,
+        Err(error) => {
+            runtime.config_error = Some(format!(
+                "{error}。已暂停所有来源，原文件未覆盖；请修复 {}",
+                path.display()
+            ));
+            from_legacy(&TaskPulseConfig::default(), false)
+        }
+    };
+    // A new config must persist its unconfirmed onboarding state. Otherwise
+    // the next launch would mistake the generated file for a legacy opt-in.
+    if !existed && runtime.config_error.is_none() {
+        if let Err(error) = write_settings(&path, &settings) {
+            runtime.config_error = Some(error);
+        }
+    }
+    runtime.settings = Some(settings.clone());
     settings
+}
+
+#[tauri::command]
+pub fn get_monitoring_error() -> Option<String> {
+    runtime()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .config_error
+        .clone()
 }
 
 #[tauri::command]
@@ -217,7 +256,31 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
         {
             return Err("请输入有效的 SSH 别名".into());
         }
-        if !locations.insert((format!("{:?}", source.kind), source.location.to_lowercase())) {
+        let location = match source.kind {
+            SourceKind::DeepseekDesktop => Some(if source.location.is_empty() {
+                crate::providers::deepseek_harness::DeepSeekHarnessProvider::desktop_root()
+            } else {
+                PathBuf::from(&source.location)
+            }),
+            SourceKind::Hermes => {
+                if source.location.is_empty() {
+                    crate::providers::hermes::discover_db()
+                } else {
+                    Some(PathBuf::from(&source.location))
+                }
+            }
+            _ => None,
+        };
+        let location = location
+            .map(|path| {
+                path.canonicalize()
+                    .unwrap_or(path)
+                    .display()
+                    .to_string()
+                    .to_lowercase()
+            })
+            .unwrap_or_else(|| source.location.to_lowercase());
+        if !locations.insert((format!("{:?}", source.kind), location)) {
             return Err("相同运行环境只能添加一个同类来源".into());
         }
         if matches!(
@@ -226,6 +289,15 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
         ) && !source.location.is_empty()
         {
             return Err("此来源使用默认本机配置，不支持自定义目录".into());
+        }
+        let builtin = match source.kind {
+            SourceKind::Codex => Some("codex"),
+            SourceKind::Hooks => Some("local_file"),
+            SourceKind::Scanner => Some("scanner"),
+            _ => None,
+        };
+        if builtin.is_some_and(|id| source.id != id) {
+            return Err("本机 Codex、Hooks、扫描来源使用固定 ID，请启用已有来源".into());
         }
     }
     Ok(())
@@ -264,6 +336,7 @@ pub fn save_monitoring_settings(
     {
         let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
         state.settings = Some(settings.clone());
+        state.config_error = None;
         state.revision += 1;
     }
     crate::watcher::request_refresh();
@@ -339,6 +412,26 @@ pub fn exclusion(settings: &DashboardSettings, task: &TaskSnapshot) -> Option<&'
     if !source.enabled {
         return Some("来源未启用");
     }
+    if source.kind == SourceKind::Tmux
+        && ((!source.tmux_sessions.is_empty()
+            && !source.tmux_sessions.iter().any(|p| {
+                task.tmux_session
+                    .as_deref()
+                    .is_some_and(|s| config::wildcard_match(p, s))
+            }))
+            || (!source.tmux_panes.is_empty()
+                && !source.tmux_panes.iter().any(|p| {
+                    task.tmux_pane
+                        .as_deref()
+                        .is_some_and(|s| config::wildcard_match(p, s))
+                        || task
+                            .tmux_target
+                            .as_deref()
+                            .is_some_and(|s| config::wildcard_match(p, s))
+                })))
+    {
+        return Some("tmux 不在监控范围");
+    }
     if source
         .excluded_projects
         .iter()
@@ -356,7 +449,40 @@ pub fn allows(task: &TaskSnapshot) -> bool {
 pub fn observe(tasks: &[TaskSnapshot]) {
     let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
     for task in tasks {
+        if task.status == crate::domain::TaskStatus::Unknown {
+            if let Some(previous) = state.catalog.get_mut(&task.id) {
+                previous.name = task.name.clone();
+                previous.project = task.project.clone();
+                previous.project_path = task.project_path.clone();
+                continue;
+            }
+        }
         state.catalog.insert(task.id.clone(), task.clone());
+    }
+}
+
+pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
+    let ids: HashSet<_> = tasks.iter().map(|t| t.id.clone()).collect();
+    // Refresh known sessions without importing dormant catalog entries.
+    let catalog = runtime()
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .catalog
+        .clone();
+    for mut known in crate::watcher::known_sessions() {
+        if ids.contains(&known.id) || !allows(&known) {
+            continue;
+        }
+        if let Some(meta) = catalog.get(&known.id) {
+            known.name = meta.name.clone();
+            known.project = meta.project.clone();
+            known.project_path = meta.project_path.clone();
+            known.new_execution = false;
+            if known.status == crate::domain::TaskStatus::Running {
+                known.stale = true;
+            }
+            tasks.push(known);
+        }
     }
 }
 
@@ -428,17 +554,24 @@ pub fn list_discovered_sessions(
 }
 
 pub fn find_session(id: &str) -> Option<TaskSnapshot> {
-    runtime()
+    let catalog = runtime()
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .catalog
         .get(id)
-        .cloned()
-        .or_else(|| {
-            crate::watcher::known_sessions()
-                .into_iter()
-                .find(|t| t.id == id)
-        })
+        .cloned();
+    let known = crate::watcher::known_sessions()
+        .into_iter()
+        .find(|t| t.id == id);
+    if let (Some(meta), Some(mut task)) = (&catalog, known.clone()) {
+        if meta.status == crate::domain::TaskStatus::Unknown {
+            task.name = meta.name.clone();
+            task.project = meta.project.clone();
+            task.project_path = meta.project_path.clone();
+            return Some(task);
+        }
+    }
+    catalog.or(known)
 }
 
 #[derive(Serialize)]
@@ -460,7 +593,11 @@ pub fn discover_sources() -> Vec<SourceDiscovery> {
                     home.join(".codex").display().to_string(),
                 ),
                 SourceKind::Hermes => {
-                    let path = crate::providers::hermes::discover_db();
+                    let path = if source.location.is_empty() {
+                        crate::providers::hermes::discover_db()
+                    } else {
+                        Some(PathBuf::from(&source.location)).filter(|p| p.exists())
+                    };
                     (
                         path.is_some(),
                         path.map(|p| p.display().to_string())
@@ -507,8 +644,19 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
                 .iter()
                 .find(|s| s.enabled && s.kind == SourceKind::Tmux && s.location == source.location);
             cfg.remote_hosts.push(RemoteHostConfig {
-                id: source
-                    .id
+                id: settings
+                    .sources
+                    .iter()
+                    .find(|s| s.location == source.location && s.kind == SourceKind::RemoteCodex)
+                    .or_else(|| {
+                        settings
+                            .sources
+                            .iter()
+                            .find(|s| s.location == source.location && s.kind == SourceKind::Tmux)
+                    })
+                    .filter(|s| s.id.starts_with("remote-codex:") || s.id.starts_with("tmux:"))
+                    .map(|s| s.id.as_str())
+                    .unwrap_or(&source.location)
                     .split_once(':')
                     .map(|(_, id)| id.to_string())
                     .unwrap_or_else(|| source.location.clone()),
@@ -576,6 +724,38 @@ mod tests {
         assert!(exclusion(&settings, &task).is_none());
         settings.sources[0].excluded_projects = vec!["demo".into()];
         assert!(exclusion(&settings, &task).is_some());
+    }
+
+    #[test]
+    fn scanner_cannot_bypass_disabled_native_source_and_host_identity_survives_disable() {
+        let mut cfg = TaskPulseConfig::default();
+        cfg.remote_hosts.push(RemoteHostConfig {
+            id: "server3".into(),
+            ssh_host: "Server3".into(),
+            enabled: true,
+            poll_interval_ms: 3000,
+            tmux_sessions: vec![],
+            tmux_panes: vec![],
+        });
+        let mut settings = from_legacy(&cfg, true);
+        let task = TaskSnapshot::new(
+            "scan:1",
+            "process",
+            TaskSource::Codex,
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            std::time::SystemTime::now(),
+        );
+        settings.sources[0].enabled = false;
+        assert_eq!(exclusion(&settings, &task), Some("来源未启用"));
+        let remote_id = remote_config(&settings).remote_hosts[0].id.clone();
+        settings
+            .sources
+            .iter_mut()
+            .find(|s| s.kind == SourceKind::RemoteCodex)
+            .unwrap()
+            .enabled = false;
+        assert_eq!(remote_config(&settings).remote_hosts[0].id, remote_id);
     }
     #[test]
     fn saving_preserves_unknown_config_and_backs_up_legacy() {

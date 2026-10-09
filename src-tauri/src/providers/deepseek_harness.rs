@@ -52,6 +52,8 @@ struct SessionMetadata {
     status: Option<TaskStatus>,
     seq: Option<i64>,
     turn_start_seq: Option<i64>,
+    waiting_reason: Option<crate::domain::WaitingReason>,
+    input_request_id: Option<String>,
 }
 
 pub struct DeepSeekHarnessProvider {
@@ -317,7 +319,7 @@ impl DeepSeekHarnessProvider {
         };
         let mut task = TaskSnapshot::new(
             format!("{prefix}:{session_id}"),
-            truncate(name, NAME_LEN),
+            name.trim(),
             TaskSource::DeepSeekHarness,
             status,
             DetectionConfidence::Hook,
@@ -638,6 +640,8 @@ impl Provider for DeepSeekHarnessProvider {
                 },
             };
             let session_id = session_id_from_path(&path);
+            let mut waiting_reason = None;
+            let mut input_request_id = None;
             if let Some(native) = metadata.get(&session_id) {
                 if let Some(title) = native
                     .title
@@ -662,6 +666,8 @@ impl Provider for DeepSeekHarnessProvider {
                                 && status == TaskStatus::Running)
                         {
                             state.status = status;
+                            waiting_reason = native.waiting_reason;
+                            input_request_id = native.input_request_id.clone();
                         }
                     }
                     if let Some(seq) = native.turn_start_seq {
@@ -682,7 +688,9 @@ impl Provider for DeepSeekHarnessProvider {
             task.started_at = state.started_at;
             task.project_path = (!state.cwd.is_empty()).then_some(state.cwd.clone());
             if task.status == TaskStatus::WaitingInput {
-                task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+                task.waiting_reason =
+                    waiting_reason.or(Some(crate::domain::WaitingReason::TurnEnded));
+                task.input_request_id = input_request_id;
             }
             task.activity = if state.status == TaskStatus::Running {
                 state.activity.or_else(|| Some("正在分析".into()))
@@ -751,7 +759,7 @@ fn parse_metadata_record(session: &serde_json::Value) -> SessionMetadata {
     let turn_start_seq = boundary
         .and_then(|value| value.get("openTurnStartSeq"))
         .and_then(serde_json::Value::as_i64);
-    let seq = rows
+    let mut seq = rows
         .pointer("/turnBoundary/seq")
         .or_else(|| rows.pointer("/sessionStats/seq"))
         .and_then(serde_json::Value::as_i64);
@@ -760,7 +768,21 @@ fn parse_metadata_record(session: &serde_json::Value) -> SessionMetadata {
     // call means work is active; a closed projection means the latest
     // turn has settled. Goal completion/failure is more specific than
     // the generic waiting-for-user state.
-    let status = if turn_start_seq.is_some()
+    let active_questions = rows
+        .pointer("/userQuestions/val/questions/active")
+        .and_then(serde_json::Value::as_array)
+        .filter(|questions| !questions.is_empty());
+    let question_seq = rows
+        .pointer("/userQuestions/seq")
+        .and_then(serde_json::Value::as_i64);
+    let gate =
+        active_questions.is_some() && question_seq.is_some_and(|q| seq.is_none_or(|s| q >= s));
+    if gate {
+        seq = question_seq;
+    }
+    let status = if gate {
+        Some(TaskStatus::WaitingInput)
+    } else if turn_start_seq.is_some()
         || open_step.is_some_and(|step| !step.is_null())
         || has_pending_calls
     {
@@ -779,12 +801,44 @@ fn parse_metadata_record(session: &serde_json::Value) -> SessionMetadata {
         status,
         seq,
         turn_start_seq,
+        waiting_reason: if gate {
+            Some(crate::domain::WaitingReason::Question)
+        } else if status == Some(TaskStatus::WaitingInput) {
+            Some(crate::domain::WaitingReason::TurnEnded)
+        } else {
+            None
+        },
+        input_request_id: gate
+            .then(|| serde_json::to_string(&active_questions).unwrap_or_default()),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn structured_questions_block_but_an_old_question_cannot_override_end() {
+        let mut record = serde_json::json!({"rows": {
+            "sessionStats":{"seq":10,"val":{"turns":1,"openStep":1,"pendingCalls":{}}},
+            "turnBoundary":{"seq":10,"val":{"openTurnStartSeq":10}},
+            "userQuestions":{"seq":11,"val":{"questions":{"active":[{"id":"q1","text":"Choose"}]}}}
+        }});
+        let state = parse_metadata_record(&record);
+        assert_eq!(state.status, Some(TaskStatus::WaitingInput));
+        assert_eq!(
+            state.waiting_reason,
+            Some(crate::domain::WaitingReason::Question)
+        );
+        assert!(state.input_request_id.unwrap().contains("q1"));
+        record["rows"]["turnBoundary"] =
+            serde_json::json!({"seq":12,"val":{"openTurnStartSeq":null}});
+        record["rows"]["sessionStats"]["val"]["openStep"] = serde_json::Value::Null;
+        assert_eq!(
+            parse_metadata_record(&record).waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+    }
 
     fn desktop_fixture(root: &std::path::Path, ended: bool, title: &str, projection_seq: i64) {
         let dir = root.join("sessions/workspace/session-fixture");

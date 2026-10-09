@@ -60,6 +60,24 @@ pub struct RemoteTmuxProvider {
 
 impl RemoteTmuxProvider {
     pub fn reconfigure(&mut self, config: TaskPulseConfig) {
+        // Narrowing a scope is not workload completion. Forget inference for
+        // the affected host before reconciling its newly filtered snapshot.
+        for host in &config.remote_hosts {
+            if self
+                .config
+                .remote_hosts
+                .iter()
+                .find(|h| h.id == host.id)
+                .is_some_and(|old| {
+                    old.tmux_sessions != host.tmux_sessions
+                        || old.tmux_panes != host.tmux_panes
+                        || old.ssh_host != host.ssh_host
+                })
+            {
+                self.hosts.remove(&host.id);
+                self.detected.retain(|(id, _), _| id != &host.id);
+            }
+        }
         let enabled: std::collections::HashSet<_> =
             config.enabled_hosts().into_iter().map(|h| h.id).collect();
         self.hosts.retain(|id, _| enabled.contains(id));
@@ -184,7 +202,7 @@ impl RemoteTmuxProvider {
                     } else {
                         pane.pane_title.clone()
                     };
-                    let task = TaskSnapshot::new(
+                    let mut task = TaskSnapshot::new(
                         format!("ssh:{ssh_host}:{}", pane.pane_id),
                         label,
                         TaskSource::RemoteTmux,
@@ -198,6 +216,10 @@ impl RemoteTmuxProvider {
                     .with_message(message)
                     .with_pid(pid)
                     .with_started_at(detected_at);
+                    task.project_path = Some(pane.pane_current_path.clone());
+                    task.tmux_session = Some(pane.session_name.clone());
+                    task.tmux_pane = Some(pane.pane_id.clone());
+                    task.tmux_target = Some(pane.target());
                     tasks.push(task);
                 }
                 detector::PaneClass::Idle => {
@@ -230,6 +252,10 @@ impl RemoteTmuxProvider {
                         .with_finished_at(now)
                         .with_message("finished (inferred — exit code unknown)");
                         task.recent = true;
+                        task.project_path = Some(pane.pane_current_path.clone());
+                        task.tmux_session = Some(pane.session_name.clone());
+                        task.tmux_pane = Some(pane.pane_id.clone());
+                        task.tmux_target = Some(pane.target());
                         tasks.push(task);
                         log::info!(
                             "Remote pane {} on {} finished (inferred, no exit code)",
@@ -270,6 +296,14 @@ impl RemoteTmuxProvider {
             .with_finished_at(now)
             .with_message("pane gone — finished (inferred)");
             task.recent = true;
+            if let Some(previous) = state.last_tasks.iter().find(|t| t.id == task.id) {
+                task.name = previous.name.clone();
+                task.project = previous.project.clone();
+                task.project_path = previous.project_path.clone();
+                task.tmux_session = previous.tmux_session.clone();
+                task.tmux_pane = previous.tmux_pane.clone();
+                task.tmux_target = previous.tmux_target.clone();
+            }
             tasks.push(task);
             log::info!(
                 "Remote pane {pane_id} on {ssh_host} destroyed while running → inferred finish"
@@ -312,6 +346,11 @@ impl RemoteTmuxProvider {
         state.last_tasks = tasks.clone();
         ProviderOutput {
             tasks,
+            catalog: crate::providers::codex::catalog_from_codex_section(
+                codex_section,
+                ssh_host,
+                host_id,
+            ),
             hosts: vec![HostHealth::connected(ssh_host.to_string(), now)],
             ..ProviderOutput::default()
         }
@@ -445,6 +484,7 @@ impl Provider for RemoteTmuxProvider {
                         now,
                     );
                     output.tasks.extend(host_out.tasks);
+                    output.catalog.extend(host_out.catalog);
                     output.hosts.extend(host_out.hosts);
                 }
                 Err(e) => self.handle_failure(&r.host_id, &r.ssh_host, e, now, &mut output),
@@ -591,6 +631,21 @@ mod tests {
         assert!(session_allowed("worker-abc", &wl));
         assert!(!session_allowed("other", &wl));
         assert!(!session_allowed("trainx", &wl)); // exact, not prefix
+    }
+
+    #[test]
+    fn narrowing_tmux_scope_does_not_emit_a_fake_finish() {
+        let fake = FakeSshExecutor::new()
+            .with("Server3", &running_snapshot())
+            .with("Server3", &running_snapshot())
+            .arc();
+        let mut provider = provider_with(fake);
+        let now = SystemTime::now();
+        assert_eq!(provider.poll(now).tasks.len(), 1);
+        let mut config = config_single_host();
+        config.remote_hosts[0].tmux_sessions = vec!["different-session".into()];
+        provider.reconfigure(config);
+        assert!(provider.poll(now).tasks.is_empty());
     }
 
     #[test]

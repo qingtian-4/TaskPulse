@@ -43,6 +43,7 @@ pub enum TaskEvent {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 enum EventKind {
     WaitingInput,
+    TurnEnded,
     Succeeded,
     Failed,
     InferredFinished,
@@ -54,6 +55,8 @@ enum EventKind {
 pub struct TransitionEngine {
     prev: HashMap<String, TaskStatus>,
     prev_turns: HashMap<String, Option<String>>,
+    #[serde(default)]
+    prev_waits: HashMap<String, (Option<crate::domain::WaitingReason>, Option<String>)>,
     prev_hosts: HashMap<String, HostStatus>,
     notified: HashSet<(String, EventKind)>,
     #[serde(skip)]
@@ -64,6 +67,7 @@ impl TransitionEngine {
     pub fn forget(&mut self, ids: &HashSet<String>) {
         self.prev.retain(|id, _| !ids.contains(id));
         self.prev_turns.retain(|id, _| !ids.contains(id));
+        self.prev_waits.retain(|id, _| !ids.contains(id));
         self.notified.retain(|(id, _)| !ids.contains(id));
     }
     pub fn new() -> Self {
@@ -85,7 +89,7 @@ impl TransitionEngine {
             return;
         };
         let result = (|| -> std::io::Result<()> {
-            let body = serde_json::to_vec(self)?;
+            let body = serde_json::to_vec(&serde_json::to_value(self)?)?;
             if std::fs::read(path).ok().as_deref() == Some(body.as_slice()) {
                 return Ok(());
             }
@@ -118,12 +122,23 @@ impl TransitionEngine {
         let baseline = self.prev.is_empty();
         let mut current: HashMap<String, TaskStatus> = HashMap::new();
         let mut current_turns: HashMap<String, Option<String>> = HashMap::new();
+        let mut current_waits = HashMap::new();
 
         for task in tasks {
             let id = task.id.clone();
             let status = task.status;
             current.insert(id.clone(), status);
             current_turns.insert(id.clone(), task.turn_key.clone());
+            let wait = (task.waiting_reason, task.input_request_id.clone());
+            current_waits.insert(id.clone(), wait.clone());
+            let wait_changed = status == TaskStatus::WaitingInput
+                && self
+                    .prev_waits
+                    .get(&id)
+                    .is_some_and(|previous| previous != &wait);
+            if wait_changed && task.requires_action() {
+                self.notified.remove(&(id.clone(), EventKind::WaitingInput));
+            }
 
             let prev_status = match self.prev.get(&id).copied() {
                 Some(status) => status,
@@ -145,7 +160,7 @@ impl TransitionEngine {
             {
                 reset_task_notifications(&mut self.notified, &id);
             }
-            if prev_status == status && !turn_changed {
+            if prev_status == status && !turn_changed && !wait_changed {
                 continue;
             }
             if !turn_changed
@@ -161,7 +176,10 @@ impl TransitionEngine {
 
             match status {
                 TaskStatus::WaitingInput => {
-                    if !already(&mut self.notified, &id, EventKind::WaitingInput) {
+                    let kind = if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
+                        EventKind::TurnEnded
+                    } else { EventKind::WaitingInput };
+                    if !already(&mut self.notified, &id, kind) {
                         events.push(TaskEvent::WaitingInput {
                             task: task.clone(),
                             reason: task.hook_matcher.clone(),
@@ -221,11 +239,15 @@ impl TransitionEngine {
 
         self.prev = current;
         self.prev_turns = current_turns;
+        self.prev_waits = current_waits;
 
         // ---- host transitions ----
         for host in hosts {
             let id = format!("host:{}", host.host);
             let prev = self.prev_hosts.get(&id).copied();
+            if prev.is_some_and(|status| status != host.status) {
+                reset_task_notifications(&mut self.notified, &id);
+            }
             match host.status {
                 HostStatus::Connected => {
                     if prev == Some(HostStatus::Disconnected)
@@ -261,6 +283,7 @@ impl TransitionEngine {
     pub fn reset(&mut self) {
         self.prev.clear();
         self.prev_turns.clear();
+        self.prev_waits.clear();
         self.prev_hosts.clear();
         self.notified.clear();
     }
@@ -306,6 +329,38 @@ mod tests {
         let mut engine = TransitionEngine::new();
         let events = apply_once(&mut engine, &[task("t1", TaskStatus::Running)]);
         assert!(events.is_empty());
+    }
+
+    #[test]
+    fn question_then_end_and_restart_are_independent_one_shot_events() {
+        use crate::domain::WaitingReason;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut snapshot = task_turn("t", TaskStatus::Running, "turn-1");
+        apply_once(&mut engine, &[snapshot.clone()]);
+        snapshot.status = TaskStatus::WaitingInput;
+        snapshot.waiting_reason = Some(WaitingReason::Question);
+        snapshot.input_request_id = Some("q1".into());
+        assert_eq!(apply_once(&mut engine, &[snapshot.clone()]).len(), 1);
+        assert!(apply_once(&mut engine, &[snapshot.clone()]).is_empty());
+        snapshot.input_request_id = Some("q2".into());
+        assert_eq!(apply_once(&mut engine, &[snapshot.clone()]).len(), 1);
+        snapshot.waiting_reason = Some(WaitingReason::TurnEnded);
+        snapshot.input_request_id = None;
+        assert_eq!(apply_once(&mut engine, &[snapshot.clone()]).len(), 1);
+        let mut restarted = TransitionEngine::open(path);
+        assert!(apply_once(&mut restarted, &[snapshot]).is_empty());
+    }
+
+    #[test]
+    fn a_new_short_turn_completed_before_first_observation_notifies_once() {
+        let mut engine = TransitionEngine::new();
+        let mut short = task_turn("short", TaskStatus::WaitingInput, "new-turn");
+        short.new_execution = true;
+        short.unread = true;
+        assert_eq!(apply_once(&mut engine, &[short.clone()]).len(), 1);
+        assert!(apply_once(&mut engine, &[short]).is_empty());
     }
 
     #[test]
@@ -433,6 +488,7 @@ mod tests {
         let events = engine.apply(&[], &connected, now);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], TaskEvent::HostReconnected { .. }));
+        assert_eq!(engine.apply(&[], &disconnected, now).len(), 1);
     }
 
     #[test]
