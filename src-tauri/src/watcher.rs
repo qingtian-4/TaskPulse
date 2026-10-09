@@ -461,108 +461,188 @@ struct LocalBatch {
 
 struct LocalProviders {
     file: LocalFileProvider,
-    codex: CodexProvider,
-    hermes: HermesProvider,
-    dsh_rx: std::sync::mpsc::Receiver<ProviderOutput>,
-    dsh_refresh_tx: std::sync::mpsc::Sender<()>,
-    dsh_latest: Option<ProviderOutput>,
-    scanner: Scanner,
+    workers: Vec<(
+        &'static str,
+        Vec<TaskSource>,
+        crate::providers::worker::Worker,
+    )>,
+    latest: std::collections::HashMap<&'static str, ProviderOutput>,
+    observed_at: std::collections::HashMap<&'static str, Instant>,
+    started_at: Instant,
     health: Vec<ProviderHealth>,
     monitoring: MonitoringConfig,
 }
 
 impl LocalProviders {
     fn new(monitoring: MonitoringConfig) -> Self {
-        // WSL startup can take tens of seconds on Windows. Keep the DeepSeek
-        // probe off the local refresh path so Codex/Hermes appear immediately.
-        let (dsh_tx, dsh_rx) = std::sync::mpsc::channel();
-        let (dsh_refresh_tx, dsh_refresh_rx) = std::sync::mpsc::channel();
-        std::thread::spawn(move || {
-            let mut dsh = DeepSeekHarnessProvider::new();
-            loop {
-                let output = dsh.poll(SystemTime::now());
-                if dsh_tx.send(output).is_err() {
-                    break;
-                }
-                match dsh_refresh_rx.recv_timeout(Duration::from_secs(2)) {
-                    Ok(()) => {
-                        while dsh_refresh_rx.try_recv().is_ok() {}
-                        dsh.force_refresh();
-                    }
-                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
-                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
-                }
-            }
-        });
+        use crate::providers::worker::Worker;
+        let mut codex = CodexProvider::new();
+        let mut hermes = HermesProvider::new();
+        let mut dsh = DeepSeekHarnessProvider::new();
+        let mut scanner = Scanner::new();
         Self {
             file: LocalFileProvider::new(),
-            codex: CodexProvider::new(),
-            hermes: HermesProvider::new(),
-            dsh_rx,
-            dsh_refresh_tx,
-            dsh_latest: None,
-            scanner: Scanner::new(),
-            health: Vec::new(),
+            workers: vec![
+                (
+                    "codex",
+                    vec![TaskSource::Codex],
+                    Worker::spawn(Duration::from_secs(1), move |_| {
+                        codex.poll(SystemTime::now())
+                    }),
+                ),
+                (
+                    "hermes",
+                    vec![TaskSource::Hermes],
+                    Worker::spawn(Duration::from_secs(1), move |_| {
+                        hermes.poll(SystemTime::now())
+                    }),
+                ),
+                (
+                    "deepseek_harness",
+                    vec![TaskSource::DeepSeekHarness],
+                    Worker::spawn(Duration::from_secs(2), move |_| dsh.poll(SystemTime::now())),
+                ),
+                (
+                    "scanner",
+                    vec![TaskSource::ClaudeCode, TaskSource::Gemini],
+                    Worker::spawn(Duration::from_secs(2), move |_| {
+                        ProviderOutput::tasks(scanner.scan().into_iter().map(Into::into).collect())
+                    }),
+                ),
+            ],
+            latest: Default::default(),
+            observed_at: Default::default(),
+            started_at: Instant::now(),
+            health: ["codex", "hermes", "deepseek_harness", "scanner"]
+                .into_iter()
+                .map(|provider| ProviderHealth {
+                    provider: provider.to_string(),
+                    status: ProviderStatus::Degraded,
+                    last_success: None,
+                    message: Some("首次采集中".into()),
+                })
+                .collect(),
             monitoring,
         }
     }
 
-    fn primary_dir(&self) -> PathBuf {
-        self.file.primary_dir()
+    fn watch_paths(&self) -> Vec<(PathBuf, RecursiveMode)> {
+        let mut paths: Vec<_> = self
+            .file
+            .status_dirs()
+            .into_iter()
+            .map(|path| (path, RecursiveMode::NonRecursive))
+            .collect();
+        if let Some(home) = dirs_next::home_dir() {
+            // Rollouts and SQLite WAL writes carry start/end/rename changes.
+            paths.push((home.join(".codex/sessions"), RecursiveMode::Recursive));
+            paths.push((home.join(".codex"), RecursiveMode::NonRecursive));
+            paths.push((home.join(".hermes"), RecursiveMode::NonRecursive));
+        }
+        if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+            paths.push((
+                PathBuf::from(local).join("hermes"),
+                RecursiveMode::NonRecursive,
+            ));
+        }
+        if let Some(db) = std::env::var_os("HERMES_STATE_DB").map(PathBuf::from) {
+            if let Some(parent) = db.parent() {
+                paths.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
+            }
+        }
+        paths
     }
 
-    fn request_dsh_refresh(&self) {
-        let _ = self.dsh_refresh_tx.send(());
+    fn request_refresh(&self) {
+        for (_, _, worker) in &self.workers {
+            worker.request_refresh();
+        }
+    }
+
+    fn request_native_refresh(&self) {
+        for (name, _, worker) in &self.workers {
+            if *name == "codex" || *name == "hermes" {
+                worker.request_refresh();
+            }
+        }
+    }
+
+    fn collect_ready(&mut self) -> bool {
+        let mut changed = false;
+        for (name, _, worker) in &self.workers {
+            while let Ok(observation) = worker.observations.try_recv() {
+                log::debug!("provider {name}: {} ms", observation.duration_ms);
+                update_provider_health(
+                    &mut self.health,
+                    name,
+                    &observation.output,
+                    observation.completed_at,
+                );
+                self.latest.insert(name, observation.output);
+                self.observed_at.insert(name, Instant::now());
+                changed = true;
+            }
+            let last = self
+                .observed_at
+                .get(name)
+                .copied()
+                .unwrap_or(self.started_at);
+            if last.elapsed() > Duration::from_secs(30) {
+                let error = "采集超过 30 秒未返回；保留上次状态";
+                if let Some(health) = self
+                    .health
+                    .iter_mut()
+                    .find(|health| health.provider == *name)
+                {
+                    if health.message.as_deref() != Some(error) {
+                        health.status = ProviderStatus::Degraded;
+                        health.message = Some(error.into());
+                        if let Some(output) = self.latest.get_mut(name) {
+                            output.authoritative = false;
+                            output.error = Some(error.into());
+                            for task in &mut output.tasks {
+                                task.stale = true;
+                            }
+                        }
+                        changed = true;
+                    }
+                }
+            }
+        }
+        changed
     }
 
     fn poll(&mut self, now: SystemTime) -> LocalBatch {
+        self.collect_ready();
         let file = self.file.poll(now);
         update_provider_health(&mut self.health, "local_file", &file, now);
-        let codex = self.codex.poll(now);
-        update_provider_health(&mut self.health, "codex", &codex, now);
-        let hermes = self.hermes.poll(now);
-        update_provider_health(&mut self.health, "hermes", &hermes, now);
-        while let Ok(output) = self.dsh_rx.try_recv() {
-            self.dsh_latest = Some(output);
-        }
-        if let Some(dsh) = &self.dsh_latest {
-            update_provider_health(&mut self.health, "deepseek_harness", dsh, now);
-        }
-
-        let mut authoritative_sources = HashSet::from([TaskSource::ClaudeCode, TaskSource::Gemini]);
+        let mut authoritative_sources = HashSet::new();
         if file.authoritative {
             authoritative_sources.insert(TaskSource::LocalFile);
         }
-        if codex.authoritative {
-            authoritative_sources.insert(TaskSource::Codex);
-        }
-        if hermes.authoritative {
-            authoritative_sources.insert(TaskSource::Hermes);
-        }
-        if self
-            .dsh_latest
-            .as_ref()
-            .is_some_and(|output| output.authoritative)
-        {
-            authoritative_sources.insert(TaskSource::DeepSeekHarness);
-        }
-
         let mut tasks = file.tasks;
-        tasks.extend(codex.tasks);
-        tasks.extend(hermes.tasks);
-        if let Some(dsh) = &self.dsh_latest {
-            tasks.extend(dsh.tasks.clone());
+        for (name, sources, _) in &self.workers {
+            if let Some(output) = self.latest.get(name) {
+                if output.authoritative {
+                    authoritative_sources.extend(sources.iter().copied());
+                }
+                if *name != "scanner" {
+                    tasks.extend(output.tasks.clone());
+                }
+            }
         }
-        let scanned_agents = self.scanner.scan();
-        let scanned: Vec<TaskSnapshot> = scanned_agents.iter().cloned().map(Into::into).collect();
-        crate::heuristics::cross_validate_tasks(&mut tasks, &scanned);
-        tasks.extend(scanned);
+        let scanned = self
+            .latest
+            .get("scanner")
+            .map(|out| out.tasks.as_slice())
+            .unwrap_or(&[]);
+        crate::heuristics::cross_validate_tasks(&mut tasks, scanned);
+        tasks.extend_from_slice(scanned);
         dedup_by_terminal(&mut tasks);
         dedup_codex_over_scan(&mut tasks);
         dedup_hermes_over_scan(&mut tasks);
         dedup_dsh_over_scan(&mut tasks);
         tasks.retain(|task| self.monitoring.allows(task));
-
         LocalBatch {
             tasks,
             authoritative_sources,
@@ -727,7 +807,7 @@ pub fn watch(app: AppHandle) {
         now,
     );
 
-    let dir = local_providers.primary_dir();
+    let watch_paths = local_providers.watch_paths();
 
     // Outer restart loop: recreates the file watcher whenever the channel
     // disconnects (inotify watch limit exhausted, OS resource pressure).
@@ -741,7 +821,7 @@ pub fn watch(app: AppHandle) {
                 loop {
                     std::thread::sleep(scan_interval);
                     if MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
-                        local_providers.request_dsh_refresh();
+                        local_providers.request_refresh();
                         let _ = remote_refresh_tx.send(());
                     }
                     let now = SystemTime::now();
@@ -772,14 +852,20 @@ pub fn watch(app: AppHandle) {
             }
         };
 
-        if let Err(e) = watcher.watch(&dir, RecursiveMode::NonRecursive) {
-            log::error!("Failed to watch {:?}: {e}", dir);
-            return;
+        for (path, mode) in &watch_paths {
+            if path.exists() {
+                if let Err(error) = watcher.watch(path, *mode) {
+                    log::warn!(
+                        "Failed to watch {}: {error}; polling remains active",
+                        path.display()
+                    );
+                }
+            }
         }
 
         log::info!(
             "Watching {:?} + scanning processes + polling remote hosts",
-            dir
+            watch_paths
         );
 
         let debounce = Duration::from_millis(50);
@@ -794,6 +880,7 @@ pub fn watch(app: AppHandle) {
                         EventKind::Create(_) | EventKind::Modify(_) | EventKind::Remove(_)
                     ) && last_emit.elapsed() >= debounce
                     {
+                        local_providers.request_native_refresh();
                         let now = SystemTime::now();
                         refresh_local(
                             &app,
@@ -817,7 +904,7 @@ pub fn watch(app: AppHandle) {
             }
 
             if MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel) {
-                local_providers.request_dsh_refresh();
+                local_providers.request_refresh();
                 let _ = remote_refresh_tx.send(());
                 let now = SystemTime::now();
                 refresh_local(
@@ -850,8 +937,8 @@ pub fn watch(app: AppHandle) {
                 );
             }
 
-            // Periodic local process scan.
-            if last_scan.elapsed() >= scan_interval {
+            // Publish worker results immediately, even when another source is slow.
+            if local_providers.collect_ready() || last_scan.elapsed() >= scan_interval {
                 let now = SystemTime::now();
                 refresh_local(
                     &app,
@@ -867,6 +954,70 @@ pub fn watch(app: AppHandle) {
             }
         }
     }
+}
+
+/// Read-only, bounded sampling of the same workers used by the tray. This
+/// reports native task titles/status and cadence, without prompts or commands.
+pub fn diagnose() {
+    let config = config::load_config();
+    let mut providers = LocalProviders::new(config.monitoring.clone());
+    let started = Instant::now();
+    let mut samples = std::collections::HashMap::new();
+    let mut first_ready = std::collections::HashMap::new();
+    let mut durations = std::collections::HashMap::new();
+    let mut latest = LocalBatch {
+        tasks: Vec::new(),
+        authoritative_sources: HashSet::new(),
+    };
+    let mut store = TaskStore::default();
+    let mut engine = TransitionEngine::new();
+    let mut event_count = 0;
+    while started.elapsed() < Duration::from_secs(10) {
+        for (name, _, worker) in &providers.workers {
+            while let Ok(observation) = worker.observations.try_recv() {
+                *samples.entry(*name).or_insert(0u32) += 1;
+                first_ready
+                    .entry(*name)
+                    .or_insert(started.elapsed().as_millis());
+                durations.insert(*name, observation.duration_ms);
+                update_provider_health(
+                    &mut providers.health,
+                    name,
+                    &observation.output,
+                    observation.completed_at,
+                );
+                providers.latest.insert(name, observation.output);
+                providers.observed_at.insert(name, Instant::now());
+            }
+        }
+        latest = providers.poll(SystemTime::now());
+        let merged = store.merge_sources(
+            latest.tasks.clone(),
+            &latest.authoritative_sources,
+            SystemTime::now(),
+        );
+        event_count += engine.apply(&merged, &[], SystemTime::now()).len();
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let tasks: Vec<_> = latest
+        .tasks
+        .iter()
+        .map(|task| {
+            serde_json::json!({
+                "id": task.id, "name": task.name, "project": task.project,
+                "source": task.source, "status": task.status, "stale": task.stale,
+                "has_activity": task.activity.is_some(),
+            })
+        })
+        .collect();
+    println!(
+        "{}",
+        serde_json::json!({
+            "sample_window_ms": started.elapsed().as_millis(), "samples": samples,
+            "first_ready_ms": first_ready, "last_poll_ms": durations,
+            "providers": providers.health, "tasks": tasks, "transition_count": event_count,
+        })
+    );
 }
 
 #[cfg(test)]

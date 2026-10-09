@@ -45,13 +45,6 @@ impl LocalFileProvider {
     pub fn status_dirs(&self) -> Vec<PathBuf> {
         self.dirs.clone()
     }
-
-    pub fn primary_dir(&self) -> PathBuf {
-        self.dirs
-            .first()
-            .cloned()
-            .unwrap_or_else(|| PathBuf::from(".agent-monitor"))
-    }
 }
 
 impl Default for LocalFileProvider {

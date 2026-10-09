@@ -17,6 +17,7 @@ dependencies = [
  "env_logger",
  "log",
  "notify",
+ "notify-rust",
  "rusqlite",
  "serde",
  "serde_json",

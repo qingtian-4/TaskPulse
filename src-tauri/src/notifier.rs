@@ -6,7 +6,6 @@
 use std::sync::LazyLock;
 
 use tauri::AppHandle;
-use tauri_plugin_notification::NotificationExt;
 
 use crate::domain::TaskSnapshot;
 use crate::transition::TaskEvent;
@@ -74,7 +73,7 @@ impl Notifier for SystemBeepNotifier {
     }
 }
 
-/// Sends native OS desktop notifications via tauri-plugin-notification.
+/// Send on a separate thread, preserving the native API's real error result.
 pub struct DesktopNotifier;
 
 impl Notifier for DesktopNotifier {
@@ -86,14 +85,38 @@ impl Notifier for DesktopNotifier {
 
         let (title, body) = notification_copy(event);
 
-        let mut builder = app.notification().builder().title(&title).body(&body);
-        if let Some(icon_path) = notification_icon_path() {
-            builder = builder.icon(icon_path);
-        }
-        if let Err(e) = builder.show() {
-            log::warn!("Desktop notification failed: {e}");
-        }
+        let identifier = app.config().identifier.clone();
+        std::thread::spawn(move || {
+            if let Err(error) = send_desktop_notification(&title, &body, &identifier) {
+                log::error!("Desktop notification failed: {error}");
+            }
+        });
     }
+}
+
+fn send_desktop_notification(title: &str, body: &str, identifier: &str) -> Result<(), String> {
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(title).body(body);
+    if let Some(icon) = notification_icon_path() {
+        notification.icon(&icon);
+    }
+    #[cfg(target_os = "windows")]
+    if !cfg!(debug_assertions) {
+        // Installed release builds use the registered app ID. Debug binaries
+        // (including isolated verification targets) use Windows' fallback ID.
+        notification.app_id(identifier);
+    }
+    #[cfg(target_os = "macos")]
+    let _ = notify_rust::set_application(if cfg!(debug_assertions) {
+        "com.apple.Terminal"
+    } else {
+        identifier
+    });
+    let _ = identifier;
+    notification
+        .show()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
 }
 
 fn notification_copy(event: &NotifyEvent) -> (String, String) {
@@ -288,8 +311,16 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
 
 /// Let users verify Windows notification settings without waiting for a task.
 #[tauri::command]
-pub fn test_notification(app: AppHandle) {
-    NOTIFIER.notify(&NotifyEvent::Test, Some(&app));
+pub async fn test_notification(app: AppHandle) -> Result<(), String> {
+    let identifier = app.config().identifier.clone();
+    tauri::async_runtime::spawn_blocking(move || send_test_notification(&identifier))
+        .await
+        .map_err(|error| error.to_string())?
+}
+
+pub fn send_test_notification(identifier: &str) -> Result<(), String> {
+    let (title, body) = notification_copy(&NotifyEvent::Test);
+    send_desktop_notification(&title, &body, identifier)
 }
 
 fn fmt_last_seen(t: std::time::SystemTime) -> String {

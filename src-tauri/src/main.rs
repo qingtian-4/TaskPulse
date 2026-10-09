@@ -20,6 +20,20 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if std::env::args().any(|arg| arg == "--diagnose") {
+        watcher::diagnose();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--test-notification") {
+        match notifier::send_test_notification("com.sprklai.agenttray") {
+            Ok(()) => println!("Notification accepted by the native Windows/desktop API."),
+            Err(error) => {
+                eprintln!("Notification failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     // Log panics from any thread before the process aborts (release uses panic=abort)
     let default_hook = std::panic::take_hook();
@@ -76,7 +90,7 @@ fn main() {
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
                     "../icons/tray-offline.png"
                 ))?)
-                .tooltip("AgentTray")
+                .tooltip("TaskPulse")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event({
@@ -85,7 +99,14 @@ fn main() {
                         "show" => tray::toggle_popup(&h_show),
                         "pin" => tray::pin_popup(&h_pin),
                         "hide" => tray::hide_popup(&h_hide),
-                        "test-notification" => notifier::test_notification(app.clone()),
+                        "test-notification" => {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) = notifier::test_notification(handle).await {
+                                    log::error!("Test notification failed: {error}");
+                                }
+                            });
+                        }
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -116,6 +137,11 @@ fn main() {
                     .build(),
             )?;
             app.global_shortcut().register(shortcut)?;
+
+            // Useful for first launch and desktop smoke verification.
+            if std::env::args().any(|arg| arg == "--show") {
+                tray::toggle_popup(app.handle());
+            }
 
             Ok(())
         })

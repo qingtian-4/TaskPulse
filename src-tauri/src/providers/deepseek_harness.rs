@@ -19,8 +19,8 @@
 //! (path, mtime) cache avoids re-reading an unchanged log.
 
 use std::path::PathBuf;
-use std::process::Command;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use crate::providers::{Provider, ProviderOutput};
@@ -28,9 +28,7 @@ use base64::Engine;
 
 /// A session with no activity within this window is treated as dormant.
 const STALE_TTL: Duration = Duration::from_secs(24 * 3600);
-/// How often we re-run `wsl.exe` to re-discover the newest session. Between
-/// probes we re-emit the last known state (avoids spawning wsl.exe each poll).
-const PROBE_INTERVAL: Duration = Duration::from_secs(6);
+const WSL_TIMEOUT: Duration = Duration::from_secs(15);
 const WSL_DISTRO: &str = "Ubuntu";
 const NAME_LEN: usize = 56;
 
@@ -55,7 +53,6 @@ pub struct DeepSeekHarnessProvider {
     distro: String,
     /// path → parsed state; unchanged logs are not re-parsed.
     cache: std::collections::HashMap<String, CachedSession>,
-    last_probe: Option<std::time::Instant>,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -66,24 +63,77 @@ impl DeepSeekHarnessProvider {
         Self {
             distro,
             cache: Default::default(),
-            last_probe: None,
             last_tasks: Vec::new(),
         }
     }
 
     /// Run a command inside WSL and capture stdout as raw bytes.
     fn wsl(&self, script: &str) -> std::io::Result<Vec<u8>> {
-        let out = Command::new("wsl.exe")
+        let mut child = Command::new("wsl.exe")
             .args(["--distribution", &self.distro, "-e", "bash", "-lc", script])
-            .output()?;
-        if !out.status.success() {
-            let detail = String::from_utf8_lossy(&out.stderr);
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        // Drain both pipes while the child runs, including large compressed logs.
+        let stdout = child.stdout.take();
+        let stderr = child.stderr.take();
+        let (tx, rx) = std::sync::mpsc::channel();
+        for (is_stdout, stream) in [
+            (
+                true,
+                stdout.map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+            ),
+            (
+                false,
+                stderr.map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
+            ),
+        ] {
+            let tx = tx.clone();
+            std::thread::spawn(move || {
+                let mut bytes = Vec::new();
+                if let Some(mut stream) = stream {
+                    let _ = stream.read_to_end(&mut bytes);
+                }
+                let _ = tx.send((is_stdout, bytes));
+            });
+        }
+        let deadline = Instant::now() + WSL_TIMEOUT;
+        let status = loop {
+            match child.try_wait()? {
+                Some(status) => break status,
+                None if Instant::now() >= deadline => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(std::io::Error::new(
+                        std::io::ErrorKind::TimedOut,
+                        "WSL probe exceeded 15 seconds",
+                    ));
+                }
+                None => std::thread::sleep(Duration::from_millis(20)),
+            }
+        };
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        for _ in 0..2 {
+            let (is_stdout, bytes) = rx
+                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+                .map_err(|_| {
+                    std::io::Error::new(std::io::ErrorKind::TimedOut, "WSL output pipe timed out")
+                })?;
+            if is_stdout {
+                out = bytes;
+            } else {
+                err = bytes;
+            }
+        }
+        if !status.success() {
+            let detail = String::from_utf8_lossy(&err);
             return Err(std::io::Error::other(format!(
                 "WSL command failed: {}",
                 detail.trim()
             )));
         }
-        Ok(out.stdout)
+        Ok(out)
     }
 
     /// Paths + mtimes of the most recently written session logs. NUL-delimited
@@ -103,10 +153,6 @@ impl DeepSeekHarnessProvider {
     ) -> std::io::Result<std::collections::HashMap<String, SessionMetadata>> {
         let out = self.wsl("cat \"$HOME/.dsh/storages/session_projcache.json\" 2>/dev/null")?;
         Ok(parse_session_metadata(&out))
-    }
-
-    pub fn force_refresh(&mut self) {
-        self.last_probe = None;
     }
 
     /// Read + decompress + parse a session log, returning inferred status.
@@ -299,19 +345,7 @@ impl Provider for DeepSeekHarnessProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
-        // Throttle the wsl.exe probe; between probes re-emit the last state so
-        // we don't spawn wsl.exe every 2s poll.
-        if let Some(last) = self.last_probe {
-            if last.elapsed() < PROBE_INTERVAL {
-                return ProviderOutput {
-                    tasks: self.last_tasks.clone(),
-                    hosts: vec![],
-                    ..ProviderOutput::default()
-                };
-            }
-        }
-        self.last_probe = Some(std::time::Instant::now());
-
+        // Cadence is owned by the independent worker; every poll is a real probe.
         let sessions = match self.recent_sessions() {
             Ok(sessions) => sessions,
             Err(error) => {
@@ -328,10 +362,12 @@ impl Provider for DeepSeekHarnessProvider {
                 return ProviderOutput::degraded(tasks, error.to_string());
             }
         };
+        let mut metadata_error = None;
         let metadata = match self.session_metadata() {
             Ok(metadata) => metadata,
             Err(error) => {
                 log::warn!("deepseek-harness: metadata projection unavailable: {error}");
+                metadata_error = Some(error.to_string());
                 std::collections::HashMap::new()
             }
         };
@@ -396,11 +432,14 @@ impl Provider for DeepSeekHarnessProvider {
                 mtime_time,
                 now,
             );
-            task.stale = stale;
+            task.stale = stale || metadata_error.is_some();
             tasks.push(task);
         }
         self.cache.retain(|path, _| live_paths.contains(path));
         self.last_tasks = tasks.clone();
+        if let Some(error) = metadata_error {
+            return ProviderOutput::degraded(tasks, format!("原生标题/状态缓存暂不可用: {error}"));
+        }
         ProviderOutput {
             tasks,
             hosts: vec![],

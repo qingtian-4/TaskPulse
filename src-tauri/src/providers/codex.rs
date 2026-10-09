@@ -61,7 +61,7 @@ static NATIVE_QUOTA: OnceLock<RwLock<Option<CodexQuota>>> = OnceLock::new();
 pub struct CodexProvider {
     sessions_root: PathBuf,
     state_db: Option<PathBuf>,
-    use_app_server: bool,
+    native_rx: Option<mpsc::Receiver<Result<NativeCodexSnapshot, String>>>,
     /// session id → last-seen mtime, so we can emit a terminal snapshot when a
     /// session stops being updated (it finished).
     seen: std::collections::HashMap<String, SystemTime>,
@@ -70,7 +70,6 @@ pub struct CodexProvider {
     /// multi-megabyte JSONL files every two seconds.
     cache: std::collections::HashMap<PathBuf, (SystemTime, u64, Option<SessionState>)>,
     native_metadata: HashMap<String, AppThreadMeta>,
-    last_native_refresh: Option<SystemTime>,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -80,7 +79,14 @@ impl CodexProvider {
         let mut provider = Self::with_root(home.join(".codex/sessions"));
         let db = home.join(".codex/state_5.sqlite");
         provider.state_db = db.exists().then_some(db);
-        provider.use_app_server = true;
+        let (tx, rx) = mpsc::sync_channel(1);
+        provider.native_rx = Some(rx);
+        std::thread::spawn(move || loop {
+            if tx.send(query_codex_app_server()).is_err() {
+                break;
+            }
+            std::thread::sleep(APP_SERVER_REFRESH);
+        });
         provider
     }
 
@@ -88,11 +94,10 @@ impl CodexProvider {
         Self {
             sessions_root: root,
             state_db: None,
-            use_app_server: false,
+            native_rx: None,
             seen: Default::default(),
             cache: Default::default(),
             native_metadata: Default::default(),
-            last_native_refresh: None,
             last_tasks: Vec::new(),
         }
     }
@@ -155,35 +160,28 @@ impl CodexProvider {
         Ok(metadata)
     }
 
-    fn refresh_native_metadata(&mut self, now: SystemTime) {
-        if !self.use_app_server {
-            return;
-        }
-        let fresh = self
-            .last_native_refresh
-            .is_some_and(|last| now.duration_since(last).unwrap_or_default() < APP_SERVER_REFRESH);
-        if fresh {
-            return;
-        }
-        self.last_native_refresh = Some(now);
-        match query_codex_app_server() {
-            Ok(snapshot) => {
-                self.native_metadata = snapshot
-                    .threads
-                    .into_iter()
-                    .map(|row| (row.id.clone(), row))
-                    .collect();
-                if let Some(quota) = snapshot.quota {
-                    *NATIVE_QUOTA
-                        .get_or_init(|| RwLock::new(None))
-                        .write()
-                        .unwrap_or_else(|error| error.into_inner()) = Some(quota);
+    fn refresh_native_metadata(&mut self, _now: SystemTime) {
+        let Some(rx) = &self.native_rx else { return };
+        while let Ok(result) = rx.try_recv() {
+            match result {
+                Ok(snapshot) => {
+                    self.native_metadata = snapshot
+                        .threads
+                        .into_iter()
+                        .map(|row| (row.id.clone(), row))
+                        .collect();
+                    if let Some(quota) = snapshot.quota {
+                        *NATIVE_QUOTA
+                            .get_or_init(|| RwLock::new(None))
+                            .write()
+                            .unwrap_or_else(|error| error.into_inner()) = Some(quota);
+                    }
                 }
-            }
-            Err(error) => {
-                // app-server is optional. Keep the last successful title map,
-                // then fall back through state DB and rollout metadata.
-                log::debug!("codex: native app-server metadata unavailable: {error}");
+                Err(error) => {
+                    // app-server is optional. Keep the last successful title map,
+                    // then fall back through state DB and rollout metadata.
+                    log::debug!("codex: native app-server metadata unavailable: {error}");
+                }
             }
         }
     }
@@ -267,7 +265,8 @@ impl CodexProvider {
         task.quota_5h_resets_at = host.quota_5h_resets_at;
         task.quota_1w_used_pct = host.quota_1w_used_pct;
         task.quota_1w_resets_at = host.quota_1w_resets_at;
-        task.started_at = Some(host.updated_at);
+        task.started_at = host.started_at;
+        task.updated_at = host.updated_at;
         task.message = host.last_message.clone();
         task.activity = host.activity.clone();
         task.turn_key = host.turn_key.clone();
@@ -305,6 +304,7 @@ fn normalize_windows_path(path: &str) -> PathBuf {
 #[derive(Debug, Clone)]
 pub struct SessionState {
     pub status: TaskStatus,
+    pub started_at: Option<SystemTime>,
     pub updated_at: SystemTime,
     pub project: Option<String>,
     pub last_message: Option<String>,
@@ -639,6 +639,7 @@ pub fn parse_codex_rollout(
     }
     let mut project: Option<String> = None;
     let mut status = TaskStatus::Unknown;
+    let mut started_at = None;
     let mut updated_at = now;
     let mut last_message: Option<String> = None;
     let mut activity: Option<String> = None;
@@ -693,6 +694,8 @@ pub fn parse_codex_rollout(
         match ptype {
             "task_started" => {
                 status = TaskStatus::Running;
+                started_at = ts;
+                activity = None;
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -703,6 +706,11 @@ pub fn parse_codex_rollout(
                     .or_else(|| value_timestamp_key(ts));
             }
             "user_message" => {
+                if status != TaskStatus::Running {
+                    started_at = ts;
+                    turn_key = value_timestamp_key(ts);
+                    activity = None;
+                }
                 status = TaskStatus::Running;
                 if let Some(t) = ts {
                     updated_at = t;
@@ -718,7 +726,9 @@ pub fn parse_codex_rollout(
                 }
             }
             "agent_message" => {
-                status = TaskStatus::Running;
+                if status != TaskStatus::WaitingInput {
+                    status = TaskStatus::Running;
+                }
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -727,7 +737,7 @@ pub fn parse_codex_rollout(
                 }
             }
             "token_count" => {
-                if status != TaskStatus::Running {
+                if status != TaskStatus::WaitingInput {
                     status = TaskStatus::Running;
                 }
                 if let Some(t) = ts {
@@ -747,7 +757,7 @@ pub fn parse_codex_rollout(
             }
             "mcp_tool_call_end" | "web_search_end" | "patch_apply_end" | "item_completed" => {
                 // activity — confirms the turn is running
-                if status != TaskStatus::Running {
+                if status != TaskStatus::WaitingInput {
                     status = TaskStatus::Running;
                 }
                 if let Some(t) = ts {
@@ -788,6 +798,7 @@ pub fn parse_codex_rollout(
 
     let state = SessionState {
         status,
+        started_at,
         updated_at,
         project,
         last_message,
@@ -1097,6 +1108,7 @@ fn flush_codex(
             .or(state.project)
             .or_else(|| Some(slug.clone()));
         t.updated_at = state.updated_at;
+        t.started_at = state.started_at;
         t.message = state.last_message;
         t.activity = state.activity;
         t.cli = Some("codex".into());
@@ -1270,6 +1282,105 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn post_completion_usage_event_does_not_restart_turn_or_reset_elapsed_time() {
+        let start = recent_rfc3339(90);
+        let end = recent_rfc3339(5);
+        let body = format!(
+            "{}\n{}\n{}\n{}\n",
+            header("/project"),
+            serde_json::json!({"timestamp":start,"payload":{"type":"task_started","turn_id":"turn-1"}}),
+            serde_json::json!({"timestamp":end,"payload":{"type":"task_complete"}}),
+            serde_json::json!({"timestamp":end,"payload":{"type":"token_count"}})
+        );
+        let state = parse_codex_rollout(&body, SystemTime::now(), "id").unwrap();
+        assert_eq!(state.status, TaskStatus::WaitingInput);
+        assert_eq!(
+            state.started_at,
+            parse_rfc3339_value(&serde_json::json!(start))
+        );
+    }
+
+    #[test]
+    fn worker_to_attention_turn_completion_and_resume() {
+        use crate::attention::AttentionTracker;
+        use crate::providers::worker::Worker;
+        use crate::store::TaskStore;
+        use crate::transition::{TaskEvent, TransitionEngine};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout-live.jsonl");
+        let event = |kind: &str, turn: &str| {
+            format!(
+                "{}\n",
+                serde_json::json!({
+                    "timestamp": recent_rfc3339(0), "payload": {"type": kind, "turn_id": turn}
+                })
+            )
+        };
+        std::fs::write(
+            &path,
+            format!("{}{}", header("/project"), event("task_started", "turn-1")),
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(root.path().to_path_buf());
+        let worker = Worker::spawn(Duration::from_secs(60), move |_| {
+            provider.poll(SystemTime::now())
+        });
+        let mut store = TaskStore::default();
+        let mut engine = TransitionEngine::new();
+        let mut attention = AttentionTracker::open(root.path().join("attention.json"));
+        let sources = std::collections::HashSet::from([TaskSource::Codex]);
+        let first = worker
+            .observations
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let merged = store.merge_sources(first.output.tasks, &sources, SystemTime::now());
+        assert!(engine.apply(&merged, &[], SystemTime::now()).is_empty());
+        assert_eq!(attention.reconcile(merged)[0].status, TaskStatus::Running);
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(event("task_complete", "turn-1").as_bytes())
+            .unwrap();
+        worker.request_refresh();
+        let completed = worker
+            .observations
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let mut merged = store.merge_sources(completed.output.tasks, &sources, SystemTime::now());
+        let events = engine.apply(&merged, &[], SystemTime::now());
+        assert!(matches!(
+            events.as_slice(),
+            [TaskEvent::WaitingInput { .. }]
+        ));
+        assert!(attention.reconcile(merged.clone())[0].unread);
+        assert!(engine.apply(&merged, &[], SystemTime::now()).is_empty());
+        merged[0].name = "Native renamed task".into();
+        assert!(engine.apply(&merged, &[], SystemTime::now()).is_empty());
+        let renamed = attention.reconcile(merged);
+        assert_eq!(renamed[0].name, "Native renamed task");
+        assert!(attention.mark_viewed(&renamed[0].id).unwrap().is_empty());
+
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(event("task_started", "turn-2").as_bytes())
+            .unwrap();
+        worker.request_refresh();
+        let resumed = worker
+            .observations
+            .recv_timeout(Duration::from_secs(1))
+            .unwrap();
+        let merged = store.merge_sources(resumed.output.tasks, &sources, SystemTime::now());
+        assert!(engine.apply(&merged, &[], SystemTime::now()).is_empty());
+        let display = attention.reconcile(merged);
+        assert_eq!(display[0].status, TaskStatus::Running);
+        assert_eq!(display[0].id, renamed[0].id);
+    }
 
     fn temp_rollout(body: &str) -> (tempfile::TempDir, PathBuf) {
         let dir = tempfile::tempdir().unwrap();

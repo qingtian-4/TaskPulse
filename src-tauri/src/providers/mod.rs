@@ -7,6 +7,7 @@ pub mod deepseek_harness;
 pub mod hermes;
 pub mod local_file;
 pub mod remote_tmux;
+pub mod worker;
 
 use std::time::SystemTime;
 
