@@ -10,6 +10,18 @@ export function taskLabel(task: TaskSnapshot): string {
   if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '等待输入';
   return { succeeded: '已完成', failed: '失败', idle: '空闲', disconnected: '已断开', unknown: '状态未知' }[task.status];
 }
+// Subphase is presentation, never a lifecycle/notification heuristic. Missing
+// phase must not be advertised as thinking, or a completed command as current.
+export function taskActivity(task: TaskSnapshot): string {
+  if (task.status !== 'running') return task.message ?? '来源未提供最近消息';
+  switch (task.phase) {
+    case 'thinking': return '正在思考';
+    case 'responding': return '正在生成回复';
+    case 'awaiting_model': return '等待模型响应 · 本轮仍在运行';
+    case 'tool': return task.activity ?? '正在执行工具 · 来源未提供具体指令';
+    default: return task.activity ?? '运行中 · 来源未提供执行阶段';
+  }
+}
 export function taskSection(task: TaskSnapshot): number {
   if (task.stale || task.status === 'failed' || needsAction(task)) return 0;
   if (task.status === 'running') return 1;

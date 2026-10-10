@@ -47,6 +47,7 @@ export interface TaskSnapshot {
   project?: string;
   message?: string;
   activity?: string;
+  phase?: 'thinking' | 'tool' | 'responding' | 'awaiting_model';
   started_at?: number; // epoch ms
   updated_at: number; // epoch ms
   finished_at?: number; // epoch ms

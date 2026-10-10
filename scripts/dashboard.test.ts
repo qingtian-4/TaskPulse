@@ -1,8 +1,15 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import { taskSection, taskLabel, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult } from '../src/lib/dashboard';
+import { taskSection, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+test('thinking and model waits are running, not command execution or task completion', () => {
+  expect(taskActivity({...base,phase:'thinking',activity:'old command'})).toBe('正在思考');
+  expect(taskActivity({...base,phase:'awaiting_model',activity:'old command'})).toContain('本轮仍在运行');
+  expect(taskActivity({...base,phase:'tool',activity:'cargo test'})).toBe('cargo test');
+  expect(taskActivity(base)).toContain('来源未提供执行阶段');
+  expect(taskSection({...base,phase:'thinking'})).toBe(1);
+});
 test('normal turn end is an unread result, not a blocking prompt', () => {
   const ended = {...base,status:'waiting_input' as const,waiting_reason:'turn_ended' as const};
   expect(taskSection(ended)).toBe(2);

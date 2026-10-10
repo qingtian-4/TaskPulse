@@ -5,7 +5,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { SOURCE_LABEL, CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type CodexAccountQuota, type SourceDiscovery } from '$lib/types';
-  import { taskSection, taskLabel, taskContext, projectKey, taskSource, sourceFreshness, refreshProgress } from '$lib/dashboard';
+  import { taskSection, taskLabel, taskActivity, taskContext, projectKey, taskSource, sourceFreshness, refreshProgress } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import Settings from '@lucide/svelte/icons/settings';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -194,7 +194,7 @@
       <p>{taskContext(selectedTask,settings)}</p>
       <p>状态依据：{CONFIDENCE_LABEL[selectedTask.confidence]}{#if selectedTask.model} · 上报模型：{selectedTask.model}{/if}</p>
       <p>{sourceFreshness(selectedTask,settings,providers,now)} · 最后活动 {formatAgo(selectedTask.updated_at,now)}</p>
-      <div class="command glass-scroll"><span>{selectedTask.stale?'上次观测活动（非实时）':selectedTask.status==='running'?'当前活动':'最近消息'}</span><pre>{selectedTask.status==='running' ? selectedTask.activity ?? '运行中，来源暂未提供具体指令' : selectedTask.message ?? '来源未提供最近消息'}</pre></div>
+      <div class="command glass-scroll"><span>{selectedTask.stale?'上次观测活动（非实时）':selectedTask.status==='running'?'当前活动':'最近消息'}</span><pre>{taskActivity(selectedTask)}</pre></div>
       <div class="detail-actions">
         {#if selectedTask.can_focus}<button onclick={()=>open(selectedTask!)}>{selectedTask.source==='claude_code'?'聚焦项目窗口':'聚焦运行窗口'}</button>{/if}
         <button onclick={()=>copy(selectedTask!)}>复制任务信息</button>

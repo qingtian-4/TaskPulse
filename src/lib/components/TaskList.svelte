@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TaskSnapshot, DashboardSettings, ProviderHealth } from '$lib/types';
   import { formatElapsed } from '$lib/types';
-  import { taskContext, taskLabel, sourceFreshness, isEndedResult } from '$lib/dashboard';
+  import { taskContext, taskLabel, taskActivity, sourceFreshness, isEndedResult } from '$lib/dashboard';
   let { tasks, settings, selectedId, onSelect, onViewed, providers=[], now=Date.now() }: { tasks: TaskSnapshot[]; settings: DashboardSettings | null; selectedId: string | null; onSelect: (task: TaskSnapshot) => void; onViewed?: (task: TaskSnapshot) => void; providers?:ProviderHealth[]; now?:number } = $props();
 </script>
 <ul class="m-0 p-0 list-none">
@@ -12,7 +12,7 @@
         <span class="row-copy">
           <span class="row-title" title={task.name}>{task.name}</span>
           <span class="context" title={task.project_path ?? taskContext(task,settings)}>{taskContext(task,settings)}</span>
-          {#if task.status === 'running' && !task.stale}<span class="activity" title={task.activity ?? ''}>{task.activity ?? '运行中 · 暂无指令信息'}{task.started_at ? ` · ${formatElapsed(task.started_at,now)}` : ''}</span>{/if}
+          {#if task.status === 'running' && !task.stale}<span class="activity" title={taskActivity(task)}>{taskActivity(task)}{task.started_at ? ` · ${formatElapsed(task.started_at,now)}` : ''}</span>{/if}
           {#if task.stale || sourceFreshness(task,settings,providers,now).startsWith('来源数据待更新')}<span class="freshness" title={sourceFreshness(task,settings,providers,now)}>来源数据待更新</span>{/if}
         </span>
         <span class="row-status">
