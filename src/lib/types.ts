@@ -81,7 +81,12 @@ export interface DashboardSettings {
   version: number; onboarding_complete: boolean; sources: MonitorSource[];
   notifications: boolean; sound: boolean; default_view: 'tasks' | 'projects';
   recent_days?: number; // 0 keeps all ages; legacy configs default to 7.
+  notification_mode?: 'popup' | 'system' | 'both';
 }
+export interface TaskNotice {
+  id: number; title: string; body: string; created_at: number; task_id: string | null; test: boolean;
+}
+export interface NoticeState { current: TaskNotice | null; pending: number }
 export interface SourceDiscovery { id: string; available: boolean; detail: string }
 export interface SessionPage { items: Array<{ task: TaskSnapshot; reason: string }>; total: number }
 

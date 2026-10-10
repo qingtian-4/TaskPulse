@@ -11,6 +11,7 @@ mod notifier;
 mod providers;
 mod scanner;
 mod store;
+mod task_notice;
 mod transition;
 mod tray;
 mod watcher;
@@ -103,7 +104,8 @@ fn main() {
                         "test-notification" => {
                             let handle = app.clone();
                             tauri::async_runtime::spawn(async move {
-                                if let Err(error) = notifier::test_notification(handle).await {
+                                if let Err(error) = notifier::test_notification(handle, None).await
+                                {
                                     log::error!("Test notification failed: {error}");
                                 }
                             });
@@ -166,6 +168,9 @@ fn main() {
             watcher::install_hooks,
             notifier::test_notification,
             notifier::get_notification_error,
+            task_notice::get_task_notice,
+            task_notice::dismiss_task_notice,
+            task_notice::open_task_notice,
             tray::toggle_pin,
             tray::get_pinned,
             tray::open_management,

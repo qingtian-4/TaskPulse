@@ -47,7 +47,8 @@ pub struct SystemBeepNotifier;
 impl Notifier for SystemBeepNotifier {
     fn notify(&self, event: &NotifyEvent, _app: Option<&AppHandle>) {
         // Windows toast controls sound itself; don't play a second alert.
-        if cfg!(target_os = "windows") || !crate::monitoring::get_monitoring_settings().sound {
+        let settings = crate::monitoring::get_monitoring_settings();
+        if !settings.sound || (cfg!(target_os = "windows") && settings.desktop_notifications()) {
             return;
         }
         match event {
@@ -82,6 +83,9 @@ pub struct DesktopNotifier;
 
 impl Notifier for DesktopNotifier {
     fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>) {
+        if !crate::monitoring::get_monitoring_settings().desktop_notifications() {
+            return;
+        }
         let Some(app) = app else {
             log::warn!("DesktopNotifier: no AppHandle, skipping notification");
             return;
@@ -102,13 +106,29 @@ impl Notifier for DesktopNotifier {
             if let Err(error) =
                 send_actionable_notification(&title, &body, &identifier, Some(app.clone()), task)
             {
-                log::error!("Desktop notification failed: {error}");
-                *LAST_NOTIFICATION_ERROR
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
-                let _ = app.emit("notification-error", error);
+                report_notification_error(&app, error);
             }
         });
+    }
+}
+
+pub struct PopupNotifier;
+impl Notifier for PopupNotifier {
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>) {
+        if !crate::monitoring::get_monitoring_settings().popup_notifications() {
+            return;
+        }
+        if let Some(app) = app {
+            let (title, body) = notification_copy(event);
+            let task = match event {
+                NotifyEvent::WaitingInput { task, .. }
+                | NotifyEvent::Succeeded { task }
+                | NotifyEvent::Failed { task }
+                | NotifyEvent::InferredFinished { task } => Some(task.clone()),
+                _ => None,
+            };
+            crate::task_notice::enqueue(app, title, body, task, matches!(event, NotifyEvent::Test));
+        }
     }
 }
 
@@ -117,6 +137,14 @@ fn send_desktop_notification(title: &str, body: &str, identifier: &str) -> Resul
 }
 
 static LAST_NOTIFICATION_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn report_notification_error(app: &AppHandle, error: String) {
+    log::error!("Task notification failed: {error}");
+    *LAST_NOTIFICATION_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
+    let _ = app.emit("notification-error", error);
+}
 
 #[tauri::command]
 pub fn get_notification_error() -> Option<String> {
@@ -284,7 +312,7 @@ fn notification_icon_path() -> Option<String> {
     Some(icon_path.to_string_lossy().into_owned())
 }
 
-/// Fires multiple notifiers in sequence (beep + desktop banner).
+/// Fires configured reminder channels (sound, app popup, system banner).
 pub struct CompositeNotifier {
     backends: Vec<Box<dyn Notifier>>,
 }
@@ -306,6 +334,7 @@ impl Notifier for CompositeNotifier {
 static NOTIFIER: LazyLock<CompositeNotifier> = LazyLock::new(|| {
     CompositeNotifier::new(vec![
         Box::new(SystemBeepNotifier),
+        Box::new(PopupNotifier),
         Box::new(DesktopNotifier),
     ])
 });
@@ -356,9 +385,16 @@ fn platform_beep() -> Result<(), String> {
 
 #[cfg(target_os = "windows")]
 fn platform_beep() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
     Command::new("powershell")
-        .args(["-c", "[System.Media.SystemSounds]::Exclamation.Play()"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW: never flash a console.
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[System.Media.SystemSounds]::Exclamation.Play()",
+        ])
         .output()
         .map(|_| ())
         .map_err(|e| format!("powershell beep failed: {e}"))
@@ -409,16 +445,60 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
     }
 }
 
-/// Let users verify Windows notification settings without waiting for a task.
+/// Verify configured reminder channels without waiting for a real task.
 #[tauri::command]
-pub async fn test_notification(app: AppHandle) -> Result<(), String> {
+pub async fn test_notification(app: AppHandle, kind: Option<String>) -> Result<(), String> {
+    let settings = crate::monitoring::get_monitoring_settings();
+    if !settings.notifications {
+        return Err("请先启用任务提醒并保存配置".into());
+    }
+    let event = test_event(kind.as_deref().unwrap_or("test"))?;
+    if settings.popup_notifications() {
+        let (title, body) = notification_copy(&event);
+        // Explicit test: no fake task enters attention/history or Agent data.
+        crate::task_notice::enqueue(&app, title, body, None, true);
+    }
+    SystemBeepNotifier.notify(&NotifyEvent::Test, Some(&app));
+    if !settings.desktop_notifications() {
+        return Ok(());
+    }
     let identifier = app.config().identifier.clone();
     tauri::async_runtime::spawn_blocking(move || {
-        let (title, body) = notification_copy(&NotifyEvent::Test);
+        let (title, body) = notification_copy(&event);
         send_actionable_notification(&title, &body, &identifier, Some(app), None)
     })
     .await
     .map_err(|error| error.to_string())?
+}
+
+fn test_event(kind: &str) -> Result<NotifyEvent, String> {
+    use crate::domain::{DetectionConfidence, TaskSource, TaskStatus, WaitingReason};
+    if kind == "test" {
+        return Ok(NotifyEvent::Test);
+    }
+    let mut task = TaskSnapshot::new(
+        "notification-test",
+        "任务提醒验收（测试，不是真实任务）",
+        TaskSource::LocalFile,
+        TaskStatus::WaitingInput,
+        DetectionConfidence::Exact,
+        std::time::SystemTime::now(),
+    );
+    match kind {
+        "turn_ended" => {
+            task.waiting_reason = Some(WaitingReason::TurnEnded);
+            Ok(NotifyEvent::WaitingInput { task, reason: None })
+        }
+        "approval" => {
+            task.waiting_reason = Some(WaitingReason::Approval);
+            Ok(NotifyEvent::WaitingInput { task, reason: None })
+        }
+        "failed" => {
+            task.status = TaskStatus::Failed;
+            Ok(NotifyEvent::Failed { task })
+        }
+        _ => Err("无效的提醒测试类型".into()),
+    }
 }
 
 pub fn send_test_notification(identifier: &str) -> Result<(), String> {
@@ -450,6 +530,59 @@ mod tests {
     use super::*;
     use crate::domain::{DetectionConfidence, TaskSource, TaskStatus};
     use std::time::{Duration, SystemTime};
+
+    #[test]
+    fn completion_transition_has_real_title_and_only_notifies_once_per_turn() {
+        let mut engine = crate::transition::TransitionEngine::new();
+        let mut task = TaskSnapshot::new(
+            "codex:stable-id",
+            "Native renamed task",
+            TaskSource::Codex,
+            TaskStatus::Running,
+            DetectionConfidence::Exact,
+            SystemTime::now(),
+        );
+        task.project = Some("real-project".into());
+        task.turn_key = Some("turn-1".into());
+        task.unread = true;
+        assert!(engine
+            .apply(&[task.clone()], &[], SystemTime::now())
+            .is_empty());
+        task.status = TaskStatus::WaitingInput;
+        task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        let events = engine.apply(&[task.clone()], &[], SystemTime::now());
+        assert_eq!(events.len(), 1);
+        if let TaskEvent::WaitingInput { task, reason } = &events[0] {
+            let (title, body) = notification_copy(&NotifyEvent::WaitingInput {
+                task: task.clone(),
+                reason: reason.clone(),
+            });
+            assert_eq!(title, "TaskPulse · 本轮结束，等待后续输入");
+            assert_eq!(body, "Codex · real-project · Native renamed task");
+            assert_eq!(task.id, "codex:stable-id");
+        } else {
+            panic!("expected turn completion");
+        }
+        task.name = "Renamed after completion".into();
+        assert!(engine
+            .apply(&[task.clone()], &[], SystemTime::now())
+            .is_empty());
+        task.status = TaskStatus::Running;
+        task.turn_key = Some("turn-2".into());
+        engine.apply(&[task.clone()], &[], SystemTime::now());
+        task.status = TaskStatus::WaitingInput;
+        assert_eq!(engine.apply(&[task], &[], SystemTime::now()).len(), 1);
+    }
+
+    #[test]
+    fn test_alerts_are_explicit_and_invalid_kinds_rejected() {
+        for kind in ["turn_ended", "approval", "failed"] {
+            let (title, body) = notification_copy(&test_event(kind).unwrap());
+            assert!(body.contains("测试，不是真实任务"));
+            assert!(title.contains("TaskPulse"));
+        }
+        assert!(test_event("anything").is_err());
+    }
 
     #[test]
     fn task_label_preserves_source_project_and_native_title() {

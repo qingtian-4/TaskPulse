@@ -56,6 +56,8 @@ pub struct DashboardSettings {
     pub sources: Vec<SourceConfig>,
     #[serde(default = "yes")]
     pub notifications: bool,
+    #[serde(default = "notification_mode_default")]
+    pub notification_mode: String,
     #[serde(default)]
     pub sound: bool,
     #[serde(default = "task_view")]
@@ -66,6 +68,17 @@ pub struct DashboardSettings {
 }
 fn recent_days_default() -> u16 {
     7
+}
+fn notification_mode_default() -> String {
+    "popup".into()
+}
+impl DashboardSettings {
+    pub fn popup_notifications(&self) -> bool {
+        self.notifications && matches!(self.notification_mode.as_str(), "popup" | "both")
+    }
+    pub fn desktop_notifications(&self) -> bool {
+        self.notifications && matches!(self.notification_mode.as_str(), "system" | "both")
+    }
 }
 fn yes() -> bool {
     true
@@ -150,6 +163,7 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         onboarding_complete: existing,
         sources,
         notifications: true,
+        notification_mode: notification_mode_default(),
         sound: false,
         default_view: task_view(),
         recent_days: recent_days_default(),
@@ -243,6 +257,12 @@ pub fn revision() -> u64 {
 fn validate(settings: &DashboardSettings) -> Result<(), String> {
     if settings.version != 2 {
         return Err("不支持的配置版本".into());
+    }
+    if !matches!(
+        settings.notification_mode.as_str(),
+        "popup" | "system" | "both"
+    ) {
+        return Err("无效的任务提醒方式".into());
     }
     if !matches!(settings.default_view.as_str(), "tasks" | "projects") {
         return Err("无效的默认视图".into());
@@ -350,6 +370,11 @@ pub fn save_monitoring_settings(
         state.revision += 1;
     }
     crate::watcher::request_refresh();
+    if !settings.popup_notifications() {
+        crate::task_notice::clear(&app);
+    } else {
+        crate::task_notice::retain_in_scope(&app);
+    }
     let _ = app.emit("monitoring-settings-updated", &settings);
     Ok(settings)
 }
@@ -750,14 +775,27 @@ mod tests {
         settings.sources[0].projects = vec!["my-project".into()];
         let mut value = serde_json::to_value(&settings).unwrap();
         value.as_object_mut().unwrap().remove("recent_days");
+        value.as_object_mut().unwrap().remove("notification_mode");
         let restored: DashboardSettings = serde_json::from_value(value).unwrap();
         assert_eq!(restored.recent_days, 7);
+        assert!(restored.popup_notifications());
+        assert!(!restored.desktop_notifications());
         assert_eq!(restored.sources[0].projects, vec!["my-project"]);
         assert!(validate(&restored).is_ok());
         settings.recent_days = 366;
         assert!(validate(&settings).is_err());
         settings.recent_days = 0;
         assert!(validate(&settings).is_ok());
+    }
+    #[test]
+    fn reminder_channels_respect_master_switch_and_validate_mode() {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        settings.notification_mode = "both".into();
+        assert!(settings.popup_notifications() && settings.desktop_notifications());
+        settings.notifications = false;
+        assert!(!settings.popup_notifications() && !settings.desktop_notifications());
+        settings.notification_mode = "unsupported".into();
+        assert!(validate(&settings).is_err());
     }
     #[test]
     fn project_paths_and_exclusions_do_not_alias_same_names() {

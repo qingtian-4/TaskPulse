@@ -281,6 +281,9 @@ pub fn update_task_attention(
         .collect();
     let hosts = get_hosts();
     let providers = get_providers();
+    if matches!(action.as_str(), "viewed" | "hide" | "ignore") {
+        crate::task_notice::remove_task(&app, &id);
+    }
     emit_agents(&app, &tasks, &hosts, &providers);
     Ok(tasks)
 }
