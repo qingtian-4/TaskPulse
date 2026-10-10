@@ -53,7 +53,7 @@ async function client(tab: Tab) {
 
 let popup: Tab | undefined;
 for (let n = 0; n < 100; n++) {
-  popup = (await tabs().catch(() => [])).find(t => t.url.includes('tauri.localhost') && !t.url.includes('manage'));
+  popup = (await tabs().catch(() => [])).find(t => t.url.includes('tauri.localhost') && !t.url.includes('manage') && !t.url.includes('/notice'));
   if (popup) break;
   await Bun.sleep(100);
 }
@@ -141,7 +141,7 @@ try {
   const result = {
     passed: true, layout, initialTasks: initial.length, archivedTasks:archived.length, discoveredSessions: directory.total, refreshFeedback,
     providers: providers.map((p: any) => ({ provider: p.provider, status: p.status })),
-    checks: ['native embedded popup', 'archive separate from live main', 'management rendered with native IPC', 'immediate source toggle UI', 'unsaved close prevention', 'manual refresh actual source results', 'unchanged scopes after save/restore', 'disable + scanner exclusion', 'restore stable Codex identity', 'internal service exclusion', 'no CSP console errors', 'native notification API accepted'],
+    checks: ['native embedded popup', 'archive separate from live main', 'management rendered with native IPC', 'immediate source toggle UI', 'unsaved close prevention', 'manual refresh actual source results', 'unchanged scopes after save/restore', 'disable + scanner exclusion', 'restore stable Codex identity', 'internal service exclusion', 'no CSP console errors', 'configured test reminder requested'],
     notVerified: ['user clicked delivered banner', 'real-agent P95 latency']
   };
   await Bun.write(out + '/native-result.json', JSON.stringify(result, null, 2));

@@ -32,6 +32,7 @@ Important locations:
 - `src-tauri/src/monitoring.rs`: source instance registry, legacy migration, hot reload and discovered-session catalog.
 - `src-tauri/src/history.rs`: recent terminal-task persistence.
 - `src-tauri/src/tray.rs`: aggregate tray state and embedded tray icons.
+- `src-tauri/src/task_notice.rs` and `src/routes/notice/`: non-activating task reminder window and separate-event queue. Dismissal must never mark a task viewed; stale timer IDs cannot dismiss the next alert.
 - `src/routes/+page.svelte` and `src/lib/components/`: popup UI.
 - `src/routes/manage/`: independent management window; permissions include both `popup` and `management`.
 - `docs/PRODUCT_DASHBOARD.md`: task-first presentation, source configuration, blocking vs normal end, notification rules.
@@ -95,6 +96,8 @@ cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_remote_sna
 The tray PNGs are compile-time embedded. Do not add `icons/tray-*.png` back to Tauri `bundle.resources`; copying those redundant runtime resources caused Windows file-lock failures while the tray app was running.
 
 Windows WebView2 creation must use async commands or a separate thread, never synchronous IPC/event handlers. Keep the narrowly scoped `ipc:` / `http://ipc.localhost` CSP connect permissions; actual native IPC/window tests catch failures that browser mocks cannot.
+
+Reminder delivery defaults to the independent TaskPulse popup (`dashboard.notification_mode=popup`, alternatives `system`/`both`). The master `notifications` switch covers all channels. Only lifecycle events trigger task alerts; tests are explicitly labelled and never imported as monitored tasks. Run `scripts/native-notice-smoke.ts` for actual popup visual/click/focus acceptance, not just system notification API success.
 
 While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps1`; it builds into `src-tauri/target/codex-check`, so the linker never replaces the live executable. To rebuild the executable used by the tray itself, stop only the workspace-owned process, run the normal build, and restart it. Never kill unrelated processes by name without verifying their executable path.
 
