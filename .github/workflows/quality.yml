@@ -1,0 +1,44 @@
+name: Windows quality
+
+on:
+  push:
+    branches: [main, 'codex/**']
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Windows Rust and frontend
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v6
+      - uses: oven-sh/setup-bun@v2
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - name: Install locked frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Check frontend types, models and production build
+        run: |
+          bun run check
+          bun run test:ui-model
+          bun run build
+      - name: Check Rust format, lint, tests and executable
+        run: |
+          cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+          cargo clippy --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+          cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray
+          cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray
+      # Opt-in live Agent/SSH/WSL and GUI acceptance tests are not unattended CI.
+      # No tags, installers, release publication or write-capable token here.

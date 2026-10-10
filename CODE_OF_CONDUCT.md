@@ -32,9 +32,11 @@ Examples of unacceptable behavior:
 
 ## Enforcement
 
-Instances of unacceptable behavior may be reported to the project team at
-**aisprkl@gmail.com**. All complaints will be reviewed and investigated
-promptly and fairly.
+TaskPulse is maintained by [qingtian-4](https://github.com/qingtian-4). Non-sensitive
+conduct concerns may be raised in this repository's issues. For private matters,
+ask the maintainer for a private channel; do not disclose personal information in
+a public issue. AgentTray's original maintainers are not TaskPulse's reporting
+channel. Reports are reviewed on a best-effort basis.
 
 ## Attribution
 

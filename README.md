@@ -6,6 +6,8 @@
 
 TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray)（MIT）的 Windows-first 桌面伴随工具，目前为 **alpha**。当前形态是独立托盘应用，尚不是可安装到所有 IDE/Agent 的通用插件。
 
+本仓库由 [qingtian-4](https://github.com/qingtian-4) 维护，独立演进为 TaskPulse；原始 AgentTray 的版权和 Git 提交历史保留。新增功能向本仓库的 `main` 提交 PR，不默认向上游提交。维护流程见 [Git 与 PR 入门](docs/GIT_WORKFLOW.md)。
+
 ## 与 AgentTray 的区别
 
 上游已经具备多会话托盘、Claude Code / Codex CLI / Gemini CLI hooks、进程扫描、终端跳转和桌面通知。TaskPulse 复用这些基础，在其上增加：

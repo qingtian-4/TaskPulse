@@ -1,6 +1,6 @@
 ---
 name: Feature Request
-about: Suggest a new feature for AgentTray
+about: Suggest a new feature for TaskPulse
 title: "[FEATURE] "
 labels: enhancement
 ---

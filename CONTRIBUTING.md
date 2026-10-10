@@ -56,6 +56,14 @@ cannot supply reliable task titles or lifecycle boundaries.
 
 ## Changes and license
 
+The canonical repository is `qingtian-4/TaskPulse`; target `main` for TaskPulse
+pull requests, not AgentTray's upstream. Develop on a short-lived topic branch,
+push that branch, describe and review the PR, pass the Windows quality workflow,
+then merge. A push is not a merge. The initial TaskPulse integration uses a
+merge commit to preserve upstream and fork-development history. Never rewrite
+someone else's author metadata to change the contributors display. See
+[Git / PR workflow](docs/GIT_WORKFLOW.md) for the maintainer's Chinese guide.
+
 Keep changes scoped and include tests and documentation. Describe migrations and
 compatibility limits. Never publish credentials or machine-specific fixtures.
 Do not force-push during review. Contributions use the [MIT License](LICENSE);
