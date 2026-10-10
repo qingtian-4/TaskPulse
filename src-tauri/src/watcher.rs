@@ -674,6 +674,12 @@ impl LocalProviders {
                     ))
                 }
                 SourceKind::Codex => Box::new(CodexProvider::new()),
+                SourceKind::CodexWsl => {
+                    Box::new(crate::providers::codex_wsl::WslCodexProvider::new(
+                        source.location.clone(),
+                        source.id.clone(),
+                    ))
+                }
                 SourceKind::Hermes => Box::new(if source.location.is_empty() {
                     HermesProvider::new()
                 } else {
@@ -712,7 +718,8 @@ impl LocalProviders {
             };
             let source = source.clone();
             let id = source.id.clone();
-            let interval = if source.kind == SourceKind::DeepseekWsl {
+            let interval = if matches!(source.kind, SourceKind::DeepseekWsl | SourceKind::CodexWsl)
+            {
                 2
             } else {
                 1
@@ -724,14 +731,16 @@ impl LocalProviders {
                     let mut output = provider.poll(SystemTime::now());
                     for task in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
                         task.source_instance = Some(source.id.clone());
-                        if !matches!(
-                            source.id.as_str(),
-                            "codex"
-                                | "claude_code"
-                                | "hermes"
-                                | "deepseek_harness"
-                                | "deepseek_harness_desktop"
-                        ) {
+                        if source.kind != SourceKind::CodexWsl
+                            && !matches!(
+                                source.id.as_str(),
+                                "codex"
+                                    | "claude_code"
+                                    | "hermes"
+                                    | "deepseek_harness"
+                                    | "deepseek_harness_desktop"
+                            )
+                        {
                             task.id = format!("{}:{}", source.id, task.id);
                         }
                     }

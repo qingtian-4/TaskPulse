@@ -36,6 +36,19 @@ test('legacy remote tasks never borrow a local source label', () => {
   expect(taskContext({...task,host:'Other'},settings)).toBe('HyperMem · Codex · Other');
 });
 
+test('local WSL Codex has a separate source label and project identity', () => {
+  const common={enabled:true,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
+  const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[
+    {...common,id:'codex',name:'Codex · 本机',kind:'codex',location:''},
+    {...common,id:'codex-wsl:ubuntu',name:'Codex · WSL Ubuntu',kind:'codex_wsl',location:'Ubuntu'}
+  ]};
+  const task={...base,source_instance:'codex-wsl:ubuntu',project:'E-commerce Agent',project_path:'/home/user/projects/E-commerce Agent'};
+  expect(taskContext(task,settings)).toBe('E-commerce Agent · Codex · WSL Ubuntu');
+  expect(taskSource(task,settings)?.id).toBe('codex-wsl:ubuntu');
+  expect(projectKey(task,settings)).not.toBe(projectKey({...task,source_instance:'codex'},settings));
+  expect(sourceFreshness(task,settings,[{provider:'codex',status:'connected',last_success:100}],100)).toBe('来源尚未成功采集');
+});
+
 test('source freshness does not borrow another provider success or task activity',()=>{
   const task={...base,source_instance:'remote-codex:server3',remote:true,host:'Server3'};
   const providers=[{provider:'codex',status:'connected' as const,last_success:100000},{provider:'remote-codex:server3',status:'degraded' as const,last_success:1000,last_attempt:99900,message:'SSH failed'}];

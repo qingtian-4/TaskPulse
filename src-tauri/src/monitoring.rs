@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter};
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Codex,
+    CodexWsl,
     ClaudeCode,
     Hermes,
     DeepseekDesktop,
@@ -104,6 +105,12 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
     let mut sources = vec![
         source("codex", "Codex · 本机", SourceKind::Codex, ""),
         source(
+            "codex-wsl:ubuntu",
+            "Codex · WSL Ubuntu",
+            SourceKind::CodexWsl,
+            "Ubuntu",
+        ),
+        source(
             "claude_code",
             "Claude Code · 本机",
             SourceKind::ClaudeCode,
@@ -134,7 +141,9 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
             }
             _ => all_projects(),
         };
-        item.enabled = existing && !item.projects.is_empty() && item.kind != SourceKind::ClaudeCode;
+        item.enabled = existing
+            && !item.projects.is_empty()
+            && !matches!(item.kind, SourceKind::ClaudeCode | SourceKind::CodexWsl);
     }
     for host in &cfg.remote_hosts {
         let mut codex = source(
@@ -285,6 +294,9 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
         }
         if !(500..=60_000).contains(&source.poll_interval_ms) {
             return Err("远程轮询周期需在 500–60000 毫秒之间".into());
+        }
+        if source.kind == SourceKind::CodexWsl {
+            crate::providers::codex_wsl::validate_distro(&source.location)?;
         }
         if matches!(source.kind, SourceKind::RemoteCodex | SourceKind::Tmux)
             && (source.location.trim().is_empty()
@@ -642,13 +654,32 @@ pub struct SourceDiscovery {
     pub candidate: Option<SourceConfig>,
 }
 #[tauri::command]
-pub fn discover_sources() -> Vec<SourceDiscovery> {
+pub async fn discover_sources() -> Vec<SourceDiscovery> {
+    tauri::async_runtime::spawn_blocking(discover_source_rows)
+        .await
+        .unwrap_or_default()
+}
+fn discover_source_rows() -> Vec<SourceDiscovery> {
     let home = dirs_next::home_dir().unwrap_or_default();
     let settings = get_monitoring_settings();
     let mut sources = settings.sources.clone();
     for candidate in from_legacy(&TaskPulseConfig::default(), false).sources {
         if !sources.iter().any(|s| s.kind == candidate.kind) {
             sources.push(candidate);
+        }
+    }
+    let running = crate::providers::codex_wsl::running_distros().unwrap_or_default();
+    for distro in &running {
+        if !sources
+            .iter()
+            .any(|s| s.kind == SourceKind::CodexWsl && s.location.eq_ignore_ascii_case(distro))
+        {
+            sources.push(source(
+                &format!("codex-wsl:{}", distro.to_lowercase()),
+                &format!("Codex · WSL {distro}"),
+                SourceKind::CodexWsl,
+                distro,
+            ));
         }
     }
     sources
@@ -669,6 +700,15 @@ pub fn discover_sources() -> Vec<SourceDiscovery> {
                 SourceKind::Codex => (
                     home.join(".codex").exists(),
                     home.join(".codex").display().to_string(),
+                ),
+                SourceKind::CodexWsl => (
+                    running
+                        .iter()
+                        .any(|d| d.eq_ignore_ascii_case(&source.location)),
+                    format!(
+                        "本机 WSL {} · 启用后只读验证 Codex 目录；独立于 Windows",
+                        source.location
+                    ),
                 ),
                 SourceKind::Hermes => {
                     let path = if source.location.is_empty() {
@@ -760,6 +800,38 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wsl_sources_are_opt_in_and_distro_scopes_never_alias_windows_or_ssh() {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        let wsl_source = settings
+            .sources
+            .iter_mut()
+            .find(|s| s.kind == SourceKind::CodexWsl)
+            .unwrap();
+        assert!(!wsl_source.enabled);
+        wsl_source.enabled = true;
+        wsl_source.projects = vec!["/home/user/projects/Project".into()];
+        let source_id = wsl_source.id.clone();
+        let mut task = TaskSnapshot::new(
+            "codex-wsl:ubuntu:codex:s",
+            "native title",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::Running,
+            crate::domain::DetectionConfidence::Hook,
+            std::time::SystemTime::now(),
+        );
+        task.source_instance = Some(source_id);
+        task.project_path = Some("/home/user/projects/Project".into());
+        assert!(exclusion(&settings, &task).is_none());
+        task.project_path = Some("/home/user/projects/project".into());
+        assert!(exclusion(&settings, &task).is_some());
+        task.source_instance = Some("codex-wsl:other".into());
+        assert_eq!(exclusion(&settings, &task), Some("来源已移除"));
+        assert!(validate(&settings).is_ok());
+        let another = source("wsl2", "Other", SourceKind::CodexWsl, "ubuntu");
+        settings.sources.push(another);
+        assert!(validate(&settings).is_err());
+    }
     use crate::domain::{DetectionConfidence, TaskStatus};
     #[test]
     fn internal_service_sessions_are_outside_attention_and_notification_scope() {

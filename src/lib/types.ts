@@ -74,7 +74,7 @@ export interface TaskSnapshot {
   hook_matcher?: string;
 }
 
-export type SourceKind = 'codex' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner';
+export type SourceKind = 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner';
 export interface MonitorSource {
   id: string; name: string; kind: SourceKind; enabled: boolean; location: string;
   projects: string[]; excluded_projects: string[]; tmux_sessions: string[]; tmux_panes: string[]; poll_interval_ms: number;

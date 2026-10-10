@@ -117,6 +117,9 @@ fn record_quota(state: &mut AccountQuota, result: Result<CodexQuota, String>, no
 
 pub struct CodexProvider {
     sessions_root: PathBuf,
+    identity_prefix: String,
+    linux_share: Option<PathBuf>,
+    external_metadata: Option<HashMap<String, ThreadMeta>>,
     state_db: Option<PathBuf>,
     native_rx: Option<mpsc::Receiver<Result<NativeCodexSnapshot, String>>>,
     /// session id → last-seen mtime, so we can emit a terminal snapshot when a
@@ -136,6 +139,49 @@ struct RolloutCache {
 }
 
 impl CodexProvider {
+    /// WSL transport supplies metadata/path mapping, not a second lifecycle.
+    pub(super) fn with_wsl_root(root: PathBuf, share: PathBuf, instance: &str) -> Self {
+        let mut provider = Self::with_root(root.join("sessions"));
+        provider.identity_prefix = format!("{instance}:codex");
+        provider.linux_share = Some(share);
+        provider.external_metadata = Some(Default::default());
+        provider
+    }
+    pub(super) fn set_external_metadata(&mut self, rows: &[super::codex_wsl::WslThread]) {
+        self.external_metadata = Some(
+            rows.iter()
+                .map(|row| {
+                    (
+                        row.id.clone(),
+                        ThreadMeta {
+                            id: row.id.clone(),
+                            manual_name: row.name.clone(),
+                            native_name: row.sidebar_title.clone(),
+                            title: row.title.clone(),
+                            first_user_message: row.first_user_message.clone(),
+                            cwd: row.cwd.clone(),
+                            rollout_path: row.rollout_path.clone(),
+                            updated_at: row.updated_at,
+                            pinned: row.is_pinned,
+                            internal: internal_guardian(&row.source),
+                        },
+                    )
+                })
+                .collect(),
+        );
+    }
+    fn task_id(&self, id: &str) -> String {
+        format!("{}:{id}", self.identity_prefix)
+    }
+    fn resolve_rollout_path(&self, path: &str) -> PathBuf {
+        if let Some(share) = &self.linux_share {
+            if path.starts_with('/') {
+                return share.join(path.trim_start_matches('/'));
+            }
+        }
+        normalize_windows_path(path)
+    }
+
     pub fn new() -> Self {
         let home = dirs_next::home_dir().unwrap_or_default();
         let mut provider = Self::with_root(home.join(".codex/sessions"));
@@ -190,6 +236,9 @@ impl CodexProvider {
     pub fn with_root(root: PathBuf) -> Self {
         Self {
             sessions_root: root,
+            identity_prefix: "codex".into(),
+            linux_share: None,
+            external_metadata: None,
             state_db: None,
             native_rx: None,
             seen: Default::default(),
@@ -200,6 +249,9 @@ impl CodexProvider {
     }
 
     fn thread_metadata(&mut self, now: SystemTime) -> Result<HashMap<String, ThreadMeta>, String> {
+        if let Some(metadata) = &self.external_metadata {
+            return Ok(metadata.clone());
+        }
         self.refresh_native_metadata(now);
         let Some(path) = &self.state_db else {
             return Ok(self
@@ -338,7 +390,7 @@ impl CodexProvider {
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| unnamed_task(&host.session_id));
         let mut task = TaskSnapshot::new(
-            format!("codex:{}", host.session_id),
+            self.task_id(&host.session_id),
             name,
             TaskSource::Codex,
             host.status,
@@ -1441,13 +1493,13 @@ impl Provider for CodexProvider {
                 meta.pinned
                     || self.seen.contains_key(&meta.id)
                     || crate::watcher::known_sessions().iter().any(|t| {
-                        t.id == format!("codex:{}", meta.id)
+                        t.id == self.task_id(&meta.id)
                             && (t.unread || t.pinned || t.requires_action())
                     })
                     || now_secs.saturating_sub(meta.updated_at) <= DISCOVERY_TTL.as_secs() as i64
             })
             .filter_map(|meta| meta.rollout_path.as_deref())
-            .map(normalize_windows_path)
+            .map(|path| self.resolve_rollout_path(path))
             .collect();
         let files: Vec<PathBuf> = if eligible_paths.is_empty() {
             discovered
@@ -1464,7 +1516,7 @@ impl Provider for CodexProvider {
                 let known = self.seen.contains_key(&state.session_id)
                     || metadata.get(&state.session_id).is_some_and(|m| m.pinned)
                     || crate::watcher::known_sessions().iter().any(|t| {
-                        t.id == format!("codex:{}", state.session_id)
+                        t.id == self.task_id(&state.session_id)
                             && (t.unread || t.pinned || t.requires_action())
                     });
                 if !session_is_live(&state, now)
@@ -1498,7 +1550,7 @@ impl Provider for CodexProvider {
                 continue;
             }
             let mut task = TaskSnapshot::new(
-                format!("codex:{}", meta.id),
+                self.task_id(&meta.id),
                 thread_task_name(meta),
                 TaskSource::Codex,
                 TaskStatus::Idle,
@@ -1523,7 +1575,7 @@ impl Provider for CodexProvider {
             .values()
             .map(|meta| {
                 let mut task = TaskSnapshot::new(
-                    format!("codex:{}", meta.id),
+                    self.task_id(&meta.id),
                     thread_task_name(meta),
                     TaskSource::Codex,
                     TaskStatus::Unknown,
@@ -1607,6 +1659,103 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn wsl_mapping_sidebar_rename_and_incremental_turn_share_native_rules() {
+        use crate::attention::AttentionTracker;
+        use crate::transition::{TaskEvent, TransitionEngine};
+        let dir = tempfile::tempdir().unwrap();
+        let linux_home = "home/user/.codex";
+        let root = dir.path().join(linux_home);
+        std::fs::create_dir_all(root.join("sessions")).unwrap();
+        let path = root.join("sessions/rollout-stable.jsonl");
+        let ts = recent_rfc3339(0);
+        let event = |kind: &str| {
+            format!(
+                "{}\n",
+                serde_json::json!({"timestamp":ts,"payload":{"type":kind,"turn_id":"turn"}})
+            )
+        };
+        let session_meta = serde_json::json!({"type":"session_meta","payload":{"id":"stable","cwd":"/home/user/projects/E-commerce Agent"}});
+        std::fs::write(&path, format!("{session_meta}\n{}", event("task_started"))).unwrap();
+        let mut provider =
+            CodexProvider::with_wsl_root(root, dir.path().into(), "codex-wsl:ubuntu");
+        let mut row:super::super::codex_wsl::WslThread=serde_json::from_value(serde_json::json!({
+            "id":"stable","title":"long first prompt, not the sidebar", "sidebar_title":"原生 WSL 标题",
+            "cwd":"/home/user/projects/E-commerce Agent","rollout_path":"/home/user/.codex/sessions/rollout-stable.jsonl",
+            "updated_at":SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_secs()
+        })).unwrap();
+        provider.set_external_metadata(&[row]);
+        let first = provider.poll(SystemTime::now());
+        assert!(first.authoritative);
+        assert_eq!(first.tasks.len(), 1);
+        let task = &first.tasks[0];
+        assert_eq!(task.id, "codex-wsl:ubuntu:codex:stable");
+        assert_eq!(task.name, "原生 WSL 标题");
+        assert_eq!(task.project.as_deref(), Some("E-commerce Agent"));
+        assert_eq!(
+            task.project_path.as_deref(),
+            Some("/home/user/projects/E-commerce Agent")
+        );
+        assert_eq!(task.status, TaskStatus::Running);
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let mut engine = TransitionEngine::new();
+        assert!(engine
+            .apply(&first.tasks, &[], SystemTime::now())
+            .is_empty());
+        assert_eq!(tracker.reconcile(first.tasks.clone()).len(), 1);
+        row=serde_json::from_value(serde_json::json!({"id":"stable","name":"手动新标题","rollout_path":"/home/user/.codex/sessions/rollout-stable.jsonl"})).unwrap();
+        provider.set_external_metadata(&[row]);
+        let renamed = provider.poll(SystemTime::now());
+        assert_eq!(renamed.tasks[0].name, "手动新标题");
+        assert_eq!(renamed.tasks[0].id, task.id);
+        assert_eq!(renamed.tasks[0].turn_key, task.turn_key);
+        assert!(engine
+            .apply(&renamed.tasks, &[], SystemTime::now())
+            .is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(event("task_complete").as_bytes())
+            .unwrap();
+        let ended = provider.poll(SystemTime::now());
+        assert_eq!(
+            ended.tasks[0].waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+        assert_eq!(ended.tasks[0].status, TaskStatus::WaitingInput);
+        assert!(matches!(
+            engine
+                .apply(&ended.tasks, &[], SystemTime::now())
+                .as_slice(),
+            [TaskEvent::WaitingInput { .. }]
+        ));
+        assert!(engine
+            .apply(&ended.tasks, &[], SystemTime::now())
+            .is_empty());
+        let attention = tracker.reconcile(ended.tasks.clone());
+        assert!(attention[0].unread);
+        assert!(tracker.hide(&task.id).unwrap().is_empty());
+        let mut fresh = AttentionTracker::open(dir.path().join("fresh-attention.json"));
+        assert!(fresh.reconcile(ended.tasks).is_empty());
+        let next_turn = serde_json::json!({"timestamp":ts,"payload":{"type":"task_started","turn_id":"next-turn"}});
+        writeln!(
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap(),
+            "{next_turn}"
+        )
+        .unwrap();
+        let resumed = provider.poll(SystemTime::now()).tasks;
+        assert!(engine.apply(&resumed, &[], SystemTime::now()).is_empty());
+        let attention = tracker.reconcile(resumed);
+        assert_eq!(attention.len(), 1);
+        assert_eq!(attention[0].id, task.id);
+        assert_eq!(attention[0].status, TaskStatus::Running);
+        assert_eq!(attention[0].turn_key.as_deref(), Some("next-turn"));
+    }
 
     #[test]
     fn tool_outputs_clear_only_matching_calls_and_reasoning_keeps_turn_running() {

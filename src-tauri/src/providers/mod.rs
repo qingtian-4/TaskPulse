@@ -4,6 +4,7 @@
 
 pub mod claude_code;
 pub mod codex;
+pub mod codex_wsl;
 pub mod deepseek_harness;
 pub mod hermes;
 pub mod jsonl_tail;
