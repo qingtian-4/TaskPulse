@@ -75,7 +75,7 @@ tmux_panes = ["%12", "3:0.1"]
 
 以上为旧版配置格式。新版本通过齿轮打开“监控来源”管理窗口；首次保存将旧范围迁移到同文件的 `[dashboard]`，备份为 `config.toml.pre-dashboard.bak`，原有其他字段保留。保存立即生效，停用来源不触发完成通知。之后以 `[dashboard]` 为准；手动改文件仍需重启，不要同时编辑旧范围和新范围。完整规则见 [PRODUCT_DASHBOARD.md](PRODUCT_DASHBOARD.md)。
 
-SSH 别名必须与实际运行 Agent 的账号一致。同一机器的两个别名可以使用不同用户，例如 `Server1` 与 `Server1_wanghy`；只连接到机器并不能读取另一个用户的 `~/.codex`。`remote_hosts.ssh_host` 和 `monitoring.remote_codex.host` 应指向相同别名，同时启用主机并将项目加入范围。远程 Codex 不要求运行在 tmux 中，IDE Remote SSH 的原生 rollout 也可以采集。
+SSH 别名必须与实际运行 Agent 的账号一致。同一机器的两个别名可以使用不同用户，例如 `dev-server` 与 `dev-server-other-user`；只连接到机器并不能读取另一个用户的 `~/.codex`。`remote_hosts.ssh_host` 和 `monitoring.remote_codex.host` 应指向相同别名，同时启用主机并将项目加入范围。远程 Codex 不要求运行在 tmux 中，IDE Remote SSH 的原生 rollout 也可以采集。
 
 ## Codex 剩余额度
 
