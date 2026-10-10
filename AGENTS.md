@@ -53,6 +53,7 @@ The main view defaults to a configurable 7-day execution-activity window (`dashb
 - Source registry uses `[dashboard]` in that config; once saved it supersedes legacy scopes. UI saves apply immediately; preserve unknown config fields and create the one-time migration backup. Fresh installs require explicit onboarding confirmation.
 - Legacy/generic hook input: `~/.agent-monitor/` and `~/.taskpulse/` status files.
 - Codex: native thread/app-server metadata plus rollout logs; local and configured remote projects are supported.
+- Codex WSL: independent opt-in `codex_wsl` sources per running distro. Read metadata inside Linux using Python 3 / read-only SQLite plus `session_index.jsonl`; never open WSL SQLite/WAL through Windows UNC. Reuse the Codex incremental rollout parser via `\\wsl.localhost\<distro>`. IDs are `<source-instance>:codex:<thread-id>` and Linux project paths stay separate from Windows / SSH. Never auto-wake a stopped distro or query Windows account quota for WSL tasks. See `docs/WSL_CODEX.md`.
 - Claude Code: read-only `CLAUDE_CONFIG_DIR` (default `~/.claude`) projects/*.jsonl, sessions/*.json and IDE *.lock evidence; never read *.key. Native formats are best-effort/inferred. Explicit, reversible official hooks write a minimal event envelope to `~/.taskpulse/claude-events/`. Agent identity is independent from the reported/proxy model. Never auto-install hooks or overwrite statusLine/other hooks/proxy settings.
 - Hermes: native SQLite session metadata and runtime lease state.
 - DeepSeek Harness: native Desktop/CLI `$DSH_HOME` (default `~/.dsh`, override with `TASKPULSE_DSH_HOME`) plus an independent WSL worker. Support both `session.jsonl.zstd` and `session.v4.jsonl.zstd`. Native v4 titles/state use `storages/session_projcache/sessions/<id>.json` (`version`/`record` envelope); legacy versions use `storages/session_projcache.json`. Projection event seq must not override a newer log state. Native IDs are `dsh-native:<session-id>`; existing WSL IDs stay `dsh:<session-id>`.
@@ -93,6 +94,14 @@ Run the opt-in real SSH smoke test only when the configured servers are expected
 ```powershell
 cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_remote_snapshot -- --ignored --nocapture
 ```
+
+Opt-in WSL read-only smoke (Python 3 and a running distro required, default Ubuntu):
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_wsl_codex_snapshot -- --ignored --nocapture
+```
+
+Set `TASKPULSE_WSL_DISTRO` for another distro. `scripts/native-wsl-codex-smoke.ts` validates actual source discovery, save, native session titles and isolated scopes with temporary WebView2 CDP, restoring settings by default.
 
 ## Windows build and tray process
 

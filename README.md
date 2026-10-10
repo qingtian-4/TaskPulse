@@ -50,6 +50,8 @@ bun run tauri dev
 
 首次启动自动打开来源确认界面；确认发现的本机来源并保存，未确认前不开始采集，不自动连接远程服务器。之后可通过托盘菜单或 Ctrl+Shift+A 打开面板；快捷键冲突不影响托盘启动。管理窗口可以添加 SSH 来源、Windows DeepSeek、Claude Code 或 WSL 实例，选择所有项目的新执行或指定项目范围。新检测到的内置 Agent 会作为候选展示，保存后才启用，不自动导入空闲历史。旧配置保留原范围，首次保存创建迁移备份。完整交互见 [任务面板与来源管理](docs/PRODUCT_DASHBOARD.md)。
 
+VS Code Remote–WSL / WSL CLI 中的 Codex 需单独启用“Codex · WSL”来源；Windows 的 Codex 来源不包含 Linux `.codex`。支持按发行版和 Linux 项目路径设置范围，使用真实侧栏标题、共享的增量状态解析，不自动唤醒停止的发行版。详见 [WSL Codex 接入](docs/WSL_CODEX.md)。
+
 管理窗口“通知与显示”或托盘菜单可发送明确标注的测试提醒，通知与声音分别开关。系统通知需要 Windows 允许通知；“请勿打扰”可能隐藏系统横幅。窗口关闭后采集和提醒继续运行。点击提醒打开对应 TaskPulse 详情；关闭提醒或聚焦项目窗口不代表已查看结果，请手动标记“已查看”。
 
 Claude Code 默认只读观测 VS Code / CLI 会话，不读取 `*.key` 或代理凭据。C Switch 代理使用 DeepSeek 时，来源仍为 Claude Code，详情单独显示会话上报模型；这不证明代理背后的实际服务商。原生内部格式属于推断证据。如需精确生命周期，在来源编辑器选择“启用精确事件…”并另行确认：首次备份 Claude 配置，仅合并 TaskPulse Hook，保留 statusLine、其他 Hook 和代理设置，可撤销。支持边界与审查取舍见 [审查回应](docs/REVIEW_RESPONSE.md)。

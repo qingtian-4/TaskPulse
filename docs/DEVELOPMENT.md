@@ -48,6 +48,8 @@ cd .. && bun run tauri dev        # 或: cd src-tauri && cargo tauri dev
 
 核心逻辑全部可离线测试：`cargo test`。
 
+Codex WSL 的真实只读采集与原生管理页验收分别使用 `live_wsl_codex_snapshot`、`scripts/native-wsl-codex-smoke.ts`；不发送 Agent 任务，后者临时启用来源后默认恢复设置。安装要求、执行命令和数据降级规则见 [WSL_CODEX.md](WSL_CODEX.md)。
+
 - `providers/remote_tmux/`：tmux/ps 解析、进程树检测、SSH 失败语义、DISCONNECTED 阈值、恢复、并行轮询（FakeSshExecutor 脚本化响应，无需 Server1/Server3）。
 - `store/`：EXACT>HOOK>INFERRED 合并、同 pane 去重、RECENT TTL、新运行重置。
 - `transition/`：RUNNING→WAITING_INPUT / SUCCEEDED / FAILED / 推断完成；只通知一次；断连/恢复。

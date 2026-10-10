@@ -34,6 +34,8 @@
 ```
 domain/            TaskSnapshot / TaskStatus / TaskSource / DetectionConfidence
 providers/
+  codex_wsl.rs    本机 WSL 独立来源；Linux 内只读元数据 + UNC 日志，共用 codex.rs 增量状态机
+  codex_wsl_metadata.py  默认 Linux 用户的 SQLite / session_index 只读采集，不读取凭据
   local_file.rs    AgentTray 兼容状态文件（.agent-monitor v1 + .taskpulse v2）
   remote_tmux/
     config.rs      ~/.taskpulse/config.toml（首次运行自动生成）
