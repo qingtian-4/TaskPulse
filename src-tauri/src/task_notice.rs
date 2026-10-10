@@ -8,7 +8,31 @@ use std::time::SystemTime;
 use serde::Serialize;
 use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWindowBuilder};
 
-use crate::domain::TaskSnapshot;
+use crate::domain::{TaskSnapshot, TaskSource};
+
+const NOTICE_WIDTH: f64 = 400.0;
+const NOTICE_HEIGHT: f64 = 180.0;
+const NOTICE_MARGIN: f64 = 16.0;
+
+/// Presentation fields are separate: native task titles may themselves contain ` · `.
+#[derive(Debug, Clone, Serialize)]
+pub struct NoticeContext {
+    pub task_name: String,
+    pub source: TaskSource,
+    pub project: Option<String>,
+    pub host: Option<String>,
+}
+
+impl From<&TaskSnapshot> for NoticeContext {
+    fn from(task: &TaskSnapshot) -> Self {
+        Self {
+            task_name: task.name.clone(),
+            source: task.source,
+            project: task.project.clone(),
+            host: task.host.clone(),
+        }
+    }
+}
 
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskNotice {
@@ -18,6 +42,7 @@ pub struct TaskNotice {
     pub created_at: u64,
     pub task_id: Option<String>,
     pub test: bool,
+    pub context: Option<NoticeContext>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -68,6 +93,9 @@ pub fn enqueue(
     if !crate::monitoring::get_monitoring_settings().popup_notifications() {
         return;
     }
+    let context = task.as_ref().map(NoticeContext::from);
+    // Tests may exercise presentation metadata, but never point to a real task.
+    let task = task.filter(|_| !test);
     let notice = TaskNotice {
         id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         title,
@@ -78,6 +106,7 @@ pub fn enqueue(
             .as_millis() as u64,
         task_id: task.as_ref().map(|t| t.id.clone()),
         test,
+        context,
     };
     QUEUE
         .lock()
@@ -194,9 +223,10 @@ fn publish(app: &AppHandle) {
         let result =
             WebviewWindowBuilder::new(&app, "task-notice", WebviewUrl::App("notice/".into()))
                 .title("TaskPulse · 任务提醒")
-                .background_color(tauri::webview::Color(28, 34, 39, 255))
-                .inner_size(400.0, 245.0)
+                .background_color(tauri::webview::Color(255, 255, 255, 255))
+                .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
                 .decorations(false)
+                .shadow(true)
                 .resizable(false)
                 .skip_taskbar(true)
                 .always_on_top(true)
@@ -232,8 +262,10 @@ fn publish(app: &AppHandle) {
 }
 
 fn corner_position(x: i32, y: i32, width: u32, height: u32, scale: f64) -> (i32, i32) {
-    let left = i64::from(x) + i64::from(width) - (416.0 * scale).ceil() as i64;
-    let top = i64::from(y) + i64::from(height) - (261.0 * scale).ceil() as i64;
+    let left =
+        i64::from(x) + i64::from(width) - ((NOTICE_WIDTH + NOTICE_MARGIN) * scale).ceil() as i64;
+    let top =
+        i64::from(y) + i64::from(height) - ((NOTICE_HEIGHT + NOTICE_MARGIN) * scale).ceil() as i64;
     (left.max(i64::from(x)) as i32, top.max(i64::from(y)) as i32)
 }
 
@@ -249,6 +281,7 @@ mod tests {
                 created_at: 1,
                 task_id: Some(format!("task:{id}")),
                 test: false,
+                context: None,
             },
             task: None,
         }
@@ -272,8 +305,27 @@ mod tests {
     }
     #[test]
     fn placement_respects_work_area_dpi_and_negative_monitor_origin() {
-        assert_eq!(corner_position(0, 0, 1920, 1040, 1.0), (1504, 779));
-        assert_eq!(corner_position(-1920, 0, 1920, 1040, 1.5), (-624, 648));
-        assert_eq!(corner_position(0, 0, 320, 200, 1.0), (0, 0));
+        assert_eq!(corner_position(0, 0, 1920, 1040, 1.0), (1504, 844));
+        assert_eq!(corner_position(-1920, 0, 1920, 1040, 1.5), (-624, 746));
+        assert_eq!(corner_position(0, 0, 320, 160, 1.0), (0, 0));
+    }
+
+    #[test]
+    fn context_keeps_native_title_separate_from_project_and_host() {
+        let mut task = TaskSnapshot::new(
+            "codex:stable-id",
+            "Task · native separator",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Exact,
+            SystemTime::now(),
+        );
+        task.project = Some("Project · with separator".into());
+        task.host = Some("Server1".into());
+        let context = NoticeContext::from(&task);
+        assert_eq!(context.task_name, "Task · native separator");
+        assert_eq!(context.project.as_deref(), Some("Project · with separator"));
+        assert_eq!(context.host.as_deref(), Some("Server1"));
+        assert_eq!(context.source, TaskSource::Codex);
     }
 }

@@ -1,14 +1,18 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import { Activity, ArrowUpRight, X } from '@lucide/svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type { NoticeState } from '$lib/types';
+  import { formatAgo } from '$lib/types';
+  import { noticeContent } from '$lib/notice';
   let noticeState=$state<NoticeState>({current:null,pending:0});
   let remaining=$state(15000);
   let hovered=$state(false);
   let busy=$state(false);
   let error=$state('');
   let currentId:number | null=null;
+  const content=$derived(noticeState.current ? noticeContent(noticeState.current) : null);
   function apply(next:NoticeState){
     if(next.current?.id!==currentId){currentId=next.current?.id ?? null;remaining=15000;error='';busy=false;}
     noticeState=next;
@@ -32,8 +36,8 @@
       try{
         const unsubscribe=await listen<NoticeState>('task-notice-updated',e=>apply(e.payload));
         if(!mounted){unsubscribe();return;}cleanup=unsubscribe;
-        apply(await invoke<NoticeState>('get_task_notice'));
-      }catch(e){error=String(e);}
+        const state=await invoke<NoticeState>('get_task_notice');if(mounted)apply(state);
+      }catch(e){if(mounted)error=String(e);}
     })();
     let last=performance.now();
     const timer=setInterval(()=>{
@@ -45,16 +49,76 @@
 </script>
 
 <div class="notice-window" role="region" aria-label="TaskPulse 任务提醒" onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
-  <header><span>TASKPULSE · {noticeState.current?.test?'测试提醒':'任务提醒'}</span><button aria-label="关闭提醒（保持未查看）" title="关闭提醒，任务仍未查看" disabled={busy} onclick={dismiss}>×</button></header>
-  {#if noticeState.current}
-    <div class="copy" role="status"><h1>{noticeState.current.title.replace('TaskPulse · ','')}</h1><p title={noticeState.current.body}>{noticeState.current.body}</p></div>
-    <div class="actions"><button class="primary" disabled={busy} onclick={open}>查看详情</button><button disabled={busy} onclick={dismiss}>稍后处理</button>{#if noticeState.pending}<span>还有 {noticeState.pending} 条提醒</span>{/if}</div>
-    <footer>{hovered?'鼠标移开后自动收起':Math.ceil(remaining/1000)+' 秒后收起'} · 不会标记已查看</footer>
-    <div class="progress" style:width={(remaining/15000*100)+'%'}></div>
+  <button class="close" aria-label="关闭提醒（保持未查看）" title="关闭提醒，任务仍未查看" disabled={busy || !noticeState.current} onclick={dismiss}><X size={16} strokeWidth={1.7}/></button>
+  {#if noticeState.current && content}
+    {#key noticeState.current.id}
+      <button class="message" disabled={busy} aria-label={'查看任务详情：'+content.heading} onclick={open}>
+        <span class="avatar" aria-hidden="true"><Activity size={24} strokeWidth={2.1}/><span class={'status-dot '+content.tone}></span></span>
+        <span class="copy">
+          <span class="sender-line">
+            <span class="sender" title={content.sender}>{content.sender}</span>
+            {#if noticeState.current.test}<span class="test-badge">测试提醒</span>{/if}
+            <span class="timestamp">{Date.now()-noticeState.current.created_at<60000?'刚刚':formatAgo(noticeState.current.created_at)}</span>
+          </span>
+          <span class="heading" role="heading" aria-level={1} title={content.heading}>{content.heading}</span>
+          <span class={'summary '+content.tone} role="status" title={content.summary}>{content.summary}</span>
+        </span>
+      </button>
+    {/key}
+    <footer>
+      <div class="hint" title="自动收起或稍后处理都不会标记任务已查看">
+        {#if error}<span class="error" role="alert">{error}</span>
+        {:else if noticeState.pending}<span class="pending">还有 {noticeState.pending} 条提醒</span>
+        {:else}<span>{hovered?'鼠标移开后自动收起':Math.ceil(remaining/1000)+' 秒后收起'}</span>{/if}
+      </div>
+      <div class="actions"><button class="later" title="收起提醒，保持未查看" disabled={busy} onclick={dismiss}>稍后处理</button><button class="primary" disabled={busy} onclick={open}>查看详情<ArrowUpRight size={14} strokeWidth={1.8}/></button></div>
+    </footer>
+    <div class="progress-track" aria-hidden="true"><div class="progress" style:width={(remaining/15000*100)+'%'}></div></div>
+  {:else if error}
+    <p class="empty-error" role="alert">{error}</p>
   {/if}
-  {#if error}<p class="error" role="alert">{error}</p>{/if}
 </div>
 
 <style>
-  .notice-window{box-sizing:border-box;height:245px;width:100%;position:relative;display:flex;flex-direction:column;background:#1c2227;border:1px solid #749caf42;border-radius:10px;color:#dce4e6;overflow:hidden;padding:16px 20px;font-family:inherit}header{display:flex;align-items:center;justify-content:space-between;gap:16px;color:#90a5af;font-size:10px;letter-spacing:.12em}button{background:transparent;border:0;border-radius:6px;color:#b3c6cf;cursor:pointer;font-size:12px;padding:7px 10px}button:hover{background:#ffffff0d}button:disabled{opacity:.5;cursor:default}header button{font-size:21px;padding:0 4px;line-height:1}.copy{flex:1;min-height:0;margin:17px 0 13px}.copy h1{font-size:16px;line-height:1.5;font-weight:550;margin:0 0 10px}.copy p{font-size:12px;line-height:1.7;overflow:hidden;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:3;line-clamp:3;-webkit-box-orient:vertical;margin:0;color:#afbdc4}.actions{display:flex;align-items:center;gap:9px}.primary{background:#8cb5c9;color:#10242f;font-weight:600}.primary:hover{background:#a6cbdc}.actions span{font-size:10px;margin-left:auto;color:#9daeb7}footer{margin-top:12px;font-size:10px;color:#8599a3}.progress{position:absolute;height:2px;bottom:0;left:0;background:#8cb5c9;transition:width .2s linear}.error{font-size:11px;color:#e8ada1;overflow-wrap:anywhere}
+  .notice-window {
+    box-sizing:border-box; height:180px; width:100%; position:relative;
+    display:flex; flex-direction:column; overflow:hidden; background:#fff;
+    border:1px solid #e5e6eb; border-radius:12px; color:#1f2329;
+    font-family:'Segoe UI','Microsoft YaHei UI',-apple-system,sans-serif;
+  }
+  button { cursor:pointer; font:inherit; border:0; background:transparent; }
+  button:disabled { cursor:default; opacity:.55; }
+  button:focus-visible { outline:2px solid #3370ff; outline-offset:-3px; }
+  .close { position:absolute; top:10px; right:10px; z-index:1; display:grid; place-items:center; width:26px; height:26px; border-radius:6px; color:#8f959e; }
+  .close:hover { background:#f2f3f5; color:#464b53; }
+  .message { min-height:0; flex:1; display:flex; align-items:flex-start; gap:12px; padding:19px 18px 12px; text-align:left; color:inherit; animation:arrive .18s ease-out; }
+  .message:hover { background:#fafbff; }
+  .avatar { position:relative; flex-shrink:0; width:40px; height:40px; display:grid; place-items:center; background:#3370ff; border-radius:12px; color:#fff; }
+  .status-dot { position:absolute; width:11px; height:11px; bottom:-2px; right:-2px; border:2px solid #fff; border-radius:50%; background:#3370ff; }
+  .status-dot.success { background:#35a475; }
+  .status-dot.attention { background:#dc8b24; }
+  .status-dot.danger { background:#e45b5b; }
+  .copy { flex:1; min-width:0; }
+  .sender-line { display:flex; align-items:center; gap:7px; padding-right:27px; line-height:18px; }
+  .sender { font-size:12px; color:#646a73; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .timestamp { flex-shrink:0; margin-left:auto; color:#8f959e; font-size:11px; white-space:nowrap; }
+  .test-badge { flex-shrink:0; color:#4b70ba; background:#edf2ff; padding:0 5px; border-radius:4px; font-size:10px; white-space:nowrap; }
+  .heading { margin-top:5px; font-size:14px; font-weight:600; line-height:21px; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
+  .summary { display:block; margin-top:7px; font-size:12px; line-height:18px; color:#646a73; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
+  .summary.danger { color:#b74646; }
+  .summary.attention { color:#93651f; }
+  footer { display:flex; align-items:center; justify-content:space-between; gap:8px; padding:7px 12px 9px 18px; border-top:1px solid #f0f1f3; }
+  .hint { min-width:0; color:#8f959e; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .pending { color:#646a73; }
+  .actions { display:flex; align-items:center; gap:2px; flex-shrink:0; }
+  .actions button { display:inline-flex; align-items:center; gap:4px; padding:5px 7px; border-radius:5px; font-size:12px; line-height:18px; }
+  .later { color:#646a73; }
+  .later:hover { background:#f2f3f5; }
+  .primary { color:#3370ff; font-weight:500; }
+  .primary:hover { background:#edf2ff; }
+  .progress-track { position:absolute; bottom:0; left:0; right:0; height:2px; background:#f5f6f8; }
+  .progress { height:100%; background:#c9d8fc; transition:width .2s linear; }
+  .error { color:#b74646; }
+  .empty-error { padding:40px 20px; font-size:12px; color:#b74646; overflow-wrap:anywhere; }
+  @keyframes arrive { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
 </style>

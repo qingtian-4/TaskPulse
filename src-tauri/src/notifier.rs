@@ -456,7 +456,14 @@ pub async fn test_notification(app: AppHandle, kind: Option<String>) -> Result<(
     if settings.popup_notifications() {
         let (title, body) = notification_copy(&event);
         // Explicit test: no fake task enters attention/history or Agent data.
-        crate::task_notice::enqueue(&app, title, body, None, true);
+        let task = match &event {
+            NotifyEvent::WaitingInput { task, .. }
+            | NotifyEvent::Succeeded { task }
+            | NotifyEvent::Failed { task }
+            | NotifyEvent::InferredFinished { task } => Some(task.clone()),
+            _ => None,
+        };
+        crate::task_notice::enqueue(&app, title, body, task, true);
     }
     SystemBeepNotifier.notify(&NotifyEvent::Test, Some(&app));
     if !settings.desktop_notifications() {
@@ -496,6 +503,14 @@ fn test_event(kind: &str) -> Result<NotifyEvent, String> {
         "failed" => {
             task.status = TaskStatus::Failed;
             Ok(NotifyEvent::Failed { task })
+        }
+        "long_title" => {
+            task.name = "长标题排版验收（测试）· Verify multilingual task titles 与很长的任务名称在消息卡片中正确换行，且不挤压操作按钮".into();
+            task.source = TaskSource::Codex;
+            task.project = Some("长项目名称排版验收（测试）· Native project".into());
+            task.host = Some("Test-server".into());
+            task.waiting_reason = Some(WaitingReason::TurnEnded);
+            Ok(NotifyEvent::WaitingInput { task, reason: None })
         }
         _ => Err("无效的提醒测试类型".into()),
     }
@@ -580,6 +595,12 @@ mod tests {
             let (title, body) = notification_copy(&test_event(kind).unwrap());
             assert!(body.contains("测试，不是真实任务"));
             assert!(title.contains("TaskPulse"));
+        }
+        if let NotifyEvent::WaitingInput { task, .. } = test_event("long_title").unwrap() {
+            assert!(task.name.contains("（测试）"));
+            assert!(task.project.unwrap().contains("（测试）"));
+        } else {
+            panic!("expected long title reminder");
         }
         assert!(test_event("anything").is_err());
     }
