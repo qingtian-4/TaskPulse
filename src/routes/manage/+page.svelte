@@ -19,7 +19,8 @@
   let saving=$state(false);
   let loadingSessions=$state(false);
   let notificationError=$state('');
-  let addKind=$state<SourceKind>('remote_codex');
+  let addKind=$state<SourceKind>('codex');
+  let eventPrompt=$state<{sourceId:string;enabled:boolean} | null>(null);
   let dirty=$state(false);
   let applied=$state<DashboardSettings | null>(null);
   let conflict=$state(false);
@@ -27,12 +28,22 @@
   let closing=false;
   let now=$state(Date.now());
   let editor=$derived(settings?.sources.find(s=>s.id===selected) ?? null);
-  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'codex',name:'Codex · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
+  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'codex',name:'Codex · 本机'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
+  const candidates=$derived(discovery.filter(d=>d.available && d.candidate && !settings?.sources.some(s=>s.kind===d.candidate!.kind)));
+  function addCandidate(candidate:MonitorSource) {
+    if(!settings)return;
+    settings.sources.push({...candidate,enabled:true});selected=candidate.id;dirty=true;notice='已添加 '+candidate.name+'；保存后开始关注新执行。';
+  }
+  async function confirmEvents(){
+    if(!eventPrompt)return;
+    const choice=eventPrompt;eventPrompt=null;saving=true;error='';
+    try{notice=await invoke<string>('configure_claude_events',{sourceId:choice.sourceId,enabled:choice.enabled,confirmed:true});}catch(e){error=String(e);}finally{saving=false;}
+  }
   function list(value:string):string[]{return value.split('\n').map(s=>s.trim()).filter(Boolean);}
   function changed(){dirty=true;}
   function add(){
     if(!settings)return;
-    const builtin:Partial<Record<SourceKind,string>>={codex:'codex',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
+    const builtin:Partial<Record<SourceKind,string>>={codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
     const candidate=builtin[addKind];
     if(['codex','hooks','scanner'].includes(addKind) && settings.sources.some(s=>s.kind===addKind)){selected=settings.sources.find(s=>s.kind===addKind)!.id;notice='本机来源已存在，请在左侧启用或编辑。';return;}
     const id=candidate && !settings.sources.some(s=>s.id===candidate) ? candidate : addKind+':'+crypto.randomUUID();
@@ -78,7 +89,7 @@
     const previous=document.activeElement as HTMLElement | null;
     dialog.querySelector<HTMLElement>('button')?.focus();
     function keydown(e:KeyboardEvent){
-      if(e.key==='Escape'){e.preventDefault();closePrompt=false;}
+      if(e.key==='Escape'){e.preventDefault();closePrompt=false;eventPrompt=null;}
       if(e.key!=='Tab')return;
       const buttons=[...dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];
       const first=buttons[0],last=buttons.at(-1);
@@ -124,8 +135,9 @@
       } catch(e){error=String(e);}
     })();
     const interval=setInterval(()=>{if(tab==='sessions')void loadSessions();},3000);
+    const discoveryTimer=setInterval(()=>{if(tab==='sources')void invoke<SourceDiscovery[]>('discover_sources').then(value=>discovery=value).catch(e=>error=String(e));},30000);
     const clock=setInterval(()=>now=Date.now(),1000);
-    return()=>{mounted=false;clearInterval(interval);clearInterval(clock);cleanups.forEach(fn=>fn());};
+    return()=>{mounted=false;clearInterval(interval);clearInterval(discoveryTimer);clearInterval(clock);cleanups.forEach(fn=>fn());};
   });
 </script>
 
@@ -136,6 +148,7 @@
   {#if conflict}<div class="message"><button onclick={reloadSettings}>放弃未保存编辑，加载最新配置</button></div>{/if}
   {#if notice}<div class="message" role="status">{notice}<button onclick={()=>notice=''} aria-label="关闭提示">×</button></div>{/if}
   {#if settings && !settings.onboarding_complete}<div class="welcome">首次设置：已预选发现的本机来源。确认需要的来源后，点击“保存并生效”。远程服务器由你主动添加。</div>{/if}
+  {#each candidates as candidate}<div class="message">发现 {candidate.candidate!.name}<button onclick={()=>addCandidate(candidate.candidate!)}>添加到监控来源</button></div>{/each}
   <main class="glass-scroll">
     {#if settings && tab==='sources'}
       <div class="source-layout"><aside><div class="add"><select bind:value={addKind} aria-label="新增来源类型">{#each kinds as kind}<option value={kind.kind}>{kind.name}</option>{/each}</select><button onclick={add}>＋ 添加</button></div>
@@ -144,7 +157,8 @@
         {#if editor}
           <h2>{editor.name}</h2>
           <label>显示名称<input bind:value={editor.name} oninput={changed}/></label>
-          {#if editor.kind==='remote_codex' || editor.kind==='tmux'}<label>SSH 别名<input bind:value={editor.location} oninput={changed} placeholder="例如 Server1_wanghy"/></label><p class="help">使用系统 SSH 配置和已有登录方式，不在 TaskPulse 保存密码。</p><label>轮询周期（毫秒）<input type="number" min="500" max="60000" bind:value={editor.poll_interval_ms} oninput={changed}/></label>
+          {#if editor.kind==='remote_codex' || editor.kind==='tmux'}<label>SSH 别名<input bind:value={editor.location} oninput={changed} placeholder="例如 dev-server"/></label><p class="help">使用系统 SSH 配置和已有登录方式，不在 TaskPulse 保存密码。</p><label>轮询周期（毫秒）<input type="number" min="500" max="60000" bind:value={editor.poll_interval_ms} oninput={changed}/></label>
+          {:else if editor.kind==='claude_code'}<label>Claude 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 CLAUDE_CONFIG_DIR 或本机 .claude"/></label><p class="help">自动观测 VS Code / CLI 原生会话、标题与上报模型；未启用精确事件时，内部格式的状态显示为“推断”。</p><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:true}}>启用精确事件…</button><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:false}}>移除精确事件…</button>
           {:else if editor.kind==='deepseek_desktop'}<label>桌面版数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 DSH_HOME 或本机 .dsh"/></label>
           {:else if editor.kind==='deepseek_wsl'}<label>WSL 发行版<input bind:value={editor.location} oninput={changed}/></label>
           {:else if editor.kind==='hermes'}<label>状态数据库<input bind:value={editor.location} oninput={changed} placeholder="留空：自动发现 Hermes state.db"/></label>{/if}
@@ -172,6 +186,7 @@
     {/if}
   </main>
   {#if closePrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="close-title"><h2 id="close-title">还有未保存的配置</h2><p>启用开关已即时生效；项目范围和其他编辑尚未保存。</p><div><button onclick={()=>closePrompt=false}>继续编辑</button><button onclick={discardAndClose}>放弃未保存编辑</button><button class="primary" disabled={saving || conflict} onclick={saveAndClose}>保存并关闭</button></div></dialog></div>{/if}
+  {#if eventPrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="events-title"><h2 id="events-title">{eventPrompt.enabled?'启用 Claude 精确事件':'移除 Claude 精确事件'}</h2><p>这会修改所选 Claude 数据目录中的 settings.json，仅添加或移除 TaskPulse Hook。首次修改会备份；已有 Hook、statusLine、代理和模型设置保留。可随时移除。</p><div><button onclick={()=>eventPrompt=null}>取消</button><button class="primary" onclick={confirmEvents}>确认{eventPrompt.enabled?'启用':'移除'}</button></div></dialog></div>{/if}
 </div>
 <style>
   .modal{position:fixed;inset:0;display:grid;place-items:center;background:#0009;z-index:10}.modal dialog{position:static;margin:0;color:#d9dedb;background:#252b30;border:1px solid #ffffff18;border-radius:12px;padding:24px;max-width:500px}.modal p{font-size:12px;color:#a9b8bc;margin:12px 0 20px}.modal dialog>div{display:flex;gap:10px;justify-content:flex-end}

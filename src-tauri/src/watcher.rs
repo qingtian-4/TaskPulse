@@ -17,6 +17,7 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
+use tauri::Manager;
 
 use crate::attention::AttentionTracker;
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
@@ -90,6 +91,7 @@ impl From<AgentStatus> for TaskSnapshot {
             source,
             status,
             source_instance: None,
+            model: None,
             internal: false,
             project_path: None,
             tmux_session: None,
@@ -326,6 +328,13 @@ fn emit_agents(
     }
     crate::tray::update_icon(app, tasks, hosts);
     let _ = app.emit("agents-updated", tasks);
+    static ARCHIVED: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
+    let archived = get_archived_attention();
+    let mut previous = ARCHIVED.lock().unwrap_or_else(|e| e.into_inner());
+    if *previous != archived {
+        let _ = app.emit("archived-attention-updated", &archived);
+        *previous = archived;
+    }
     let _ = app.emit("hosts-updated", hosts);
     let _ = app.emit("providers-updated", providers);
     let _ = app.emit(
@@ -426,15 +435,22 @@ pub fn request_refresh() -> u64 {
 /// Tauri command: install or uninstall AgentTray/TaskPulse hooks for a CLI
 /// tool. `cli` = "claude", "codex", "gemini", or "all"; `uninstall` removes.
 #[tauri::command]
-pub fn install_hooks(cli: String, uninstall: bool) -> Result<String, String> {
-    let base_dir = std::env::current_exe()
+pub fn install_hooks(app: AppHandle, cli: String, uninstall: bool) -> Result<String, String> {
+    let base_dir = app
+        .path()
+        .resource_dir()
         .ok()
-        .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-        .and_then(|dir| {
-            dir.ancestors()
-                .find(|d| d.join("scripts").exists())
-                .map(|d| d.to_path_buf())
-                .or(Some(dir))
+        .filter(|d| d.join("scripts/hooks").exists())
+        .or_else(|| {
+            std::env::current_exe()
+                .ok()
+                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
+                .and_then(|dir| {
+                    dir.ancestors()
+                        .find(|d| d.join("scripts").exists())
+                        .map(|d| d.to_path_buf())
+                        .or(Some(dir))
+                })
         })
         .ok_or_else(|| "Could not locate scripts directory".to_string())?;
 
@@ -497,6 +513,11 @@ fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
         std::collections::HashMap::new();
 
     for (i, t) in tasks.iter().enumerate() {
+        // A project window can contain many native sessions. Its PID is not
+        // session identity and must not deduplicate them by evidence strength.
+        if t.session_id.is_some() {
+            continue;
+        }
         let Some(term) = &t.terminal else { continue };
         if term.focus_id.is_empty() || term.focus_id == "0" {
             continue;
@@ -566,6 +587,18 @@ fn dedup_dsh_over_scan(tasks: &mut Vec<TaskSnapshot>) {
     }
 }
 
+fn dedup_claude_over_scan(tasks: &mut Vec<TaskSnapshot>) {
+    if tasks.iter().any(|t| {
+        t.source == TaskSource::ClaudeCode
+            && (t.id.starts_with("claude:") || t.id.contains(":claude:"))
+    }) {
+        tasks.retain(|t| {
+            !((t.source_instance.as_deref() == Some("scanner") || t.id.starts_with("scan:"))
+                && t.source == TaskSource::ClaudeCode)
+        });
+    }
+}
+
 struct LocalBatch {
     tasks: Vec<TaskSnapshot>,
     authoritative_sources: HashSet<TaskSource>,
@@ -604,7 +637,8 @@ impl LocalProviders {
             .sources
             .iter()
             .filter(|s| {
-                s.enabled
+                settings.onboarding_complete
+                    && s.enabled
                     && !matches!(
                         s.kind,
                         SourceKind::RemoteCodex | SourceKind::Tmux | SourceKind::Hooks
@@ -629,6 +663,15 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::ClaudeCode => {
+                    Box::new(crate::providers::claude_code::ClaudeCodeProvider::new(
+                        if source.location.is_empty() {
+                            crate::providers::claude_code::default_root()
+                        } else {
+                            PathBuf::from(&source.location)
+                        },
+                    ))
+                }
                 SourceKind::Codex => Box::new(CodexProvider::new()),
                 SourceKind::Hermes => Box::new(if source.location.is_empty() {
                     HermesProvider::new()
@@ -682,7 +725,11 @@ impl LocalProviders {
                         task.source_instance = Some(source.id.clone());
                         if !matches!(
                             source.id.as_str(),
-                            "codex" | "hermes" | "deepseek_harness" | "deepseek_harness_desktop"
+                            "codex"
+                                | "claude_code"
+                                | "hermes"
+                                | "deepseek_harness"
+                                | "deepseek_harness_desktop"
                         ) {
                             task.id = format!("{}:{}", source.id, task.id);
                         }
@@ -719,6 +766,21 @@ impl LocalProviders {
             );
         }
         for source in &self.configured {
+            if source.kind == SourceKind::ClaudeCode {
+                let root = if source.location.is_empty() {
+                    crate::providers::claude_code::default_root()
+                } else {
+                    PathBuf::from(&source.location)
+                };
+                paths.push((root.join("projects"), RecursiveMode::Recursive));
+                paths.push((root.join("sessions"), RecursiveMode::NonRecursive));
+                if let Some(home) = dirs_next::home_dir() {
+                    paths.push((
+                        home.join(".taskpulse/claude-events"),
+                        RecursiveMode::NonRecursive,
+                    ));
+                }
+            }
             if source.kind == SourceKind::Codex {
                 if let Some(home) = dirs_next::home_dir() {
                     paths.push((home.join(".codex/sessions"), RecursiveMode::Recursive));
@@ -761,6 +823,7 @@ impl LocalProviders {
                     && matches!(
                         s.kind,
                         crate::monitoring::SourceKind::Codex
+                            | crate::monitoring::SourceKind::ClaudeCode
                             | crate::monitoring::SourceKind::Hermes
                             | crate::monitoring::SourceKind::DeepseekDesktop
                     )
@@ -852,13 +915,24 @@ impl LocalProviders {
                 }
             }
         }
-        let scanned = self
+        let has_claude_adapter = crate::monitoring::get_monitoring_settings()
+            .sources
+            .iter()
+            .any(|s| s.kind == crate::monitoring::SourceKind::ClaudeCode);
+        let scanned: Vec<_> = self
             .latest
             .get("scanner")
             .map(|out| out.tasks.as_slice())
-            .unwrap_or(&[]);
-        crate::heuristics::cross_validate_tasks(&mut tasks, scanned);
-        tasks.extend_from_slice(scanned);
+            .unwrap_or(&[])
+            .iter()
+            // An explicit native-source switch must not be bypassed by the
+            // generic process scanner (even before the first native result).
+            .filter(|t| !(has_claude_adapter && t.source == TaskSource::ClaudeCode))
+            .cloned()
+            .collect();
+        crate::heuristics::cross_validate_tasks(&mut tasks, &scanned);
+        tasks.extend_from_slice(&scanned);
+        dedup_claude_over_scan(&mut tasks);
         dedup_by_terminal(&mut tasks);
         dedup_codex_over_scan(&mut tasks);
         dedup_hermes_over_scan(&mut tasks);
@@ -1139,7 +1213,7 @@ pub fn watch(app: AppHandle) {
             providers.request_refresh();
             let _ = refresh_tx.try_send(());
         }
-        let mut changed = force;
+        let mut changed = false;
         while let Ok((generation, output)) = remote_rx.try_recv() {
             if generation != revision {
                 continue;
@@ -1162,7 +1236,7 @@ pub fn watch(app: AppHandle) {
             }
             changed = true;
         }
-        if providers.collect_ready() || last_scan.elapsed() >= Duration::from_secs(2) || force {
+        if providers.collect_ready() || last_scan.elapsed() >= Duration::from_secs(2) {
             let batch = providers.poll(SystemTime::now());
             store.retain(crate::monitoring::allows);
             store.merge_instances(
@@ -1408,6 +1482,42 @@ mod tests {
         dedup_by_terminal(&mut tasks);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, "file:codex");
+    }
+
+    #[test]
+    fn native_claude_sessions_survive_one_window_and_suppress_scanner_duplicates() {
+        let mut tasks = vec![
+            task_with_terminal(
+                "claude:one",
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "123",
+                None,
+            ),
+            task_with_terminal(
+                "claude:two",
+                TaskStatus::WaitingInput,
+                DetectionConfidence::Hook,
+                "123",
+                None,
+            ),
+            task_with_terminal(
+                "scan:claude",
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "123",
+                Some("claude-code"),
+            ),
+        ];
+        for (i, task) in tasks.iter_mut().enumerate() {
+            task.source = TaskSource::ClaudeCode;
+            if i < 2 {
+                task.session_id = Some(format!("session-{i}"));
+            }
+        }
+        dedup_claude_over_scan(&mut tasks);
+        dedup_by_terminal(&mut tasks);
+        assert_eq!(tasks.len(), 2);
     }
 
     #[test]

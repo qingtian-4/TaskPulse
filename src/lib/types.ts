@@ -30,6 +30,7 @@ export interface TerminalInfo {
 
 export interface TaskSnapshot {
   source_instance?: string;
+  model?: string;
   internal?: boolean;
   project_path?: string;
   tmux_session?: string;
@@ -72,7 +73,7 @@ export interface TaskSnapshot {
   hook_matcher?: string;
 }
 
-export type SourceKind = 'codex' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner';
+export type SourceKind = 'codex' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner';
 export interface MonitorSource {
   id: string; name: string; kind: SourceKind; enabled: boolean; location: string;
   projects: string[]; excluded_projects: string[]; tmux_sessions: string[]; tmux_panes: string[]; poll_interval_ms: number;
@@ -88,7 +89,7 @@ export interface TaskNotice {
   context?: { task_name: string; source: Source; project: string | null; host: string | null } | null;
 }
 export interface NoticeState { current: TaskNotice | null; pending: number }
-export interface SourceDiscovery { id: string; available: boolean; detail: string }
+export interface SourceDiscovery { id: string; available: boolean; detail: string; candidate?: MonitorSource }
 export interface SessionPage { items: Array<{ task: TaskSnapshot; reason: string }>; total: number }
 
 export interface HostHealth {

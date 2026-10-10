@@ -20,6 +20,7 @@ export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | nu
   const explicit = settings?.sources.find(s => s.id === task.source_instance);
   const nativeId = task.source === 'deepseek_harness'
     ? (task.id.startsWith('dsh-native:') ? 'deepseek_harness_desktop' : 'deepseek_harness')
+    : task.source === 'claude_code' && task.id.startsWith('claude:') ? 'claude_code'
     : task.source === 'claude_code' || task.source === 'gemini' ? 'scanner' : task.source;
   return explicit ?? (task.remote
     ? settings?.sources.find(s => s.location === task.host && s.kind === (task.source === 'codex' ? 'remote_codex' : 'tmux'))

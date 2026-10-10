@@ -2,7 +2,7 @@
 name        = "agent-tray"
 version     = "0.1.11"
 edition     = "2021"
-description = "Agent Tray - System tray monitor for AI coding agents"
+description = "TaskPulse - Attention dashboard for AI coding-agent tasks"
 
 [dependencies]
 tauri                     = { version = "2", features = ["tray-icon", "image-png", "macos-private-api"] }

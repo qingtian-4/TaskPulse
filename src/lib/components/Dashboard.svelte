@@ -4,7 +4,7 @@
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
-  import { SOURCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type CodexAccountQuota } from '$lib/types';
+  import { SOURCE_LABEL, CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type CodexAccountQuota, type SourceDiscovery } from '$lib/types';
   import { taskSection, taskLabel, taskContext, projectKey, taskSource, sourceFreshness, refreshProgress } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import Settings from '@lucide/svelte/icons/settings';
@@ -32,6 +32,8 @@
   let refreshing = $state(false);
   let pinned = $state(false);
   let overPopup = $state(false);
+  let openingManagement = false;
+  let newSources = $state(0);
   let panel = $state<HTMLDivElement | null>(null);
   let demo = $state(false);
   let lastHidden = $state<{task:TaskSnapshot;action:'restore'|'unignore'} | null>(null);
@@ -70,7 +72,8 @@
   }
   async function manage() {
     if (!isTauri()) { note='浏览器演示：真实设置请在托盘应用中打开'; return; }
-    try { await invoke('open_management'); } catch(e) { error=String(e); }
+    openingManagement=true;
+    try { await invoke('open_management'); } catch(e) { error=String(e);openingManagement=false; }
   }
   async function action(task: TaskSnapshot, name: string, value?: boolean) {
     if (!isTauri()) return;
@@ -116,28 +119,38 @@
       return ()=>clearInterval(clock);
     }
     const cleanups:Array<()=>void>=[]; let mounted=true;
+    const discover=async()=>{
+      try {
+        const found=await invoke<SourceDiscovery[]>('discover_sources');
+        if(mounted)newSources=found.filter(s=>s.available && s.candidate && !['hooks','scanner'].includes(s.candidate.kind)).length;
+      } catch { /* Candidate hints must not block normal monitoring. */ }
+    };
+    const discoveryTimer=setInterval(()=>void discover(),30000);
     async function subscribe(promise:Promise<()=>void>) { const cleanup=await promise; if(mounted)cleanups.push(cleanup);else cleanup(); }
     void (async()=>{
       try {
-        await subscribe(listen<TaskSnapshot[]>('agents-updated',e=>{tasks=e.payload;void invoke<TaskSnapshot[]>('get_archived_attention').then(a=>archived=a).catch(e=>error=String(e));}));
+        await subscribe(listen<TaskSnapshot[]>('agents-updated',e=>tasks=e.payload));
+        await subscribe(listen<TaskSnapshot[]>('archived-attention-updated',e=>archived=e.payload));
         await subscribe(listen<ProviderHealth[]>('providers-updated',e=>providers=e.payload));
         await subscribe(listen<CodexAccountQuota>('codex-quota-updated',e=>quota=e.payload));
-        await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settings=e.payload;view=e.payload.default_view;}));
+        await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settings=e.payload;view=e.payload.default_view;void discover();}));
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selected=e.payload));
         await subscribe(listen<boolean>('pinned-changed',e=>pinned=e.payload));
+        await subscribe(listen('management-closed',()=>openingManagement=false));
         await snapshots(); view=settings?.default_view ?? 'tasks';
+        void discover();
         error=await invoke<string | null>('get_monitoring_error') ?? '';
         selected=await invoke<TaskSnapshot | null>('get_selected_task');
         pinned=await invoke<boolean>('get_pinned');
-        await emit('popup-ready',null);
         const win=getCurrentWindow(); let showTime=Date.now();
         await subscribe(win.onFocusChanged(({payload:focused})=>{
           if(focused) {showTime=Date.now();void snapshots().catch(e=>error=String(e));}
-          else if(!pinned && !overPopup && Date.now()-showTime>300) void invoke('close_popup');
+          else if(!pinned && !overPopup && !openingManagement && Date.now()-showTime>300) void invoke('close_popup');
         }));
       } catch(e) { error='无法读取监控数据：'+String(e); }
+      finally { await emit('popup-ready',null).catch(()=>{}); }
     })();
-    return ()=>{mounted=false;clearInterval(clock);cleanups.forEach(fn=>fn());};
+    return ()=>{mounted=false;clearInterval(clock);clearInterval(discoveryTimer);cleanups.forEach(fn=>fn());};
   });
 </script>
 
@@ -150,12 +163,13 @@
       <button disabled={demo} onclick={()=>invoke('toggle_pin')} title={pinned?'取消固定窗口':'固定窗口'} aria-label={pinned?'取消固定窗口':'固定窗口'}>{#if pinned}<Pin size={15}/>{:else}<PinOff size={15}/>{/if}</button>
     </div>
   </header>
-  <div class="counts"><button class:active={filterSection===1} onclick={()=>chooseSection(1)}>运行 <b>{tasks.filter(t=>taskSection(t)===1).length}</b></button><button class:active={filterSection===0} onclick={()=>chooseSection(0)}>需处理 <b>{tasks.filter(t=>taskSection(t)===0).length}</b></button><button class:active={filterSection===2} onclick={()=>chooseSection(2)}>待查看 <b>{tasks.filter(t=>taskSection(t)===2).length}</b></button><button class="total" onclick={()=>{showArchive=false;resetFilters();}}>全部 {tasks.length}</button></div>
+  <div class="counts"><button class:active={filterSection===0} onclick={()=>chooseSection(0)}>需处理 <b>{tasks.filter(t=>taskSection(t)===0).length}</b></button><button class:active={filterSection===1} onclick={()=>chooseSection(1)}>运行 <b>{tasks.filter(t=>taskSection(t)===1).length}</b></button><button class:active={filterSection===2} onclick={()=>chooseSection(2)}>待查看 <b>{tasks.filter(t=>taskSection(t)===2).length}</b></button><button class="total" onclick={()=>{showArchive=false;resetFilters();}}>全部 {tasks.length}</button></div>
   <div class="view-bar"><button class:active={!showArchive} onclick={()=>{showArchive=false;resetFilters();}}>{settings?.recent_days===0?'全部关注':'近期活动 · '+(settings?.recent_days ?? 7)+'天'}</button>{#if archived.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>较早关注 {archived.length}</button>{/if}<button class="link" onclick={()=>showFilters=!showFilters}>{showFilters?'收起筛选':'筛选 / 分组'}</button></div>
   {#if demo}<p class="notice">浏览器演示 · 以下均为示例，不是真实采集结果</p>{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
   {#if note}<p class="notice" role="status">{note}<button class="dismiss" onclick={()=>note=''} aria-label="关闭提示">×</button></p>{/if}
   {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>选择你要关注的 Agent</strong><p>确认本机来源，或添加远程服务器。新任务会自动出现。</p><button onclick={manage}>设置监控来源</button></div>{/if}
+  {#if settings?.onboarding_complete && newSources}<p class="notice">发现 {newSources} 个可监控来源<button class="link" onclick={manage}>选择添加</button></p>{/if}
   {#if refreshing}<p class="notice" role="status">刷新中：{progress.total-progress.pending.length} / {progress.total} 个来源已返回{#if progress.failed.length} · {progress.failed.length} 个失败{/if}</p>{/if}
   {#if showArchive}<p class="notice">较早关注保留原状态和未读标记，不占近期面板；可重新加入或固定。</p>{/if}
   {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?'已隐藏本轮':'已停止监控此会话'}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>撤销</button></div>{/if}
@@ -174,7 +188,23 @@
       {#each sectionNames as name,index}{@const group=sorted.filter(t=>taskSection(t)===index)}{#if group.length}<section><h2>{name}<span>{group.length}</span></h2><TaskList tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
     {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/each}{/if}
   </main>
-  {#if selectedTask}<aside class="detail" aria-label="任务详情"><div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span>{taskLabel(selectedTask)}</span><button onclick={()=>selected=null} aria-label="关闭详情">×</button></div><p>{taskContext(selectedTask,settings)}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} · 最后活动 {formatAgo(selectedTask.updated_at,now)}</p><div class="command glass-scroll"><span>{selectedTask.stale?'上次观测活动（非实时）':selectedTask.status==='running'?'当前活动':'最近结果'}</span><pre>{selectedTask.status==='running' ? selectedTask.activity ?? '运行中，来源暂未提供具体指令' : selectedTask.message ?? '来源未提供结果摘要'}</pre></div><div class="detail-actions">{#if selectedTask.can_focus}<button onclick={()=>open(selectedTask!)}>聚焦运行窗口</button>{/if}<button onclick={()=>copy(selectedTask!)}>复制任务信息</button>{#if selectedTask.unread}<button onclick={()=>action(selectedTask!,'viewed')}>已查看</button>{/if}{#if showArchive}<button onclick={()=>action(selectedTask!,'follow')}>重新加入</button>{/if}<button onclick={()=>action(selectedTask!,'pin',showArchive ? true : !selectedTask!.pinned)}>{showArchive?'固定到近期面板':selectedTask.pinned?'取消固定':'固定'}</button><details class="more"><summary>更多</summary>{#if selectedTask.status!=='running'}<button onclick={()=>action(selectedTask!,'hide')}>隐藏本轮（新执行会恢复）</button>{/if}<button onclick={()=>action(selectedTask!,'ignore')}>停止监控此会话（需手动恢复）</button></details></div></aside>{/if}
+  {#if selectedTask}
+    <aside class="detail" aria-label="任务详情">
+      <div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span>{taskLabel(selectedTask)}</span><button onclick={()=>selected=null} aria-label="关闭详情">×</button></div>
+      <p>{taskContext(selectedTask,settings)}</p>
+      <p>状态依据：{CONFIDENCE_LABEL[selectedTask.confidence]}{#if selectedTask.model} · 上报模型：{selectedTask.model}{/if}</p>
+      <p>{sourceFreshness(selectedTask,settings,providers,now)} · 最后活动 {formatAgo(selectedTask.updated_at,now)}</p>
+      <div class="command glass-scroll"><span>{selectedTask.stale?'上次观测活动（非实时）':selectedTask.status==='running'?'当前活动':'最近消息'}</span><pre>{selectedTask.status==='running' ? selectedTask.activity ?? '运行中，来源暂未提供具体指令' : selectedTask.message ?? '来源未提供最近消息'}</pre></div>
+      <div class="detail-actions">
+        {#if selectedTask.can_focus}<button onclick={()=>open(selectedTask!)}>{selectedTask.source==='claude_code'?'聚焦项目窗口':'聚焦运行窗口'}</button>{/if}
+        <button onclick={()=>copy(selectedTask!)}>复制任务信息</button>
+        {#if selectedTask.unread}<button onclick={()=>action(selectedTask!,'viewed')}>已查看</button>{/if}
+        {#if showArchive}<button onclick={()=>action(selectedTask!,'follow')}>重新加入</button>{/if}
+        <button onclick={()=>action(selectedTask!,'pin',showArchive ? true : !selectedTask!.pinned)}>{showArchive?'固定到近期面板':selectedTask.pinned?'取消固定':'固定'}</button>
+        <details class="more"><summary>更多</summary>{#if selectedTask.status!=='running'}<button onclick={()=>action(selectedTask!,'hide')}>隐藏本轮（新执行会恢复）</button>{/if}<button onclick={()=>action(selectedTask!,'ignore')}>停止监控此会话（需手动恢复）</button></details>
+      </div>
+    </aside>
+  {/if}
   <footer><button onclick={manage}>{settings?.sources.filter(s=>s.enabled).length ?? 0} 个来源{degraded.length ? ' · '+degraded.length+' 个待检查' : ''}</button><span>按来源显示采集时间</span></footer>
   {#if !demo}<details class="quota"><summary>本地 Codex 账号额度<span>{quota?.refreshing?'更新中…':quota?.quota ? (quota.stale?'数据待更新':'已更新'):'暂无数据'}</span></summary><p>{#if quota?.quota}5h 剩余 {Math.round(100-quota.quota.used_5h_pct)}% · 7天剩余 {Math.round(100-quota.quota.used_1w_pct)}%{#if quota.quota.resets_5h_at}<br/>5h 重置：{new Date(quota.quota.resets_5h_at*1000).toLocaleString()}{/if}{#if quota.quota.resets_1w_at}<br/>7天重置：{new Date(quota.quota.resets_1w_at*1000).toLocaleString()}{/if}{#if quota.observed_at}<br/>读取于 {formatAgo(quota.observed_at,now)}{/if}{:else}尚未获得本机账号额度{/if}{#if quota?.error}<br/>{quota.error}{/if}<br/>不代表远程服务器账号额度。</p></details>{/if}
 </div>

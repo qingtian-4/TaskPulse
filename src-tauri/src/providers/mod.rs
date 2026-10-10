@@ -2,6 +2,7 @@
 //! normalized `TaskSnapshot`s.  Providers never talk to the tray, the store,
 //! or the UI — they only observe and normalize.
 
+pub mod claude_code;
 pub mod codex;
 pub mod deepseek_harness;
 pub mod hermes;

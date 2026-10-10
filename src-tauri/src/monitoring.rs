@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter};
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Codex,
+    ClaudeCode,
     Hermes,
     DeepseekDesktop,
     DeepseekWsl,
@@ -102,6 +103,12 @@ fn runtime() -> &'static Mutex<Runtime> {
 pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
     let mut sources = vec![
         source("codex", "Codex · 本机", SourceKind::Codex, ""),
+        source(
+            "claude_code",
+            "Claude Code · 本机",
+            SourceKind::ClaudeCode,
+            "",
+        ),
         source("hermes", "Hermes · 本机", SourceKind::Hermes, ""),
         source(
             "deepseek_harness_desktop",
@@ -127,7 +134,7 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
             }
             _ => all_projects(),
         };
-        item.enabled = existing && !item.projects.is_empty();
+        item.enabled = existing && !item.projects.is_empty() && item.kind != SourceKind::ClaudeCode;
     }
     for host in &cfg.remote_hosts {
         let mut codex = source(
@@ -287,6 +294,11 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
             return Err("请输入有效的 SSH 别名".into());
         }
         let location = match source.kind {
+            SourceKind::ClaudeCode => Some(if source.location.is_empty() {
+                crate::providers::claude_code::default_root()
+            } else {
+                PathBuf::from(&source.location)
+            }),
             SourceKind::DeepseekDesktop => Some(if source.location.is_empty() {
                 crate::providers::deepseek_harness::DeepSeekHarnessProvider::desktop_root()
             } else {
@@ -393,6 +405,7 @@ pub fn source_id(task: &TaskSnapshot) -> String {
                 "deepseek_harness_desktop".into()
             }
             (TaskSource::DeepSeekHarness, _) => "deepseek_harness".into(),
+            (TaskSource::ClaudeCode, _) if task.id.starts_with("claude:") => "claude_code".into(),
             (TaskSource::ClaudeCode | TaskSource::Gemini, _) => "scanner".into(),
             _ => "local_file".into(),
         })
@@ -626,15 +639,33 @@ pub struct SourceDiscovery {
     pub id: String,
     pub available: bool,
     pub detail: String,
+    pub candidate: Option<SourceConfig>,
 }
 #[tauri::command]
 pub fn discover_sources() -> Vec<SourceDiscovery> {
     let home = dirs_next::home_dir().unwrap_or_default();
-    get_monitoring_settings()
-        .sources
+    let settings = get_monitoring_settings();
+    let mut sources = settings.sources.clone();
+    for candidate in from_legacy(&TaskPulseConfig::default(), false).sources {
+        if !sources.iter().any(|s| s.kind == candidate.kind) {
+            sources.push(candidate);
+        }
+    }
+    sources
         .iter()
         .map(|source| {
             let (available, detail) = match source.kind {
+                SourceKind::ClaudeCode => {
+                    let root = if source.location.is_empty() {
+                        crate::providers::claude_code::default_root()
+                    } else {
+                        PathBuf::from(&source.location)
+                    };
+                    (
+                        root.join("projects").exists() || root.join("sessions").exists(),
+                        format!("{} · 原生会话观测；可启用精确事件", root.display()),
+                    )
+                }
                 SourceKind::Codex => (
                     home.join(".codex").exists(),
                     home.join(".codex").display().to_string(),
@@ -671,6 +702,8 @@ pub fn discover_sources() -> Vec<SourceDiscovery> {
                 id: source.id.clone(),
                 available,
                 detail,
+                candidate: (!settings.sources.iter().any(|s| s.id == source.id))
+                    .then(|| source.clone()),
             }
         })
         .collect()

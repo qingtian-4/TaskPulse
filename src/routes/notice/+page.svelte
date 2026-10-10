@@ -97,7 +97,7 @@
   .status-dot.attention { background:#dc8b24; }
   .status-dot.danger { background:#e45b5b; }
   .copy { flex:1; min-width:0; }
-  .sender-line { display:flex; align-items:center; gap:6px; padding-right:18px; line-height:15px; }
+  .sender-line { display:flex; align-items:center; gap:6px; padding-right:28px; line-height:15px; }
   .sender { font-size:10.5px; color:#909aa6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
   .test-badge { flex-shrink:0; color:#90afca; background:#8cb5c91a; padding:0 4px; border-radius:3px; font-size:9px; white-space:nowrap; }
   .heading { margin-top:4px; font-size:12.5px; font-weight:550; line-height:18px; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }

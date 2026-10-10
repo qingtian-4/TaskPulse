@@ -218,6 +218,9 @@ pub struct TaskSnapshot {
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_instance: Option<String>,
+    /// Model reported by the agent/response, never part of session identity.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
     /// Provider-identified internal service work, not a user coding task.
     #[serde(default)]
     pub internal: bool,
@@ -344,6 +347,7 @@ impl TaskSnapshot {
             source,
             status,
             source_instance: None,
+            model: None,
             internal: false,
             project_path: None,
             tmux_session: None,

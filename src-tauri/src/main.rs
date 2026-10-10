@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod attention;
+mod claude_integration;
 mod domain;
 mod focus;
 mod focusers;
@@ -22,12 +23,19 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if std::env::args().any(|arg| arg == "--claude-event") {
+        if let Err(error) = claude_integration::receive_event() {
+            log::warn!("TaskPulse event bridge: {error}");
+        }
+        // Monitoring must never block or inject context into the Agent.
+        return;
+    }
     if std::env::args().any(|arg| arg == "--diagnose") {
         watcher::diagnose();
         return;
     }
     if std::env::args().any(|arg| arg == "--test-notification") {
-        match notifier::send_test_notification("com.sprklai.agenttray") {
+        match notifier::send_test_notification("app.taskpulse.desktop") {
             Ok(()) => println!("Notification accepted by the native Windows/desktop API."),
             Err(error) => {
                 eprintln!("Notification failed: {error}");
@@ -55,6 +63,7 @@ fn main() {
         )
         .setup(|app| {
             let handle = app.handle().clone();
+            let first_setup = !monitoring::initialize().onboarding_complete;
 
             // Spawn watcher on a dedicated OS thread (blocking loop)
             let h_watch = handle.clone();
@@ -64,18 +73,13 @@ fn main() {
             // GNOME AppIndicator does NOT support direct click events — only menu)
             let h_show = handle.clone();
             let h_hide = handle.clone();
-            let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-            let pin_item = MenuItem::with_id(app, "pin", "Pin", true, None::<&str>)?;
-            let hide_item = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
-            let test_notification_item = MenuItem::with_id(
-                app,
-                "test-notification",
-                "Test notification",
-                true,
-                None::<&str>,
-            )?;
+            let show_item = MenuItem::with_id(app, "show", "显示任务面板", true, None::<&str>)?;
+            let pin_item = MenuItem::with_id(app, "pin", "固定任务面板", true, None::<&str>)?;
+            let hide_item = MenuItem::with_id(app, "hide", "隐藏任务面板", true, None::<&str>)?;
+            let test_notification_item =
+                MenuItem::with_id(app, "test-notification", "发送测试提醒", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
+            let quit_item = MenuItem::with_id(app, "quit", "退出 TaskPulse", true, None::<&str>)?;
             let menu = Menu::with_items(
                 app,
                 &[
@@ -139,11 +143,13 @@ fn main() {
                     })
                     .build(),
             )?;
-            app.global_shortcut().register(shortcut)?;
+            if let Err(error) = app.global_shortcut().register(shortcut) {
+                log::warn!("Ctrl+Shift+A unavailable; use the tray icon: {error}");
+            }
 
             // Useful for first launch and desktop smoke verification.
-            if std::env::args().any(|arg| arg == "--show") {
-                tray::toggle_popup(app.handle());
+            if first_setup || std::env::args().any(|arg| arg == "--show") {
+                tray::show_popup(app.handle());
             }
 
             Ok(())
@@ -166,6 +172,7 @@ fn main() {
             monitoring::discover_sources,
             monitoring::list_discovered_sessions,
             watcher::install_hooks,
+            claude_integration::configure_claude_events,
             notifier::test_notification,
             notifier::get_notification_error,
             task_notice::get_task_notice,
@@ -177,7 +184,7 @@ fn main() {
             tray::close_popup
         ])
         .build(tauri::generate_context!())
-        .expect("AgentTray failed to build")
+        .expect("TaskPulse failed to build")
         .run(|_app, event| {
             // Prevent exit when the last window is hidden — this is a tray-only app.
             // Only block window-close exits (code == None), not explicit quit (code == Some).

@@ -78,6 +78,29 @@ fn icon_bytes(state: &str) -> &'static [u8] {
 
 pub fn update_icon(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
     let state = aggregate_state(tasks, hosts);
+    if let Some(tray) = app.tray_by_id(&TrayIconId::new("main")) {
+        let needs = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Failed || t.requires_action() || t.stale)
+            .count();
+        let running = tasks
+            .iter()
+            .filter(|t| t.status == TaskStatus::Running && !t.stale)
+            .count();
+        let unread = tasks
+            .iter()
+            .filter(|t| {
+                t.unread
+                    && t.status != TaskStatus::Running
+                    && !t.requires_action()
+                    && t.status != TaskStatus::Failed
+                    && !t.stale
+            })
+            .count();
+        let _ = tray.set_tooltip(Some(format!(
+            "TaskPulse · 需处理 {needs} · 运行 {running} · 待查看 {unread}"
+        )));
+    }
 
     {
         let mut last = LAST_STATE.lock().unwrap_or_else(|e| {
@@ -155,9 +178,17 @@ pub fn show_popup(app: &AppHandle) {
 }
 
 fn create_popup(app: &AppHandle) {
+    let ready = app.clone();
+    app.once("popup-ready", move |_| {
+        if let Some(win) = ready.get_webview_window("popup") {
+            let _ = win.show();
+            let _ = win.set_focus();
+        }
+        emit_current_state(&ready);
+    });
     match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
         .title("TaskPulse")
-        .inner_size(440.0, 180.0)
+        .inner_size(440.0, 520.0)
         .decorations(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
@@ -179,12 +210,6 @@ fn create_popup(app: &AppHandle) {
                     .args(["-r", "TaskPulse", "-b", "add,sticky"])
                     .output();
             }
-            let _ = win.show();
-            let _ = win.set_focus();
-            let h = app.clone();
-            app.once("popup-ready", move |_| {
-                emit_current_state(&h);
-            });
         }
         Err(e) => log::error!("Failed to create popup window: {e}"),
     }
@@ -196,14 +221,19 @@ pub async fn open_management(app: AppHandle) -> Result<(), String> {
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
     }
-    WebviewWindowBuilder::new(&app, "management", WebviewUrl::App("manage/".into()))
+    let window = WebviewWindowBuilder::new(&app, "management", WebviewUrl::App("manage/".into()))
         .title("TaskPulse · 管理监控来源")
         .inner_size(900.0, 640.0)
         .min_inner_size(720.0, 520.0)
         .resizable(true)
         .build()
-        .map(|_| ())
-        .map_err(|e| e.to_string())
+        .map_err(|e| e.to_string())?;
+    window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::Destroyed) {
+            let _ = app.emit("management-closed", ());
+        }
+    });
+    Ok(())
 }
 
 fn emit_current_state(app: &AppHandle) {

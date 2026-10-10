@@ -107,6 +107,12 @@ try {
     await manage.invoke('plugin:window|close',{label:'management'});
     await manage.waitFor(`!!document.querySelector('[aria-labelledby="close-title"]')`);
     await manage.evaluate(`[...document.querySelectorAll('dialog button')].find(b=>b.textContent==='放弃未保存编辑').click()`);
+    let closed=false;
+    for(let n=0;n<100;n++){
+      if(!(await tabs()).some(t=>t.url.includes('/manage'))){closed=true;break;}
+      await Bun.sleep(100);
+    }
+    if(!closed)throw Error('Confirmed management close did not destroy native window');
   } finally { manage.close(); }
   console.log('Native management UI rendered');
   const disabled = structuredClone(original);
