@@ -122,12 +122,17 @@ pub struct CodexProvider {
     /// session id → last-seen mtime, so we can emit a terminal snapshot when a
     /// session stops being updated (it finished).
     seen: std::collections::HashMap<String, SystemTime>,
-    /// path → (mtime, size, parsed state). Rollouts are append-only, so an
-    /// unchanged signature can reuse the previous parse instead of rereading
-    /// multi-megabyte JSONL files every two seconds.
-    cache: std::collections::HashMap<PathBuf, (SystemTime, u64, Option<SessionState>)>,
+    /// Append-only rollout cursors plus folded state. Unchanged files reuse
+    /// state; changed files read new complete lines, with reset on replacement.
+    cache: std::collections::HashMap<PathBuf, RolloutCache>,
     native_metadata: HashMap<String, AppThreadMeta>,
     last_tasks: Vec<TaskSnapshot>,
+}
+
+#[derive(Default)]
+struct RolloutCache {
+    tail: super::jsonl_tail::JsonlTail,
+    state: Option<SessionState>,
 }
 
 impl CodexProvider {
@@ -302,30 +307,23 @@ impl CodexProvider {
         Ok(files)
     }
 
+    #[cfg(test)]
     fn parse_session_state(&self, path: &Path, now: SystemTime) -> Option<SessionState> {
         let body = std::fs::read_to_string(path).ok()?;
-        let sid = path
-            .file_stem()
-            .and_then(|s| s.to_str())
-            .unwrap_or("")
-            .to_string();
-        parse_codex_rollout_unfiltered(&body, now, &sid)
+        parse_codex_rollout_unfiltered(&body, now, path.file_stem()?.to_str()?)
     }
 
     fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
-        let metadata = path.metadata().ok()?;
-        let modified = metadata.modified().unwrap_or(UNIX_EPOCH);
-        let len = metadata.len();
-        if let Some((cached_mtime, cached_len, state)) = self.cache.get(path) {
-            if *cached_mtime == modified && *cached_len == len {
-                return state.clone();
-            }
+        let cache = self.cache.entry(path.to_path_buf()).or_default();
+        let batch = cache.tail.read(path).ok()?;
+        if batch.reset {
+            cache.state = None;
         }
-
-        let state = self.parse_session_state(path, now);
-        self.cache
-            .insert(path.to_path_buf(), (modified, len, state.clone()));
-        state
+        if !batch.body.trim().is_empty() {
+            let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+            cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
+        }
+        cache.state.clone()
     }
 
     fn session_to_task(
@@ -399,7 +397,7 @@ fn normalize_windows_path(path: &str) -> PathBuf {
 }
 
 /// Derived live state of one Codex session.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct SessionState {
     pub status: TaskStatus,
     pub waiting_reason: Option<crate::domain::WaitingReason>,
@@ -769,24 +767,51 @@ fn parse_codex_rollout_unfiltered(
     now: SystemTime,
     default_session_id: &str,
 ) -> Option<SessionState> {
+    apply_codex_rollout(body, now, default_session_id, None)
+}
+
+fn apply_codex_rollout(
+    body: &str,
+    now: SystemTime,
+    default_session_id: &str,
+    previous: Option<SessionState>,
+) -> Option<SessionState> {
     if body.trim().is_empty() {
-        return None;
+        return previous;
     }
-    let mut project: Option<String> = None;
-    let mut status = TaskStatus::Unknown;
-    let mut waiting_reason = None;
-    let mut input_request_id = None;
-    let mut started_at = None;
-    let mut updated_at = now;
-    let mut last_message: Option<String> = None;
-    let mut activity: Option<String> = None;
-    let mut session_id = default_session_id.to_string();
-    let mut turn_key: Option<String> = None;
-    let mut first_user_message: Option<String> = None;
-    let mut quota_5h_used_pct: Option<f64> = None;
-    let mut quota_5h_resets_at: Option<i64> = None;
-    let mut quota_1w_used_pct: Option<f64> = None;
-    let mut quota_1w_resets_at: Option<i64> = None;
+    let SessionState {
+        mut project,
+        mut status,
+        mut waiting_reason,
+        mut input_request_id,
+        mut started_at,
+        mut updated_at,
+        mut last_message,
+        mut activity,
+        mut session_id,
+        mut turn_key,
+        mut first_user_message,
+        mut quota_5h_used_pct,
+        mut quota_5h_resets_at,
+        mut quota_1w_used_pct,
+        mut quota_1w_resets_at,
+    } = previous.unwrap_or_else(|| SessionState {
+        project: None,
+        status: TaskStatus::Unknown,
+        waiting_reason: None,
+        input_request_id: None,
+        started_at: None,
+        updated_at: now,
+        last_message: None,
+        activity: None,
+        session_id: default_session_id.into(),
+        turn_key: None,
+        first_user_message: None,
+        quota_5h_used_pct: None,
+        quota_5h_resets_at: None,
+        quota_1w_used_pct: None,
+        quota_1w_resets_at: None,
+    });
 
     for line in body.lines() {
         let line = line.trim_start();
@@ -1467,7 +1492,7 @@ fn parse_rfc3339_value(v: &serde_json::Value) -> Option<SystemTime> {
     parse_rfc3339(s)
 }
 
-fn parse_rfc3339(s: &str) -> Option<SystemTime> {
+pub(crate) fn parse_rfc3339(s: &str) -> Option<SystemTime> {
     let s = s.trim();
     // Accept "2026-07-06T08:22:01.075Z" and "+00:00" offsets.
     let cleaned = s.replace('Z', "+00:00");
@@ -1785,6 +1810,54 @@ mod tests {
     }
 
     #[test]
+    fn incremental_rollout_matches_full_parse_across_turns() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("stable.jsonl");
+        let now = SystemTime::now();
+        let mut body = header("/tmp/project");
+        std::fs::write(&path, &body).unwrap();
+        let mut provider = CodexProvider::with_root(root.path().into());
+        for (kind, payload) in [
+            (
+                "event_msg",
+                serde_json::json!({"type":"task_started","turn_id":"first"}),
+            ),
+            (
+                "event_msg",
+                serde_json::json!({"type":"user_message","message":"keep this title"}),
+            ),
+            (
+                "response_item",
+                serde_json::json!({"type":"function_call","name":"exec_command","arguments":"{\"cmd\":\"cargo test\"}"}),
+            ),
+            (
+                "event_msg",
+                serde_json::json!({"type":"task_complete","last_agent_message":"finished"}),
+            ),
+            (
+                "event_msg",
+                serde_json::json!({"type":"task_started","turn_id":"second"}),
+            ),
+        ] {
+            let line = format!(
+                "{}\n",
+                serde_json::json!({"type":kind,"timestamp":recent_rfc3339(1),"payload":payload})
+            );
+            body.push_str(&line);
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&path)
+                .unwrap()
+                .write_all(line.as_bytes())
+                .unwrap();
+            assert_eq!(
+                provider.cached_session_state(&path, now),
+                parse_codex_rollout_unfiltered(&body, now, "stable")
+            );
+        }
+    }
+
+    #[test]
     fn unchanged_rollout_reuses_cached_parse() {
         let root = tempfile::tempdir().unwrap();
         let body = format!(
@@ -1802,7 +1875,7 @@ mod tests {
             .cache
             .get_mut(&path)
             .unwrap()
-            .2
+            .state
             .as_mut()
             .unwrap()
             .project = Some("cached-project".into());

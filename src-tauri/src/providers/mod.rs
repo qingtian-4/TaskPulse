@@ -5,6 +5,7 @@
 pub mod codex;
 pub mod deepseek_harness;
 pub mod hermes;
+pub mod jsonl_tail;
 pub mod local_file;
 pub mod remote_tmux;
 pub mod worker;

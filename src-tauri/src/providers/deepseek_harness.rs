@@ -62,6 +62,7 @@ pub struct DeepSeekHarnessProvider {
     /// path → parsed state; unchanged logs are not re-parsed.
     cache: std::collections::HashMap<String, CachedSession>,
     last_metadata: std::collections::HashMap<String, SessionMetadata>,
+    shard_cache: std::collections::HashMap<PathBuf, (SystemTime, u64, SessionMetadata)>,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -74,6 +75,7 @@ impl DeepSeekHarnessProvider {
             native_root: None,
             cache: Default::default(),
             last_metadata: Default::default(),
+            shard_cache: Default::default(),
             last_tasks: Vec::new(),
         }
     }
@@ -186,20 +188,7 @@ impl DeepSeekHarnessProvider {
                     .duration_since(UNIX_EPOCH)
                     .unwrap_or_default()
                     .as_secs_f64();
-                let id = session_id_from_path(&path.to_string_lossy());
-                let projection_modified = root
-                    .join("storages/session_projcache/sessions")
-                    .join(format!("{id}.json"))
-                    .metadata()
-                    .and_then(|metadata| metadata.modified())
-                    .ok()
-                    .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
-                    .map(|modified| modified.as_secs_f64())
-                    .unwrap_or(0.0);
-                sessions.push((
-                    path.to_string_lossy().into_owned(),
-                    modified.max(projection_modified),
-                ));
+                sessions.push((path.to_string_lossy().into_owned(), modified));
             }
             sessions.sort_by(|a, b| b.1.total_cmp(&a.1));
             return Ok(sessions);
@@ -221,30 +210,47 @@ impl DeepSeekHarnessProvider {
     /// live step state here; neither is guaranteed to be appended to the
     /// compressed event log.
     fn session_metadata(
-        &self,
+        &mut self,
     ) -> std::io::Result<std::collections::HashMap<String, SessionMetadata>> {
         if let Some(root) = &self.native_root {
             let shards = root.join("storages/session_projcache/sessions");
             if shards.is_dir() {
                 let mut metadata = std::collections::HashMap::new();
+                let mut live = std::collections::HashSet::new();
                 for entry in std::fs::read_dir(shards)? {
                     let path = entry?.path();
                     if path.extension().and_then(|value| value.to_str()) != Some("json") {
                         continue;
                     }
-                    let bytes = std::fs::read(&path)?;
-                    let root: serde_json::Value =
-                        serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
-                    let record = root.get("record").ok_or_else(|| {
-                        std::io::Error::other("DSH projection shard has no record")
-                    })?;
+                    live.insert(path.clone());
+                    let file = path.metadata()?;
+                    let signature = (file.modified()?, file.len());
+                    let cached = self
+                        .shard_cache
+                        .get(&path)
+                        .filter(|(mtime, len, _)| (*mtime, *len) == signature);
+                    let parsed = if let Some((_, _, record)) = cached {
+                        record.clone()
+                    } else {
+                        let bytes = std::fs::read(&path)?;
+                        let root: serde_json::Value =
+                            serde_json::from_slice(&bytes).map_err(std::io::Error::other)?;
+                        let record = root.get("record").ok_or_else(|| {
+                            std::io::Error::other("DSH projection shard has no record")
+                        })?;
+                        let parsed = parse_metadata_record(record);
+                        self.shard_cache
+                            .insert(path.clone(), (signature.0, signature.1, parsed.clone()));
+                        parsed
+                    };
                     let id = path
                         .file_stem()
                         .unwrap_or_default()
                         .to_string_lossy()
                         .into_owned();
-                    metadata.insert(id, parse_metadata_record(record));
+                    metadata.insert(id, parsed);
                 }
+                self.shard_cache.retain(|path, _| live.contains(path));
                 return Ok(metadata);
             }
             let legacy = root.join("storages/session_projcache.json");
