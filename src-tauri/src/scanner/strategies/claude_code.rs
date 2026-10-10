@@ -8,16 +8,52 @@ pub struct ClaudeCodeStrategy;
 /// These patterns match keywords that may appear in the title text.
 const TITLE_PATTERNS: &[TitlePattern] = &[
     // needs-input signals
-    TitlePattern { pattern: "approv",     status: "needs-input", confidence: 0.9 },
-    TitlePattern { pattern: "allow",      status: "needs-input", confidence: 0.9 },
-    TitlePattern { pattern: "permission", status: "needs-input", confidence: 0.85 },
-    TitlePattern { pattern: "yes/no",     status: "needs-input", confidence: 0.85 },
-    TitlePattern { pattern: "bypass",     status: "needs-input", confidence: 0.8 },
+    TitlePattern {
+        pattern: "approv",
+        status: "needs-input",
+        confidence: 0.9,
+    },
+    TitlePattern {
+        pattern: "allow",
+        status: "needs-input",
+        confidence: 0.9,
+    },
+    TitlePattern {
+        pattern: "permission",
+        status: "needs-input",
+        confidence: 0.85,
+    },
+    TitlePattern {
+        pattern: "yes/no",
+        status: "needs-input",
+        confidence: 0.85,
+    },
+    TitlePattern {
+        pattern: "bypass",
+        status: "needs-input",
+        confidence: 0.8,
+    },
     // working signals
-    TitlePattern { pattern: "running",    status: "working", confidence: 0.9 },
-    TitlePattern { pattern: "editing",    status: "working", confidence: 0.9 },
-    TitlePattern { pattern: "thinking",   status: "working", confidence: 0.9 },
-    TitlePattern { pattern: "interrupt",  status: "working", confidence: 0.85 },
+    TitlePattern {
+        pattern: "running",
+        status: "working",
+        confidence: 0.9,
+    },
+    TitlePattern {
+        pattern: "editing",
+        status: "working",
+        confidence: 0.9,
+    },
+    TitlePattern {
+        pattern: "thinking",
+        status: "working",
+        confidence: 0.9,
+    },
+    TitlePattern {
+        pattern: "interrupt",
+        status: "working",
+        confidence: 0.85,
+    },
 ];
 
 impl CliStrategy for ClaudeCodeStrategy {
@@ -42,7 +78,11 @@ impl CliStrategy for ClaudeCodeStrategy {
         if child_count > 0 && cpu_pct > 0.5 {
             return DetectedState {
                 status: "working".to_string(),
-                message: format!("Running tool ({} subprocess{})", child_count, if child_count == 1 { "" } else { "es" }),
+                message: format!(
+                    "Running tool ({} subprocess{})",
+                    child_count,
+                    if child_count == 1 { "" } else { "es" }
+                ),
                 confidence: 0.75,
             };
         }

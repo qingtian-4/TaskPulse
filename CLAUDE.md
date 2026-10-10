@@ -1,39 +1,26 @@
-# CLAUDE.md
+# Claude Code guidance for TaskPulse
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+Read [AGENTS.md](AGENTS.md) first: it is the canonical development contract.
 
-## Project
+TaskPulse is a **Windows-first attention dashboard**, forked from AgentTray.
+The executable remains `agent-tray` for script compatibility; desktop identity is
+`app.taskpulse.desktop`. This is not upstream's Linux-oriented process-list app.
 
-AgentTray is a cross-platform tray app built with Tauri 2, SvelteKit, and Rust. It monitors AI coding agents and shows their state in the system tray. Part of NSRTech.
+Pipeline: Provider → scope/normalization/dedup → TaskStore → AttentionTracker →
+TransitionEngine → tray/UI/reminders. State lives in `~/.taskpulse/`.
+Legacy `~/.agent-monitor/` status files are compatible inputs, not the main architecture.
 
-## Tech Stack
+- Use Bun, Svelte 5, Tauri 2 and Rust.
+- Keep stable session IDs and separate task titles, projects and reported models.
+- Do not import idle history or invent titles, completion percentages or exit codes.
+- An Agent turn ending means `WAITING_INPUT / turn_ended`, not command success.
+- Discovery is read-only. A new Agent type needs user confirmation to enable.
+- Never read Claude `*.key` files or print proxy credentials. Hook installation
+  needs separate confirmation and must preserve existing hooks/settings.
+- While the Windows tray runs, use `powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend`.
+  The isolated target avoids replacing the live executable. Tray PNGs are embedded.
+- Verify providers against available real data, not just fixtures.
+- Preserve unrelated edits; use small commits on the current `codex/*` branch.
 
-- **Backend:** Rust + Tauri 2.x (tray-icon, shell, process plugins)
-- **Frontend:** SvelteKit + Svelte 5 (runes) + Tailwind CSS v4
-- **Package manager:** bun (not npm)
-- **Icons:** @lucide/svelte
-- **File watcher:** notify crate v8
-- **Build:** `bun run build` for frontend, `cargo tauri dev` for full app
-
-## Commands
-
-- `bun install`: install frontend dependencies
-- `bun run build`: build frontend to `build/`
-- `bun run dev`: start SvelteKit dev server
-- `cargo tauri dev`: run full Tauri app in dev mode
-- `cargo tauri build`: production build
-- `cargo test --manifest-path src-tauri/Cargo.toml`: run Rust tests
-- `bun run check`: TypeScript and Svelte type checking
-
-## Architecture
-
-- Status files: `~/.agent-monitor/<name>.status` (JSON v1 format)
-- Shell scripts: `scripts/wrap.sh` wraps agent commands, `scripts/hooks/` installs and handles CLI hooks
-- Rust watcher: `src-tauri/src/watcher.rs` watches status dir, emits `agents-updated` events
-- Tray: `src-tauri/src/tray.rs` manages icon color and popup window
-- Focus: `src-tauri/src/focusers/` dispatches terminal focus by kind
-- Frontend: Svelte popup renders agent list from Tauri events
-
-## Status
-
-Main path works on Linux. macOS and Windows are supported in code but are used less often during development.
+See [architecture](docs/ARCHITECTURE.md), [product rules](docs/PRODUCT_DASHBOARD.md),
+[attention rules](docs/ATTENTION_LIST.md), and [review response](docs/REVIEW_RESPONSE.md).

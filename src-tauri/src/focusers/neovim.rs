@@ -1,6 +1,5 @@
-/// Focus a Neovim terminal buffer via its RPC socket.
-/// `focus_id` is the NVIM socket path (e.g. "/tmp/nvimXXXXXX/0").
-
+//! Focus a Neovim terminal buffer via its RPC socket.
+//! `focus_id` is the NVIM socket path (e.g. "/tmp/nvimXXXXXX/0").
 pub fn focus(focus_id: &str, _outer_id: &str) -> Result<(), String> {
     if focus_id.is_empty() {
         return Ok(());

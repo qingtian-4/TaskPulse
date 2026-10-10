@@ -1,90 +1,309 @@
-use std::collections::{HashMap, HashSet};
+//! Notification plumbing.
+//!
+//! The Transition Engine decides WHAT happened; this module decides how it
+//! is surfaced: a one-shot system sound and native desktop notification.
+
 use std::sync::{LazyLock, Mutex};
-use std::time::{Duration, Instant};
 
-use tauri::AppHandle;
-use tauri_plugin_notification::NotificationExt;
+use tauri::{AppHandle, Emitter};
 
-use crate::watcher::AgentStatus;
+use crate::domain::TaskSnapshot;
+use crate::transition::TaskEvent;
 
-const NEEDS_INPUT_REMINDER_INTERVAL: Duration = Duration::from_secs(10);
-
-/// Events that can trigger a notification.
+/// A concrete notification to surface.
 #[derive(Debug, Clone)]
-pub enum AgentEvent {
-    NeedsInput {
-        agent_name: String,
-        /// Hook-provided reason: "permission_prompt", "idle_prompt", "elicitation_dialog", etc.
+pub enum NotifyEvent {
+    WaitingInput {
+        task: TaskSnapshot,
         reason: Option<String>,
     },
-    NeedsInputReminder {
-        agent_name: String,
-        reason: Option<String>,
+    Succeeded {
+        task: TaskSnapshot,
     },
+    Failed {
+        task: TaskSnapshot,
+    },
+    InferredFinished {
+        task: TaskSnapshot,
+    },
+    HostDisconnected {
+        host: String,
+        last_seen_label: Option<String>,
+    },
+    HostReconnected {
+        host: String,
+    },
+    Test,
 }
 
 /// Swappable notification backend.
 pub trait Notifier: Send + Sync {
-    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>);
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>);
 }
 
 /// Plays a platform system sound via shell commands.
 pub struct SystemBeepNotifier;
 
 impl Notifier for SystemBeepNotifier {
-    fn notify(&self, event: &AgentEvent, _app: Option<&AppHandle>) {
+    fn notify(&self, event: &NotifyEvent, _app: Option<&AppHandle>) {
+        // Windows toast controls sound itself; don't play a second alert.
+        let settings = crate::monitoring::get_monitoring_settings();
+        if !settings.sound || (cfg!(target_os = "windows") && settings.desktop_notifications()) {
+            return;
+        }
         match event {
-            AgentEvent::NeedsInput { agent_name, reason } => {
-                let reason_str = reason.as_deref().unwrap_or("unknown");
-                log::info!("Agent '{}' needs input ({}) — playing alert", agent_name, reason_str);
+            NotifyEvent::WaitingInput { task, reason } => {
+                log::info!(
+                    "'{}' needs input ({}) — playing alert",
+                    task.name,
+                    reason.as_deref().unwrap_or("unknown")
+                );
                 play_system_beep();
             }
-            AgentEvent::NeedsInputReminder { agent_name, reason } => {
-                let reason_str = reason.as_deref().unwrap_or("unknown");
-                log::info!("Agent '{}' still needs input ({}) — playing reminder", agent_name, reason_str);
+            NotifyEvent::Succeeded { task } | NotifyEvent::InferredFinished { task } => {
+                log::info!("'{}' finished — playing alert", task.name);
                 play_system_beep();
             }
+            NotifyEvent::Failed { task } => {
+                log::info!("'{}' FAILED — playing alert", task.name);
+                play_system_beep();
+            }
+            NotifyEvent::HostDisconnected { host, .. } => {
+                log::info!("Host {host} disconnected — playing alert");
+                play_system_beep();
+            }
+            NotifyEvent::Test => play_system_beep(),
+            _ => {}
         }
     }
 }
 
-/// Sends native OS desktop notifications via tauri-plugin-notification.
+/// Send on a separate thread, preserving the native API's real error result.
 pub struct DesktopNotifier;
 
 impl Notifier for DesktopNotifier {
-    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>) {
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>) {
+        if !crate::monitoring::get_monitoring_settings().desktop_notifications() {
+            return;
+        }
         let Some(app) = app else {
-            log::warn!("DesktopNotifier: no AppHandle available, skipping notification");
+            log::warn!("DesktopNotifier: no AppHandle, skipping notification");
             return;
         };
-        match event {
-            AgentEvent::NeedsInput { agent_name, reason } => {
-                let body = match reason.as_deref() {
-                    Some(r) => format!("{} needs your input ({})", agent_name, r),
-                    None => format!("{} needs your input", agent_name),
-                };
-                let mut builder = app.notification()
-                    .builder()
-                    .title("AgentTray")
-                    .body(&body);
-                if let Some(icon_path) = notification_icon_path() {
-                    builder = builder.icon(icon_path);
-                }
-                if let Err(e) = builder.show() {
-                    log::warn!("Desktop notification failed: {}", e);
-                }
+
+        let (title, body) = notification_copy(event);
+
+        let identifier = app.config().identifier.clone();
+        let app = app.clone();
+        let task = match event {
+            NotifyEvent::WaitingInput { task, .. }
+            | NotifyEvent::Succeeded { task }
+            | NotifyEvent::Failed { task }
+            | NotifyEvent::InferredFinished { task } => Some(task.clone()),
+            _ => None,
+        };
+        std::thread::spawn(move || {
+            if let Err(error) =
+                send_actionable_notification(&title, &body, &identifier, Some(app.clone()), task)
+            {
+                report_notification_error(&app, error);
             }
-            AgentEvent::NeedsInputReminder { .. } => {}
+        });
+    }
+}
+
+pub struct PopupNotifier;
+impl Notifier for PopupNotifier {
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>) {
+        if !crate::monitoring::get_monitoring_settings().popup_notifications() {
+            return;
+        }
+        if let Some(app) = app {
+            let (title, body) = notification_copy(event);
+            let task = match event {
+                NotifyEvent::WaitingInput { task, .. }
+                | NotifyEvent::Succeeded { task }
+                | NotifyEvent::Failed { task }
+                | NotifyEvent::InferredFinished { task } => Some(task.clone()),
+                _ => None,
+            };
+            crate::task_notice::enqueue(app, title, body, task, matches!(event, NotifyEvent::Test));
         }
     }
 }
 
+fn send_desktop_notification(title: &str, body: &str, identifier: &str) -> Result<(), String> {
+    send_actionable_notification(title, body, identifier, None, None)
+}
+
+static LAST_NOTIFICATION_ERROR: Mutex<Option<String>> = Mutex::new(None);
+
+pub fn report_notification_error(app: &AppHandle, error: String) {
+    log::error!("Task notification failed: {error}");
+    *LAST_NOTIFICATION_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
+    let _ = app.emit("notification-error", error);
+}
+
+#[tauri::command]
+pub fn get_notification_error() -> Option<String> {
+    LAST_NOTIFICATION_ERROR
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone()
+}
+
+#[cfg(target_os = "windows")]
+fn send_actionable_notification(
+    title: &str,
+    body: &str,
+    identifier: &str,
+    app: Option<AppHandle>,
+    task: Option<TaskSnapshot>,
+) -> Result<(), String> {
+    use winrt_notification::{Sound, Toast};
+    let id = if cfg!(debug_assertions) {
+        Toast::POWERSHELL_APP_ID
+    } else {
+        identifier
+    };
+    let mut toast = Toast::new(id).title(title).text1(body).sound(
+        crate::monitoring::get_monitoring_settings()
+            .sound
+            .then_some(Sound::Default),
+    );
+    if let Some(icon) = notification_icon_path() {
+        toast = toast.icon(
+            std::path::Path::new(&icon),
+            winrt_notification::IconCrop::Square,
+            "TaskPulse",
+        );
+    }
+    if let Some(app) = app {
+        toast = toast.on_activated(move |_| {
+            let handle = app.clone();
+            let task = task.clone();
+            let _ = app.run_on_main_thread(move || {
+                if let Some(task) = task {
+                    // Metadata may have changed since the toast was sent.
+                    let current = crate::monitoring::find_session(&task.id).unwrap_or(task);
+                    crate::watcher::select_task(&handle, current);
+                } else {
+                    crate::tray::show_popup(&handle);
+                }
+            });
+            Ok(())
+        });
+    }
+    toast.show().map_err(|e| e.to_string())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn send_actionable_notification(
+    title: &str,
+    body: &str,
+    identifier: &str,
+    _app: Option<AppHandle>,
+    _task: Option<TaskSnapshot>,
+) -> Result<(), String> {
+    let mut notification = notify_rust::Notification::new();
+    notification.summary(title).body(body);
+    if let Some(icon) = notification_icon_path() {
+        notification.icon(&icon);
+    }
+    #[cfg(target_os = "macos")]
+    let _ = notify_rust::set_application(if cfg!(debug_assertions) {
+        "com.apple.Terminal"
+    } else {
+        identifier
+    });
+    let _ = identifier;
+    notification
+        .show()
+        .map(|_| ())
+        .map_err(|error| error.to_string())
+}
+
+fn notification_copy(event: &NotifyEvent) -> (String, String) {
+    match event {
+        NotifyEvent::WaitingInput { task, reason } => {
+            if let Some(reason) = reason {
+                log::debug!("Waiting-input reason for '{}': {reason}", task.name);
+            }
+            (
+                match task.waiting_reason {
+                    Some(crate::domain::WaitingReason::TurnEnded) => {
+                        "TaskPulse · 本轮结束，等待后续输入"
+                    }
+                    Some(crate::domain::WaitingReason::Approval) => "TaskPulse · 需要授权",
+                    Some(crate::domain::WaitingReason::Question) => "TaskPulse · 需要你确认",
+                    _ => "TaskPulse · 等待输入",
+                }
+                .to_string(),
+                task_notification_label(task),
+            )
+        }
+        NotifyEvent::Succeeded { task } => (
+            "TaskPulse · 任务已完成".to_string(),
+            task_notification_label(task),
+        ),
+        NotifyEvent::Failed { task } => {
+            let mut body = task_notification_label(task);
+            if let Some(code) = task.exit_code {
+                body.push_str(&format!(" · 退出码 {code}"));
+            }
+            ("TaskPulse · 任务失败，需要处理".to_string(), body)
+        }
+        NotifyEvent::InferredFinished { task } => (
+            "TaskPulse · 任务可能已结束".to_string(),
+            format!("{} · 状态来自推断，请确认", task_notification_label(task)),
+        ),
+        NotifyEvent::HostDisconnected {
+            host,
+            last_seen_label,
+        } => (
+            "TaskPulse · 远程主机已断开".to_string(),
+            match last_seen_label {
+                Some(last_seen) => format!("{host} · 最后在线 {last_seen}"),
+                None => host.clone(),
+            },
+        ),
+        NotifyEvent::HostReconnected { host } => {
+            ("TaskPulse · 远程主机已恢复".to_string(), host.clone())
+        }
+        NotifyEvent::Test => (
+            "TaskPulse · 通知测试成功".to_string(),
+            "任务完成或需要你输入时，将在这里提醒。".to_string(),
+        ),
+    }
+}
+
+fn task_notification_label(task: &TaskSnapshot) -> String {
+    let mut context = Vec::with_capacity(4);
+    if let Some(host) = task
+        .host
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        context.push(host);
+    }
+    context.push(task.source.label());
+    if let Some(project) = task
+        .project
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        context.push(project);
+    }
+    context.push(&task.name);
+    context.join(" · ")
+}
+
 /// Returns an absolute path to the notification icon, writing it to a cache
-/// file on first call. On Linux, notify_rust needs an absolute path or
-/// freedesktop icon name; in dev mode the app isn't installed, so auto_icon()
-/// fails. We embed the 128x128 app icon at compile time and materialize it.
+/// file on first call (embedded app icon, so dev mode works too).
 fn notification_icon_path() -> Option<String> {
-    let cache_dir = dirs_next::cache_dir()?.join("agent-tray");
+    let cache_dir = dirs_next::cache_dir()?.join("taskpulse");
     let icon_path = cache_dir.join("notification-icon.png");
     if !icon_path.exists() {
         std::fs::create_dir_all(&cache_dir).ok()?;
@@ -93,7 +312,7 @@ fn notification_icon_path() -> Option<String> {
     Some(icon_path.to_string_lossy().into_owned())
 }
 
-/// Fires multiple notifiers in sequence (beep + desktop banner).
+/// Fires configured reminder channels (sound, app popup, system banner).
 pub struct CompositeNotifier {
     backends: Vec<Box<dyn Notifier>>,
 }
@@ -105,84 +324,25 @@ impl CompositeNotifier {
 }
 
 impl Notifier for CompositeNotifier {
-    fn notify(&self, event: &AgentEvent, app: Option<&AppHandle>) {
+    fn notify(&self, event: &NotifyEvent, app: Option<&AppHandle>) {
         for backend in &self.backends {
             backend.notify(event, app);
         }
     }
 }
 
-#[derive(Debug, Clone, Copy)]
-struct ReminderState {
-    entered_at: Instant,
-    last_reminder_at: Option<Instant>,
-}
-
-#[derive(Default)]
-struct NeedsInputReminderTracker {
-    active: HashMap<String, ReminderState>,
-}
-
-impl NeedsInputReminderTracker {
-    fn collect_events(&mut self, old: &[AgentStatus], new: &[AgentStatus], now: Instant) -> Vec<AgentEvent> {
-        let active_ids: HashSet<String> = new.iter()
-            .filter(|agent| agent.status == "needs-input")
-            .map(|agent| agent.id.clone())
-            .collect();
-        self.active.retain(|id, _| active_ids.contains(id));
-
-        let mut events = Vec::new();
-
-        for agent in new.iter().filter(|agent| agent.status == "needs-input") {
-            let was_needs_input = old
-                .iter()
-                .find(|old_agent| old_agent.id == agent.id)
-                .map(|old_agent| old_agent.status == "needs-input")
-                .unwrap_or(false);
-
-            let entry = self.active.entry(agent.id.clone()).or_insert(ReminderState {
-                entered_at: now,
-                last_reminder_at: None,
-            });
-
-            if !was_needs_input {
-                *entry = ReminderState {
-                    entered_at: now,
-                    last_reminder_at: None,
-                };
-                events.push(AgentEvent::NeedsInput {
-                    agent_name: agent.name.clone(),
-                    reason: agent.hook_matcher.clone(),
-                });
-                continue;
-            }
-
-            let has_waited_long_enough = now.duration_since(entry.entered_at) >= NEEDS_INPUT_REMINDER_INTERVAL;
-            let reminder_due = entry.last_reminder_at
-                .map(|last| now.duration_since(last) >= NEEDS_INPUT_REMINDER_INTERVAL)
-                .unwrap_or(true);
-
-            if has_waited_long_enough && reminder_due {
-                entry.last_reminder_at = Some(now);
-                events.push(AgentEvent::NeedsInputReminder {
-                    agent_name: agent.name.clone(),
-                    reason: agent.hook_matcher.clone(),
-                });
-            }
-        }
-
-        events
-    }
-}
-
-static REMINDER_TRACKER: LazyLock<Mutex<NeedsInputReminderTracker>> = LazyLock::new(|| {
-    Mutex::new(NeedsInputReminderTracker::default())
+static NOTIFIER: LazyLock<CompositeNotifier> = LazyLock::new(|| {
+    CompositeNotifier::new(vec![
+        Box::new(SystemBeepNotifier),
+        Box::new(PopupNotifier),
+        Box::new(DesktopNotifier),
+    ])
 });
 
 fn play_system_beep() {
     std::thread::spawn(|| {
         if let Err(e) = platform_beep() {
-            log::warn!("Failed to play notification sound: {}", e);
+            log::warn!("Failed to play notification sound: {e}");
         }
     });
 }
@@ -191,7 +351,6 @@ fn play_system_beep() {
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
 
-    // Try freedesktop sound theme (uses user's configured sound theme)
     if Command::new("canberra-gtk-play")
         .args(["--id", "bell"])
         .output()
@@ -199,8 +358,6 @@ fn platform_beep() -> Result<(), String> {
     {
         return Ok(());
     }
-
-    // Try paplay with XDG sound lookup
     if Command::new("paplay")
         .args(["--property", "media.role=event"])
         .arg("/usr/share/sounds/freedesktop/stereo/bell.oga")
@@ -209,36 +366,38 @@ fn platform_beep() -> Result<(), String> {
     {
         return Ok(());
     }
-
-    // Last resort: terminal bell
     Command::new("sh")
         .args(["-c", "printf '\\a'"])
         .output()
         .map(|_| ())
-        .map_err(|e| format!("beep failed: {}", e))
+        .map_err(|e| format!("beep failed: {e}"))
 }
 
 #[cfg(target_os = "macos")]
 fn platform_beep() -> Result<(), String> {
     use std::process::Command;
-    // Use AppleScript beep — plays the user's configured alert sound
-    // without hardcoding any file path
     Command::new("osascript")
         .args(["-e", "beep"])
         .output()
         .map(|_| ())
-        .map_err(|e| format!("osascript beep failed: {}", e))
+        .map_err(|e| format!("osascript beep failed: {e}"))
 }
 
 #[cfg(target_os = "windows")]
 fn platform_beep() -> Result<(), String> {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
-    // Uses .NET system sounds — plays the user's configured exclamation sound
     Command::new("powershell")
-        .args(["-c", "[System.Media.SystemSounds]::Exclamation.Play()"])
+        .creation_flags(0x08000000) // CREATE_NO_WINDOW: never flash a console.
+        .args([
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            "[System.Media.SystemSounds]::Exclamation.Play()",
+        ])
         .output()
         .map(|_| ())
-        .map_err(|e| format!("powershell beep failed: {}", e))
+        .map_err(|e| format!("powershell beep failed: {e}"))
 }
 
 #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
@@ -247,158 +406,260 @@ fn platform_beep() -> Result<(), String> {
     Ok(())
 }
 
-/// Compare old and new agent lists; fire immediate notifications for
-/// transitions to needs-input, then periodic reminder beeps while the
-/// waiting state persists. Uses `id` for identity matching so title/name
-/// changes don't retrigger alerts.
-pub fn detect_and_notify(old: &[AgentStatus], new: &[AgentStatus], notifier: &dyn Notifier, app: Option<&AppHandle>) {
-    let mut tracker = REMINDER_TRACKER.lock().unwrap_or_else(|e| {
-        log::warn!("REMINDER_TRACKER mutex poisoned, recovering");
-        e.into_inner()
-    });
-    detect_and_notify_with_tracker(old, new, notifier, app, &mut tracker, Instant::now());
+/// Drive one-shot notifications from transition-engine events.
+pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapshot]) {
+    if !crate::monitoring::get_monitoring_settings().notifications {
+        return;
+    }
+    for event in events {
+        let task = match event {
+            TaskEvent::WaitingInput { task, .. }
+            | TaskEvent::Succeeded { task }
+            | TaskEvent::Failed { task }
+            | TaskEvent::InferredFinished { task } => Some(task),
+            _ => None,
+        };
+        if task.is_some_and(|t| !crate::monitoring::allows(t) || crate::watcher::is_ignored(&t.id))
+        {
+            continue;
+        }
+        let notify_event = match event {
+            TaskEvent::WaitingInput { task, reason } => NotifyEvent::WaitingInput {
+                task: task.clone(),
+                reason: reason.clone(),
+            },
+            TaskEvent::Succeeded { task } => NotifyEvent::Succeeded { task: task.clone() },
+            TaskEvent::Failed { task } => NotifyEvent::Failed { task: task.clone() },
+            TaskEvent::InferredFinished { task } => {
+                NotifyEvent::InferredFinished { task: task.clone() }
+            }
+            TaskEvent::HostDisconnected { host, last_seen } => NotifyEvent::HostDisconnected {
+                host: host.clone(),
+                last_seen_label: last_seen.map(fmt_last_seen),
+            },
+            TaskEvent::HostReconnected { host } => {
+                NotifyEvent::HostReconnected { host: host.clone() }
+            }
+        };
+        NOTIFIER.notify(&notify_event, Some(app));
+    }
 }
 
-fn detect_and_notify_with_tracker(
-    old: &[AgentStatus],
-    new: &[AgentStatus],
-    notifier: &dyn Notifier,
-    app: Option<&AppHandle>,
-    tracker: &mut NeedsInputReminderTracker,
-    now: Instant,
-) {
-    for event in tracker.collect_events(old, new, now) {
-        notifier.notify(&event, app);
+/// Verify configured reminder channels without waiting for a real task.
+#[tauri::command]
+pub async fn test_notification(app: AppHandle, kind: Option<String>) -> Result<(), String> {
+    let settings = crate::monitoring::get_monitoring_settings();
+    if !settings.notifications {
+        return Err("请先启用任务提醒并保存配置".into());
+    }
+    let event = test_event(kind.as_deref().unwrap_or("test"))?;
+    if settings.popup_notifications() {
+        let (title, body) = notification_copy(&event);
+        // Explicit test: no fake task enters attention/history or Agent data.
+        let task = match &event {
+            NotifyEvent::WaitingInput { task, .. }
+            | NotifyEvent::Succeeded { task }
+            | NotifyEvent::Failed { task }
+            | NotifyEvent::InferredFinished { task } => Some(task.clone()),
+            _ => None,
+        };
+        crate::task_notice::enqueue(&app, title, body, task, true);
+    }
+    SystemBeepNotifier.notify(&NotifyEvent::Test, Some(&app));
+    if !settings.desktop_notifications() {
+        return Ok(());
+    }
+    let identifier = app.config().identifier.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let (title, body) = notification_copy(&event);
+        send_actionable_notification(&title, &body, &identifier, Some(app), None)
+    })
+    .await
+    .map_err(|error| error.to_string())?
+}
+
+fn test_event(kind: &str) -> Result<NotifyEvent, String> {
+    use crate::domain::{DetectionConfidence, TaskSource, TaskStatus, WaitingReason};
+    if kind == "test" {
+        return Ok(NotifyEvent::Test);
+    }
+    let mut task = TaskSnapshot::new(
+        "notification-test",
+        "任务提醒验收（测试，不是真实任务）",
+        TaskSource::LocalFile,
+        TaskStatus::WaitingInput,
+        DetectionConfidence::Exact,
+        std::time::SystemTime::now(),
+    );
+    match kind {
+        "turn_ended" => {
+            task.waiting_reason = Some(WaitingReason::TurnEnded);
+            Ok(NotifyEvent::WaitingInput { task, reason: None })
+        }
+        "approval" => {
+            task.waiting_reason = Some(WaitingReason::Approval);
+            Ok(NotifyEvent::WaitingInput { task, reason: None })
+        }
+        "failed" => {
+            task.status = TaskStatus::Failed;
+            Ok(NotifyEvent::Failed { task })
+        }
+        "long_title" => {
+            task.name = "长标题排版验收（测试）· Verify multilingual task titles 与很长的任务名称在消息卡片中正确换行，且不挤压操作按钮".into();
+            task.source = TaskSource::Codex;
+            task.project = Some("长项目名称排版验收（测试）· Native project".into());
+            task.host = Some("Test-server".into());
+            task.waiting_reason = Some(WaitingReason::TurnEnded);
+            Ok(NotifyEvent::WaitingInput { task, reason: None })
+        }
+        _ => Err("无效的提醒测试类型".into()),
+    }
+}
+
+pub fn send_test_notification(identifier: &str) -> Result<(), String> {
+    let (title, body) = notification_copy(&NotifyEvent::Test);
+    send_desktop_notification(&title, &body, identifier)
+}
+
+fn fmt_last_seen(t: std::time::SystemTime) -> String {
+    let secs = t
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    let ago = (now - secs).max(0);
+    if ago < 60 {
+        format!("{ago}s ago")
+    } else if ago < 3600 {
+        format!("{}m ago", ago / 60)
+    } else {
+        format!("{}h ago", ago / 3600)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::sync::atomic::{AtomicUsize, Ordering};
+    use crate::domain::{DetectionConfidence, TaskSource, TaskStatus};
+    use std::time::{Duration, SystemTime};
 
-    struct CountingNotifier(AtomicUsize);
-    impl Notifier for CountingNotifier {
-        fn notify(&self, _event: &AgentEvent, _app: Option<&AppHandle>) {
-            self.0.fetch_add(1, Ordering::Relaxed);
+    #[test]
+    fn completion_transition_has_real_title_and_only_notifies_once_per_turn() {
+        let mut engine = crate::transition::TransitionEngine::new();
+        let mut task = TaskSnapshot::new(
+            "codex:stable-id",
+            "Native renamed task",
+            TaskSource::Codex,
+            TaskStatus::Running,
+            DetectionConfidence::Exact,
+            SystemTime::now(),
+        );
+        task.project = Some("real-project".into());
+        task.turn_key = Some("turn-1".into());
+        task.unread = true;
+        assert!(engine
+            .apply(&[task.clone()], &[], SystemTime::now())
+            .is_empty());
+        task.status = TaskStatus::WaitingInput;
+        task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        let events = engine.apply(&[task.clone()], &[], SystemTime::now());
+        assert_eq!(events.len(), 1);
+        if let TaskEvent::WaitingInput { task, reason } = &events[0] {
+            let (title, body) = notification_copy(&NotifyEvent::WaitingInput {
+                task: task.clone(),
+                reason: reason.clone(),
+            });
+            assert_eq!(title, "TaskPulse · 本轮结束，等待后续输入");
+            assert_eq!(body, "Codex · real-project · Native renamed task");
+            assert_eq!(task.id, "codex:stable-id");
+        } else {
+            panic!("expected turn completion");
         }
+        task.name = "Renamed after completion".into();
+        assert!(engine
+            .apply(&[task.clone()], &[], SystemTime::now())
+            .is_empty());
+        task.status = TaskStatus::Running;
+        task.turn_key = Some("turn-2".into());
+        engine.apply(&[task.clone()], &[], SystemTime::now());
+        task.status = TaskStatus::WaitingInput;
+        assert_eq!(engine.apply(&[task], &[], SystemTime::now()).len(), 1);
     }
 
-    fn agent(name: &str, status: &str) -> AgentStatus {
-        AgentStatus {
-            id: format!("test:{}", name),
-            name: name.into(),
-            status: status.into(),
-            message: String::new(),
-            terminal: None,
-            can_focus: false,
-            cpu: None,
-            source: None,
-            cli: None,
-            session_id: None,
-            hook_event: None,
-            hook_matcher: None,
-            mtime: None,
+    #[test]
+    fn test_alerts_are_explicit_and_invalid_kinds_rejected() {
+        for kind in ["turn_ended", "approval", "failed"] {
+            let (title, body) = notification_copy(&test_event(kind).unwrap());
+            assert!(body.contains("测试，不是真实任务"));
+            assert!(title.contains("TaskPulse"));
         }
+        if let NotifyEvent::WaitingInput { task, .. } = test_event("long_title").unwrap() {
+            assert!(task.name.contains("（测试）"));
+            assert!(task.project.unwrap().contains("（测试）"));
+        } else {
+            panic!("expected long title reminder");
+        }
+        assert!(test_event("anything").is_err());
     }
 
     #[test]
-    fn no_notification_when_already_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![agent("a", "needs-input")];
-        let new = vec![agent("a", "needs-input")];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 0);
+    fn task_label_preserves_source_project_and_native_title() {
+        let mut task = TaskSnapshot::new(
+            "codex:thread-1",
+            "研究 HyperMem 记忆机制",
+            TaskSource::Codex,
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Exact,
+            SystemTime::now(),
+        );
+        task.host = Some("Server3".into());
+        task.project = Some("HyperMem".into());
+        assert_eq!(
+            task_notification_label(&task),
+            "Server3 · Codex · HyperMem · 研究 HyperMem 记忆机制"
+        );
     }
 
     #[test]
-    fn notification_on_transition_to_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![agent("a", "working")];
-        let new = vec![agent("a", "needs-input")];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 1);
+    fn waiting_notification_does_not_invent_completion() {
+        let mut task = TaskSnapshot::new(
+            "hermes:session-1",
+            "Install image-to-editable-ppt skill",
+            TaskSource::Hermes,
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Exact,
+            SystemTime::now(),
+        );
+        let (title, body) = notification_copy(&NotifyEvent::WaitingInput {
+            task: task.clone(),
+            reason: Some("provider event".into()),
+        });
+        assert_eq!(title, "TaskPulse · 等待输入");
+        assert_eq!(body, "Hermes · Install image-to-editable-ppt skill");
+        task.waiting_reason = Some(crate::domain::WaitingReason::Question);
+        assert_eq!(
+            notification_copy(&NotifyEvent::WaitingInput {
+                task: task.clone(),
+                reason: None
+            })
+            .0,
+            "TaskPulse · 需要你确认"
+        );
+        task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert_eq!(
+            notification_copy(&NotifyEvent::WaitingInput { task, reason: None }).0,
+            "TaskPulse · 本轮结束，等待后续输入"
+        );
     }
 
     #[test]
-    fn notification_for_new_agent_as_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        detect_and_notify_with_tracker(&[], &[agent("a", "needs-input")], &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 1);
-    }
-
-    #[test]
-    fn no_notification_for_non_needs_input() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![agent("a", "idle")];
-        let new = vec![agent("a", "working")];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 0);
-    }
-
-    #[test]
-    fn multiple_agents_only_transitioned_ones_notify() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let old = vec![
-            agent("a", "working"),
-            agent("b", "needs-input"),
-            agent("c", "idle"),
-        ];
-        let new = vec![
-            agent("a", "needs-input"),
-            agent("b", "needs-input"),
-            agent("c", "needs-input"),
-        ];
-        detect_and_notify_with_tracker(&old, &new, &n, None, &mut tracker, Instant::now());
-        assert_eq!(n.0.load(Ordering::Relaxed), 2);
-    }
-
-    #[test]
-    fn reminder_fires_after_ten_seconds() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let start = Instant::now();
-        let waiting = vec![agent("a", "needs-input")];
-
-        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(10));
-
-        assert_eq!(n.0.load(Ordering::Relaxed), 2);
-    }
-
-    #[test]
-    fn reminder_repeats_every_ten_seconds() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let start = Instant::now();
-        let waiting = vec![agent("a", "needs-input")];
-
-        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(9));
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(10));
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(19));
-        detect_and_notify_with_tracker(&waiting, &waiting, &n, None, &mut tracker, start + Duration::from_secs(20));
-
-        assert_eq!(n.0.load(Ordering::Relaxed), 3);
-    }
-
-    #[test]
-    fn reminder_state_clears_when_agent_leaves_waiting() {
-        let n = CountingNotifier(AtomicUsize::new(0));
-        let mut tracker = NeedsInputReminderTracker::default();
-        let start = Instant::now();
-        let waiting = vec![agent("a", "needs-input")];
-        let working = vec![agent("a", "working")];
-
-        detect_and_notify_with_tracker(&[], &waiting, &n, None, &mut tracker, start);
-        detect_and_notify_with_tracker(&waiting, &working, &n, None, &mut tracker, start + Duration::from_secs(5));
-        detect_and_notify_with_tracker(&working, &waiting, &n, None, &mut tracker, start + Duration::from_secs(6));
-
-        assert_eq!(n.0.load(Ordering::Relaxed), 2);
+    fn fmt_last_seen_recent() {
+        let t = std::time::SystemTime::now() - Duration::from_secs(30);
+        assert_eq!(fmt_last_seen(t), "30s ago");
+        let t = std::time::SystemTime::now() - Duration::from_secs(420);
+        assert_eq!(fmt_last_seen(t), "7m ago");
     }
 }

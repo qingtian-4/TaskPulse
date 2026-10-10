@@ -24,7 +24,8 @@ const HIGH_CPU_THRESHOLD: f64 = 10.0;
 /// - Never overrides "needs-input" or "error" (these are explicit signals)
 ///
 /// Called after dedup, before sorting and emission.
-pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn cross_validate(agents: &mut [AgentStatus], scanned: &[AgentStatus]) {
     let now = SystemTime::now();
 
     for agent in agents.iter_mut() {
@@ -66,15 +67,14 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
                     continue;
                 }
 
-                let is_claude_permission_wait = matches!(
-                    agent.cli.as_deref(),
-                    Some("claude-code")
-                ) && matches!(
-                    agent.hook_matcher.as_deref(),
-                    Some("permission_prompt" | "elicitation_dialog")
-                );
+                let is_claude_permission_wait = matches!(agent.cli.as_deref(), Some("claude-code"))
+                    && matches!(
+                        agent.hook_matcher.as_deref(),
+                        Some("permission_prompt" | "elicitation_dialog")
+                    );
                 let is_genuine = is_genuine_needs_input(agent);
-                let is_stale = agent.mtime
+                let is_stale = agent
+                    .mtime
                     .and_then(|mt| now.duration_since(mt).ok())
                     .map(|age| age > STALE_PERMISSION_TTL)
                     .unwrap_or(false);
@@ -96,7 +96,8 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
             "working" | "starting" => {
                 // Stale working: hook says active but process CPU is near-zero
                 // and the status file hasn't been updated recently
-                let is_stale = agent.mtime
+                let is_stale = agent
+                    .mtime
                     .and_then(|mt| now.duration_since(mt).ok())
                     .map(|age| age > STALE_WORKING_TTL)
                     .unwrap_or(false);
@@ -106,13 +107,12 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
                     agent.message = format!("{} (stale hook, low CPU)", agent.message);
                 }
             }
-            "idle" | "offline" => {
+            "idle" | "offline"
                 // Missed activity: hook says idle but process is clearly active
-                if scan_cpu > HIGH_CPU_THRESHOLD {
+                if scan_cpu > HIGH_CPU_THRESHOLD => {
                     agent.status = "working".to_string();
                     agent.message = format!("Active ({:.0}% CPU)", scan_cpu);
                 }
-            }
             _ => {}
         }
     }
@@ -123,9 +123,15 @@ pub fn cross_validate(agents: &mut Vec<AgentStatus>, scanned: &[AgentStatus]) {
 /// Correlation strategy (in priority order):
 /// 1. Same CLI name + same terminal focus_id
 /// 2. Same CLI name when there's exactly one scanner result for that CLI
-fn find_scanner_match<'a>(agent: &AgentStatus, scanned: &'a [AgentStatus]) -> Option<&'a AgentStatus> {
+#[cfg_attr(not(test), allow(dead_code))]
+fn find_scanner_match<'a>(
+    agent: &AgentStatus,
+    scanned: &'a [AgentStatus],
+) -> Option<&'a AgentStatus> {
     let cli = agent.cli.as_deref()?;
-    let agent_focus_id = agent.terminal.as_ref()
+    let agent_focus_id = agent
+        .terminal
+        .as_ref()
         .map(|t| t.focus_id.as_str())
         .unwrap_or("");
 
@@ -133,7 +139,8 @@ fn find_scanner_match<'a>(agent: &AgentStatus, scanned: &'a [AgentStatus]) -> Op
     if !agent_focus_id.is_empty() && agent_focus_id != "0" {
         if let Some(m) = scanned.iter().find(|s| {
             s.cli.as_deref() == Some(cli)
-                && s.terminal.as_ref()
+                && s.terminal
+                    .as_ref()
                     .map(|t| t.focus_id == agent_focus_id)
                     .unwrap_or(false)
         }) {
@@ -142,7 +149,8 @@ fn find_scanner_match<'a>(agent: &AgentStatus, scanned: &'a [AgentStatus]) -> Op
     }
 
     // Fallback: if exactly one scanner result for this CLI, use it
-    let cli_matches: Vec<&AgentStatus> = scanned.iter()
+    let cli_matches: Vec<&AgentStatus> = scanned
+        .iter()
         .filter(|s| s.cli.as_deref() == Some(cli))
         .collect();
     if cli_matches.len() == 1 {
@@ -152,6 +160,7 @@ fn find_scanner_match<'a>(agent: &AgentStatus, scanned: &'a [AgentStatus]) -> Op
     None
 }
 
+#[cfg_attr(not(test), allow(dead_code))]
 fn is_genuine_needs_input(agent: &AgentStatus) -> bool {
     match agent.cli.as_deref() {
         Some("claude-code") => matches!(
@@ -169,7 +178,12 @@ mod tests {
     use super::*;
     use crate::watcher::TerminalInfo;
 
-    fn hook_agent(status: &str, cli: &str, focus_id: &str, mtime: Option<SystemTime>) -> AgentStatus {
+    fn hook_agent(
+        status: &str,
+        cli: &str,
+        focus_id: &str,
+        mtime: Option<SystemTime>,
+    ) -> AgentStatus {
         AgentStatus {
             id: format!("file:test-{}", cli),
             name: "test".into(),
@@ -224,7 +238,12 @@ mod tests {
     #[test]
     fn stale_working_hook_downgraded_to_idle() {
         let old_mtime = SystemTime::now() - Duration::from_secs(60);
-        let mut agents = vec![hook_agent("working", "claude-code", "0x1234", Some(old_mtime))];
+        let mut agents = vec![hook_agent(
+            "working",
+            "claude-code",
+            "0x1234",
+            Some(old_mtime),
+        )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
 
         cross_validate(&mut agents, &scanned);
@@ -234,7 +253,12 @@ mod tests {
     #[test]
     fn fresh_working_hook_not_downgraded() {
         let fresh_mtime = SystemTime::now();
-        let mut agents = vec![hook_agent("working", "claude-code", "0x1234", Some(fresh_mtime))];
+        let mut agents = vec![hook_agent(
+            "working",
+            "claude-code",
+            "0x1234",
+            Some(fresh_mtime),
+        )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
 
         cross_validate(&mut agents, &scanned);
@@ -255,7 +279,12 @@ mod tests {
         // hook_matcher=None means unknown/non-genuine source — stale entries
         // should be downgraded to idle regardless of CPU.
         let old_mtime = SystemTime::now() - Duration::from_secs(120);
-        let mut agents = vec![hook_agent("needs-input", "claude-code", "0x1234", Some(old_mtime))];
+        let mut agents = vec![hook_agent(
+            "needs-input",
+            "claude-code",
+            "0x1234",
+            Some(old_mtime),
+        )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
 
         cross_validate(&mut agents, &scanned);
@@ -274,7 +303,12 @@ mod tests {
     #[test]
     fn no_scanner_match_leaves_hook_unchanged() {
         let old_mtime = SystemTime::now() - Duration::from_secs(60);
-        let mut agents = vec![hook_agent("working", "claude-code", "0x1234", Some(old_mtime))];
+        let mut agents = vec![hook_agent(
+            "working",
+            "claude-code",
+            "0x1234",
+            Some(old_mtime),
+        )];
         let scanned = vec![scan_agent("gemini", "0x9999", 0.0)]; // different CLI
 
         cross_validate(&mut agents, &scanned);
@@ -316,8 +350,11 @@ mod tests {
     }
 
     fn hook_agent_with_matcher(
-        status: &str, cli: &str, focus_id: &str,
-        matcher: Option<&str>, mtime: Option<SystemTime>,
+        status: &str,
+        cli: &str,
+        focus_id: &str,
+        matcher: Option<&str>,
+        mtime: Option<SystemTime>,
     ) -> AgentStatus {
         let mut a = hook_agent(status, cli, focus_id, mtime);
         a.hook_matcher = matcher.map(|s| s.into());
@@ -325,8 +362,12 @@ mod tests {
     }
 
     fn hook_agent_with_event(
-        status: &str, cli: &str, focus_id: &str,
-        hook_event: Option<&str>, matcher: Option<&str>, mtime: Option<SystemTime>,
+        status: &str,
+        cli: &str,
+        focus_id: &str,
+        hook_event: Option<&str>,
+        matcher: Option<&str>,
+        mtime: Option<SystemTime>,
     ) -> AgentStatus {
         let mut a = hook_agent_with_matcher(status, cli, focus_id, matcher, mtime);
         a.hook_event = hook_event.map(|s| s.into());
@@ -338,8 +379,11 @@ mod tests {
         // Simulates macOS case: permission granted, PreToolUse hook didn't fire.
         let old_mtime = SystemTime::now() - Duration::from_secs(45);
         let mut agents = vec![hook_agent_with_matcher(
-            "needs-input", "claude-code", "0x1234",
-            Some("permission_prompt"), Some(old_mtime),
+            "needs-input",
+            "claude-code",
+            "0x1234",
+            Some("permission_prompt"),
+            Some(old_mtime),
         )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 6.0)]; // CPU active (above LOW_CPU_THRESHOLD)
 
@@ -353,8 +397,11 @@ mod tests {
         // After STALE_PERMISSION_TTL with low CPU, should resolve to idle.
         let old_mtime = SystemTime::now() - Duration::from_secs(45);
         let mut agents = vec![hook_agent_with_matcher(
-            "needs-input", "claude-code", "0x1234",
-            Some("permission_prompt"), Some(old_mtime),
+            "needs-input",
+            "claude-code",
+            "0x1234",
+            Some("permission_prompt"),
+            Some(old_mtime),
         )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 0.5)]; // CPU idle
 
@@ -367,8 +414,11 @@ mod tests {
         // Permission prompt is recent — user hasn't responded yet.
         let fresh_mtime = SystemTime::now();
         let mut agents = vec![hook_agent_with_matcher(
-            "needs-input", "claude-code", "0x1234",
-            Some("permission_prompt"), Some(fresh_mtime),
+            "needs-input",
+            "claude-code",
+            "0x1234",
+            Some("permission_prompt"),
+            Some(fresh_mtime),
         )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 3.0)];
 
@@ -382,8 +432,11 @@ mod tests {
         // wrote needs-input should be downgraded to idle once stale.
         let old_mtime = SystemTime::now() - Duration::from_secs(90);
         let mut agents = vec![hook_agent_with_matcher(
-            "needs-input", "claude-code", "0x1234",
-            Some("quota_warning"), Some(old_mtime),
+            "needs-input",
+            "claude-code",
+            "0x1234",
+            Some("quota_warning"),
+            Some(old_mtime),
         )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
 
@@ -396,8 +449,11 @@ mod tests {
         // Even a non-genuine needs-input should be kept if still fresh.
         let fresh_mtime = SystemTime::now();
         let mut agents = vec![hook_agent_with_matcher(
-            "needs-input", "claude-code", "0x1234",
-            Some("quota_warning"), Some(fresh_mtime),
+            "needs-input",
+            "claude-code",
+            "0x1234",
+            Some("quota_warning"),
+            Some(fresh_mtime),
         )];
         let scanned = vec![scan_agent("claude-code", "0x1234", 0.0)];
 
@@ -408,7 +464,12 @@ mod tests {
     #[test]
     fn working_hook_upgraded_when_scanner_detects_waiting() {
         let mut agents = vec![hook_agent("working", "codex", "0x1234", None)];
-        let scanned = vec![scan_agent_with_status("codex", "0x1234", "needs-input", 0.0)];
+        let scanned = vec![scan_agent_with_status(
+            "codex",
+            "0x1234",
+            "needs-input",
+            0.0,
+        )];
 
         cross_validate(&mut agents, &scanned);
         assert_eq!(agents[0].status, "needs-input");
@@ -418,12 +479,288 @@ mod tests {
     fn stale_codex_stop_wait_not_cleared() {
         let old_mtime = SystemTime::now() - Duration::from_secs(90);
         let mut agents = vec![hook_agent_with_event(
-            "needs-input", "codex", "0x1234",
-            Some("Stop"), None, Some(old_mtime),
+            "needs-input",
+            "codex",
+            "0x1234",
+            Some("Stop"),
+            None,
+            Some(old_mtime),
         )];
         let scanned = vec![scan_agent("codex", "0x1234", 0.0)];
 
         cross_validate(&mut agents, &scanned);
         assert_eq!(agents[0].status, "needs-input");
+    }
+}
+
+// ===========================================================================
+// TaskSnapshot port (TaskPulse) — same heuristics, unified domain model.
+// ===========================================================================
+
+use crate::domain::{DetectionConfidence, TaskSnapshot, TaskStatus};
+
+/// Cross-validate hook file statuses against live scanner data, operating on
+/// the unified `TaskSnapshot` model.  Rules mirror `cross_validate`:
+/// - Never override FAILED or scanner-confirmed WAITING_INPUT.
+/// - Stale "running" hooks (file mtime > 30 s) with near-zero CPU → IDLE.
+/// - "idle"/"unknown" hooks with high CPU → RUNNING.
+/// - Stale non-genuine waits → IDLE (genuine waits are kept).
+pub fn cross_validate_tasks(tasks: &mut [TaskSnapshot], scanned: &[TaskSnapshot]) {
+    let now = std::time::SystemTime::now();
+
+    for task in tasks.iter_mut() {
+        // Only hook/file-backed agents are cross-validated (scan results are
+        // the reference data, never the subject).
+        if task.confidence != DetectionConfidence::Hook {
+            continue;
+        }
+        if task.is_agent_session() || task.turn_key.is_some() || task.hook_event.is_some() {
+            // Session/hook lifecycle is stronger than a shared terminal's CPU
+            // or title. A model request often consumes no local CPU at all.
+            continue;
+        }
+        if task.status == TaskStatus::Failed {
+            continue;
+        }
+        let Some(scan) = find_scanner_match_tasks(task, scanned) else {
+            continue;
+        };
+        let scan_cpu = scan.cpu.unwrap_or(0.0);
+        let age = now.duration_since(task.updated_at).unwrap_or_default();
+
+        // Scanner-detected waiting beats a stale hook "running"/"idle".
+        if scan.status == TaskStatus::WaitingInput && task.status != TaskStatus::WaitingInput {
+            task.status = TaskStatus::WaitingInput;
+            task.message = Some(
+                scan.message
+                    .clone()
+                    .filter(|m| !m.is_empty())
+                    .unwrap_or_else(|| "Waiting for input".to_string()),
+            );
+            continue;
+        }
+
+        match task.status {
+            TaskStatus::WaitingInput => {
+                if scan.status == TaskStatus::WaitingInput {
+                    continue;
+                }
+                let genuine = is_genuine_wait(task);
+                let stale = age > STALE_PERMISSION_TTL;
+                if !genuine && stale {
+                    task.status = TaskStatus::Idle;
+                    task.message = Some("Waiting for input".to_string());
+                } else if is_claude_permission_wait(task) && stale {
+                    task.status = if scan_cpu > LOW_CPU_THRESHOLD {
+                        TaskStatus::Running
+                    } else {
+                        TaskStatus::Idle
+                    };
+                    task.message = Some(if scan_cpu > LOW_CPU_THRESHOLD {
+                        "Running tool...".to_string()
+                    } else {
+                        "Waiting for input".to_string()
+                    });
+                }
+            }
+            TaskStatus::Running => {
+                if age > STALE_WORKING_TTL && scan_cpu < LOW_CPU_THRESHOLD {
+                    task.stale = true;
+                }
+            }
+            TaskStatus::Idle | TaskStatus::Unknown if scan_cpu > HIGH_CPU_THRESHOLD => {
+                task.status = TaskStatus::Running;
+                task.message = Some(format!("Active ({scan_cpu:.0}% CPU)"));
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Find the scanner-detected task matching a hook task: same CLI + focus_id
+/// first, else the single scanner result for that CLI.
+fn find_scanner_match_tasks<'a>(
+    task: &TaskSnapshot,
+    scanned: &'a [TaskSnapshot],
+) -> Option<&'a TaskSnapshot> {
+    let cli = task.cli.as_deref()?;
+    let focus_id = task
+        .terminal
+        .as_ref()
+        .map(|t| t.focus_id.as_str())
+        .unwrap_or("");
+
+    if !focus_id.is_empty() && focus_id != "0" {
+        if let Some(m) = scanned.iter().find(|s| {
+            s.cli.as_deref() == Some(cli)
+                && s.terminal
+                    .as_ref()
+                    .map(|t| t.focus_id == focus_id)
+                    .unwrap_or(false)
+        }) {
+            return Some(m);
+        }
+    }
+
+    let cli_matches: Vec<&TaskSnapshot> = scanned
+        .iter()
+        .filter(|s| s.cli.as_deref() == Some(cli))
+        .collect();
+    if cli_matches.len() == 1 {
+        return Some(cli_matches[0]);
+    }
+    None
+}
+
+fn is_claude_permission_wait(task: &TaskSnapshot) -> bool {
+    task.cli.as_deref() == Some("claude-code")
+        && matches!(
+            task.hook_matcher.as_deref(),
+            Some("permission_prompt" | "elicitation_dialog")
+        )
+}
+
+fn is_genuine_wait(task: &TaskSnapshot) -> bool {
+    match task.cli.as_deref() {
+        Some("claude-code") => matches!(
+            task.hook_matcher.as_deref(),
+            Some("permission_prompt" | "elicitation_dialog")
+        ),
+        Some("codex") => task.hook_event.as_deref() == Some("Stop"),
+        Some("gemini") => task.hook_event.as_deref() == Some("Notification"),
+        _ => false,
+    }
+}
+
+#[cfg(test)]
+mod snapshot_tests {
+    use super::*;
+    #[test]
+    fn structured_sessions_survive_long_cloud_thinking_and_shared_window_guesses() {
+        for source in [
+            crate::domain::TaskSource::Codex,
+            crate::domain::TaskSource::ClaudeCode,
+            crate::domain::TaskSource::Hermes,
+            crate::domain::TaskSource::DeepSeekHarness,
+        ] {
+            let mut task = hook_task(TaskStatus::Running, "codex", "shared", 3600);
+            task.source = source;
+            task.session_id = Some("native-session".into());
+            task.turn_key = Some("turn".into());
+            task.phase = Some(crate::domain::ExecutionPhase::Thinking);
+            for status in [TaskStatus::Idle, TaskStatus::WaitingInput] {
+                let mut tasks = vec![task.clone()];
+                cross_validate_tasks(&mut tasks, &[scan_task("codex", "shared", status, 0.0)]);
+                assert_eq!(tasks[0], task);
+            }
+        }
+    }
+    use crate::domain::TerminalInfo;
+    use std::time::SystemTime;
+
+    fn hook_task(status: TaskStatus, cli: &str, focus_id: &str, age_secs: u64) -> TaskSnapshot {
+        let mut t = TaskSnapshot::new(
+            "file:test",
+            "test",
+            crate::domain::TaskSource::LocalFile,
+            status,
+            DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        t.terminal = Some(TerminalInfo {
+            kind: "x11_generic".into(),
+            focus_id: focus_id.into(),
+            outer_id: String::new(),
+            label: "Terminal".into(),
+            window_title: None,
+        });
+        t.cli = Some(cli.to_string());
+        t.updated_at = SystemTime::now() - Duration::from_secs(age_secs);
+        t
+    }
+
+    fn scan_task(cli: &str, focus_id: &str, status: TaskStatus, cpu: f64) -> TaskSnapshot {
+        let mut t = TaskSnapshot::new(
+            "scan:pts/1",
+            "scan",
+            crate::domain::TaskSource::LocalFile,
+            status,
+            DetectionConfidence::Inferred,
+            SystemTime::now(),
+        );
+        t.terminal = Some(TerminalInfo {
+            kind: "x11_generic".into(),
+            focus_id: focus_id.into(),
+            outer_id: String::new(),
+            label: "Terminal".into(),
+            window_title: None,
+        });
+        t.cli = Some(cli.to_string());
+        t.cpu = Some(cpu);
+        t
+    }
+
+    #[test]
+    fn stale_running_hook_is_uncertain_not_finished() {
+        let mut tasks = vec![hook_task(TaskStatus::Running, "claude-code", "0x1234", 60)];
+        let scanned = vec![scan_task("claude-code", "0x1234", TaskStatus::Idle, 0.0)];
+        cross_validate_tasks(&mut tasks, &scanned);
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+        assert!(tasks[0].stale);
+    }
+
+    #[test]
+    fn fresh_running_hook_kept() {
+        let mut tasks = vec![hook_task(TaskStatus::Running, "claude-code", "0x1234", 0)];
+        let scanned = vec![scan_task("claude-code", "0x1234", TaskStatus::Idle, 0.0)];
+        cross_validate_tasks(&mut tasks, &scanned);
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+    }
+
+    #[test]
+    fn idle_hook_upgraded_on_high_cpu() {
+        let mut tasks = vec![hook_task(TaskStatus::Idle, "gemini", "0x5678", 0)];
+        let scanned = vec![scan_task("gemini", "0x5678", TaskStatus::Idle, 15.0)];
+        cross_validate_tasks(&mut tasks, &scanned);
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+    }
+
+    #[test]
+    fn failed_never_overridden() {
+        let mut tasks = vec![hook_task(TaskStatus::Failed, "codex", "0x1234", 60)];
+        let scanned = vec![scan_task("codex", "0x1234", TaskStatus::Running, 20.0)];
+        cross_validate_tasks(&mut tasks, &scanned);
+        assert_eq!(tasks[0].status, TaskStatus::Failed);
+    }
+
+    #[test]
+    fn scan_waiting_upgrades_stale_hook() {
+        let mut tasks = vec![hook_task(TaskStatus::Running, "codex", "0x1234", 0)];
+        let scanned = vec![scan_task("codex", "0x1234", TaskStatus::WaitingInput, 0.0)];
+        cross_validate_tasks(&mut tasks, &scanned);
+        assert_eq!(tasks[0].status, TaskStatus::WaitingInput);
+    }
+
+    #[test]
+    fn non_genuine_stale_wait_cleared() {
+        let mut tasks = vec![hook_task(
+            TaskStatus::WaitingInput,
+            "claude-code",
+            "0x1234",
+            120,
+        )];
+        let scanned = vec![scan_task("claude-code", "0x1234", TaskStatus::Idle, 0.0)];
+        cross_validate_tasks(&mut tasks, &scanned);
+        assert_eq!(tasks[0].status, TaskStatus::Idle);
+    }
+
+    #[test]
+    fn genuine_codex_stop_wait_kept() {
+        let mut t = hook_task(TaskStatus::WaitingInput, "codex", "0x1234", 90);
+        t.hook_event = Some("Stop".into());
+        let mut tasks = vec![t];
+        let scanned = vec![scan_task("codex", "0x1234", TaskStatus::Idle, 0.0)];
+        cross_validate_tasks(&mut tasks, &scanned);
+        assert_eq!(tasks[0].status, TaskStatus::WaitingInput);
     }
 }

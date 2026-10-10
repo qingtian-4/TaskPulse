@@ -10,9 +10,7 @@ pub fn spawn_silent(cmd: &str, args: &[&str]) -> Result<(), String> {
                 Err(format!("{} failed: {}", cmd, stderr.trim()))
             }
         }
-        Err(e) => {
-            Err(format!("{} not available: {}", cmd, e))
-        }
+        Err(e) => Err(format!("{} not available: {}", cmd, e)),
     }
 }
 

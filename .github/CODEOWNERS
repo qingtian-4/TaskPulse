@@ -1,17 +1,18 @@
 # CODEOWNERS — auto-request review from the right people.
 # https://docs.github.com/en/repositories/managing-your-repositorys-settings-and-features/customizing-your-repository/about-code-owners
 
-# Default: everything goes to the project maintainer
-*                           @rakeshdhote
+# TaskPulse maintainer. Upstream authors remain credited in LICENSE / history;
+# inherited authorship is not a request for them to maintain this repository.
+*                           @qingtian-4
 
 # Rust backend
-src-tauri/**                @rakeshdhote
+src-tauri/**                @qingtian-4
 
 # Frontend
-src/**                      @rakeshdhote
+src/**                      @qingtian-4
 
 # Scripts and hooks
-scripts/**                  @rakeshdhote
+scripts/**                  @qingtian-4
 
 # CI and GitHub config
-.github/**                  @rakeshdhote
+.github/**                  @qingtian-4

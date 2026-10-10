@@ -1,0 +1,6 @@
+{
+  "identifier": "management-close",
+  "description": "Permit the management close-request handler to finish a confirmed close",
+  "windows": ["management"],
+  "permissions": ["core:window:allow-destroy"]
+}

@@ -1,144 +1,95 @@
-# AgentTray
+# TaskPulse
 
-Desktop tray app that alerts you when Claude Code, Codex CLI, or Gemini CLI pauses for input.
+> 多个 coding agent 的任务状态和当前活动，一眼可见；结束或需要输入时主动提醒。
 
-[![GitHub Release](https://img.shields.io/github/v/release/sprklai/agenttray?style=flat-square&label=latest)](https://github.com/sprklai/agenttray/releases/latest)
-[![GitHub Downloads](https://img.shields.io/github/downloads/sprklai/agenttray/total?style=flat-square)](https://github.com/sprklai/agenttray/releases)
-[![License](https://img.shields.io/github/license/sprklai/agenttray?style=flat-square)](LICENSE)
-[![Built with Tauri](https://img.shields.io/badge/built_with-Tauri_2-24C8DB?style=flat-square&logo=tauri&logoColor=white)](https://tauri.app)
+同时开着几个 coding agent 时，反复切换对话查看有没有完成，会打断手头工作。TaskPulse 把本地和远程任务放在一个托盘面板：谁正在执行什么指令、谁等待输入、谁失败、哪些结果还没看。任务需要关注时弹出深色独立提醒，用户不必一直盯着窗口。
 
-I built AgentTray because I kept missing prompts from long-running agent sessions in another terminal. It sits in the tray, changes color when a session needs input, and opens a small popup with the sessions it can see. If your terminal exposes enough focus metadata, the popup can jump back to it.
+TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray)（MIT）的 Windows-first 桌面伴随工具，目前为 **alpha**。当前形态是独立托盘应用，尚不是可安装到所有 IDE/Agent 的通用插件。
 
-- Hook-based prompt alerts for Claude Code, Codex CLI, and Gemini CLI
-- Process scanning when hooks are not installed
-- Native desktop notifications plus a tray status dot
-- No daemon and no hosted backend; status files live in `~/.agent-monitor/`
+本仓库由 [qingtian-4](https://github.com/qingtian-4) 维护，独立演进为 TaskPulse；原始 AgentTray 的版权和 Git 提交历史保留。新增功能向本仓库的 `main` 提交 PR，不默认向上游提交。维护流程见 [Git 与 PR 入门](docs/GIT_WORKFLOW.md)。
 
-<p align="center">
-  <img src="assets/agenttray-demo.gif" alt="AgentTray demo" width="860" />
-</p>
-<p align="center">
-  <img src="assets/agenttray-screenshot.png" alt="AgentTray screenshot" width="400" />
-</p>
+## 与 AgentTray 的区别
 
-## Why It Exists
+上游已经具备多会话托盘、Claude Code / Codex CLI / Gemini CLI hooks、进程扫描、终端跳转和桌面通知。TaskPulse 复用这些基础，在其上增加：
 
-The problem is not whether AI CLIs can notify you at all. The problem is that long agent sessions disappear behind other work. Notifications stack up, get dismissed, or arrive when you are deep in another window.
+| 场景 | TaskPulse 扩展 |
+|---|---|
+| 多个桌面 Agent 的进程名难以对应真实任务 | Codex、Hermes、DeepSeek Harness 与 Claude Code 原生会话；项目名与任务名分开 |
+| 闲置历史掩盖需要关注的任务 | 任务优先面板：需处理 → 运行 → 结果待查看 → 固定空闲；隐藏后新 turn 自动回来 |
+| 工作同时在本机和服务器运行 | 独立来源管理窗口，按 Windows/WSL/SSH 实例启停；所有项目自动关注或指定范围，保存立即生效 |
+| 不想逐个点进去才知道在做什么 | 任务行显示当前指令/活动、状态和可获取的运行时长 |
+| 慢进程扫描、WSL 或 API 拖住其他 Agent | 独立采集线程，本机 Codex/Hermes/DeepSeek Desktop 1 秒兜底采集，WSL 2 秒；原生文件变化触发刷新 |
+| 完成通知重复或错误成功 | 每任务分别通知，去重跨重启保留；区分本轮结束与授权/确认阻塞；点击 Windows 通知定位详情 |
 
-What I wanted was something quieter than another popup and easier to trust at a glance than a stack of notifications.
+“进度”指 Agent 的当前状态和可观测活动。未提供步骤总数或完成比例的 Agent 不显示虚构百分比。支持范围、实测数据和剩余限制见 [版本审查](docs/RELEASE_READINESS.md)。
 
-## What It Does
+在系统托盘即可知道：谁在跑、谁在等用户输入、远端哪个任务还在跑、哪个刚结束、哪个服务器失联。只有明确提供的命令退出码才会显示；提醒默认使用独立 TaskPulse 弹窗，也可选择系统通知。
 
-| State        | Color                | Meaning                        |
-|--------------|----------------------|--------------------------------|
-| needs-input  | 🟡 Yellow            | Agent is waiting for user input — triggers beep + desktop notification |
-| error        | 🔴 Red               | Agent exited with non-zero code |
-| working      | 🔵 Blue              | Agent is actively processing    |
-| idle         | 🟢 Green             | Agent running, minimal CPU      |
-| offline      | ⚪ Gray              | No status file found            |
+[架构说明](docs/ARCHITECTURE.md)
 
-Hooks give AgentTray better state changes. Without hooks, it falls back to process scanning so you can still see active sessions.
+## 核心能力
 
-## Quick Start
+| 能力 | 说明 |
+|---|---|
+| 本地 Agent 状态 | hook > wrapper > scan 三层可靠性，沿用 AgentTray 机制（`~/.agent-monitor/` 兼容 + `~/.taskpulse/`） |
+| 远端 tmux 监控（自动） | 每 Host 每轮 1 条 SSH，并行轮询；进程树判定 workload；推断完成（无退出码时绝不标 SUCCEEDED） |
+| 远端 tmux 监控（精确） | `tp-run "label" -- python eval.py`：完整保留 stdio + 真实退出码 → SUCCEEDED/FAILED / EXACT |
+| 服务器健康 | SSH 失败保留状态（stale）→ 连续 3 次失败 → DISCONNECTED（带 last seen）；恢复自动回来 |
+| 数据源健康 | 本地 Provider 读取失败时保留上次状态并显示降级提示，不会把读取失败误判为任务结束 |
+| 通知 | 只在有意义迁移通知一次：等输入 / 成功 / 失败 / 推断完成 / 断连 / 恢复；可在监控窗口或托盘菜单测试 Windows 通知 |
+| 完成历史 | 完成任务保留在 RECENT 30 分钟并跨应用重启恢复（`~/.taskpulse/recent.json`） |
+| 托盘聚合 | FAILED > WAITING_INPUT > DISCONNECTED > RUNNING > SUCCEEDED/IDLE |
 
-The most reliable setup today is from source because the hook installers currently live in this repo.
+## 快速开始（Windows）
 
-### Full Setup With Hooks
-
-```bash
-git clone https://github.com/sprklai/agenttray.git
-cd agenttray
+```powershell
+# 前置：Rust（GNU/MSVC 均可）、bun、WebView2
+git clone https://github.com/qingtian-4/TaskPulse.git taskpulse
+cd taskpulse
 bun install
-./scripts/hooks/install-hooks.sh all
-cargo tauri dev
+bun run tauri dev
 ```
 
-Requirements:
+首次启动自动打开来源确认界面；确认发现的本机来源并保存，未确认前不开始采集，不自动连接远程服务器。之后可通过托盘菜单或 Ctrl+Shift+A 打开面板；快捷键冲突不影响托盘启动。管理窗口可以添加 SSH 来源、Windows DeepSeek、Claude Code 或 WSL 实例，选择所有项目的新执行或指定项目范围。新检测到的内置 Agent 会作为候选展示，保存后才启用，不自动导入空闲历史。旧配置保留原范围，首次保存创建迁移备份。完整交互见 [任务面板与来源管理](docs/PRODUCT_DASHBOARD.md)。
 
-- [Rust](https://rustup.rs/) stable
-- [Bun](https://bun.sh/)
-- Tauri CLI: `cargo install tauri-cli`
-- `jq` for `install-hooks.sh`
-- Ubuntu/Debian system packages:
-  ```bash
-  sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-  ```
+VS Code Remote–WSL / WSL CLI 中的 Codex 需单独启用“Codex · WSL”来源；Windows 的 Codex 来源不包含 Linux `.codex`。支持按发行版和 Linux 项目路径设置范围，使用真实侧栏标题、共享的增量状态解析，不自动唤醒停止的发行版。详见 [WSL Codex 接入](docs/WSL_CODEX.md)。
 
-### Prebuilt App Only
+管理窗口“通知与显示”或托盘菜单可发送明确标注的测试提醒，通知与声音分别开关。系统通知需要 Windows 允许通知；“请勿打扰”可能隐藏系统横幅。窗口关闭后采集和提醒继续运行。点击提醒打开对应 TaskPulse 详情；关闭提醒或聚焦项目窗口不代表已查看结果，请手动标记“已查看”。
 
-If you only want scan-based detection, download a build from the [releases page](https://github.com/sprklai/agenttray/releases/latest) and run it.
+Claude Code 默认只读观测 VS Code / CLI 会话，不读取 `*.key` 或代理凭据。C Switch 代理使用 DeepSeek 时，来源仍为 Claude Code，详情单独显示会话上报模型；这不证明代理背后的实际服务商。原生内部格式属于推断证据。如需精确生命周期，在来源编辑器选择“启用精确事件…”并另行确认：首次备份 Claude 配置，仅合并 TaskPulse Hook，保留 statusLine、其他 Hook 和代理设置，可撤销。支持边界与审查取舍见 [审查回应](docs/REVIEW_RESPONSE.md)。
 
-Hook installation is still script-based:
+开发者可运行已构建的 `agent-tray.exe --diagnose`，用同一套采集线程采样 10 秒，输出任务标题、状态、采集次数和耗时（不包含提示词与指令正文）。`--test-notification` 会发送一次真实系统通知并返回 API 结果。
 
-- Unix: `./scripts/hooks/install-hooks.sh all`
-- Windows: `.\scripts\hooks\install-hooks.ps1 -Target all`
+远端安装精确模式包装：
 
-## Compatibility
+```bash
+# 在需要监控的远程服务器上
+install -m 755 scripts/tp-run ~/.local/bin/tp-run
+```
 
-| Area | Current status |
-| --- | --- |
-| Supported CLIs | Claude Code, Codex CLI, Gemini CLI |
-| Hook-based updates | Supported for all three CLIs |
-| Scan-based detection | Supported for all three CLIs |
-| Linux | Used most during development |
-| macOS | Supported in code, less tested than Linux |
-| Windows | Supported in code, less tested than Linux |
-| Terminal focus | Works for supported terminals and multiplexers; otherwise monitoring still works without focus |
+## 文档
 
-Detailed matrix: [docs/compatibility.md](docs/compatibility.md)
+- [架构审计（复用/修改/替换/不复制 + License）](docs/ARCHITECTURE_AUDIT.md)
+- [架构总览（Provider → Store → Transition → Tray）](docs/ARCHITECTURE.md)
+- [远端 tmux：自动推断 vs tp-run 精确模式](docs/REMOTE_TMUX.md)
+- [本地 Agent：hook/wrap/scan 与状态映射](docs/LOCAL_AGENTS.md)
+- [开发：工具链、测试、已知限制](docs/DEVELOPMENT.md)
 
-## Use Cases
+## 语义红线
 
-- Monitor a long Codex run while working in another window
-- See when Claude Code is waiting on permission or input
-- Keep multiple agent sessions visible across terminals
-- Wrap an unsupported CLI and still get file-based status updates
+- Agent turn 完成 = `WAITING_INPUT`，不是 `SUCCEEDED`。
+- 外部命令只有真实退出码才能标记 SUCCEEDED/FAILED；Agent 原生明确失败事件可标记 FAILED，但不编造退出码。
+- SSH 超时 ≠ 任务完成。
+- 不存凭据（走系统 ssh + ~/.ssh/config）；不 OCR；不读 pane 内容；无云端。
 
-Examples: [docs/use-cases.md](docs/use-cases.md)
+## 技术栈
 
-## FAQ
+Tauri 2 · Rust · Svelte 5 / SvelteKit · TypeScript · Tailwind 4
 
-### Why not just rely on built-in notifications?
+## Dynamic attention list
 
-Because notifications disappear. The tray does not.
-
-### Does AgentTray send my prompts anywhere?
-
-No. AgentTray watches local status files in `~/.agent-monitor/` and local process metadata. There is no hosted service in the current setup.
-
-### Do I need hooks?
-
-No. Hooks work better, but they are optional. Without them, AgentTray still detects running agent processes and basic state changes via scanning.
-
-### What if my CLI is not supported?
-
-You can use the wrapper scripts documented in [scripts/README.md](scripts/README.md) to report file-based status for custom or unsupported commands.
-
-## Current Limitations
-
-- Linux is still the platform used most during development.
-- Hook installation is script-first today, not yet a polished in-app onboarding flow.
-- Terminal focus depends on the terminal or multiplexer exposing enough metadata to target the right session.
-
-## Docs
-
-- [Compatibility matrix](docs/compatibility.md)
-- [Use cases](docs/use-cases.md)
-- [Script usage](scripts/README.md)
-- [Contributing](CONTRIBUTING.md)
-- [Security policy](SECURITY.md)
-
-## Contributing
-
-If you want to help, the biggest gaps right now are:
-
-- new CLI hook integrations
-- more terminal focusers
-- macOS and Windows validation
-- onboarding and docs polish
-
-Start with [CONTRIBUTING.md](CONTRIBUTING.md) and the open [`help wanted`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22) or [`good first issue`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22good+first+issue%22) labels.
+Task/session visibility, native-title sources, fallback behavior, and project/server/tmux scope configuration are documented in [docs/ATTENTION_LIST.md](docs/ATTENTION_LIST.md).
 
 ## License
 
-MIT
+MIT。TaskPulse 派生自 [AgentTray](https://github.com/sprklai/agenttray)（MIT, © sprklai）——保留原作者版权与授权。参考项目：AgentMonitor、tmux-monitor、tmux-agent、tmux-notify（均为 MIT，仅参考未 vendoring）。

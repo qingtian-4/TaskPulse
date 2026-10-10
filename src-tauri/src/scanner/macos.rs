@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::watcher::TerminalInfo;
-use super::{known_terminal, ProcInfo, WindowCache};
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
+use super::{known_terminal, ProcInfo, WindowCache};
+use crate::watcher::TerminalInfo;
 
 /// Find CLI processes matching any registered strategy.
 /// Also returns a pid→ppid map for ALL processes (used for transitive
@@ -41,9 +41,9 @@ pub fn find_cli_processes<'a>(
             .unwrap_or("");
 
         // Phase 1: Direct exe_name match (native binaries like "claude")
-        let strategy = strategies.iter().find(|s| {
-            s.process_names().iter().any(|n| *n == exe_name)
-        });
+        let strategy = strategies
+            .iter()
+            .find(|s| s.process_names().iter().any(|n| *n == exe_name));
 
         // Phase 2: If argv[0] is a script runtime (node, bun, etc.),
         // check remaining args for script names (e.g., "gemini", "codex")
@@ -61,9 +61,9 @@ pub fn find_cli_processes<'a>(
                         .file_name()
                         .and_then(|n| n.to_str())
                         .unwrap_or("");
-                    strategies.iter().find(|s| {
-                        s.script_names().iter().any(|n| *n == arg_name)
-                    })
+                    strategies
+                        .iter()
+                        .find(|s| s.script_names().iter().any(|n| *n == arg_name))
                 }) {
                     Some(s) => s.as_ref(),
                     None => continue,
@@ -72,7 +72,11 @@ pub fn find_cli_processes<'a>(
         };
 
         let full_cmd = parts[4..].join(" ");
-        if strategy.excluded_substrings().iter().any(|exc| full_cmd.contains(exc)) {
+        if strategy
+            .excluded_substrings()
+            .iter()
+            .any(|exc| full_cmd.contains(exc))
+        {
             continue;
         }
 
@@ -97,17 +101,20 @@ pub fn find_cli_processes<'a>(
             continue; // skip non-terminal processes
         }
 
-        out.push((ProcInfo {
-            pid,
-            ppid,
-            cwd,
-            tty_label,
-            utime: 0,
-            stime: 0,
-            instant_cpu: Some(cpu),
-            window_title: None,
-            last_active: None,
-        }, strategy));
+        out.push((
+            ProcInfo {
+                pid,
+                ppid,
+                cwd,
+                tty_label,
+                utime: 0,
+                stime: 0,
+                instant_cpu: Some(cpu),
+                window_title: None,
+                last_active: None,
+            },
+            strategy,
+        ));
     }
 
     (out, ppid_map)
@@ -154,8 +161,7 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
         cache
             .entry(term_pid)
             .or_insert_with(|| {
-                tty_window_title(&term_app, tty)
-                    .or_else(|| osascript_window_title(term_pid))
+                tty_window_title(&term_app, tty).or_else(|| osascript_window_title(term_pid))
             })
             .clone()
     } else {
@@ -249,7 +255,11 @@ fn tty_window_title(app_name: &str, tty: &str) -> Option<String> {
         .output()
         .ok()?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 fn osascript_window_title(term_pid: u32) -> Option<String> {
@@ -263,7 +273,11 @@ fn osascript_window_title(term_pid: u32) -> Option<String> {
         .output()
         .ok()?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() { None } else { Some(name) }
+    if name.is_empty() {
+        None
+    } else {
+        Some(name)
+    }
 }
 
 /// Read a single environment variable from a running process.
@@ -276,6 +290,7 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
         .ok()?;
     let stdout = String::from_utf8_lossy(&output.stdout);
     let prefix = format!("{}=", key);
-    stdout.split_whitespace()
+    stdout
+        .split_whitespace()
         .find_map(|token| token.strip_prefix(&prefix).map(str::to_string))
 }

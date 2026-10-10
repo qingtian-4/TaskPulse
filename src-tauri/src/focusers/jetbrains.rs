@@ -1,6 +1,5 @@
-/// Focus a JetBrains IDE terminal window.
-/// Falls back to platform-specific window activation.
-
+//! Focus a JetBrains IDE terminal window.
+//! Falls back to platform-specific window activation.
 pub fn focus(_focus_id: &str, _outer_id: &str) -> Result<(), String> {
     #[cfg(target_os = "macos")]
     {
@@ -45,9 +44,17 @@ pub fn focus(_focus_id: &str, _outer_id: &str) -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         // Try wmctrl with JetBrains window class patterns
-        let classes = ["jetbrains-idea", "jetbrains-pycharm", "jetbrains-webstorm",
-                       "jetbrains-goland", "jetbrains-clion", "jetbrains-phpstorm",
-                       "jetbrains-rubymine", "jetbrains-rider", "jetbrains-datagrip"];
+        let classes = [
+            "jetbrains-idea",
+            "jetbrains-pycharm",
+            "jetbrains-webstorm",
+            "jetbrains-goland",
+            "jetbrains-clion",
+            "jetbrains-phpstorm",
+            "jetbrains-rubymine",
+            "jetbrains-rider",
+            "jetbrains-datagrip",
+        ];
 
         for class in &classes {
             if super::os_helpers::spawn_silent("wmctrl", &["-xa", class]).is_ok() {

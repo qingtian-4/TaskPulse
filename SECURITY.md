@@ -4,13 +4,22 @@
 
 | Version | Supported          |
 |---------|--------------------|
-| 0.1.x   | Yes                |
+| Current `main` (alpha) | Best effort; no supported stable release yet |
 
 ## Reporting a Vulnerability
 
 **Do not open a public issue for security vulnerabilities.**
 
-Please email **aisprkl@gmail.com** with:
+TaskPulse is maintained by [qingtian-4](https://github.com/qingtian-4), independently
+of AgentTray. Do not send TaskPulse reports to AgentTray's original maintainers.
+
+Use this repository's **Security → Report a vulnerability** private channel if
+available. If private reporting has not been enabled, ask the maintainer to
+provide a private channel; a public issue may request contact, but must contain
+**no exploit details, credentials, personal data or sensitive logs**. No private
+email address is published here without the maintainer's explicit choice.
+
+Include the following only in the agreed private report:
 
 1. A description of the vulnerability
 2. Affected version or commit
@@ -18,14 +27,12 @@ Please email **aisprkl@gmail.com** with:
 4. Potential impact assessment
 5. Any suggested fixes (optional)
 
-This email address is the current reporting channel for the project.
-
 ## Response Timeline
 
-- **Acknowledgment**: Within 48 hours
-- **Initial assessment**: Within 7 days
-- **Fix timeline**: Within 90 days of confirmed report
-- **Public disclosure**: After fix is released, coordinated with reporter
+This alpha project has no guaranteed response or fix SLA. The maintainer will
+assess reports on a best-effort basis and coordinate disclosure after a fix.
+Enable and verify a private reporting channel before presenting a stable release
+as security-supported.
 
 ## What Qualifies as a Security Issue
 

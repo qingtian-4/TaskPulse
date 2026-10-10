@@ -1,111 +1,70 @@
-# Contributing to AgentTray
+# Contributing to TaskPulse
 
-AgentTray is still early. The best contributions are the ones that make the app work better in real use, not the ones that add the most code.
+TaskPulse is an alpha, Windows-first Tauri 2 tray companion for coding-agent tasks.
+Read [AGENTS.md](AGENTS.md) for the current development contract. Preserve other
+platforms where practical, but do not claim untested paths are supported.
 
-## Fast Local Setup
+## Local setup
 
-```bash
-git clone https://github.com/<your-username>/agenttray.git
-cd agenttray
+Install Rust, Bun, [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
+and Windows WebView2:
+
+```powershell
 bun install
-cargo tauri dev
+bun run tauri dev
 ```
 
-Prerequisites:
+First launch asks which detected sources to monitor. Discovery does not modify
+Agent settings. Never copy the maintainer's servers or projects into defaults.
+The executable name `agent-tray` remains for compatibility.
 
-- Rust stable via [rustup](https://rustup.rs/)
-- [Bun](https://bun.sh/)
-- Tauri CLI: `cargo install tauri-cli`
-- Ubuntu/Debian packages:
-  ```bash
-  sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
-  ```
+## Verification
 
-## Good Places to Help
+While the Windows tray is running:
 
-### Add CLI Hook Support
-
-The hook bridge lives in `scripts/hooks/agent-tray-hook.sh` and `scripts/hooks/install-hooks.sh`.
-
-Typical work:
-
-1. Add CLI detection in `detect_cli()`
-2. Map hook events to `working`, `needs-input`, `idle`, or `error`
-3. Add installer logic that merges AgentTray hooks into that CLI's settings
-
-Good starting issues: [#7 Aider](https://github.com/sprklai/agenttray/issues/7), [#8 Amp](https://github.com/sprklai/agenttray/issues/8)
-
-### Add Terminal Focus Support
-
-Terminal focusers live in `src-tauri/src/focusers/`.
-
-Typical work:
-
-1. Add `src-tauri/src/focusers/<terminal>.rs`
-2. Detect that terminal in the focus pipeline
-3. Wire the new focuser into the dispatcher
-
-Templates: `kitty.rs`, `tmux.rs`, `wezterm.rs`
-
-### Validate Platforms and Onboarding
-
-This helps a lot right now.
-
-- Validate the current macOS or Windows path
-- Tighten setup docs where the first-run experience is unclear
-- Improve screenshots, demos, and compatibility notes
-
-## Architecture Pointers
-
-- `scripts/hooks/` installs hooks and translates CLI events into local status files
-- `scripts/wrap.sh` and `scripts/wrap.ps1` are the fallback path for unsupported CLIs
-- `src-tauri/src/scanner/strategies/` detects Claude Code, Codex CLI, and Gemini processes
-- `src-tauri/src/focusers/` contains terminal and IDE focus implementations
-- `src-tauri/src/watcher.rs` watches `~/.agent-monitor/` and emits UI updates
-- `src/routes/+page.svelte` renders the popup list
-
-## Quality Bar
-
-Run the checks that match your change before opening a PR:
-
-```bash
-cargo test --manifest-path src-tauri/Cargo.toml
-cargo clippy --manifest-path src-tauri/Cargo.toml -- -D warnings
-cargo fmt --manifest-path src-tauri/Cargo.toml --check
-bun run check
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
+bun run test:ui-model
 ```
 
-Expectations:
+The isolated target avoids linking over the live executable. Elsewhere, run Cargo
+fmt/clippy/tests/build with `--manifest-path src-tauri/Cargo.toml` and
+`--bin agent-tray`, followed by `bun run check` and `bun run build`.
 
-- add or update tests for behavior changes
-- update docs when user-facing behavior changes
-- keep PRs scoped to one logical change
-- do not force-push during review
+Provider changes need real-source validation when available. Opt-in tests
+`live_remote_snapshot` and `live_claude_snapshot` require SSH/local data and are not
+unattended CI tests. UI changes need real Tauri/WebView2 acceptance:
+`scripts/native-ui-smoke.ts` and `scripts/native-notice-smoke.ts`. Disable temporary
+CDP after testing; do not mark user tasks viewed or send real Agent prompts for tests.
 
-## Claiming Work
+## Adding an Agent adapter
 
-Browse the open [`help wanted`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22help+wanted%22) and [`good first issue`](https://github.com/sprklai/agenttray/issues?q=is%3Aopen+label%3A%22good+first+issue%22) labels.
+- Implement a Provider and a source-registry kind.
+- Discover an actual installed/data-backed candidate; require confirmation to enable.
+- Use stable session IDs; keep project, native/manual title and reported model separate.
+- Add file watches where supported and independent polling fallback.
+- Read/network failure retains stale state; disappearance never implies success.
+- Prefer official events; undocumented native formats are best-effort evidence.
+- Hook installation is opt-in, reversible and preserves unknown config fields.
+- Test rename, append/truncation, new turns, unread/pinned state, scope exclusions,
+  malformed data and notification deduplication.
 
-To claim an issue, comment `/assign`.
+Pipeline: Provider → TaskStore → AttentionTracker → TransitionEngine → UI/alerts.
+The dashboard is an attention list, not a historical-session browser. Unknown
+Agents may use the generic wrapper/status protocol; detecting a process alone
+cannot supply reliable task titles or lifecycle boundaries.
 
-For larger changes, open an issue first so the direction is clear before implementation.
+## Changes and license
 
-## Commit and PR Guidance
+The canonical repository is `qingtian-4/TaskPulse`; target `main` for TaskPulse
+pull requests, not AgentTray's upstream. Develop on a short-lived topic branch,
+push that branch, describe and review the PR, pass the Windows quality workflow,
+then merge. A push is not a merge. The initial TaskPulse integration uses a
+merge commit to preserve upstream and fork-development history. Never rewrite
+someone else's author metadata to change the contributors display. See
+[Git / PR workflow](docs/GIT_WORKFLOW.md) for the maintainer's Chinese guide.
 
-- Use imperative commit subjects
-- Keep the subject line under 72 characters
-- Do not mix unrelated changes in one commit
-- Include motivation, behavior change, and test notes in the PR description
-- Call out breaking changes explicitly
-
-Examples:
-
-```text
-Add Gemini CLI hook detection
-Fix popup not closing on focus loss
-Update docs for Windows hook installation
-```
-
-## License
-
-By contributing to AgentTray, you agree that your contributions will be licensed under the [MIT License](LICENSE).
+Keep changes scoped and include tests and documentation. Describe migrations and
+compatibility limits. Never publish credentials or machine-specific fixtures.
+Do not force-push during review. Contributions use the [MIT License](LICENSE);
+retain AgentTray attribution.

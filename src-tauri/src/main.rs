@@ -1,10 +1,19 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod attention;
+mod claude_integration;
+mod domain;
 mod focus;
 mod focusers;
 mod heuristics;
+mod history;
+mod monitoring;
 mod notifier;
+mod providers;
 mod scanner;
+mod store;
+mod task_notice;
+mod transition;
 mod tray;
 mod watcher;
 
@@ -14,6 +23,27 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if std::env::args().any(|arg| arg == "--claude-event") {
+        if let Err(error) = claude_integration::receive_event() {
+            log::warn!("TaskPulse event bridge: {error}");
+        }
+        // Monitoring must never block or inject context into the Agent.
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--diagnose") {
+        watcher::diagnose();
+        return;
+    }
+    if std::env::args().any(|arg| arg == "--test-notification") {
+        match notifier::send_test_notification("app.taskpulse.desktop") {
+            Ok(()) => println!("Notification accepted by the native Windows/desktop API."),
+            Err(error) => {
+                eprintln!("Notification failed: {error}");
+                std::process::exit(1);
+            }
+        }
+        return;
+    }
 
     // Log panics from any thread before the process aborts (release uses panic=abort)
     let default_hook = std::panic::take_hook();
@@ -33,28 +63,40 @@ fn main() {
         )
         .setup(|app| {
             let handle = app.handle().clone();
+            let first_setup = !monitoring::initialize().onboarding_complete;
 
             // Spawn watcher on a dedicated OS thread (blocking loop)
             let h_watch = handle.clone();
             std::thread::spawn(move || watcher::watch(h_watch));
 
-
             // Build tray menu (required for AppIndicator on GNOME to show icon;
             // GNOME AppIndicator does NOT support direct click events — only menu)
             let h_show = handle.clone();
             let h_hide = handle.clone();
-            let show_item = MenuItem::with_id(app, "show", "Show", true, None::<&str>)?;
-            let pin_item = MenuItem::with_id(app, "pin", "Pin", true, None::<&str>)?;
-            let hide_item = MenuItem::with_id(app, "hide", "Hide", true, None::<&str>)?;
+            let show_item = MenuItem::with_id(app, "show", "显示任务面板", true, None::<&str>)?;
+            let pin_item = MenuItem::with_id(app, "pin", "固定任务面板", true, None::<&str>)?;
+            let hide_item = MenuItem::with_id(app, "hide", "隐藏任务面板", true, None::<&str>)?;
+            let test_notification_item =
+                MenuItem::with_id(app, "test-notification", "发送测试提醒", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
-            let quit_item = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show_item, &pin_item, &hide_item, &separator, &quit_item])?;
+            let quit_item = MenuItem::with_id(app, "quit", "退出 TaskPulse", true, None::<&str>)?;
+            let menu = Menu::with_items(
+                app,
+                &[
+                    &show_item,
+                    &pin_item,
+                    &hide_item,
+                    &test_notification_item,
+                    &separator,
+                    &quit_item,
+                ],
+            )?;
 
             TrayIconBuilder::with_id("main")
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
                     "../icons/tray-offline.png"
                 ))?)
-                .tooltip("AgentTray")
+                .tooltip("TaskPulse")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event({
@@ -63,6 +105,15 @@ fn main() {
                         "show" => tray::toggle_popup(&h_show),
                         "pin" => tray::pin_popup(&h_pin),
                         "hide" => tray::hide_popup(&h_hide),
+                        "test-notification" => {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) = notifier::test_notification(handle, None).await
+                                {
+                                    log::error!("Test notification failed: {error}");
+                                }
+                            });
+                        }
                         "quit" => app.exit(0),
                         _ => {}
                     }
@@ -92,13 +143,48 @@ fn main() {
                     })
                     .build(),
             )?;
-            app.global_shortcut().register(shortcut)?;
+            if let Err(error) = app.global_shortcut().register(shortcut) {
+                log::warn!("Ctrl+Shift+A unavailable; use the tray icon: {error}");
+            }
+
+            // Useful for first launch and desktop smoke verification.
+            if first_setup || std::env::args().any(|arg| arg == "--show") {
+                tray::show_popup(app.handle());
+            }
 
             Ok(())
         })
-        .invoke_handler(tauri::generate_handler![focus::focus_terminal, watcher::get_agents, watcher::get_status_dir, watcher::install_hooks, tray::toggle_pin, tray::close_popup])
+        .invoke_handler(tauri::generate_handler![
+            focus::focus_terminal,
+            watcher::get_agents,
+            watcher::get_archived_attention,
+            watcher::get_hosts,
+            watcher::get_providers,
+            providers::codex::get_codex_quota,
+            watcher::request_refresh,
+            watcher::get_status_dir,
+            watcher::update_task_attention,
+            watcher::open_task,
+            watcher::get_selected_task,
+            monitoring::get_monitoring_settings,
+            monitoring::get_monitoring_error,
+            monitoring::save_monitoring_settings,
+            monitoring::discover_sources,
+            monitoring::list_discovered_sessions,
+            watcher::install_hooks,
+            claude_integration::configure_claude_events,
+            notifier::test_notification,
+            notifier::get_notification_error,
+            task_notice::get_task_notice,
+            task_notice::dismiss_task_notice,
+            task_notice::open_task_notice,
+            tray::toggle_pin,
+            tray::get_pinned,
+            tray::open_management,
+            tray::close_popup
+        ])
         .build(tauri::generate_context!())
-        .expect("AgentTray failed to build")
+        .expect("TaskPulse failed to build")
         .run(|_app, event| {
             // Prevent exit when the last window is hidden — this is a tray-only app.
             // Only block window-close exits (code == None), not explicit quit (code == Some).
