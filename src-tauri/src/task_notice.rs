@@ -10,8 +10,8 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWi
 
 use crate::domain::{TaskSnapshot, TaskSource};
 
-const NOTICE_WIDTH: f64 = 400.0;
-const NOTICE_HEIGHT: f64 = 180.0;
+const NOTICE_WIDTH: f64 = 320.0;
+const NOTICE_HEIGHT: f64 = 132.0;
 const NOTICE_MARGIN: f64 = 16.0;
 
 /// Presentation fields are separate: native task titles may themselves contain ` · `.
@@ -223,10 +223,13 @@ fn publish(app: &AppHandle) {
         let result =
             WebviewWindowBuilder::new(&app, "task-notice", WebviewUrl::App("notice/".into()))
                 .title("TaskPulse · 任务提醒")
-                .background_color(tauri::webview::Color(255, 255, 255, 255))
+                .transparent(true)
+                .background_color(tauri::webview::Color(0, 0, 0, 0))
                 .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
                 .decorations(false)
-                .shadow(true)
+                // Native Windows shadows add a white frame to undecorated windows.
+                // Match the dashboard's transparent, CSS-rounded dark surface instead.
+                .shadow(false)
                 .resizable(false)
                 .skip_taskbar(true)
                 .always_on_top(true)
@@ -305,9 +308,9 @@ mod tests {
     }
     #[test]
     fn placement_respects_work_area_dpi_and_negative_monitor_origin() {
-        assert_eq!(corner_position(0, 0, 1920, 1040, 1.0), (1504, 844));
-        assert_eq!(corner_position(-1920, 0, 1920, 1040, 1.5), (-624, 746));
-        assert_eq!(corner_position(0, 0, 320, 160, 1.0), (0, 0));
+        assert_eq!(corner_position(0, 0, 1920, 1040, 1.0), (1584, 892));
+        assert_eq!(corner_position(-1920, 0, 1920, 1040, 1.5), (-504, 818));
+        assert_eq!(corner_position(0, 0, 300, 130, 1.0), (0, 0));
     }
 
     #[test]

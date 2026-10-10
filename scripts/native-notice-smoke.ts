@@ -45,8 +45,8 @@ try{
   if(!first.current?.test || first.current.task_id!==null)throw Error('Test created fake monitored task');
   const focusPreserved=await root.invoke('plugin:window|is_focused',{label:'popup'});
   if(!focusPreserved)throw Error('Alert stole dashboard focus');
-  const layout=await alert.evaluate(`(()=>{const p=document.querySelector('.notice-window');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,background:getComputedStyle(p).backgroundColor,overflow:document.documentElement.scrollWidth>400||document.documentElement.scrollHeight>180,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)};})()`);
-  if(layout.width>400.1||layout.height>180.1||layout.background!=='rgb(255, 255, 255)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
+  const layout=await alert.evaluate(`(()=>{const p=document.querySelector('.notice-window');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,background:getComputedStyle(p).backgroundColor,overflow:document.documentElement.scrollWidth>320||document.documentElement.scrollHeight>132,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)};})()`);
+  if(layout.width!==320||layout.height!==132||layout.background!=='rgb(26, 27, 30)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
   const name=await alert.evaluate(`document.querySelector('.heading')?.textContent`);
   if(name!==first.current.context?.task_name)throw Error('Native task title not used as message heading');
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:50,y:90});
@@ -92,8 +92,8 @@ try{
   await alert.wait(`document.querySelector('.message')?.disabled===false`);
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:100,y:80});
   await Bun.sleep(200);
-  const longTitleLayout=await alert.evaluate(`(()=>{const title=document.querySelector('.heading');const summary=document.querySelector('.summary');const footer=document.querySelector('footer');const sender=document.querySelector('.sender');return {headingHeight:title.getBoundingClientRect().height,summaryBottom:summary.getBoundingClientRect().bottom,footerTop:footer.getBoundingClientRect().top,fullTitle:title.title,senderTitle:sender.title,overflow:document.documentElement.scrollWidth>400||document.documentElement.scrollHeight>180};})()`);
-  if(longTitleLayout.headingHeight>42.1||longTitleLayout.summaryBottom>longTitleLayout.footerTop||longTitleLayout.overflow||!longTitleLayout.senderTitle.includes('Test-server'))throw Error('Long title layout regression: '+JSON.stringify(longTitleLayout));
+  const longTitleLayout=await alert.evaluate(`(()=>{const title=document.querySelector('.heading');const summary=document.querySelector('.summary');const footer=document.querySelector('footer');const sender=document.querySelector('.sender');return {headingHeight:title.getBoundingClientRect().height,summaryBottom:summary.getBoundingClientRect().bottom,footerTop:footer.getBoundingClientRect().top,fullTitle:title.title,senderTitle:sender.title,buttonsInside:[...document.querySelectorAll('.actions button,.close')].every(b=>{const r=b.getBoundingClientRect();return r.left>=0&&r.right<=320&&r.top>=0&&r.bottom<=132;}),overflow:document.documentElement.scrollWidth>320||document.documentElement.scrollHeight>132};})()`);
+  if(longTitleLayout.headingHeight>36.1||longTitleLayout.summaryBottom>longTitleLayout.footerTop||!longTitleLayout.buttonsInside||longTitleLayout.overflow||!longTitleLayout.senderTitle.includes('Test-server'))throw Error('Long title layout regression: '+JSON.stringify(longTitleLayout));
   await Bun.write(out+'/native-long-title-notice.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   // Real pointer input exercises the message-card hit target, not just DOM.click().
   phase='message pointer click';
@@ -107,7 +107,7 @@ try{
   if(after.some((t:any)=>t.id==='notification-test'))throw Error('Test polluted attention');
   for(const old of before.filter((t:any)=>t.unread)){const next=after.find((t:any)=>t.id===old.id);if(next && !next.unread)throw Error('Alert dismissed unread task state');}
   if(root.errors.length||alert.errors.length)throw Error('Native console/CSP error: '+[...root.errors,...alert.errors].join(';'));
-  const result={passed:true,layout,longTitleLayout,focusPreserved,autoDismissMs,checks:['actual completion/failure/approval windows rendered','native task title is primary heading','compact light card and long title layout','message card pointer click opens dashboard','separate queued alerts','late callback safe','hover pauses timer','view details opens dashboard','15s auto-hide','master off clears popup','no fake task or viewed-state mutations','no native console/CSP errors'],notVerified:['fresh real Agent task finish during acceptance','OS system banner delivery']};
+  const result={passed:true,layout,longTitleLayout,focusPreserved,autoDismissMs,checks:['actual completion/failure/approval windows rendered','native task title is primary heading','narrow dark strip and long title layout','action buttons inside compact window','message card pointer click opens dashboard','separate queued alerts','late callback safe','hover pauses timer','view details opens dashboard','15s auto-hide','master off clears popup','no fake task or viewed-state mutations','no native console/CSP errors'],notVerified:['fresh real Agent task finish during acceptance','OS system banner delivery']};
   await Bun.write(out+'/native-notice-result.json',JSON.stringify(result,null,2));
   console.log(JSON.stringify(result));
 }catch(error){
