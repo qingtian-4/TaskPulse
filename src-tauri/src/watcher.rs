@@ -105,6 +105,7 @@ impl From<AgentStatus> for TaskSnapshot {
             project: None,
             message: (!a.message.is_empty()).then_some(a.message),
             activity: None,
+            phase: None,
             started_at: None,
             updated_at: a.mtime.unwrap_or(now),
             finished_at: None,
@@ -1379,6 +1380,7 @@ pub fn diagnose() {
                 "id": task.id, "name": task.name, "project": task.project,
                 "source": task.source, "status": task.status, "stale": task.stale,
                 "has_activity": task.activity.is_some(),
+                "phase": task.phase, "turn": task.turn_key,
             })
         })
         .collect();

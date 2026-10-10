@@ -359,6 +359,7 @@ impl CodexProvider {
         task.updated_at = host.updated_at;
         task.message = host.last_message.clone();
         task.activity = host.activity.clone();
+        task.phase = host.phase;
         task.turn_key = host.turn_key.clone();
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
@@ -407,6 +408,8 @@ pub struct SessionState {
     pub project: Option<String>,
     pub last_message: Option<String>,
     pub activity: Option<String>,
+    pub phase: Option<crate::domain::ExecutionPhase>,
+    active_tools: std::collections::BTreeMap<String, String>,
     pub session_id: String,
     pub turn_key: Option<String>,
     pub first_user_message: Option<String>,
@@ -788,6 +791,8 @@ fn apply_codex_rollout(
         mut updated_at,
         mut last_message,
         mut activity,
+        mut phase,
+        mut active_tools,
         mut session_id,
         mut turn_key,
         mut first_user_message,
@@ -804,6 +809,8 @@ fn apply_codex_rollout(
         updated_at: now,
         last_message: None,
         activity: None,
+        phase: None,
+        active_tools: Default::default(),
         session_id: default_session_id.into(),
         turn_key: None,
         first_user_message: None,
@@ -860,6 +867,8 @@ fn apply_codex_rollout(
                 input_request_id = None;
                 started_at = ts;
                 activity = None;
+                active_tools.clear();
+                phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -874,6 +883,8 @@ fn apply_codex_rollout(
                     started_at = ts;
                     turn_key = value_timestamp_key(ts);
                     activity = None;
+                    active_tools.clear();
+                    phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 }
                 status = TaskStatus::Running;
                 if let Some(t) = ts {
@@ -889,15 +900,39 @@ fn apply_codex_rollout(
                     turn_key = value_timestamp_key(ts);
                 }
             }
-            "agent_message" => {
+            "agent_message" | "message"
+                if ptype == "agent_message"
+                    || payload.get("role").and_then(|v| v.as_str()) == Some("assistant") =>
+            {
                 if status != TaskStatus::WaitingInput {
                     status = TaskStatus::Running;
                 }
                 if let Some(t) = ts {
                     updated_at = t;
                 }
-                if let Some(msg) = payload.get("message").and_then(|v| v.as_str()) {
+                if let Some(msg) = payload.get("message").and_then(|v| v.as_str()).or_else(|| {
+                    payload
+                        .get("content")
+                        .and_then(|v| v.as_array())
+                        .and_then(|items| {
+                            items
+                                .iter()
+                                .find_map(|item| item.get("text").and_then(|v| v.as_str()))
+                        })
+                }) {
                     last_message = Some(truncate(msg, 120));
+                }
+                if active_tools.is_empty() && status == TaskStatus::Running {
+                    phase = Some(crate::domain::ExecutionPhase::Responding);
+                }
+            }
+            "reasoning" | "agent_reasoning" | "agent_reasoning_raw_content" => {
+                if status == TaskStatus::Running && active_tools.is_empty() {
+                    phase = Some(crate::domain::ExecutionPhase::Thinking);
+                    activity = None;
+                    if let Some(t) = ts {
+                        updated_at = t;
+                    }
                 }
             }
             "token_count" => {
@@ -934,6 +969,13 @@ fn apply_codex_rollout(
                     updated_at = t;
                 }
                 activity = summarize_tool_activity(payload);
+                if let Some(id) = payload.get("call_id").and_then(|v| v.as_str()) {
+                    active_tools.insert(
+                        id.to_owned(),
+                        activity.clone().unwrap_or_else(|| "工具".into()),
+                    );
+                }
+                phase = Some(crate::domain::ExecutionPhase::Tool);
                 if payload
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -949,7 +991,19 @@ fn apply_codex_rollout(
                         .map(str::to_string);
                 }
             }
-            "function_call_output" => {
+            "function_call_output" | "custom_tool_call_output" => {
+                if let Some(id) = payload.get("call_id").and_then(|v| v.as_str()) {
+                    active_tools.remove(id);
+                    activity = active_tools.values().next_back().cloned();
+                    phase = (status == TaskStatus::Running).then_some(if active_tools.is_empty() {
+                        crate::domain::ExecutionPhase::AwaitingModel
+                    } else {
+                        crate::domain::ExecutionPhase::Tool
+                    });
+                }
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
                 if input_request_id.is_some()
                     && payload.get("call_id").and_then(|v| v.as_str())
                         == input_request_id.as_deref()
@@ -957,6 +1011,11 @@ fn apply_codex_rollout(
                     status = TaskStatus::Running;
                     waiting_reason = None;
                     input_request_id = None;
+                    phase = Some(if active_tools.is_empty() {
+                        crate::domain::ExecutionPhase::AwaitingModel
+                    } else {
+                        crate::domain::ExecutionPhase::Tool
+                    });
                 }
             }
             "task_complete" => {
@@ -964,6 +1023,8 @@ fn apply_codex_rollout(
                 waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
                 input_request_id = None;
                 activity = None;
+                active_tools.clear();
+                phase = None;
                 if let Some(t) = payload
                     .get("completed_at")
                     .and_then(parse_rfc3339_value)
@@ -980,6 +1041,8 @@ fn apply_codex_rollout(
                 waiting_reason = Some(crate::domain::WaitingReason::Unknown);
                 input_request_id = None;
                 activity = None;
+                active_tools.clear();
+                phase = None;
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -997,6 +1060,8 @@ fn apply_codex_rollout(
         project,
         last_message,
         activity,
+        phase,
+        active_tools,
         session_id,
         turn_key,
         first_user_message,
@@ -1320,6 +1385,7 @@ fn flush_codex(
         t.started_at = state.started_at;
         t.message = state.last_message;
         t.activity = state.activity;
+        t.phase = state.phase;
         t.cli = Some("codex".into());
         t.session_id = Some(sid);
         t.turn_key = state.turn_key;
@@ -1541,6 +1607,62 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn tool_outputs_clear_only_matching_calls_and_reasoning_keeps_turn_running() {
+        use crate::domain::ExecutionPhase;
+        let now = SystemTime::now();
+        let mut state = None;
+        for payload in [
+            serde_json::json!({"type":"task_started","turn_id":"stable-turn"}),
+            serde_json::json!({"type":"custom_tool_call","call_id":"a","name":"exec","input":"{\"cmd\":\"cargo test\"}"}),
+            serde_json::json!({"type":"function_call","call_id":"b","name":"shell_command","arguments":"{\"command\":\"git status\"}"}),
+            serde_json::json!({"type":"custom_tool_call_output","call_id":"a"}),
+        ] {
+            state = apply_codex_rollout(
+                &format!("{}\n", serde_json::json!({"payload":payload})),
+                now,
+                "s",
+                state,
+            );
+        }
+        assert_eq!(state.as_ref().unwrap().phase, Some(ExecutionPhase::Tool));
+        assert!(state
+            .as_ref()
+            .unwrap()
+            .activity
+            .as_ref()
+            .unwrap()
+            .contains("git status"));
+        state = apply_codex_rollout(
+            "{\"payload\":{\"type\":\"function_call_output\",\"call_id\":\"b\"}}\n",
+            now,
+            "s",
+            state,
+        );
+        assert_eq!(state.as_ref().unwrap().activity, None);
+        assert_eq!(
+            state.as_ref().unwrap().phase,
+            Some(ExecutionPhase::AwaitingModel)
+        );
+        state = apply_codex_rollout("{\"payload\":{\"type\":\"reasoning\"}}\n", now, "s", state);
+        let thinking = state.unwrap();
+        assert_eq!(thinking.status, TaskStatus::Running);
+        assert_eq!(thinking.phase, Some(ExecutionPhase::Thinking));
+        assert_eq!(thinking.turn_key.as_deref(), Some("stable-turn"));
+        let resumed = apply_codex_rollout(
+            "{\"payload\":{\"type\":\"task_complete\"}}\n",
+            now,
+            "s",
+            Some(thinking),
+        )
+        .unwrap();
+        assert_eq!(resumed.phase, None);
+        assert_eq!(
+            resumed.waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+    }
 
     #[test]
     fn post_completion_usage_event_does_not_restart_turn_or_reset_elapsed_time() {

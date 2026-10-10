@@ -4,7 +4,7 @@
 //!   RUNNING → WAITING_INPUT
 //!   RUNNING → SUCCEEDED (exact)
 //!   RUNNING → FAILED (exact)
-//!   RUNNING → IDLE (inferred finish)
+//!   RUNNING → IDLE with explicit tmux shell-return evidence (inferred finish)
 //!   CONNECTED → DISCONNECTED (already debounced by the provider)
 //!   DISCONNECTED → CONNECTED (recovery)
 //!
@@ -126,6 +126,12 @@ impl TransitionEngine {
 
         for task in tasks {
             let id = task.id.clone();
+            if task.is_agent_session() {
+                // v3 could infer an end during thinking. Do not let that false
+                // event suppress the next genuine failure/completion.
+                self.notified
+                    .remove(&(id.clone(), EventKind::InferredFinished));
+            }
             let status = task.status;
             current.insert(id.clone(), status);
             current_turns.insert(id.clone(), task.turn_key.clone());
@@ -155,7 +161,8 @@ impl TransitionEngine {
 
             // A new run started in the same id — reset notification memory.
             if turn_changed
-                || (prev_status.is_terminal() || prev_status == TaskStatus::Idle)
+                || task.turn_key.is_none()
+                    && (prev_status.is_terminal() || prev_status == TaskStatus::Idle)
                     && status.is_active()
             {
                 reset_task_notifications(&mut self.notified, &id);
@@ -203,7 +210,8 @@ impl TransitionEngine {
                 TaskStatus::Idle
                     // RUNNING → IDLE is an inferred finish (no exit code).
                     // WAITING_INPUT → IDLE and IDLE → IDLE are not events.
-                    if (prev_status == TaskStatus::Running || prev_status == TaskStatus::Unknown)
+                    if task.allows_inferred_finish()
+                        && (prev_status == TaskStatus::Running || prev_status == TaskStatus::Unknown)
                         && !already(&mut self.notified, &id, EventKind::InferredFinished) => {
                             events.push(TaskEvent::InferredFinished { task: task.clone() });
                         }
@@ -211,31 +219,8 @@ impl TransitionEngine {
             }
         }
 
-        // Tasks that vanished entirely: a remote pane destroyed while we were
-        // watching it run.  The provider emits an IDLE terminal snapshot for
-        // this case, so this branch only fires for local tasks that
-        // disappeared without a terminal snapshot (e.g. hook file deleted).
-        if !baseline {
-            for (id, prev_status) in &self.prev {
-                if current.contains_key(id) {
-                    continue;
-                }
-                if *prev_status == TaskStatus::Running {
-                    let mut ghost = TaskSnapshot::new(
-                        id,
-                        id,
-                        crate::domain::TaskSource::LocalFile,
-                        TaskStatus::Idle,
-                        crate::domain::DetectionConfidence::Inferred,
-                        _now,
-                    );
-                    ghost.finished_at = Some(_now);
-                    if !already(&mut self.notified, id, EventKind::InferredFinished) {
-                        events.push(TaskEvent::InferredFinished { task: ghost });
-                    }
-                }
-            }
-        }
+        // Absence is never completion evidence. Source removal, discovery
+        // windows and failed probes all remove rows without ending a turn.
 
         self.prev = current;
         self.prev_turns = current_turns;
@@ -301,6 +286,35 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn agent_cpu_idle_flapping_never_announces_end_or_resets_dedup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut snap = task_turn("codex:s", TaskStatus::Running, "same-turn");
+        snap.source = crate::domain::TaskSource::Codex;
+        snap.session_id = Some("s".into());
+        apply_once(&mut engine, &[snap.clone()]);
+        for _ in 0..60 {
+            for status in [TaskStatus::Idle, TaskStatus::Running] {
+                snap.status = status;
+                assert!(apply_once(&mut engine, &[snap.clone()]).is_empty());
+            }
+        }
+        snap.status = TaskStatus::WaitingInput;
+        snap.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert_eq!(apply_once(&mut engine, &[snap.clone()]).len(), 1);
+        snap.status = TaskStatus::Idle;
+        assert!(apply_once(&mut engine, &[snap.clone()]).is_empty());
+        snap.status = TaskStatus::Running;
+        assert!(apply_once(&mut engine, &[snap.clone()]).is_empty());
+        snap.status = TaskStatus::WaitingInput;
+        assert!(apply_once(&mut engine, &[snap.clone()]).is_empty());
+        let mut restarted = TransitionEngine::open(path);
+        assert!(apply_once(&mut restarted, &[snap.clone()]).is_empty());
+        snap.turn_key = Some("new-turn".into());
+        assert_eq!(apply_once(&mut restarted, &[snap]).len(), 1);
+    }
     use crate::domain::{DetectionConfidence, TaskSource};
 
     fn task(id: &str, status: TaskStatus) -> TaskSnapshot {
@@ -397,7 +411,10 @@ mod tests {
     fn running_to_idle_is_inferred_finish() {
         let mut engine = TransitionEngine::new();
         apply_once(&mut engine, &[task("t1", TaskStatus::Running)]);
-        let events = apply_once(&mut engine, &[task("t1", TaskStatus::Idle)]);
+        let mut ended = task("t1", TaskStatus::Idle);
+        ended.source = crate::domain::TaskSource::RemoteTmux;
+        ended.finished_at = Some(SystemTime::now());
+        let events = apply_once(&mut engine, &[ended]);
         assert_eq!(events.len(), 1);
         assert!(matches!(events[0], TaskEvent::InferredFinished { .. }));
     }
@@ -414,7 +431,10 @@ mod tests {
     fn inferred_finish_then_exact_no_double_notify() {
         let mut engine = TransitionEngine::new();
         apply_once(&mut engine, &[task("t1", TaskStatus::Running)]);
-        let e1 = apply_once(&mut engine, &[task("t1", TaskStatus::Idle)]);
+        let mut ended = task("t1", TaskStatus::Idle);
+        ended.source = crate::domain::TaskSource::RemoteTmux;
+        ended.finished_at = Some(SystemTime::now());
+        let e1 = apply_once(&mut engine, &[ended]);
         assert_eq!(e1.len(), 1);
         // Upgraded to exact — no second notification.
         let e2 = apply_once(&mut engine, &[task("t1", TaskStatus::Succeeded)]);
@@ -492,11 +512,10 @@ mod tests {
     }
 
     #[test]
-    fn task_disappears_without_terminal_snapshot_is_inferred_finish() {
+    fn task_disappears_without_terminal_snapshot_never_notifies_completion() {
         let mut engine = TransitionEngine::new();
         apply_once(&mut engine, &[task("local-1", TaskStatus::Running)]);
         let events = apply_once(&mut engine, &[]);
-        assert_eq!(events.len(), 1);
-        assert!(matches!(events[0], TaskEvent::InferredFinished { .. }));
+        assert!(events.is_empty());
     }
 }

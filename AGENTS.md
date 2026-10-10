@@ -41,6 +41,8 @@ Important locations:
 
 Stable session/thread IDs are task identity. A title rename updates presentation only; it must not create a new task, reset lifecycle state, or send another notification. Project and task title remain separate model fields.
 
+Execution `phase` is independent of lifecycle: thinking, tool execution, responding and waiting for a model response all remain RUNNING. Clear tool activity by matching call ID on tool results; never infer an Agent turn end from low CPU, silent logs, missing files or a tool return. Only explicit lifecycle events notify; inferred finish is limited to non-Agent tmux shell-return snapshots. Same stable turn status flapping cannot reset notification dedup. Attention v4 conservatively archives v3 false Claude history imports without acknowledging/deleting them; back up to `attention.json.pre-lifecycle.bak` before migration.
+
 The main view defaults to a configurable 7-day execution-activity window (`dashboard.recent_days`, zero disables archival). Inactive attention moves to a separate older-attention view without deleting unread/pin state. Running tasks and explicit TaskPulse manual pins never expire. Legacy pin origin is unknown and does not exempt old records from archival; preserve their flag and allow explicit re-pinning. Polling/renames must not renew execution activity. Preserve existing project allowlists unless the user changes them; new sources default to all projects' new executions.
 
 ## Data and configuration

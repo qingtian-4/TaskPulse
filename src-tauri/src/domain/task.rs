@@ -206,6 +206,16 @@ mod opt_epoch_ms {
     }
 }
 
+/// Observed activity, independent of lifecycle and source freshness.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExecutionPhase {
+    Thinking,
+    Tool,
+    Responding,
+    AwaitingModel,
+}
+
 /// The unified task snapshot.
 ///
 /// `id` is the stable identity for dedup and notification tracking:
@@ -252,6 +262,9 @@ pub struct TaskSnapshot {
     /// Kept separate from `message`, which is the latest agent prose.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub activity: Option<String>,
+    /// Subphase of an active turn. Tool completion is NOT turn completion.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub phase: Option<ExecutionPhase>,
     #[serde(
         default,
         with = "opt_epoch_ms",
@@ -324,6 +337,25 @@ pub struct TaskSnapshot {
 }
 
 impl TaskSnapshot {
+    /// A conversation can be thinking on a server while its local process is
+    /// idle. Process/CPU guesses must never end a structured agent turn.
+    pub fn is_agent_session(&self) -> bool {
+        self.session_id.is_some()
+            || matches!(
+                self.source,
+                TaskSource::Codex
+                    | TaskSource::Hermes
+                    | TaskSource::DeepSeekHarness
+                    | TaskSource::ClaudeCode
+                    | TaskSource::Gemini
+            )
+    }
+
+    pub fn allows_inferred_finish(&self) -> bool {
+        self.source == TaskSource::RemoteTmux
+            && self.session_id.is_none()
+            && self.finished_at.is_some()
+    }
     pub fn requires_action(&self) -> bool {
         self.status == TaskStatus::WaitingInput
             && matches!(
@@ -348,6 +380,7 @@ impl TaskSnapshot {
             status,
             source_instance: None,
             model: None,
+            phase: None,
             internal: false,
             project_path: None,
             tmux_session: None,

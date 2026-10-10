@@ -22,6 +22,7 @@ struct Transcript {
     manual_title: Option<String>,
     native_title: Option<String>,
     first_prompt: Option<String>,
+    active_tools: std::collections::BTreeMap<String, String>,
 }
 
 pub struct ClaudeCodeProvider {
@@ -111,6 +112,7 @@ impl ClaudeCodeProvider {
                         transcript.manual_title = None;
                         transcript.native_title = None;
                         transcript.first_prompt = None;
+                        transcript.active_tools.clear();
                     }
                     for line in batch.body.lines() {
                         if let Ok(value) = serde_json::from_str::<Value>(line) {
@@ -147,6 +149,10 @@ impl ClaudeCodeProvider {
                 if at.is_some_and(|at| at >= task.updated_at) {
                     match text(lease, "status") {
                         Some("busy") => {
+                            if task.status != TaskStatus::Running {
+                                task.activity = None;
+                                task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
+                            }
                             task.status = TaskStatus::Running;
                             task.waiting_reason = None;
                             task.confidence = DetectionConfidence::Inferred;
@@ -157,6 +163,7 @@ impl ClaudeCodeProvider {
                             task.status = TaskStatus::WaitingInput;
                             task.waiting_reason = Some(WaitingReason::TurnEnded);
                             task.activity = None;
+                            task.phase = None;
                             task.confidence = DetectionConfidence::Inferred;
                         }
                         _ => {}
@@ -170,6 +177,15 @@ impl ClaudeCodeProvider {
                     reconcile_hook_turn(&mut task, &event);
                     if millis(event.get("observed_at")).is_some_and(|at| at >= task.updated_at) {
                         apply_hook(&mut task, &event);
+                        if text(&event, "hook_event_name") == Some("PostToolUse") {
+                            if let Some(id) = text(&event, "tool_use_id") {
+                                transcript.active_tools.remove(id);
+                            }
+                            if let Some(activity) = transcript.active_tools.values().next_back() {
+                                task.activity = Some(activity.clone());
+                                task.phase = Some(crate::domain::ExecutionPhase::Tool);
+                            }
+                        }
                     }
                 }
             }
@@ -304,7 +320,17 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
     match text(value, "type") {
         Some("custom-title") => state.manual_title = text(value, "customTitle").map(str::to_owned),
         Some("ai-title") => state.native_title = text(value, "aiTitle").map(str::to_owned),
-        Some("user") if value.get("toolUseResult").is_none() => {
+        Some("user")
+            if value.get("toolUseResult").is_none()
+                && !value
+                    .pointer("/message/content")
+                    .and_then(Value::as_array)
+                    .is_some_and(|items| {
+                        items
+                            .iter()
+                            .any(|item| text(item, "type") == Some("tool_result"))
+                    }) =>
+        {
             let content = value.pointer("/message/content");
             let prompt = content
                 .and_then(Value::as_str)
@@ -337,6 +363,32 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                 task.waiting_reason = None;
                 task.stale = false;
                 task.activity = None;
+                state.active_tools.clear();
+                task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
+            }
+        }
+        Some("user") => {
+            // Tool results are user-role records, not a new user turn. Only
+            // the matching call ends; parallel tools remain visible.
+            if let Some(items) = value.pointer("/message/content").and_then(Value::as_array) {
+                for item in items {
+                    if text(item, "type") == Some("tool_result") {
+                        if let Some(id) = text(item, "tool_use_id") {
+                            state.active_tools.remove(id);
+                        }
+                    }
+                }
+                task.activity = state.active_tools.values().next_back().cloned();
+                if task.status == TaskStatus::Running {
+                    task.phase = Some(if state.active_tools.is_empty() {
+                        crate::domain::ExecutionPhase::AwaitingModel
+                    } else {
+                        crate::domain::ExecutionPhase::Tool
+                    });
+                }
+                if let Some(at) = at {
+                    task.updated_at = at;
+                }
             }
         }
         Some("assistant") => {
@@ -345,6 +397,8 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                 task.status = TaskStatus::Failed;
                 task.waiting_reason = None;
                 task.activity = None;
+                state.active_tools.clear();
+                task.phase = None;
                 task.stale = false;
             } else if task.status == TaskStatus::Failed {
                 task.status = TaskStatus::Running;
@@ -373,9 +427,24 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                             }
                             None => name.into(),
                         });
+                        if let Some(id) = text(item, "id") {
+                            state
+                                .active_tools
+                                .insert(id.into(), task.activity.clone().unwrap());
+                        }
+                        task.phase = Some(crate::domain::ExecutionPhase::Tool);
+                    }
+                    if text(item, "type") == Some("thinking")
+                        && state.active_tools.is_empty()
+                        && !api_error
+                    {
+                        task.phase = Some(crate::domain::ExecutionPhase::Thinking);
                     }
                     if let Some(message) = text(item, "text") {
                         task.message = Some(message.chars().take(500).collect());
+                        if state.active_tools.is_empty() && !api_error {
+                            task.phase = Some(crate::domain::ExecutionPhase::Responding);
+                        }
                     }
                 }
             }
@@ -388,6 +457,8 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                 task.status = TaskStatus::WaitingInput;
                 task.waiting_reason = Some(WaitingReason::TurnEnded);
                 task.activity = None;
+                state.active_tools.clear();
+                task.phase = None;
             }
         }
         Some("system")
@@ -397,6 +468,8 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(WaitingReason::TurnEnded);
             task.activity = None;
+            state.active_tools.clear();
+            task.phase = None;
             if let Some(at) = at {
                 task.updated_at = at;
             }
@@ -434,11 +507,19 @@ fn apply_hook(task: &mut TaskSnapshot, event: &Value) {
             task.waiting_reason = None;
             task.started_at = millis(event.get("observed_at"));
             task.activity = None;
+            task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
         }
-        "PreToolUse" | "PostToolUse" => {
+        "PreToolUse" => {
             task.status = TaskStatus::Running;
             task.waiting_reason = None;
             task.activity = text(event, "activity").map(str::to_owned);
+            task.phase = Some(crate::domain::ExecutionPhase::Tool);
+        }
+        "PostToolUse" => {
+            task.status = TaskStatus::Running;
+            task.waiting_reason = None;
+            task.activity = None;
+            task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
         }
         "PermissionRequest" => {
             task.status = TaskStatus::WaitingInput;
@@ -449,10 +530,12 @@ fn apply_hook(task: &mut TaskSnapshot, event: &Value) {
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(WaitingReason::TurnEnded);
             task.activity = None;
+            task.phase = None;
         }
         "StopFailure" => {
             task.status = TaskStatus::Failed;
             task.activity = None;
+            task.phase = None;
         }
         "Notification" if text(event, "notification_type") == Some("permission_prompt") => {
             task.status = TaskStatus::WaitingInput;
@@ -626,6 +709,86 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn tool_result_is_not_a_new_turn_and_retry_clears_previous_failure() {
+        use crate::domain::ExecutionPhase;
+        let mut state = Transcript::default();
+        let now = SystemTime::now();
+        for record in [
+            serde_json::json!({"type":"user","uuid":"turn","message":{"content":"fix tests"}}),
+            serde_json::json!({"type":"assistant","message":{"content":[{"type":"tool_use","id":"a","name":"Bash","input":{"command":"cargo test"}},{"type":"tool_use","id":"b","name":"Bash","input":{"command":"git status"}}]}}),
+            serde_json::json!({"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"a","content":"ok"}]}}),
+        ] {
+            apply_record(&mut state, &record, "s", now);
+        }
+        assert_eq!(
+            state.task.as_ref().unwrap().turn_key.as_deref(),
+            Some("turn")
+        );
+        assert_eq!(state.active_tools.len(), 1);
+        apply_record(
+            &mut state,
+            &serde_json::json!({"type":"user","toolUseResult":{},"message":{"content":[{"type":"tool_result","tool_use_id":"b"}]}}),
+            "s",
+            now,
+        );
+        assert_eq!(state.task.as_ref().unwrap().activity, None);
+        assert_eq!(
+            state.task.as_ref().unwrap().phase,
+            Some(ExecutionPhase::AwaitingModel)
+        );
+        apply_record(
+            &mut state,
+            &serde_json::json!({"type":"assistant","message":{"content":[{"type":"thinking","thinking":"not displayed"}]}}),
+            "s",
+            now,
+        );
+        assert_eq!(
+            state.task.as_ref().unwrap().phase,
+            Some(ExecutionPhase::Thinking)
+        );
+        apply_record(
+            &mut state,
+            &serde_json::json!({"type":"assistant","isApiErrorMessage":true}),
+            "s",
+            now,
+        );
+        assert_eq!(state.task.as_ref().unwrap().status, TaskStatus::Failed);
+        apply_record(
+            &mut state,
+            &serde_json::json!({"type":"assistant","message":{"stop_reason":"end_turn","content":[{"type":"text","text":"success"}]}}),
+            "s",
+            now,
+        );
+        assert_eq!(
+            state.task.as_ref().unwrap().status,
+            TaskStatus::WaitingInput
+        );
+        assert_eq!(state.task.as_ref().unwrap().phase, None);
+    }
+
+    #[test]
+    fn post_tool_hook_returns_to_model_without_ending_turn() {
+        let mut task = TaskSnapshot::new(
+            "s",
+            "s",
+            TaskSource::ClaudeCode,
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        apply_hook(
+            &mut task,
+            &serde_json::json!({"hook_event_name":"PreToolUse","activity":"Bash · cargo test"}),
+        );
+        assert!(task.activity.is_some());
+        apply_hook(
+            &mut task,
+            &serde_json::json!({"hook_event_name":"PostToolUse","activity":"Bash · cargo test"}),
+        );
+        assert_eq!(task.activity, None);
+        assert_eq!(task.status, TaskStatus::Running);
+    }
     #[test]
     fn incomplete_old_logs_never_become_running_and_corruption_retains_last_state() {
         use std::io::Write;

@@ -163,18 +163,12 @@ impl TaskStore {
         self.merge(incoming, now)
     }
 
-    fn reconcile_vanished(&mut self, vanished: Vec<String>, now: SystemTime) {
+    fn reconcile_vanished(&mut self, vanished: Vec<String>, _now: SystemTime) {
         for id in vanished {
             let Some(mut task) = self.active.remove(&id) else {
                 continue;
             };
-            if task.status == crate::domain::TaskStatus::Running
-                && matches!(
-                    task.source,
-                    TaskSource::Codex | TaskSource::Hermes | TaskSource::DeepSeekHarness
-                )
-                && task.confidence != DetectionConfidence::Inferred
-            {
+            if task.status == crate::domain::TaskStatus::Running && task.is_agent_session() {
                 // Missing native metadata or an expired discovery window is
                 // not an end event. Keep it uncertain until a real signal.
                 task.stale = true;
@@ -182,15 +176,11 @@ impl TaskStore {
                 continue;
             }
             if task.status == crate::domain::TaskStatus::Running {
-                task.status = crate::domain::TaskStatus::Idle;
-                task.confidence = DetectionConfidence::Inferred;
-                task.updated_at = now;
-                task.finished_at = Some(now);
+                task.status = crate::domain::TaskStatus::Unknown;
+                task.finished_at = None;
                 task.exit_code = None;
-                task.stale = false;
-                task.recent = true;
-                self.recent.retain(|recent| recent.id != id);
-                self.recent.push(task);
+                task.stale = true;
+                self.active.insert(id, task);
             }
         }
     }
@@ -245,26 +235,40 @@ impl TaskStore {
 /// 3. A stale observation never replaces a non-stale one. Cross-source ties
 ///    still use the provider timestamp and prefer active state on an exact tie.
 fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot) {
-    let existing_beats = match confidence_cmp(existing.confidence, new.confidence) {
-        std::cmp::Ordering::Less => true,
-        std::cmp::Ordering::Greater => false,
-        std::cmp::Ordering::Equal => {
-            if existing.stale != new.stale {
-                !existing.stale
-            } else if existing.source == new.source {
-                // This is the next poll from the same authority. Accept its
-                // lifecycle state even if updated_at still points at the last
-                // message/tool event.
-                false
-            } else {
-                // Conflicting observations from different sources retain the
-                // old safety rule.
-                if new.updated_at > existing.updated_at {
+    // Native adapters already reconcile their event/lease/hook evidence. A
+    // newer same-session observation must not be frozen behind the previous
+    // turn's stronger hook confidence. Cross-provider/process guesses retain
+    // confidence ordering (especially exact tmux exit codes).
+    let native_successor = existing.source == new.source
+        && existing.source_instance == new.source_instance
+        && new.session_id.is_some()
+        && existing.session_id == new.session_id
+        && !new.stale
+        && new.updated_at >= existing.updated_at;
+    let existing_beats = if native_successor {
+        false
+    } else {
+        match confidence_cmp(existing.confidence, new.confidence) {
+            std::cmp::Ordering::Less => true,
+            std::cmp::Ordering::Greater => false,
+            std::cmp::Ordering::Equal => {
+                if existing.stale != new.stale {
+                    !existing.stale
+                } else if existing.source == new.source {
+                    // This is the next poll from the same authority. Accept its
+                    // lifecycle state even if updated_at still points at the last
+                    // message/tool event.
                     false
-                } else if new.updated_at < existing.updated_at {
-                    true
                 } else {
-                    !new.status.is_active()
+                    // Conflicting observations from different sources retain the
+                    // old safety rule.
+                    if new.updated_at > existing.updated_at {
+                        false
+                    } else if new.updated_at < existing.updated_at {
+                        true
+                    } else {
+                        !new.status.is_active()
+                    }
                 }
             }
         }
@@ -304,6 +308,30 @@ fn confidence_cmp(a: DetectionConfidence, b: DetectionConfidence) -> std::cmp::O
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_retry_and_tool_phase_can_replace_prior_hook_evidence() {
+        let now = SystemTime::now();
+        let mut store = TaskStore::default();
+        let mut prior = TaskSnapshot::new(
+            "claude:s",
+            "title",
+            TaskSource::ClaudeCode,
+            crate::domain::TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+            now,
+        );
+        prior.session_id = Some("s".into());
+        prior.turn_key = Some("old".into());
+        store.merge(vec![prior.clone()], now);
+        let mut next = prior;
+        next.confidence = DetectionConfidence::Inferred;
+        next.turn_key = Some("new".into());
+        next.updated_at = now + Duration::from_secs(1);
+        next.status = crate::domain::TaskStatus::Running;
+        next.phase = Some(crate::domain::ExecutionPhase::Thinking);
+        let out = store.merge(vec![next.clone()], next.updated_at);
+        assert_eq!(out[0], next);
+    }
     #[test]
     fn wsl_authority_cannot_reconcile_native_desktop_tasks() {
         let now = SystemTime::now();
@@ -583,7 +611,7 @@ mod tests {
     }
 
     #[test]
-    fn successful_partition_reconciliation_finishes_vanished_running_task() {
+    fn successful_partition_reconciliation_marks_missing_work_uncertain() {
         let mut store = TaskStore::new(DEFAULT_RECENT_TTL);
         let now = SystemTime::now();
         let mut running = t0(
@@ -596,11 +624,11 @@ mod tests {
 
         let out = store.merge_partition(Vec::new(), false, secs(now, 5));
         assert_eq!(out.len(), 1);
-        assert_eq!(out[0].status, TaskStatus::Idle);
-        assert_eq!(out[0].confidence, DetectionConfidence::Inferred);
-        assert!(out[0].recent);
-        assert!(out[0].finished_at.is_some());
-        assert!(store.active().is_empty());
+        assert_eq!(out[0].status, TaskStatus::Unknown);
+        assert_eq!(out[0].confidence, DetectionConfidence::Hook);
+        assert!(out[0].stale);
+        assert!(out[0].finished_at.is_none());
+        assert_eq!(store.active().len(), 1);
     }
 
     #[test]

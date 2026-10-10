@@ -16,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use crate::domain::{TaskSnapshot, TaskStatus};
 use crate::providers::sort_tasks;
 
-const ATTENTION_VERSION: u8 = 3;
+const ATTENTION_VERSION: u8 = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 struct AttentionRecord {
@@ -31,6 +31,10 @@ struct AttentionRecord {
     last_execution_at: u64,
     #[serde(default)]
     followed_at: u64,
+    /// Legacy cold-history imports are retained in older attention, not
+    /// acknowledged/deleted. Explicit follow/pin or a new turn restores them.
+    #[serde(default)]
+    historical_import: bool,
     last_turn_key: Option<String>,
     last_status: TaskStatus,
     #[serde(default)]
@@ -66,19 +70,41 @@ impl AttentionTracker {
             .as_ref()
             .is_some_and(|state| state.version < ATTENTION_VERSION)
         {
-            let backup = path.with_extension("json.pre-recency.bak");
+            let backup =
+                path.with_extension(if persisted.as_ref().is_some_and(|s| s.version < 3) {
+                    "json.pre-recency.bak"
+                } else {
+                    "json.pre-lifecycle.bak"
+                });
             if !backup.exists() {
                 if let Err(error) = std::fs::copy(&path, &backup) {
                     log::warn!("attention migration backup: {error}");
                 }
             }
         }
+        let migrate = persisted.as_ref().is_some_and(|state| state.version < 4);
         let (mut records, baselines) = persisted
             .map(|state| (state.records, state.baselines))
             .unwrap_or_default();
         // Legacy pins are preserved, but their origin is unknown. Do not
         // silently turn old imported/native pins into permanent user choices.
         for record in records.values_mut() {
+            if migrate
+                && record.task.source == crate::domain::TaskSource::ClaudeCode
+                && record.task.status == TaskStatus::Failed
+                && record.followed_at == 0
+                && record.pin_override != Some(true)
+                && record.task.native_unread != Some(true)
+                && millis(record.task.updated_at).saturating_add(30_000)
+                    < record.task.attention_since
+                && millis(record.task.updated_at).saturating_add(30_000) < record.last_execution_at
+            {
+                // v3 could bootstrap an old incomplete Claude transcript as
+                // RUNNING, then "complete" it as FAILED hours after its error.
+                // Preserve unread/pin preferences, conservatively archive it.
+                record.historical_import = true;
+                record.last_execution_at = millis(record.task.updated_at);
+            }
             // This is an observation-edge flag, not durable lifecycle state.
             record.task.new_execution = false;
             if record.last_execution_at == 0 {
@@ -147,6 +173,9 @@ impl AttentionTracker {
                 }
                 if changed_turn || resumed {
                     record.hidden = false;
+                    if !task.stale {
+                        record.historical_import = false;
+                    }
                 }
                 record.pinned = record
                     .pin_override
@@ -171,10 +200,9 @@ impl AttentionTracker {
 
             // Startup baseline: only active/native-unread/native-pinned rows
             // enter the attention list. This prevents bulk history import.
-            let unread = task.status == TaskStatus::Running
+            let unread = task.status == TaskStatus::Running && !task.stale
                 || native_unread
-                || short_finished
-                || task.requires_action();
+                || short_finished;
             task.unread = unread;
             task.pinned = provider_pinned;
             task.attention_since = now;
@@ -191,8 +219,9 @@ impl AttentionTracker {
                     pin_override: None,
                     last_execution_at,
                     followed_at: 0,
+                    historical_import: false,
                     ignored: false,
-                    hidden: false,
+                    hidden: !unread && !provider_pinned,
                 },
             );
         }
@@ -249,6 +278,7 @@ impl AttentionTracker {
         record.unread = true;
         record.hidden = false;
         record.followed_at = millis(SystemTime::now());
+        record.historical_import = false;
         record.task.unread = true;
         self.save_best_effort();
         Ok(self.display())
@@ -283,11 +313,12 @@ impl AttentionTracker {
     }
 
     fn expired(&self, record: &AttentionRecord, now: u64) -> bool {
-        self.recent_days > 0
-            && record.task.status != TaskStatus::Running
-            && record.pin_override != Some(true)
-            && now.saturating_sub(record.last_execution_at.max(record.followed_at))
-                > u64::from(self.recent_days) * 86_400_000
+        record.historical_import && record.pin_override != Some(true)
+            || self.recent_days > 0
+                && record.task.status != TaskStatus::Running
+                && record.pin_override != Some(true)
+                && now.saturating_sub(record.last_execution_at.max(record.followed_at))
+                    > u64::from(self.recent_days) * 86_400_000
     }
 
     fn list(&self, archived: bool, now: u64) -> Vec<TaskSnapshot> {
@@ -362,6 +393,7 @@ impl AttentionTracker {
                 pin_override: None,
                 last_execution_at: millis(task.updated_at),
                 followed_at: 0,
+                historical_import: false,
                 ignored: false,
                 hidden: false,
             });
@@ -370,6 +402,7 @@ impl AttentionTracker {
         record.ignored = false;
         record.hidden = false;
         record.followed_at = millis(SystemTime::now());
+        record.historical_import = false;
         record.task.unread = true;
         record.task.attention_since = millis(SystemTime::now());
         self.save_best_effort();
@@ -458,6 +491,44 @@ fn effective_turn_key(task: &TaskSnapshot) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn legacy_false_failure_import_is_archived_without_acknowledging_or_deleting() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        let mut old = task("claude:old", TaskStatus::Running, Some("old-turn"));
+        old.source = crate::domain::TaskSource::ClaudeCode;
+        old.updated_at = SystemTime::now() - std::time::Duration::from_secs(3600);
+        tracker.reconcile(vec![old.clone()]);
+        old.status = TaskStatus::Failed;
+        tracker.reconcile(vec![old.clone()]);
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value["version"] = 3.into();
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut upgraded = AttentionTracker::open(path.clone());
+        assert!(upgraded.reconcile(vec![old.clone()]).is_empty());
+        assert!(upgraded.archived()[0].unread);
+        assert_eq!(upgraded.known().len(), 1);
+        assert!(path.with_extension("json.pre-lifecycle.bak").exists());
+        old.status = TaskStatus::Running;
+        old.turn_key = Some("new-turn".into());
+        old.updated_at = SystemTime::now();
+        assert_eq!(upgraded.reconcile(vec![old]).len(), 1);
+    }
+
+    #[test]
+    fn cold_failed_and_blocked_history_do_not_become_current_attention() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let failed = task("old-failure", TaskStatus::Failed, Some("old"));
+        let mut approval = task("old-gate", TaskStatus::WaitingInput, Some("old"));
+        approval.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        assert!(tracker.reconcile(vec![failed.clone(), approval]).is_empty());
+        let mut unread = failed;
+        unread.native_unread = Some(true);
+        assert_eq!(tracker.reconcile(vec![unread]).len(), 1);
+    }
     use crate::domain::{DetectionConfidence, TaskSource};
 
     #[test]
@@ -587,6 +658,7 @@ mod tests {
         let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
         let mut gate = task("gate", TaskStatus::WaitingInput, Some("turn"));
         gate.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        gate.native_unread = Some(true);
         tracker.reconcile(vec![gate]);
         assert_eq!(tracker.mark_viewed("gate").unwrap().len(), 1);
         assert!(tracker.hide("gate").unwrap().is_empty());

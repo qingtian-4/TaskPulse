@@ -514,6 +514,11 @@ pub fn cross_validate_tasks(tasks: &mut [TaskSnapshot], scanned: &[TaskSnapshot]
         if task.confidence != DetectionConfidence::Hook {
             continue;
         }
+        if task.is_agent_session() || task.turn_key.is_some() || task.hook_event.is_some() {
+            // Session/hook lifecycle is stronger than a shared terminal's CPU
+            // or title. A model request often consumes no local CPU at all.
+            continue;
+        }
         if task.status == TaskStatus::Failed {
             continue;
         }
@@ -560,14 +565,7 @@ pub fn cross_validate_tasks(tasks: &mut [TaskSnapshot], scanned: &[TaskSnapshot]
             }
             TaskStatus::Running => {
                 if age > STALE_WORKING_TTL && scan_cpu < LOW_CPU_THRESHOLD {
-                    task.status = TaskStatus::Idle;
-                    let suffix = " (stale hook, low CPU)";
-                    task.message = Some(
-                        task.message
-                            .clone()
-                            .map(|m| format!("{m}{suffix}"))
-                            .unwrap_or_else(|| suffix.to_string()),
-                    );
+                    task.stale = true;
                 }
             }
             TaskStatus::Idle | TaskStatus::Unknown if scan_cpu > HIGH_CPU_THRESHOLD => {
@@ -637,6 +635,26 @@ fn is_genuine_wait(task: &TaskSnapshot) -> bool {
 #[cfg(test)]
 mod snapshot_tests {
     use super::*;
+    #[test]
+    fn structured_sessions_survive_long_cloud_thinking_and_shared_window_guesses() {
+        for source in [
+            crate::domain::TaskSource::Codex,
+            crate::domain::TaskSource::ClaudeCode,
+            crate::domain::TaskSource::Hermes,
+            crate::domain::TaskSource::DeepSeekHarness,
+        ] {
+            let mut task = hook_task(TaskStatus::Running, "codex", "shared", 3600);
+            task.source = source;
+            task.session_id = Some("native-session".into());
+            task.turn_key = Some("turn".into());
+            task.phase = Some(crate::domain::ExecutionPhase::Thinking);
+            for status in [TaskStatus::Idle, TaskStatus::WaitingInput] {
+                let mut tasks = vec![task.clone()];
+                cross_validate_tasks(&mut tasks, &[scan_task("codex", "shared", status, 0.0)]);
+                assert_eq!(tasks[0], task);
+            }
+        }
+    }
     use crate::domain::TerminalInfo;
     use std::time::SystemTime;
 
@@ -683,11 +701,12 @@ mod snapshot_tests {
     }
 
     #[test]
-    fn stale_running_hook_downgraded_to_idle() {
+    fn stale_running_hook_is_uncertain_not_finished() {
         let mut tasks = vec![hook_task(TaskStatus::Running, "claude-code", "0x1234", 60)];
         let scanned = vec![scan_task("claude-code", "0x1234", TaskStatus::Idle, 0.0)];
         cross_validate_tasks(&mut tasks, &scanned);
-        assert_eq!(tasks[0].status, TaskStatus::Idle);
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+        assert!(tasks[0].stale);
     }
 
     #[test]
