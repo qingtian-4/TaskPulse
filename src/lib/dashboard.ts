@@ -1,5 +1,34 @@
 import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
+export interface DashboardFilters { source: string; project: string; location: string; section: number | null }
+export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null};
+export const SECTION_NAMES = ['需要处理', '正在运行', '结果待查看', '固定的空闲任务'];
+
+export function filterTasks(tasks: TaskSnapshot[], filters: DashboardFilters, settings?: DashboardSettings | null): TaskSnapshot[] {
+  return tasks.filter(t => (!filters.source || taskSource(t,settings)?.id === filters.source) &&
+    (!filters.project || projectKey(t,settings) === filters.project) &&
+    (!filters.location || (t.host ?? '本机') === filters.location) &&
+    (filters.section === null || taskSection(t) === filters.section));
+}
+
+// Global counters mean ALL monitored tasks, not the intersection with a
+// forgotten project/source filter. One click must show the counted tasks.
+export function overviewFilters(section: number, currentSection: number | null): DashboardFilters {
+  return {...EMPTY_FILTERS,section:section === currentSection ? null : section};
+}
+
+export function runningOutsideView(tasks: TaskSnapshot[], visible: TaskSnapshot[]): TaskSnapshot[] {
+  const ids=new Set(visible.map(t=>t.id));
+  return tasks.filter(t=>taskSection(t) === 1 && !ids.has(t.id));
+}
+
+export function filterDescription(filters: DashboardFilters, tasks: TaskSnapshot[], settings?: DashboardSettings | null): string {
+  return [filters.source && `来源：${settings?.sources.find(s=>s.id===filters.source)?.name ?? filters.source}`,
+    filters.project && `项目：${tasks.find(t=>projectKey(t,settings)===filters.project)?.project ?? '已不在当前列表'}`,
+    filters.location && `位置：${filters.location}`,
+    filters.section !== null && `状态：${SECTION_NAMES[filters.section]}`].filter(Boolean).join(' · ');
+}
+
 export function needsAction(task: TaskSnapshot): boolean {
   return task.status === 'waiting_input' && (task.waiting_reason === 'approval' || task.waiting_reason === 'question');
 }

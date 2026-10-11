@@ -129,6 +129,8 @@ pub struct CodexProvider {
     /// state; changed files read new complete lines, with reset on replacement.
     cache: std::collections::HashMap<PathBuf, RolloutCache>,
     native_metadata: HashMap<String, AppThreadMeta>,
+    title_index: super::jsonl_tail::JsonlTail,
+    indexed_titles: HashMap<String, String>,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -244,6 +246,8 @@ impl CodexProvider {
             seen: Default::default(),
             cache: Default::default(),
             native_metadata: Default::default(),
+            title_index: Default::default(),
+            indexed_titles: Default::default(),
             last_tasks: Vec::new(),
         }
     }
@@ -334,6 +338,37 @@ impl CodexProvider {
         }
     }
 
+    fn refresh_title_index(&mut self) {
+        // Desktop can preserve a sidebar name here while threads.name is null
+        // and threads.title is still the original prompt. WSL supplies its own
+        // index through external_metadata; do not read that file twice.
+        if self.external_metadata.is_some() {
+            return;
+        }
+        let Some(root) = self.sessions_root.parent() else {
+            return;
+        };
+        let Ok(batch) = self.title_index.read(&root.join("session_index.jsonl")) else {
+            return; // Optional metadata failure must not stop turn discovery.
+        };
+        if batch.reset {
+            self.indexed_titles.clear();
+        }
+        for line in batch.body.lines() {
+            let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if let (Some(id), Some(name)) = (
+                row.get("id").and_then(|v| v.as_str()),
+                row.get("thread_name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty()),
+            ) {
+                self.indexed_titles.insert(id.to_owned(), name.to_owned());
+            }
+        }
+    }
+
     fn discover(&self) -> std::io::Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         for path in walk(&self.sessions_root)? {
@@ -386,6 +421,11 @@ impl CodexProvider {
     ) -> TaskSnapshot {
         let name = meta
             .map(thread_task_name)
+            .or_else(|| {
+                self.indexed_titles
+                    .get(&host.session_id)
+                    .map(|name| clean_task_name(name))
+            })
             .or_else(|| host.first_user_message.as_deref().map(summarize_prompt))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| unnamed_task(&host.session_id));
@@ -400,7 +440,9 @@ impl CodexProvider {
         task.project = meta
             .and_then(|meta| project_from_cwd(meta.cwd.as_deref()))
             .or_else(|| host.project.clone());
-        task.project_path = meta.and_then(|meta| meta.cwd.clone());
+        task.project_path = meta
+            .and_then(|meta| meta.cwd.clone())
+            .or_else(|| host.cwd.clone());
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
         task.quota_5h_used_pct = host.quota_5h_used_pct;
@@ -416,7 +458,7 @@ impl CodexProvider {
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
         task.pinned = meta.is_some_and(|meta| meta.pinned);
-        task.internal = meta.is_some_and(|meta| meta.internal);
+        task.internal = host.internal || meta.is_some_and(|meta| meta.internal);
         // A completed turn means the agent is waiting on the user — keep the
         // timestamp reflecting the moment the turn finished.
         if host.status == TaskStatus::WaitingInput {
@@ -458,6 +500,8 @@ pub struct SessionState {
     pub started_at: Option<SystemTime>,
     pub updated_at: SystemTime,
     pub project: Option<String>,
+    pub cwd: Option<String>,
+    pub internal: bool,
     pub last_message: Option<String>,
     pub activity: Option<String>,
     pub phase: Option<crate::domain::ExecutionPhase>,
@@ -783,6 +827,7 @@ fn summarize_prompt(prompt: &str) -> String {
                 && !line.starts_with('#')
                 && !line.starts_with('<')
                 && !line.starts_with("Files mentioned")
+                && !line.starts_with("Distinguish instructions in attached documents")
         })
         .unwrap_or(prompt);
     let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -836,6 +881,8 @@ fn apply_codex_rollout(
     }
     let SessionState {
         mut project,
+        mut cwd,
+        mut internal,
         mut status,
         mut waiting_reason,
         mut input_request_id,
@@ -854,6 +901,8 @@ fn apply_codex_rollout(
         mut quota_1w_resets_at,
     } = previous.unwrap_or_else(|| SessionState {
         project: None,
+        cwd: None,
+        internal: false,
         status: TaskStatus::Unknown,
         waiting_reason: None,
         input_request_id: None,
@@ -897,6 +946,12 @@ fn apply_codex_rollout(
                 project = Some(truncate(&base, PROJECT_LEN));
             }
         }
+        if cwd.is_none() {
+            cwd = payload
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+        }
         // Codex emits session_meta with `type` in different places depending
         // on host form: local Desktop puts it in payload.type, headless
         // app-server (Server3) puts it at the top level. Accept both.
@@ -906,6 +961,7 @@ fn apply_codex_rollout(
             if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
                 session_id = id.to_string();
             }
+            internal |= payload.get("source").is_some_and(internal_guardian);
         }
 
         let Some(ptype) = payload.get("type").and_then(|v| v.as_str()) else {
@@ -1110,6 +1166,8 @@ fn apply_codex_rollout(
         started_at,
         updated_at,
         project,
+        cwd,
+        internal,
         last_message,
         activity,
         phase,
@@ -1458,6 +1516,7 @@ impl Provider for CodexProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
+        self.refresh_title_index();
         let discovered = match self.discover() {
             Ok(files) => files,
             Err(error) => {
@@ -1475,7 +1534,7 @@ impl Provider for CodexProvider {
                 return ProviderOutput::degraded(tasks, message);
             }
         };
-        let metadata = match self.thread_metadata(now) {
+        let mut metadata = match self.thread_metadata(now) {
             Ok(metadata) => metadata,
             Err(error) => {
                 log::warn!("codex: {error}; falling back to rollout metadata");
@@ -1486,6 +1545,15 @@ impl Provider for CodexProvider {
                     .collect()
             }
         };
+        for meta in metadata.values_mut() {
+            if meta
+                .native_name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+            {
+                meta.native_name = self.indexed_titles.get(&meta.id).cloned();
+            }
+        }
         let now_secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
         let eligible_paths: std::collections::HashSet<PathBuf> = metadata
             .values()
@@ -1501,18 +1569,31 @@ impl Provider for CodexProvider {
             .filter_map(|meta| meta.rollout_path.as_deref())
             .map(|path| self.resolve_rollout_path(path))
             .collect();
-        let files: Vec<PathBuf> = if eligible_paths.is_empty() {
-            discovered
-        } else {
-            discovered
-                .into_iter()
-                .filter(|path| eligible_paths.contains(path))
-                .collect()
-        };
+        // Metadata is an enrichment/discovery hint, never an allowlist of
+        // executions. A new/resumed rollout may precede the DB or app-server
+        // update, or the DB may retain the previous rollout path.
+        let files: Vec<PathBuf> = discovered
+            .into_iter()
+            .filter(|path| {
+                eligible_paths.contains(path)
+                    || self.cache.contains_key(path)
+                    || path
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|modified| {
+                            now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
+                        })
+            })
+            .collect();
         let mut tasks = Vec::new();
         let mut live: std::collections::HashMap<String, SystemTime> = Default::default();
+        let mut sessions: HashMap<String, (PathBuf, SessionState)> = HashMap::new();
         for path in &files {
             if let Some(state) = self.cached_session_state(path, now) {
+                // A header-only new file is not a lifecycle observation.
+                if state.status == TaskStatus::Unknown {
+                    continue;
+                }
                 let known = self.seen.contains_key(&state.session_id)
                     || metadata.get(&state.session_id).is_some_and(|m| m.pinned)
                     || crate::watcher::known_sessions().iter().any(|t| {
@@ -1531,15 +1612,36 @@ impl Provider for CodexProvider {
                 {
                     continue;
                 }
-                live.insert(state.session_id.clone(), state.updated_at);
-                let mut task = self.session_to_task(&state, metadata.get(&state.session_id), now);
-                if state.status == TaskStatus::Running
-                    && now.duration_since(state.updated_at).unwrap_or_default() > RUNNING_TTL
-                {
-                    task.stale = true;
+                // Resuming a thread can create another rollout with the SAME
+                // native ID. Emit one observation, not conflicting old/new
+                // turns whose final state depends on file enumeration order.
+                let replace = sessions
+                    .get(&state.session_id)
+                    .is_none_or(|(old_path, old)| {
+                        state.updated_at > old.updated_at
+                            || state.updated_at == old.updated_at
+                                && metadata
+                                    .get(&state.session_id)
+                                    .and_then(|m| m.rollout_path.as_deref())
+                                    .is_some_and(|canonical| {
+                                        self.resolve_rollout_path(canonical) == *path
+                                            && old_path != path
+                                    })
+                    });
+                if replace {
+                    sessions.insert(state.session_id.clone(), (path.clone(), state));
                 }
-                tasks.push(task);
             }
+        }
+        for (_, state) in sessions.into_values() {
+            live.insert(state.session_id.clone(), state.updated_at);
+            let mut task = self.session_to_task(&state, metadata.get(&state.session_id), now);
+            if state.status == TaskStatus::Running
+                && now.duration_since(state.updated_at).unwrap_or_default() > RUNNING_TTL
+            {
+                task.stale = true;
+            }
+            tasks.push(task);
         }
         let emitted: std::collections::HashSet<String> = tasks
             .iter()
@@ -1615,7 +1717,19 @@ pub(crate) fn parse_rfc3339(s: &str) -> Option<SystemTime> {
     // Accept "2026-07-06T08:22:01.075Z" and "+00:00" offsets.
     let cleaned = s.replace('Z', "+00:00");
     let dt = chrono_like_parse(&cleaned)?;
-    Some(UNIX_EPOCH + Duration::from_secs(dt))
+    // Preserve sub-second event order. Resumed rollouts and very short turns
+    // can both change within one second; truncating precision lets the old
+    // turn override the new one or gives two executions the same fallback ID.
+    let fraction = cleaned.get(19..).and_then(|tail| tail.strip_prefix('.'));
+    let mut nanos = 0;
+    let mut place = 100_000_000;
+    if let Some(fraction) = fraction {
+        for digit in fraction.bytes().take_while(u8::is_ascii_digit).take(9) {
+            nanos += u32::from(digit - b'0') * place;
+            place /= 10;
+        }
+    }
+    Some(UNIX_EPOCH + Duration::new(dt, nanos))
 }
 
 /// Minimal RFC3339 → unix-seconds parser (no external chrono dependency in the
@@ -1659,6 +1773,191 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn native_db(dir: &Path, path: &Path, updated: i64) -> PathBuf {
+        let db = dir.join("state.sqlite");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE threads (id TEXT, name TEXT, title TEXT, first_user_message TEXT, cwd TEXT, rollout_path TEXT, updated_at INTEGER, is_pinned INTEGER, source TEXT, archived INTEGER);").unwrap();
+        conn.execute("INSERT INTO threads VALUES ('sess-1',NULL,'Old prompt','Old prompt','C:/old-project',?, ?,0,'appServer',0)", (path.to_string_lossy().as_ref(),updated)).unwrap();
+        db
+    }
+
+    fn turn_event(kind: &str, turn: &str, ago: u64) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(ago),"type":"event_msg","payload":{"type":kind,"turn_id":turn}})
+        )
+    }
+
+    #[test]
+    fn desktop_sidebar_index_renames_without_lifecycle_or_activity_changes() {
+        use crate::attention::AttentionTracker;
+        use crate::transition::TransitionEngine;
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let path = sessions.join("rollout-test.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                header("/project"),
+                turn_event("task_started", "current-turn", 1)
+            ),
+        )
+        .unwrap();
+        let index = dir.path().join("session_index.jsonl");
+        std::fs::write(
+            &index,
+            "{\"id\":\"sess-1\",\"thread_name\":\"Native sidebar name\"}\ninvalid future row\n",
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(sessions);
+        provider.state_db = Some(native_db(dir.path(), &path, 0));
+        let first = provider.poll(SystemTime::now());
+        assert_eq!(first.tasks[0].name, "Native sidebar name");
+        let before = first.tasks[0].clone();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let mut engine = TransitionEngine::new();
+        engine.apply(&first.tasks, &[], SystemTime::now());
+        tracker.reconcile(first.tasks);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&index)
+            .unwrap()
+            .write_all(b"{\"id\":\"sess-1\",\"thread_name\":\"Renamed in Desktop\"}\n")
+            .unwrap();
+        let renamed = provider.poll(SystemTime::now()).tasks;
+        assert_eq!(renamed[0].name, "Renamed in Desktop");
+        assert_eq!(renamed[0].id, before.id);
+        assert_eq!(renamed[0].turn_key, before.turn_key);
+        assert_eq!(renamed[0].updated_at, before.updated_at);
+        assert!(engine.apply(&renamed, &[], SystemTime::now()).is_empty());
+        assert!(!tracker.reconcile(renamed)[0].new_execution);
+        let conn = rusqlite::Connection::open(provider.state_db.as_ref().unwrap()).unwrap();
+        conn.execute("UPDATE threads SET name='Manual override'", [])
+            .unwrap();
+        assert_eq!(
+            provider.poll(SystemTime::now()).tasks[0].name,
+            "Manual override"
+        );
+    }
+
+    #[test]
+    fn new_project_rollout_is_detected_before_metadata_and_title_are_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("rollout-existing.jsonl");
+        std::fs::write(
+            &old,
+            format!(
+                "{}{}",
+                header("/old-project"),
+                turn_event("task_complete", "old-turn", 60)
+            ),
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().to_owned());
+        provider.state_db = Some(native_db(
+            dir.path(),
+            &old,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+        ));
+        provider.poll(SystemTime::now());
+        let fresh = dir.path().join("rollout-brand-new.jsonl");
+        std::fs::write(&fresh,format!("{}\n{}",serde_json::json!({"type":"session_meta","payload":{"id":"new-id","cwd":"D:/never-monitored-before"}}),turn_event("task_started","new-turn",0))).unwrap();
+        let tasks = provider.poll(SystemTime::now()).tasks;
+        let task = tasks
+            .iter()
+            .find(|t| t.session_id.as_deref() == Some("new-id"))
+            .expect("new execution is independent of metadata allowlist");
+        assert_eq!(task.status, TaskStatus::Running);
+        assert_eq!(task.project.as_deref(), Some("never-monitored-before"));
+        assert_eq!(
+            task.project_path.as_deref(),
+            Some("D:/never-monitored-before")
+        );
+        assert_eq!(task.name, "未命名任务 · new-id");
+        let id = task.id.clone();
+        let mut tracker =
+            crate::attention::AttentionTracker::open(dir.path().join("attention.json"));
+        assert!(tracker.reconcile(tasks).iter().any(|t| t.id == id));
+    }
+
+    #[test]
+    fn resumed_thread_uses_newest_events_not_old_metadata_path_or_file_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("rollout-old.jsonl");
+        let resumed = dir.path().join("rollout-resumed.jsonl");
+        let now = SystemTime::now();
+        let secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs() - 1;
+        let stamp = format_unix(secs);
+        let old_stamp = stamp.replace(".000Z", ".100Z");
+        let new_stamp = stamp.replace(".000Z", ".900Z");
+        let body = |kind: &str, turn: &str, ts: &str| {
+            format!(
+                "{}{}\n",
+                header("/project"),
+                serde_json::json!({"timestamp":ts,"payload":{"type":kind,"turn_id":turn}})
+            )
+        };
+        std::fs::write(&resumed, body("task_started", "new-turn", &new_stamp)).unwrap();
+        // Write the old file LAST: discovery mtime order must not choose it.
+        std::fs::write(&old, body("task_complete", "old-turn", &old_stamp)).unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().to_owned());
+        provider.state_db = Some(native_db(dir.path(), &old, secs as i64));
+        let tasks = provider.poll(now).tasks;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, "codex:sess-1");
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+        assert_eq!(tasks[0].turn_key.as_deref(), Some("new-turn"));
+    }
+
+    #[test]
+    fn unknown_metadata_guardian_is_marked_internal_from_rollout_source() {
+        let body = format!(
+            "{}\n{}",
+            serde_json::json!({"type":"session_meta","payload":{"id":"internal","source":{"subagent":{"other":"guardian"}},"cwd":"/project"}}),
+            turn_event("task_started", "turn", 0)
+        );
+        let (dir, _) = temp_rollout(&body);
+        let task = CodexProvider::with_root(dir.path().to_owned())
+            .poll(SystemTime::now())
+            .tasks
+            .remove(0);
+        assert!(task.internal);
+    }
+
+    #[test]
+    fn sidebar_index_tolerates_partial_appends_and_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("session_index.jsonl");
+        let mut provider = CodexProvider::with_root(dir.path().join("sessions"));
+        std::fs::write(
+            &index,
+            "{\"id\":\"one\",\"thread_name\":\"First\"}\n{\"id\":\"two\"",
+        )
+        .unwrap();
+        provider.refresh_title_index();
+        assert_eq!(provider.indexed_titles.len(), 1);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&index)
+            .unwrap()
+            .write_all(b",\"thread_name\":\"Second\"}\n")
+            .unwrap();
+        provider.refresh_title_index();
+        assert_eq!(
+            provider.indexed_titles.get("two").map(String::as_str),
+            Some("Second")
+        );
+        std::fs::write(&index, "{\"id\":\"one\",\"thread_name\":\"Replaced\"}\n").unwrap();
+        provider.refresh_title_index();
+        assert_eq!(provider.indexed_titles.len(), 1);
+        assert_eq!(provider.indexed_titles["one"], "Replaced");
+    }
 
     #[test]
     fn wsl_mapping_sidebar_rename_and_incremental_turn_share_native_rules() {

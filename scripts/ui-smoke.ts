@@ -27,6 +27,7 @@ if(cmd==='save_monitoring_settings'){settings=structuredClone(args.settings);ret
 if(cmd==='plugin:event|listen'){listeners.push({id:listeners.length+1,...args});return listeners.length;}return null;}};
 globalThis.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
 globalThis.__smokeEmit=(event,payload)=>listeners.filter(l=>l.event===event).forEach(l=>callbacks.get(l.handler)?.({event,id:l.id,payload}));
+globalThis.__smokeStartProject=()=>{tasks=[...tasks,{...tasks[2],id:'test-new-project',name:'验收：自动发现的新执行',project:'brand-new-project',project_path:'D:/test/new-project'}];globalThis.__smokeEmit('agents-updated',tasks);};
 })();`;
 try {
   await send('Page.enable');
@@ -36,10 +37,19 @@ try {
   await waitFor(`document.querySelectorAll('.task-row').length===28`);
   const layout=await evaluate(`(()=>{const p=document.querySelector('.dashboard'),m=document.querySelector('main');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,scroll:m.scrollHeight>m.clientHeight,overflow:document.documentElement.scrollWidth>440,errors:[...document.querySelectorAll('[role=alert]')].map(n=>n.textContent),rows:document.querySelectorAll('.task-row').length};})()`);
   if(layout.width>440||layout.height>720||!layout.scroll||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
+  await evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('筛选 / 分组')).click()`);
+  await evaluate(`(()=>{const s=document.querySelector('[aria-label="筛选项目"]');s.value=[...s.options].find(o=>o.value)?.value;s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await evaluate(`__smokeStartProject()`);
+  await waitFor(`document.querySelector('.outside-running')?.textContent.includes('1 个运行任务')`);
+  await waitFor(`document.querySelector('.filter-note')?.textContent.includes('项目：test-project')`);
+  await evaluate(`[...document.querySelectorAll('.counts button')].find(b=>b.textContent.trim().startsWith('运行')).click()`);
+  await waitFor(`document.querySelector('[data-task-id="test-new-project"]') && document.querySelectorAll('.task-row').length===27`);
+  await evaluate(`document.querySelector('.counts .total').click()`);
+  await waitFor(`document.querySelectorAll('.task-row').length===29`);
   await evaluate(`[...document.querySelectorAll('.task-row')].find(row=>row.textContent.includes('验收：已结束')).click()`);
   await waitFor(`document.querySelector('.detail')?.textContent.includes('本轮结束')`);
   await evaluate(`[...document.querySelectorAll('.detail button')].find(b=>b.textContent==='已查看').click()`);
-  await waitFor(`document.querySelectorAll('.task-row').length===27`);
+  await waitFor(`document.querySelectorAll('.task-row').length===28`);
   await evaluate(`document.querySelector('[aria-label="管理监控来源"]').click()`);
   await waitFor(`__smokeCalls.some(c=>c.cmd==='open_management')`);
   await Bun.write(out+'/dashboard.png',Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -56,7 +66,7 @@ try {
   await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='通知与显示').click()`);
   await waitFor(`document.body.textContent.includes('同一事件只提醒一次')`);
   await Bun.write(out+'/management.png',Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  const result={passed:true,layout,checks:['28 tasks, scroll, bounded popup','ended task viewed action','management open IPC','source toggle + save','discovered sessions','notification preferences'],data:'isolated mocked IPC; not native live acceptance'};
+  const result={passed:true,layout,checks:['28 tasks, scroll, bounded popup','new project starts under an existing filter','global running counter clears restrictive filters','ended task viewed action','management open IPC','source toggle + save','discovered sessions','notification preferences'],data:'isolated mocked IPC; not native live acceptance'};
   await Bun.write(out+'/result.json',JSON.stringify(result,null,2));
   console.log(JSON.stringify(result));
 }finally{socket.close();}

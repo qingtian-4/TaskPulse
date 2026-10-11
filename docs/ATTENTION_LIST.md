@@ -9,7 +9,7 @@ TaskPulse 主界面不是 Agent 历史会话浏览器。它只显示当前需要
 | Agent | 稳定会话 ID | 原生标题 | 项目 | turn 事件 | 重命名 | 原生已查看 |
 |---|---|---|---|---|---|---|
 | Hermes | `sessions.id` | `display_name/name` | `cwd/git_repo_root` | `session_turn_leases` + `ended_at/end_reason` | 下一次 SQLite 读取同步 | `last_read_at` 存在，但部分版本不维护 |
-| Codex 本地 | rollout / app-server `thread.id` | app-server `thread/list.name` | `cwd` | rollout `task_started/task_complete/...` | app-server 每 15 秒刷新标题 | 当前没有稳定、可移植的未读字段 |
+| Codex 本地 | rollout / app-server `thread.id` | SQLite `name`、app-server `thread/list.name`、`session_index.jsonl.thread_name` | 元数据 `cwd`，缺失时使用 rollout `cwd` | rollout `task_started/task_complete/...` | 索引每次增量采集同步；app-server 每 10 秒刷新 | 当前没有稳定、可移植的未读字段 |
 | Codex 远程 | rollout UUID | 远程 `state_5.sqlite` 的 `name/title` | `cwd` | rollout 事件 | 下一次 SSH 快照同步 | 无稳定字段 |
 | DeepSeek Harness | session 目录 ID | session title/name；否则首条用户消息 | `cwd` | `turn/start` 与 `turn/end` | 下一次事件流读取同步 | 无稳定字段 |
 | 远程 tmux | `host + pane_id`；`tp-run` 使用 run ID | `tp-run` label 或进程命令 | pane cwd | 进程变化；`tp-run` 提供精确结束码 | 不适用 | 无 |
@@ -17,6 +17,16 @@ TaskPulse 主界面不是 Agent 历史会话浏览器。它只显示当前需要
 降级顺序统一为：手动/原生名称 → 原生正式标题 → 首条用户消息摘要 → `未命名任务 · 短 ID`。标题变化只更新同一稳定 ID 的展示数据，不改变状态、未读状态或通知去重键。
 
 Codex 的 app-server 只负责原生标题和重命名同步。运行状态仍来自 rollout，因为 TaskPulse 启动的独立 app-server 实例不会继承 Codex Desktop 当前已加载线程的实时状态。app-server 不可用时自动降级到只读 SQLite 和 rollout，不会阻止监控。
+
+### Codex 自动发现与筛选边界
+
+- 元数据是标题/项目补充和历史保留线索，不是可执行会话的路径白名单。新写入的 rollout 即使尚未出现在 SQLite/app-server 中，也必须被解析；项目范围仍在后续管道中按用户设置过滤。
+- 恢复同一 thread 可能生成多份 rollout。按原生事件时间（保留小数秒精度）归并为一个稳定 ID 的观察，不能让枚举顺序决定旧 turn 覆盖新 turn。相同时间时仅用元数据指向的当前路径打破平局。
+- 原生标题索引只更新名称，不改变原生执行时间、状态、未读或通知键；半行、未知行及替换使用现有增量读取机制处理。内部 guardian 来源即使尚未进入数据库，也通过 rollout 的原生 source 标记排除。
+- 顶部计数是全局概览。点击某个状态清除项目/来源/位置限制，展示该计数对应的任务；重新打开面板回到概览。用户在面板中显式筛选时保持筛选，但列出具体条件并提示被筛选挡住的运行任务，提供直接跳转。
+- 已启用来源默认监控所有项目的新执行；已有显式范围、排除和“停止监控此会话”选择不被自动发现覆盖。首次设置仍需用户授权，不自动接入未知 Agent 或批量导入历史。
+
+自动回归包含“已有项目元数据时的新项目日志”“同 thread 新旧日志同秒出现”“索引重命名/半行/替换”及“筛选中出现新执行”。`scripts/native-discovery-smoke.ts` 用临时 localhost CDP 验证真实 IPC、原生标题和筛选可见性，不发 Agent 提示、不写监控范围或已查看状态。
 
 ## 生命周期
 

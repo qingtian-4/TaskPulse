@@ -1,8 +1,29 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import { taskSection, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult } from '../src/lib/dashboard';
+import { taskSection, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('a newly detected project outside explicit filters is visible via the global running counter',()=>{
+  const old={...base,id:'old',project:'old-project',project_path:'C:/old',source_instance:'codex'};
+  const fresh={...base,id:'new',project:'new-project',project_path:'D:/new',source_instance:'codex'};
+  const filtered=filterTasks([old,fresh],{...EMPTY_FILTERS,project:projectKey(old)});
+  expect(filtered.map(t=>t.id)).toEqual(['old']);
+  expect(runningOutsideView([old,fresh],filtered).map(t=>t.id)).toEqual(['new']);
+  const global=overviewFilters(1,null);
+  expect(filterTasks([old,fresh],global).map(t=>t.id)).toEqual(['old','new']);
+  expect(runningOutsideView([old,fresh],filterTasks([old,fresh],global))).toEqual([]);
+});
+
+test('zero matching rows is explicitly a filter state, not a lack of collected executions',()=>{
+  const filters={...EMPTY_FILTERS,project:'obsolete-project',location:'Old server',section:0};
+  expect(filterTasks([base],filters)).toEqual([]);
+  expect(runningOutsideView([base],[])).toEqual([base]);
+  expect(filterDescription(filters,[base])).toContain('项目：已不在当前列表');
+  expect(filterDescription(filters,[base])).toContain('状态：需要处理');
+  expect(overviewFilters(0,0)).toEqual(EMPTY_FILTERS);
+  expect(filterDescription(EMPTY_FILTERS,[base])).toBe('');
+});
 test('thinking and model waits are running, not command execution or task completion', () => {
   expect(taskActivity({...base,phase:'thinking',activity:'old command'})).toBe('正在思考');
   expect(taskActivity({...base,phase:'awaiting_model',activity:'old command'})).toContain('本轮仍在运行');
