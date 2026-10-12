@@ -84,10 +84,12 @@ ending is not proof that its project is complete. Only real exit codes establish
 command success. Missing logs and failed probes never establish completion.
 
 Completion popups normally close after 15 seconds, pausing while hovered.
-Blocking/approval-check popups do not time out. Closing a popup or opening details
+Confirmed approval/question popups do not time out. Closing a popup or opening details
 does not mark a result viewed. Approval is performed in the original Agent.
-Codex escalation requests can be automatic; a delayed check reminder explicitly
-expresses uncertainty instead of asserting that human approval is required.
+Codex escalation parameters and slow commands are not evidence of pending human
+approval. Only explicit source approval events trigger authorization reminders;
+sources without these events may miss approval waits. Timed approval guesses are
+not used.
 
 ## Data and privacy
 

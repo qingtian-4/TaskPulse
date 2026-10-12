@@ -98,15 +98,11 @@ impl NoticeQueue {
             let Some(current) = tasks.iter().find(|t| t.id == previous.id && !t.stale) else {
                 return true;
             };
-            let same_request = if previous.requires_action() {
-                current.requires_action()
-                    && current.waiting_reason == previous.waiting_reason
-                    && current.input_request_id == previous.input_request_id
-                    && current.turn_key == previous.turn_key
-            } else {
-                current.approval_hint.as_ref().map(|h| &h.request_id)
-                    == previous.approval_hint.as_ref().map(|h| &h.request_id)
-            };
+            let same_request = previous.requires_action()
+                && current.requires_action()
+                && current.waiting_reason == previous.waiting_reason
+                && current.input_request_id == previous.input_request_id
+                && current.turn_key == previous.turn_key;
             if !same_request {
                 removed.push(entry.clone());
             }
@@ -152,10 +148,7 @@ pub fn enqueue(
         return;
     }
     let context = task.as_ref().map(NoticeContext::from);
-    let auto_dismiss_ms = if task
-        .as_ref()
-        .is_some_and(|t| t.requires_action() || t.approval_hint.is_some())
-    {
+    let auto_dismiss_ms = if task.as_ref().is_some_and(|t| t.requires_action()) {
         None
     } else {
         Some(15_000)
@@ -489,16 +482,14 @@ mod tests {
             "codex:s",
             "native",
             TaskSource::Codex,
-            crate::domain::TaskStatus::Running,
+            crate::domain::TaskStatus::WaitingInput,
             crate::domain::DetectionConfidence::Hook,
             SystemTime::now(),
         );
         task.unread = true;
-        task.approval_hint = Some(crate::domain::ApprovalHint {
-            request_id: "c1".into(),
-            requested_at: 0,
-            check_due: true,
-        });
+        task.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        task.input_request_id = Some("q1".into());
+        task.turn_key = Some("turn".into());
         let mut sticky = entry(1);
         sticky.notice.auto_dismiss_ms = None;
         sticky.task = Some(task.clone());
@@ -508,9 +499,13 @@ mod tests {
         assert!(queue.reconcile(&[]).is_empty());
         let mut stale = task.clone();
         stale.stale = true;
-        stale.approval_hint = None;
+        stale.status = crate::domain::TaskStatus::Running;
+        stale.waiting_reason = None;
+        stale.input_request_id = None;
         assert!(queue.reconcile(&[stale]).is_empty());
-        task.approval_hint = None;
+        task.status = crate::domain::TaskStatus::Running;
+        task.waiting_reason = None;
+        task.input_request_id = None;
         assert_eq!(queue.reconcile(&[task.clone()]).len(), 1);
         assert!(task.unread);
         assert_eq!(queue.state().current.unwrap().id, 2);

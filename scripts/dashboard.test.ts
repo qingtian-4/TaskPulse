@@ -3,10 +3,13 @@ import { test, expect } from 'bun:test';
 import { taskSection, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
-test('an unconfirmed permission request is not a finished turn or an asserted approval blocker',()=>{
+test('obsolete approval hints cannot create a blocker label, action section or completed result',()=>{
   const pending={...base,phase:'awaiting_tool' as const,approval_hint:{request_id:'c',requested_at:1,check_due:true}};
-  expect(taskLabel(pending)).toBe('授权待确认');expect(taskSection(pending)).toBe(0);
-  expect(taskActivity(pending)).toContain('尚未确认');expect(isEndedResult(pending)).toBe(false);
+  expect(taskLabel(pending)).toBe('运行中');expect(taskSection(pending)).toBe(1);
+  expect(taskActivity(pending)).toBe('等待工具响应 · 本轮仍在运行');expect(isEndedResult(pending)).toBe(false);
+  expect(taskActivity(pending)).not.toContain('授权');
+  const confirmed={...base,status:'waiting_input' as const,waiting_reason:'approval' as const,input_request_id:'q1'};
+  expect(taskLabel(confirmed)).toBe('需要授权');expect(taskSection(confirmed)).toBe(0);
   expect(taskLabel({...base,phase:'thinking'})).toBe('运行中');
 });
 

@@ -1,9 +1,12 @@
 /** Real WebView2 alert acceptance, CDP 9337; no mocked IPC.
  * Temporarily selects silent popup reminders, restores config in finally.
  * Test alerts are explicit and never enter attention/history/Agent sessions.
+ * TASKPULSE_SMOKE_LOCKED_DESKTOP=1 permits rendering checks while locked;
+ * editor focus preservation is then explicitly NOT verified, never counted as passed.
  */
 import { mkdir } from 'node:fs/promises';
 const out='src-tauri/target/ui-smoke';
+const lockedDesktop=process.env.TASKPULSE_SMOKE_LOCKED_DESKTOP==='1';
 await mkdir(out,{recursive:true});
 type Tab={url:string;webSocketDebuggerUrl:string};
 const tabs=async():Promise<Tab[]>=>fetch('http://127.0.0.1:9337/json').then(r=>r.json());
@@ -29,12 +32,16 @@ try{
   await root.wait(`!!globalThis.__TAURI_INTERNALS__ && !!document.querySelector('.dashboard')`);
   original=await root.invoke('get_monitoring_settings');
   const before=await root.invoke('get_agents');
+  if(before.some((t:any)=>Object.hasOwn(t,'approval_hint')))throw Error('Removed approval hint leaked into the actual task IPC');
+  if(await root.evaluate(`[...document.querySelectorAll('.dashboard .row-status>span:first-child,.dashboard .detail-heading>span')].some(e=>e.textContent.includes('授权待确认'))`))throw Error('Actual dashboard still shows inferred approval status');
   const existing=await root.invoke('get_task_notice');
   if(existing.current)throw Error('A real user reminder is pending; refusing to dismiss it for tests');
   await root.invoke('save_monitoring_settings',{settings:{...original,notifications:true,notification_mode:'popup',sound:false}});
   await root.invoke('plugin:window|show',{label:'popup'});
-  await root.invoke('plugin:window|set_focus',{label:'popup'});
-  await root.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'popup'})`);
+  if(!lockedDesktop){
+    await root.invoke('plugin:window|set_focus',{label:'popup'});
+    await root.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'popup'})`);
+  }
   await root.invoke('test_notification',{kind:'turn_ended'});
   let tab:Tab|undefined;
   for(let n=0;n<100;n++){tab=(await tabs()).find(t=>t.url.includes('/notice'));if(tab)break;await Bun.sleep(100);}
@@ -43,8 +50,8 @@ try{
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('本轮结束，等待后续输入')`);
   const first=await root.invoke('get_task_notice');
   if(!first.current?.test || first.current.task_id!==null)throw Error('Test created fake monitored task');
-  const focusPreserved=await root.invoke('plugin:window|is_focused',{label:'popup'});
-  if(!focusPreserved)throw Error('Focus changed during creation: '+JSON.stringify({noticeFocused:await root.invoke('plugin:window|is_focused',{label:'task-notice'}),popupVisible:await root.invoke('plugin:window|is_visible',{label:'popup'})}));
+  const focusPreserved=lockedDesktop ? null : await root.invoke('plugin:window|is_focused',{label:'popup'});
+  if(!lockedDesktop && !focusPreserved)throw Error('Focus changed during creation: '+JSON.stringify({noticeFocused:await root.invoke('plugin:window|is_focused',{label:'task-notice'}),popupVisible:await root.invoke('plugin:window|is_visible',{label:'popup'})}));
   const layout=await alert.evaluate(`(()=>{const p=document.querySelector('.notice-window');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,background:getComputedStyle(p).backgroundColor,overflow:document.documentElement.scrollWidth>320||document.documentElement.scrollHeight>132,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)};})()`);
   if(layout.width!==320||layout.height!==132||layout.background!=='rgb(26, 27, 30)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
   const name=await alert.evaluate(`document.querySelector('.heading')?.textContent`);
@@ -85,10 +92,15 @@ try{
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>!s.current)`);
   if(!await root.invoke('plugin:window|is_visible',{label:'popup'}))throw Error('View details did not show dashboard');
   if(await root.invoke('plugin:window|is_visible',{label:'task-notice'}))throw Error('Dismissed alert still visible');
-  await root.invoke('test_notification',{kind:'approval_check'});
-  await alert.wait(`document.querySelector('.summary')?.textContent.includes('授权状态待确认')`);
+  phase='removed inferred approval event';
+  let rejected=false;
+  try{await root.invoke('test_notification',{kind:'approval_check'});}catch{rejected=true;}
+  if(!rejected || (await root.invoke('get_task_notice')).current)throw Error('Removed inferred approval test still creates a reminder');
+  phase='confirmed approval queue rotation';
+  await root.invoke('test_notification',{kind:'approval'});
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
   const check=await root.invoke('get_task_notice');
-  if(check.current.auto_dismiss_ms!==null)throw Error('Approval-check reminder is not sticky');
+  if(check.current.auto_dismiss_ms!==null)throw Error('Confirmed approval reminder is not sticky');
   await root.invoke('test_notification',{kind:'turn_ended'});
   await alert.wait(`!!document.querySelector('button.pending')`);
   await alert.evaluate(`document.querySelector('button.pending').click()`);
@@ -97,12 +109,12 @@ try{
   if((await root.invoke('get_task_notice')).current?.test!==true)throw Error('Late timeout affected the current test reminder');
   const endQueued=await root.invoke('get_task_notice');
   await root.invoke('dismiss_task_notice',{id:endQueued.current.id});
-  await alert.wait(`document.querySelector('.summary')?.textContent.includes('授权状态待确认')`);
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
   const rotated=await root.invoke('get_task_notice');
   if(rotated.current.id===check.current.id)throw Error('Rotated reminder reused a stale presentation ID');
   await alert.wait(`document.querySelector('.close')?.disabled===false`);
   await Bun.sleep(200); // Capture after the entrance animation, not at partial opacity.
-  await Bun.write(out+'/native-approval-check.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await Bun.write(out+'/native-approval-queue.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.invoke('dismiss_task_notice',{id:rotated.current.id});
   await root.invoke('test_notification');
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
@@ -147,9 +159,10 @@ try{
     await management.evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='通知与显示').click()`);
     await management.wait(`document.querySelectorAll('.delivery-row').length>0`);
     if(await management.evaluate(`!!document.querySelector('.delivery [role=alert]')`))throw Error('Delivery log failed in real management IPC');
-    await management.invoke('plugin:window|close',{label:'management'});
+    // Keep the IPC caller alive: closing its own WebView can lose the response.
+    await root.invoke('plugin:window|close',{label:'management'});
   }finally{management.close();}
-  const result={passed:true,layout,longTitleLayout,focusPreserved,autoDismissMs,checks:['actual completion/failure/approval windows rendered','approval remains beyond 15s and backend refuses timeout','uncertain approval wording and sticky reminder','queue navigation preserves pending blocker with fresh presentation ID','delivery stages persisted without asserting user-read','native task title is primary heading','narrow dark strip and long title layout','action buttons inside compact window','message card pointer click opens dashboard','separate queued alerts','late callback safe','hover pauses timer','view details opens dashboard','15s auto-hide for ordinary results','master off clears popup','no fake task or viewed-state mutations','no native console/CSP errors'],notVerified:['fresh real Agent task finish during acceptance','OS system banner delivery','exact approval stream not exposed by current Desktop rollout']};
+  const result={passed:true,layout,longTitleLayout,focusPreserved,autoDismissMs,checks:['actual completion/failure/approval windows rendered','approval remains beyond 15s and backend refuses timeout','removed inferred approval event is rejected without a popup','queue navigation preserves pending blocker with fresh presentation ID','delivery stages persisted without asserting user-read','native task title is primary heading','narrow dark strip and long title layout','action buttons inside compact window','message card pointer click opens dashboard','separate queued alerts','late callback safe','hover pauses timer','view details opens dashboard','15s auto-hide for ordinary results','master off clears popup','no fake task or viewed-state mutations','no native console/CSP errors'],notVerified:[...(lockedDesktop ? ['editor focus preservation (Windows desktop locked)'] : []),'fresh real Agent task finish during acceptance','OS system banner delivery','exact approval stream not exposed by current Desktop rollout']};
   await Bun.write(out+'/native-notice-result.json',JSON.stringify(result,null,2));
   console.log(JSON.stringify(result));
 }catch(error){

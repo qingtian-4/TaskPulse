@@ -5,6 +5,6 @@
 pub mod task;
 
 pub use task::{
-    ApprovalHint, DetectionConfidence, ExecutionPhase, TaskSnapshot, TaskSource, TaskStatus,
-    TerminalInfo, WaitingReason,
+    DetectionConfidence, ExecutionPhase, TaskSnapshot, TaskSource, TaskStatus, TerminalInfo,
+    WaitingReason,
 };

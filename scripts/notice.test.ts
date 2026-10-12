@@ -6,7 +6,7 @@ const base: TaskNotice = {
   id: 1, title: 'TaskPulse · 本轮结束，等待后续输入',
   body: 'Codex · Project · Task', created_at: 1, task_id: 'codex:stable', test: false,
 };
-test('blocking and approval-check reminders have no timer, while legacy completion remains 15 seconds',()=>{
+test('confirmed blocking reminders have no timer, while legacy completion remains 15 seconds',()=>{
   expect(noticeTimeout({...base,auto_dismiss_ms:null})).toBeNull();
   expect(noticeTimeout(base)).toBe(15000);
   expect(noticeTimeout({...base,auto_dismiss_ms:15000})).toBe(15000);

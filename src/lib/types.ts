@@ -37,7 +37,6 @@ export interface TaskSnapshot {
   tmux_pane?: string;
   tmux_target?: string;
   waiting_reason?: 'turn_ended' | 'approval' | 'question' | 'unknown';
-  approval_hint?: { request_id: string; requested_at: number; check_due: boolean };
   input_request_id?: string;
   attention_since?: number;
   id: string;

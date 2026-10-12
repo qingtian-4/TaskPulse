@@ -457,7 +457,6 @@ impl CodexProvider {
         task.turn_key = host.turn_key.clone();
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
-        task.approval_hint = approval_hint(host, now);
         task.pinned = meta.is_some_and(|meta| meta.pinned);
         task.internal = host.internal || meta.is_some_and(|meta| meta.internal);
         // A completed turn means the agent is waiting on the user — keep the
@@ -507,7 +506,6 @@ pub struct SessionState {
     pub activity: Option<String>,
     pub phase: Option<crate::domain::ExecutionPhase>,
     active_tools: std::collections::BTreeMap<String, String>,
-    approval_requests: std::collections::BTreeMap<String, SystemTime>,
     confirmed_approvals: std::collections::BTreeMap<String, Option<String>>,
     pub session_id: String,
     pub turn_key: Option<String>,
@@ -879,146 +877,6 @@ fn parse_codex_rollout_unfiltered(
     apply_codex_rollout(body, now, default_session_id, None)
 }
 
-fn approval_hint(state: &SessionState, now: SystemTime) -> Option<crate::domain::ApprovalHint> {
-    if state.status != TaskStatus::Running {
-        return None;
-    }
-    let (id, at) = state.approval_requests.iter().min_by_key(|(_, at)| *at)?;
-    Some(crate::domain::ApprovalHint {
-        request_id: id.clone(),
-        requested_at: epoch_millis(*at),
-        check_due: now.duration_since(*at).unwrap_or_default() >= Duration::from_secs(20),
-    })
-}
-
-/// Inspect literal parameters, never execute Code Mode source or match words
-/// inside commands/comments/prompts. Unknown/dynamic expressions stay unknown.
-fn requests_escalation(payload: &serde_json::Value) -> bool {
-    let name = payload
-        .get("name")
-        .and_then(|v| v.as_str())
-        .unwrap_or("")
-        .rsplit('.')
-        .next()
-        .unwrap_or("");
-    let raw = payload
-        .get("arguments")
-        .or_else(|| payload.get("input"))
-        .and_then(|v| v.as_str())
-        .unwrap_or("");
-    if matches!(
-        name,
-        "exec_command" | "shell_command" | "request_permissions"
-    ) {
-        return serde_json::from_str::<serde_json::Value>(raw)
-            .ok()
-            .is_some_and(|v| {
-                v.get("sandbox_permissions").and_then(|v| v.as_str()) == Some("require_escalated")
-                    || name == "request_permissions" && v.get("permissions").is_some()
-            });
-    }
-    if name != "exec" || raw.len() > 128 * 1024 {
-        return false;
-    }
-    let tokens = js_tokens(raw);
-    for i in 0..tokens.len().saturating_sub(5) {
-        if tokens[i].1
-            || tokens[i].0 != "tools"
-            || tokens[i + 1].0 != "."
-            || !matches!(tokens[i + 2].0.as_str(), "exec_command" | "shell_command")
-            || tokens[i + 3].0 != "("
-            || tokens[i + 4].0 != "{"
-        {
-            continue;
-        }
-        let mut depth = 1;
-        for j in i + 5..tokens.len() {
-            let (text, string) = &tokens[j];
-            if !string && text == "{" {
-                depth += 1;
-            }
-            if !string && text == "}" {
-                depth -= 1;
-                if depth == 0 {
-                    break;
-                }
-            }
-            if depth == 1
-                && text == "sandbox_permissions"
-                && tokens.get(j + 1).is_some_and(|t| !t.1 && t.0 == ":")
-                && tokens
-                    .get(j + 2)
-                    .is_some_and(|t| t.1 && t.0 == "require_escalated")
-            {
-                return true;
-            }
-        }
-    }
-    false
-}
-
-fn js_tokens(source: &str) -> Vec<(String, bool)> {
-    let b = source.as_bytes();
-    let mut i = 0;
-    let mut out = Vec::new();
-    while i < b.len() {
-        if b[i].is_ascii_whitespace() {
-            i += 1;
-            continue;
-        }
-        if b[i..].starts_with(b"//") {
-            while i < b.len() && b[i] != b'\n' {
-                i += 1;
-            }
-            continue;
-        }
-        if b[i..].starts_with(b"/*") {
-            i += 2;
-            while i + 1 < b.len() && &b[i..i + 2] != b"*/" {
-                i += 1;
-            }
-            i = (i + 2).min(b.len());
-            continue;
-        }
-        if matches!(b[i], b'\'' | b'"' | b'`') {
-            let quote = b[i];
-            let start = i + 1;
-            i += 1;
-            while i < b.len() && b[i] != quote {
-                if b[i] == b'\\' {
-                    i += 1;
-                }
-                i = (i + 1).min(b.len());
-            }
-            if i >= b.len() {
-                break;
-            }
-            // Escaped/dynamic values cannot be permission identifiers.
-            let text = if quote == b'`' || source[start..i].contains('\\') {
-                String::new()
-            } else {
-                source[start..i].to_string()
-            };
-            out.push((text, true));
-            i += 1;
-            continue;
-        }
-        if b[i].is_ascii_alphabetic() || matches!(b[i], b'_' | b'$') {
-            let start = i;
-            i += 1;
-            while i < b.len() && (b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'$')) {
-                i += 1;
-            }
-            out.push((source[start..i].into(), false));
-        } else {
-            let c = source[i..].chars().next().unwrap();
-            out.push((c.to_string(), false));
-            i += c.len_utf8();
-        }
-    }
-    out
-}
-
 fn apply_codex_rollout(
     body: &str,
     now: SystemTime,
@@ -1041,7 +899,6 @@ fn apply_codex_rollout(
         mut activity,
         mut phase,
         mut active_tools,
-        mut approval_requests,
         mut confirmed_approvals,
         mut session_id,
         mut turn_key,
@@ -1063,7 +920,6 @@ fn apply_codex_rollout(
         activity: None,
         phase: None,
         active_tools: Default::default(),
-        approval_requests: Default::default(),
         confirmed_approvals: Default::default(),
         session_id: default_session_id.into(),
         turn_key: None,
@@ -1117,10 +973,7 @@ fn apply_codex_rollout(
                     }
                     "serverRequest/resolved" => {
                         if let Some(id) = params.get("requestId").and_then(request) {
-                            if let Some(item) = confirmed_approvals.remove(&id) {
-                                if let Some(item) = item {
-                                    approval_requests.remove(&item);
-                                }
+                            if confirmed_approvals.remove(&id).is_some() {
                                 if confirmed_approvals.is_empty() {
                                     status = TaskStatus::Running;
                                     waiting_reason = None;
@@ -1190,7 +1043,6 @@ fn apply_codex_rollout(
                 started_at = ts;
                 activity = None;
                 active_tools.clear();
-                approval_requests.clear();
                 confirmed_approvals.clear();
                 phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 if let Some(t) = ts {
@@ -1304,14 +1156,6 @@ fn apply_codex_rollout(
                     );
                 }
                 phase = Some(crate::domain::ExecutionPhase::Tool);
-                if requests_escalation(payload) {
-                    if let (Some(id), Some(at)) =
-                        (payload.get("call_id").and_then(|v| v.as_str()), ts)
-                    {
-                        approval_requests.insert(id.into(), at);
-                        phase = Some(crate::domain::ExecutionPhase::AwaitingTool);
-                    }
-                }
                 if payload
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -1329,7 +1173,6 @@ fn apply_codex_rollout(
             }
             "function_call_output" | "custom_tool_call_output" => {
                 if let Some(id) = payload.get("call_id").and_then(|v| v.as_str()) {
-                    approval_requests.remove(id);
                     active_tools.remove(id);
                     activity = active_tools.values().next_back().cloned();
                     phase = (status == TaskStatus::Running).then_some(if active_tools.is_empty() {
@@ -1361,7 +1204,6 @@ fn apply_codex_rollout(
                 input_request_id = None;
                 activity = None;
                 active_tools.clear();
-                approval_requests.clear();
                 confirmed_approvals.clear();
                 phase = None;
                 if let Some(t) = payload
@@ -1381,7 +1223,6 @@ fn apply_codex_rollout(
                 input_request_id = None;
                 activity = None;
                 active_tools.clear();
-                approval_requests.clear();
                 confirmed_approvals.clear();
                 phase = None;
                 if let Some(t) = ts {
@@ -1395,9 +1236,6 @@ fn apply_codex_rollout(
             waiting_reason = Some(crate::domain::WaitingReason::Approval);
             input_request_id = Some(id.clone());
             phase = None;
-        }
-        if status == TaskStatus::Running && !approval_requests.is_empty() {
-            phase = Some(crate::domain::ExecutionPhase::AwaitingTool);
         }
     }
 
@@ -1414,7 +1252,6 @@ fn apply_codex_rollout(
         activity,
         phase,
         active_tools,
-        approval_requests,
         confirmed_approvals,
         session_id,
         turn_key,
@@ -1696,7 +1533,6 @@ fn flush_codex(
     }
     let Some(slug) = slug else { return };
     if let Some(state) = parse_codex_rollout(buf, now, slug) {
-        let hint = approval_hint(&state, now);
         // The tail we read may not carry session_meta (it's at the top of the
         // file), so prefer the thread id extracted from the rollout filename.
         let sid = uuid
@@ -1737,7 +1573,6 @@ fn flush_codex(
         t.project_path = titles.get(&sid).map(|(_, cwd, _)| cwd.clone());
         t.waiting_reason = state.waiting_reason;
         t.input_request_id = state.input_request_id;
-        t.approval_hint = hint;
         t.started_at = state.started_at;
         t.message = state.last_message;
         t.activity = state.activity;
@@ -2069,8 +1904,11 @@ for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread
         assert!(output.status.success(), "SSH read failed");
         let body = String::from_utf8(output.stdout).unwrap();
         let state = parse_codex_rollout(&body, now, &id).expect("Real rollout available");
-        let hint = approval_hint(&state, now).expect("Unresolved native escalation at cutoff");
-        assert!(hint.check_due);
+        assert!(
+            !state.active_tools.is_empty(),
+            "Unresolved native tool at cutoff"
+        );
+        assert_eq!(state.phase, Some(crate::domain::ExecutionPhase::Tool));
         assert_eq!(state.status, TaskStatus::Running);
         assert_eq!(state.waiting_reason, None);
         assert_eq!(state.session_id, id);
@@ -2082,73 +1920,104 @@ for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread
             DetectionConfidence::Hook,
             now,
         );
-        task.approval_hint = Some(hint.clone());
+        task.phase = state.phase;
         task.turn_key = state.turn_key;
         let mut engine = crate::transition::TransitionEngine::new();
-        assert!(matches!(
-            engine.apply(&[task.clone()], &[], now).as_slice(),
-            [crate::transition::TaskEvent::ApprovalCheck { .. }]
-        ));
-        assert!(engine.apply(&[task], &[], now).is_empty());
-        println!("Read-only replay passed: native request {}, state RUNNING, one uncertain approval check, no completion",hint.request_id);
+        assert!(engine.apply(&[task.clone()], &[], now).is_empty());
+        assert!(engine
+            .apply(&[task], &[], now + Duration::from_secs(7200))
+            .is_empty());
+        println!("Read-only replay passed: unresolved native tool, state RUNNING, no inferred approval alert or completion");
     }
 
     #[test]
-    fn escalation_is_unconfirmed_and_only_slow_unresolved_requests_need_a_check() {
-        let now = parse_rfc3339("2026-10-12T09:00:10Z").unwrap();
-        let state = parse_codex_rollout(&escalation_log("c1"), now, "s").unwrap();
-        assert_eq!(state.status, TaskStatus::Running);
-        assert_eq!(state.waiting_reason, None);
+    fn long_escalated_calls_never_infer_approval_or_emit_notifications() {
+        let started = parse_rfc3339("2026-10-12T09:00:00Z").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(&path, escalation_log("c1")).unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().to_path_buf());
+        let mut engine = crate::transition::TransitionEngine::new();
+        // Both the first parse and unchanged incremental cache must stay running.
+        for seconds in [10, 22, 600, 7200] {
+            let now = started + Duration::from_secs(seconds);
+            let state = provider.cached_session_state(&path, now).unwrap();
+            assert_eq!(state.status, TaskStatus::Running);
+            assert_eq!(state.waiting_reason, None);
+            assert_eq!(state.input_request_id, None);
+            assert_eq!(state.phase, Some(crate::domain::ExecutionPhase::Tool));
+            assert!(state.active_tools.contains_key("c1"));
+            let snapshot = provider.session_to_task(&state, None, now);
+            assert!(!snapshot.requires_action());
+            assert!(engine.apply(&[snapshot], &[], now).is_empty());
+        }
+        let now = started + Duration::from_secs(7201);
+        let returned = serde_json::json!({"timestamp":"2026-10-12T11:00:01Z","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"Process running with session ID 12"}}).to_string();
+        let state = provider.cached_session_state(&path, now).unwrap();
+        let returned = apply_codex_rollout(&returned, now, "s", Some(state)).unwrap();
+        assert!(returned.active_tools.is_empty());
+        assert_eq!(returned.status, TaskStatus::Running);
         assert_eq!(
-            state.phase,
-            Some(crate::domain::ExecutionPhase::AwaitingTool)
+            returned.phase,
+            Some(crate::domain::ExecutionPhase::AwaitingModel)
         );
-        assert!(!approval_hint(&state, now).unwrap().check_due);
+        assert!(engine
+            .apply(&[provider.session_to_task(&returned, None, now)], &[], now)
+            .is_empty());
+        let ended = serde_json::json!({"timestamp":"2026-10-12T11:00:02Z","payload":{"type":"task_complete","turn_id":"turn"}}).to_string();
+        let ended = apply_codex_rollout(&ended, now, "s", Some(returned)).unwrap();
+        let snapshot = provider.session_to_task(&ended, None, now);
         assert!(
-            approval_hint(&state, now + Duration::from_secs(12))
-                .unwrap()
-                .check_due
+            matches!(engine.apply(&[snapshot.clone()], &[], now).as_slice(),
+            [crate::transition::TaskEvent::WaitingInput { task, .. }]
+            if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded))
         );
-        let returned=serde_json::json!({"timestamp":"2026-10-12T09:00:03Z","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"Process running with session ID 12"}}).to_string();
-        let done = apply_codex_rollout(&returned, now, "s", Some(state)).unwrap();
-        assert!(approval_hint(&done, now + Duration::from_secs(40)).is_none());
-        assert_eq!(done.status, TaskStatus::Running); // A returned tool is not a finished turn.
+        assert!(engine.apply(&[snapshot], &[], now).is_empty());
     }
 
     #[test]
-    fn unrelated_tool_results_cannot_clear_another_escalation_request() {
+    fn unrelated_tool_results_preserve_the_active_command_without_an_approval_guess() {
         let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
         let state = parse_codex_rollout(&escalation_log("c1"), now, "s").unwrap();
-        let other=serde_json::json!({"timestamp":"2026-10-12T09:00:05Z","payload":{"type":"function_call_output","call_id":"c-other"}}).to_string();
-        let waiting = apply_codex_rollout(&other, now, "s", Some(state)).unwrap();
-        assert_eq!(approval_hint(&waiting, now).unwrap().request_id, "c1");
-        let ended=serde_json::json!({"timestamp":"2026-10-12T09:00:30Z","payload":{"type":"task_complete","turn_id":"turn"}}).to_string();
-        let ended = apply_codex_rollout(&ended, now, "s", Some(waiting)).unwrap();
+        let other = serde_json::json!({"timestamp":"2026-10-12T09:00:05Z","payload":{"type":"function_call_output","call_id":"c-other"}}).to_string();
+        let running = apply_codex_rollout(&other, now, "s", Some(state)).unwrap();
+        assert!(running.active_tools.contains_key("c1"));
+        assert_eq!(running.status, TaskStatus::Running);
+        assert_eq!(running.phase, Some(crate::domain::ExecutionPhase::Tool));
+        assert_eq!(running.waiting_reason, None);
+        let ended = serde_json::json!({"timestamp":"2026-10-12T09:00:30Z","payload":{"type":"task_complete","turn_id":"turn"}}).to_string();
+        let ended = apply_codex_rollout(&ended, now, "s", Some(running)).unwrap();
         assert_eq!(
             ended.waiting_reason,
             Some(crate::domain::WaitingReason::TurnEnded)
         );
-        assert!(approval_hint(&ended, now).is_none());
+        assert!(ended.active_tools.is_empty());
     }
 
     #[test]
-    fn escalation_words_in_shell_strings_comments_or_unrelated_objects_are_not_requests() {
-        for input in [
-            "// tools.exec_command({sandbox_permissions: 'require_escalated'})\nawait tools.exec_command({cmd:'ok'});",
-            "await tools.exec_command({cmd:'echo sandbox_permissions: require_escalated'});",
-            "const text=\"tools.exec_command({sandbox_permissions: 'require_escalated'})\";",
-            "const unrelated={sandbox_permissions:'require_escalated'};await tools.exec_command({cmd:'ok'});",
-            "await tools.exec_command({sandbox_permissions: dynamic});",
-        ] {assert!(!requests_escalation(&serde_json::json!({"name":"exec","input":input})),"{input}");}
-        assert!(requests_escalation(
-            &serde_json::json!({"name":"exec","input":"await tools.exec_command({'sandbox_permissions':'require_escalated',cmd:'ok'})"})
-        ));
-        assert!(requests_escalation(
-            &serde_json::json!({"name":"functions.exec_command","arguments":"{\"sandbox_permissions\":\"require_escalated\"}"})
-        ));
-        assert!(!requests_escalation(
-            &serde_json::json!({"name":"search","arguments":"{\"sandbox_permissions\":\"require_escalated\"}"})
-        ));
+    fn command_permissions_are_not_evidence_of_a_pending_approval() {
+        let now = parse_rfc3339("2026-10-12T09:01:00Z").unwrap();
+        for (name, arguments) in [
+            (
+                "exec_command",
+                r#"{"cmd":"gpu-check","sandbox_permissions":"require_escalated"}"#,
+            ),
+            (
+                "functions.exec_command",
+                r#"{"sandbox_permissions":"require_escalated","justification":"Check GPU"}"#,
+            ),
+            (
+                "exec_command",
+                r#"{"cmd":"long-command","sandbox_permissions":"use_default"}"#,
+            ),
+        ] {
+            let call = serde_json::json!({"timestamp":"2026-10-12T09:00:02Z","payload":{"type":"function_call","name":name,"call_id":"c2","arguments":arguments}}).to_string();
+            let state = parse_codex_rollout(&(escalation_log("c1") + &call), now, "s").unwrap();
+            assert_eq!(state.status, TaskStatus::Running);
+            assert_eq!(state.phase, Some(crate::domain::ExecutionPhase::Tool));
+            assert_eq!(state.waiting_reason, None);
+            assert_eq!(state.input_request_id, None);
+        }
     }
 
     #[test]
@@ -2169,18 +2038,26 @@ for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread
         let resumed = apply_codex_rollout(&resolved, now, "s", Some(still)).unwrap();
         assert_eq!(resumed.status, TaskStatus::Running);
         assert_eq!(resumed.waiting_reason, None);
-        assert!(approval_hint(&resumed, now).is_none());
+        assert_eq!(resumed.input_request_id, None);
+        assert_eq!(
+            resumed.phase,
+            Some(crate::domain::ExecutionPhase::AwaitingTool)
+        );
     }
 
     #[test]
-    fn remote_snapshots_use_the_same_pending_request_rules_and_never_invent_completion() {
+    fn remote_snapshots_never_infer_approval_or_invent_completion() {
         let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
         let section=format!("===S:project===F:rollout-2026-10-12T09-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl===\n{}",escalation_log("c1"));
         let tasks = tasks_from_codex_section(&section, "test-host", "host", now);
         assert_eq!(tasks.len(), 1);
         assert!(tasks[0].remote);
         assert_eq!(tasks[0].status, TaskStatus::Running);
-        assert!(tasks[0].approval_hint.as_ref().unwrap().check_due);
+        assert_eq!(tasks[0].phase, Some(crate::domain::ExecutionPhase::Tool));
+        assert!(!tasks[0].requires_action());
+        assert!(crate::transition::TransitionEngine::new()
+            .apply(&tasks, &[], now)
+            .is_empty());
         assert_eq!(
             tasks[0].session_id.as_deref(),
             Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")

@@ -13,9 +13,6 @@ use crate::transition::TaskEvent;
 /// A concrete notification to surface.
 #[derive(Debug, Clone)]
 pub enum NotifyEvent {
-    ApprovalCheck {
-        task: TaskSnapshot,
-    },
     WaitingInput {
         task: TaskSnapshot,
         reason: Option<String>,
@@ -55,10 +52,6 @@ impl Notifier for SystemBeepNotifier {
             return;
         }
         match event {
-            NotifyEvent::ApprovalCheck { task } => {
-                log::info!("'{}' has an unconfirmed permission request", task.name);
-                play_system_beep();
-            }
             NotifyEvent::WaitingInput { task, reason } => {
                 log::info!(
                     "'{}' needs input ({}) — playing alert",
@@ -103,8 +96,7 @@ impl Notifier for DesktopNotifier {
         let identifier = app.config().identifier.clone();
         let app = app.clone();
         let task = match event {
-            NotifyEvent::ApprovalCheck { task }
-            | NotifyEvent::WaitingInput { task, .. }
+            NotifyEvent::WaitingInput { task, .. }
             | NotifyEvent::Succeeded { task }
             | NotifyEvent::Failed { task }
             | NotifyEvent::InferredFinished { task } => Some(task.clone()),
@@ -146,8 +138,7 @@ impl Notifier for PopupNotifier {
         if let Some(app) = app {
             let (title, body) = notification_copy(event);
             let task = match event {
-                NotifyEvent::ApprovalCheck { task }
-                | NotifyEvent::WaitingInput { task, .. }
+                NotifyEvent::WaitingInput { task, .. }
                 | NotifyEvent::Succeeded { task }
                 | NotifyEvent::Failed { task }
                 | NotifyEvent::InferredFinished { task } => Some(task.clone()),
@@ -253,13 +244,6 @@ fn send_actionable_notification(
 
 fn notification_copy(event: &NotifyEvent) -> (String, String) {
     match event {
-        NotifyEvent::ApprovalCheck { task } => (
-            "TaskPulse · 授权状态待确认，请检查 Codex".into(),
-            format!(
-                "{} · 提权请求尚无结果，来源未确认是否等待批准；请在 Codex 中检查。",
-                task_notification_label(task)
-            ),
-        ),
         NotifyEvent::WaitingInput { task, reason } => {
             if let Some(reason) = reason {
                 log::debug!("Waiting-input reason for '{}': {reason}", task.name);
@@ -444,8 +428,7 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
     crate::task_notice::reconcile(app, _tasks);
     for event in events {
         let task = match event {
-            TaskEvent::ApprovalCheck { task }
-            | TaskEvent::WaitingInput { task, .. }
+            TaskEvent::WaitingInput { task, .. }
             | TaskEvent::Succeeded { task }
             | TaskEvent::Failed { task }
             | TaskEvent::InferredFinished { task } => Some(task),
@@ -453,7 +436,6 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
         };
         // Audit the event category, not arbitrary native titles/prompt fallbacks.
         let title = match event {
-            TaskEvent::ApprovalCheck { .. } => "授权状态待确认",
             TaskEvent::WaitingInput { task, .. }
                 if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) =>
             {
@@ -477,7 +459,6 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
             continue;
         }
         let notify_event = match event {
-            TaskEvent::ApprovalCheck { task } => NotifyEvent::ApprovalCheck { task: task.clone() },
             TaskEvent::WaitingInput { task, reason } => NotifyEvent::WaitingInput {
                 task: task.clone(),
                 reason: reason.clone(),
@@ -511,8 +492,7 @@ pub async fn test_notification(app: AppHandle, kind: Option<String>) -> Result<(
         let (title, body) = notification_copy(&event);
         // Explicit test: no fake task enters attention/history or Agent data.
         let task = match &event {
-            NotifyEvent::ApprovalCheck { task }
-            | NotifyEvent::WaitingInput { task, .. }
+            NotifyEvent::WaitingInput { task, .. }
             | NotifyEvent::Succeeded { task }
             | NotifyEvent::Failed { task }
             | NotifyEvent::InferredFinished { task } => Some(task.clone()),
@@ -554,15 +534,6 @@ fn test_event(kind: &str) -> Result<NotifyEvent, String> {
         "approval" => {
             task.waiting_reason = Some(WaitingReason::Approval);
             Ok(NotifyEvent::WaitingInput { task, reason: None })
-        }
-        "approval_check" => {
-            task.status = crate::domain::TaskStatus::Running;
-            task.approval_hint = Some(crate::domain::ApprovalHint {
-                request_id: "test-request".into(),
-                requested_at: 0,
-                check_due: true,
-            });
-            Ok(NotifyEvent::ApprovalCheck { task })
         }
         "failed" => {
             task.status = TaskStatus::Failed;
@@ -667,6 +638,7 @@ mod tests {
             panic!("expected long title reminder");
         }
         assert!(test_event("anything").is_err());
+        assert!(test_event("approval_check").is_err());
     }
 
     #[test]

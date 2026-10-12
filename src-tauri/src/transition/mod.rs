@@ -20,8 +20,6 @@ use crate::providers::{HostHealth, HostStatus};
 /// A meaningful change worth surfacing (notification + UI emphasis).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskEvent {
-    /// Explicit escalation request remains unresolved; actual approval is unknown.
-    ApprovalCheck { task: TaskSnapshot },
     /// Agent finished its turn and needs the user (local agents).
     WaitingInput {
         task: TaskSnapshot,
@@ -62,8 +60,6 @@ pub struct TransitionEngine {
     prev_hosts: HashMap<String, HostStatus>,
     notified: HashSet<(String, EventKind)>,
     #[serde(default)]
-    approval_checks: HashSet<(String, String)>,
-    #[serde(default)]
     input_notifications: HashSet<(String, String)>,
     #[serde(skip)]
     path: Option<std::path::PathBuf>,
@@ -75,7 +71,6 @@ impl TransitionEngine {
         self.prev_turns.retain(|id, _| !ids.contains(id));
         self.prev_waits.retain(|id, _| !ids.contains(id));
         self.notified.retain(|(id, _)| !ids.contains(id));
-        self.approval_checks.retain(|(id, _)| !ids.contains(id));
         self.input_notifications.retain(|(id, _)| !ids.contains(id));
     }
     pub fn new() -> Self {
@@ -134,16 +129,6 @@ impl TransitionEngine {
 
         for task in tasks {
             let id = task.id.clone();
-            if !task.stale && task.status == TaskStatus::Running {
-                if let Some(hint) = task.approval_hint.as_ref().filter(|h| h.check_due) {
-                    if self
-                        .approval_checks
-                        .insert((id.clone(), hint.request_id.clone()))
-                    {
-                        events.push(TaskEvent::ApprovalCheck { task: task.clone() });
-                    }
-                }
-            }
             if task.is_agent_session() {
                 // v3 could infer an end during thinking. Do not let that false
                 // event suppress the next genuine failure/completion.
@@ -296,7 +281,6 @@ impl TransitionEngine {
         self.prev_waits.clear();
         self.prev_hosts.clear();
         self.notified.clear();
-        self.approval_checks.clear();
         self.input_notifications.clear();
     }
 }
@@ -314,22 +298,12 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 mod tests {
     use super::*;
     #[test]
-    fn permission_checks_and_confirmed_requests_dedup_by_request_across_flaps_and_restart() {
+    fn confirmed_requests_dedup_by_request_across_flaps_and_restart() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("notifications.json");
         let mut engine = TransitionEngine::open(path.clone());
         let mut t = task_turn("codex:s", TaskStatus::Running, "turn");
-        t.approval_hint = Some(crate::domain::ApprovalHint {
-            request_id: "c1".into(),
-            requested_at: 0,
-            check_due: false,
-        });
         assert!(apply_once(&mut engine, &[t.clone()]).is_empty());
-        t.approval_hint.as_mut().unwrap().check_due = true;
-        assert!(matches!(
-            apply_once(&mut engine, &[t.clone()]).as_slice(),
-            [TaskEvent::ApprovalCheck { .. }]
-        ));
         let mut restart = TransitionEngine::open(path);
         assert!(apply_once(&mut restart, &[t.clone()]).is_empty());
         t.status = TaskStatus::WaitingInput;
@@ -345,6 +319,40 @@ mod tests {
         t.input_request_id = Some("q2".into());
         assert_eq!(apply_once(&mut restart, &[t]).len(), 1);
     }
+    #[test]
+    fn obsolete_approval_checks_do_not_reset_persisted_completion_or_request_dedup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut t = task_turn("codex:s", TaskStatus::Running, "turn");
+        apply_once(&mut engine, &[t.clone()]);
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        t.input_request_id = Some("q1".into());
+        assert_eq!(apply_once(&mut engine, &[t.clone()]).len(), 1);
+        t.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        t.input_request_id = None;
+        assert_eq!(apply_once(&mut engine, &[t.clone()]).len(), 1);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        legacy["approval_checks"] = serde_json::json!([["codex:s", "c1"]]);
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let mut restored = TransitionEngine::open(path.clone());
+        assert!(apply_once(&mut restored, &[t.clone()]).is_empty());
+        t.status = TaskStatus::Running;
+        t.waiting_reason = None;
+        assert!(apply_once(&mut restored, &[t.clone()]).is_empty());
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        t.input_request_id = Some("q1".into());
+        assert!(apply_once(&mut restored, &[t.clone()]).is_empty());
+        t.input_request_id = Some("q2".into());
+        assert_eq!(apply_once(&mut restored, &[t]).len(), 1);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(saved.get("approval_checks").is_none());
+    }
+
     #[test]
     fn agent_cpu_idle_flapping_never_announces_end_or_resets_dedup() {
         let dir = tempfile::tempdir().unwrap();

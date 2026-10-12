@@ -99,7 +99,6 @@ impl From<AgentStatus> for TaskSnapshot {
             tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
-            approval_hint: None,
             attention_since: 0,
             new_execution: false,
             host: None,
