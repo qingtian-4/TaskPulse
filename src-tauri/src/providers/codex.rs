@@ -457,6 +457,7 @@ impl CodexProvider {
         task.turn_key = host.turn_key.clone();
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
+        task.approval_hint = approval_hint(host, now);
         task.pinned = meta.is_some_and(|meta| meta.pinned);
         task.internal = host.internal || meta.is_some_and(|meta| meta.internal);
         // A completed turn means the agent is waiting on the user — keep the
@@ -506,6 +507,8 @@ pub struct SessionState {
     pub activity: Option<String>,
     pub phase: Option<crate::domain::ExecutionPhase>,
     active_tools: std::collections::BTreeMap<String, String>,
+    approval_requests: std::collections::BTreeMap<String, SystemTime>,
+    confirmed_approvals: std::collections::BTreeMap<String, Option<String>>,
     pub session_id: String,
     pub turn_key: Option<String>,
     pub first_user_message: Option<String>,
@@ -562,7 +565,13 @@ struct NativeCodexSnapshot {
 fn query_codex_app_server() -> Result<NativeCodexSnapshot, String> {
     let executable = find_codex_executable()
         .ok_or_else(|| "Codex app-server executable was not found".to_string())?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW: never disturb editor focus.
+    }
+    let mut child = command
         .args(["app-server", "--stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -870,6 +879,146 @@ fn parse_codex_rollout_unfiltered(
     apply_codex_rollout(body, now, default_session_id, None)
 }
 
+fn approval_hint(state: &SessionState, now: SystemTime) -> Option<crate::domain::ApprovalHint> {
+    if state.status != TaskStatus::Running {
+        return None;
+    }
+    let (id, at) = state.approval_requests.iter().min_by_key(|(_, at)| *at)?;
+    Some(crate::domain::ApprovalHint {
+        request_id: id.clone(),
+        requested_at: epoch_millis(*at),
+        check_due: now.duration_since(*at).unwrap_or_default() >= Duration::from_secs(20),
+    })
+}
+
+/// Inspect literal parameters, never execute Code Mode source or match words
+/// inside commands/comments/prompts. Unknown/dynamic expressions stay unknown.
+fn requests_escalation(payload: &serde_json::Value) -> bool {
+    let name = payload
+        .get("name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .rsplit('.')
+        .next()
+        .unwrap_or("");
+    let raw = payload
+        .get("arguments")
+        .or_else(|| payload.get("input"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if matches!(
+        name,
+        "exec_command" | "shell_command" | "request_permissions"
+    ) {
+        return serde_json::from_str::<serde_json::Value>(raw)
+            .ok()
+            .is_some_and(|v| {
+                v.get("sandbox_permissions").and_then(|v| v.as_str()) == Some("require_escalated")
+                    || name == "request_permissions" && v.get("permissions").is_some()
+            });
+    }
+    if name != "exec" || raw.len() > 128 * 1024 {
+        return false;
+    }
+    let tokens = js_tokens(raw);
+    for i in 0..tokens.len().saturating_sub(5) {
+        if tokens[i].1
+            || tokens[i].0 != "tools"
+            || tokens[i + 1].0 != "."
+            || !matches!(tokens[i + 2].0.as_str(), "exec_command" | "shell_command")
+            || tokens[i + 3].0 != "("
+            || tokens[i + 4].0 != "{"
+        {
+            continue;
+        }
+        let mut depth = 1;
+        for j in i + 5..tokens.len() {
+            let (text, string) = &tokens[j];
+            if !string && text == "{" {
+                depth += 1;
+            }
+            if !string && text == "}" {
+                depth -= 1;
+                if depth == 0 {
+                    break;
+                }
+            }
+            if depth == 1
+                && text == "sandbox_permissions"
+                && tokens.get(j + 1).is_some_and(|t| !t.1 && t.0 == ":")
+                && tokens
+                    .get(j + 2)
+                    .is_some_and(|t| t.1 && t.0 == "require_escalated")
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn js_tokens(source: &str) -> Vec<(String, bool)> {
+    let b = source.as_bytes();
+    let mut i = 0;
+    let mut out = Vec::new();
+    while i < b.len() {
+        if b[i].is_ascii_whitespace() {
+            i += 1;
+            continue;
+        }
+        if b[i..].starts_with(b"//") {
+            while i < b.len() && b[i] != b'\n' {
+                i += 1;
+            }
+            continue;
+        }
+        if b[i..].starts_with(b"/*") {
+            i += 2;
+            while i + 1 < b.len() && &b[i..i + 2] != b"*/" {
+                i += 1;
+            }
+            i = (i + 2).min(b.len());
+            continue;
+        }
+        if matches!(b[i], b'\'' | b'"' | b'`') {
+            let quote = b[i];
+            let start = i + 1;
+            i += 1;
+            while i < b.len() && b[i] != quote {
+                if b[i] == b'\\' {
+                    i += 1;
+                }
+                i = (i + 1).min(b.len());
+            }
+            if i >= b.len() {
+                break;
+            }
+            // Escaped/dynamic values cannot be permission identifiers.
+            let text = if quote == b'`' || source[start..i].contains('\\') {
+                String::new()
+            } else {
+                source[start..i].to_string()
+            };
+            out.push((text, true));
+            i += 1;
+            continue;
+        }
+        if b[i].is_ascii_alphabetic() || matches!(b[i], b'_' | b'$') {
+            let start = i;
+            i += 1;
+            while i < b.len() && (b[i].is_ascii_alphanumeric() || matches!(b[i], b'_' | b'$')) {
+                i += 1;
+            }
+            out.push((source[start..i].into(), false));
+        } else {
+            let c = source[i..].chars().next().unwrap();
+            out.push((c.to_string(), false));
+            i += c.len_utf8();
+        }
+    }
+    out
+}
+
 fn apply_codex_rollout(
     body: &str,
     now: SystemTime,
@@ -892,6 +1041,8 @@ fn apply_codex_rollout(
         mut activity,
         mut phase,
         mut active_tools,
+        mut approval_requests,
+        mut confirmed_approvals,
         mut session_id,
         mut turn_key,
         mut first_user_message,
@@ -912,6 +1063,8 @@ fn apply_codex_rollout(
         activity: None,
         phase: None,
         active_tools: Default::default(),
+        approval_requests: Default::default(),
+        confirmed_approvals: Default::default(),
         session_id: default_session_id.into(),
         turn_key: None,
         first_user_message: None,
@@ -930,6 +1083,67 @@ fn apply_codex_rollout(
             continue;
         };
         let ts = value.get("timestamp").and_then(parse_rfc3339_value);
+        // Exact public app-server messages, only when the source records them.
+        if let (Some(method), Some(params)) = (
+            value.get("method").and_then(|v| v.as_str()),
+            value.get("params"),
+        ) {
+            if params.get("threadId").and_then(|v| v.as_str()) == Some(session_id.as_str()) {
+                let request = |v: &serde_json::Value| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .or_else(|| v.as_i64().map(|n| n.to_string()))
+                };
+                match method {
+                    "item/commandExecution/requestApproval"
+                    | "item/fileChange/requestApproval"
+                    | "item/permissions/requestApproval" => {
+                        if let Some(id) = value.get("id").and_then(request) {
+                            confirmed_approvals.insert(
+                                id.clone(),
+                                params
+                                    .get("itemId")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_owned),
+                            );
+                            status = TaskStatus::WaitingInput;
+                            waiting_reason = Some(crate::domain::WaitingReason::Approval);
+                            input_request_id = Some(id);
+                            phase = None;
+                            if let Some(t) = ts {
+                                updated_at = t;
+                            }
+                        }
+                    }
+                    "serverRequest/resolved" => {
+                        if let Some(id) = params.get("requestId").and_then(request) {
+                            if let Some(item) = confirmed_approvals.remove(&id) {
+                                if let Some(item) = item {
+                                    approval_requests.remove(&item);
+                                }
+                                if confirmed_approvals.is_empty() {
+                                    status = TaskStatus::Running;
+                                    waiting_reason = None;
+                                    input_request_id = None;
+                                    phase = Some(crate::domain::ExecutionPhase::AwaitingTool);
+                                }
+                                if let Some(t) = ts {
+                                    updated_at = t;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                if let Some(id) = confirmed_approvals.keys().next() {
+                    status = TaskStatus::WaitingInput;
+                    waiting_reason = Some(crate::domain::WaitingReason::Approval);
+                    input_request_id = Some(id.clone());
+                    phase = None;
+                }
+            }
+            continue;
+        }
         let Some(payload) = value.get("payload") else {
             continue;
         };
@@ -976,6 +1190,8 @@ fn apply_codex_rollout(
                 started_at = ts;
                 activity = None;
                 active_tools.clear();
+                approval_requests.clear();
+                confirmed_approvals.clear();
                 phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 if let Some(t) = ts {
                     updated_at = t;
@@ -987,14 +1203,16 @@ fn apply_codex_rollout(
                     .or_else(|| value_timestamp_key(ts));
             }
             "user_message" => {
-                if status != TaskStatus::Running {
+                if status != TaskStatus::Running && status != TaskStatus::WaitingInput {
                     started_at = ts;
                     turn_key = value_timestamp_key(ts);
                     activity = None;
                     active_tools.clear();
                     phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 }
-                status = TaskStatus::Running;
+                if status != TaskStatus::WaitingInput {
+                    status = TaskStatus::Running;
+                }
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -1072,7 +1290,9 @@ fn apply_codex_rollout(
                 }
             }
             "function_call" | "custom_tool_call" => {
-                status = TaskStatus::Running;
+                if status != TaskStatus::WaitingInput {
+                    status = TaskStatus::Running;
+                }
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -1084,6 +1304,14 @@ fn apply_codex_rollout(
                     );
                 }
                 phase = Some(crate::domain::ExecutionPhase::Tool);
+                if requests_escalation(payload) {
+                    if let (Some(id), Some(at)) =
+                        (payload.get("call_id").and_then(|v| v.as_str()), ts)
+                    {
+                        approval_requests.insert(id.into(), at);
+                        phase = Some(crate::domain::ExecutionPhase::AwaitingTool);
+                    }
+                }
                 if payload
                     .get("name")
                     .and_then(|v| v.as_str())
@@ -1101,6 +1329,7 @@ fn apply_codex_rollout(
             }
             "function_call_output" | "custom_tool_call_output" => {
                 if let Some(id) = payload.get("call_id").and_then(|v| v.as_str()) {
+                    approval_requests.remove(id);
                     active_tools.remove(id);
                     activity = active_tools.values().next_back().cloned();
                     phase = (status == TaskStatus::Running).then_some(if active_tools.is_empty() {
@@ -1132,6 +1361,8 @@ fn apply_codex_rollout(
                 input_request_id = None;
                 activity = None;
                 active_tools.clear();
+                approval_requests.clear();
+                confirmed_approvals.clear();
                 phase = None;
                 if let Some(t) = payload
                     .get("completed_at")
@@ -1150,12 +1381,23 @@ fn apply_codex_rollout(
                 input_request_id = None;
                 activity = None;
                 active_tools.clear();
+                approval_requests.clear();
+                confirmed_approvals.clear();
                 phase = None;
                 if let Some(t) = ts {
                     updated_at = t;
                 }
             }
             _ => {}
+        }
+        if let Some(id) = confirmed_approvals.keys().next() {
+            status = TaskStatus::WaitingInput;
+            waiting_reason = Some(crate::domain::WaitingReason::Approval);
+            input_request_id = Some(id.clone());
+            phase = None;
+        }
+        if status == TaskStatus::Running && !approval_requests.is_empty() {
+            phase = Some(crate::domain::ExecutionPhase::AwaitingTool);
         }
     }
 
@@ -1172,6 +1414,8 @@ fn apply_codex_rollout(
         activity,
         phase,
         active_tools,
+        approval_requests,
+        confirmed_approvals,
         session_id,
         turn_key,
         first_user_message,
@@ -1452,6 +1696,7 @@ fn flush_codex(
     }
     let Some(slug) = slug else { return };
     if let Some(state) = parse_codex_rollout(buf, now, slug) {
+        let hint = approval_hint(&state, now);
         // The tail we read may not carry session_meta (it's at the top of the
         // file), so prefer the thread id extracted from the rollout filename.
         let sid = uuid
@@ -1492,6 +1737,7 @@ fn flush_codex(
         t.project_path = titles.get(&sid).map(|(_, cwd, _)| cwd.clone());
         t.waiting_reason = state.waiting_reason;
         t.input_request_id = state.input_request_id;
+        t.approval_hint = hint;
         t.started_at = state.started_at;
         t.message = state.last_message;
         t.activity = state.activity;
@@ -1773,6 +2019,173 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn escalation_log(id: &str) -> String {
+        format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({"timestamp":"2026-10-12T09:00:00Z","type":"session_meta","payload":{"id":"s","cwd":"/project"}}),
+            serde_json::json!({"timestamp":"2026-10-12T09:00:00Z","payload":{"type":"task_started","turn_id":"turn"}}),
+            serde_json::json!({"timestamp":"2026-10-12T09:00:01Z","payload":{"type":"custom_tool_call","name":"exec","call_id":id,"input":"const r = await tools.exec_command({cmd: \"gpu-check\", sandbox_permissions: \"require_escalated\"});"}})
+        )
+    }
+
+    /// Replay a real, read-only SSH transcript at a caller-selected historical
+    /// cutoff. Never prompts an Agent, executes its commands, or edits a log.
+    #[test]
+    #[ignore = "requires TASKPULSE_APPROVAL_SSH_HOST, THREAD_ID and REPLAY_UNTIL"]
+    fn live_remote_approval_replay() {
+        use base64::Engine;
+        let host = std::env::var("TASKPULSE_APPROVAL_SSH_HOST").expect("Set SSH host");
+        let id = std::env::var("TASKPULSE_APPROVAL_THREAD_ID").expect("Set thread ID");
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'));
+        let until = std::env::var("TASKPULSE_APPROVAL_REPLAY_UNTIL").expect("Set RFC3339 cutoff");
+        let now = parse_rfc3339(&until).expect("Valid cutoff");
+        let script = format!(
+            r#"import glob,json,os
+from datetime import datetime
+thread={id:?}
+cutoff=datetime.fromisoformat({until:?}.replace('Z','+00:00'))
+for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread+'*.jsonl'),recursive=True):
+ with open(path,encoding='utf-8') as stream:
+  for line in stream:
+   try:
+    row=json.loads(line)
+    if datetime.fromisoformat(row['timestamp'].replace('Z','+00:00'))<=cutoff: print(line,end='')
+   except (ValueError,KeyError): pass
+"#
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(script);
+        let output = Command::new("ssh")
+            .args([
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=6",
+                &host,
+                &format!("echo {encoded} | base64 -d | python3"),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "SSH read failed");
+        let body = String::from_utf8(output.stdout).unwrap();
+        let state = parse_codex_rollout(&body, now, &id).expect("Real rollout available");
+        let hint = approval_hint(&state, now).expect("Unresolved native escalation at cutoff");
+        assert!(hint.check_due);
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.waiting_reason, None);
+        assert_eq!(state.session_id, id);
+        let mut task = TaskSnapshot::new(
+            format!("replay:{id}"),
+            "Read-only replay (not monitored)",
+            TaskSource::Codex,
+            state.status,
+            DetectionConfidence::Hook,
+            now,
+        );
+        task.approval_hint = Some(hint.clone());
+        task.turn_key = state.turn_key;
+        let mut engine = crate::transition::TransitionEngine::new();
+        assert!(matches!(
+            engine.apply(&[task.clone()], &[], now).as_slice(),
+            [crate::transition::TaskEvent::ApprovalCheck { .. }]
+        ));
+        assert!(engine.apply(&[task], &[], now).is_empty());
+        println!("Read-only replay passed: native request {}, state RUNNING, one uncertain approval check, no completion",hint.request_id);
+    }
+
+    #[test]
+    fn escalation_is_unconfirmed_and_only_slow_unresolved_requests_need_a_check() {
+        let now = parse_rfc3339("2026-10-12T09:00:10Z").unwrap();
+        let state = parse_codex_rollout(&escalation_log("c1"), now, "s").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.waiting_reason, None);
+        assert_eq!(
+            state.phase,
+            Some(crate::domain::ExecutionPhase::AwaitingTool)
+        );
+        assert!(!approval_hint(&state, now).unwrap().check_due);
+        assert!(
+            approval_hint(&state, now + Duration::from_secs(12))
+                .unwrap()
+                .check_due
+        );
+        let returned=serde_json::json!({"timestamp":"2026-10-12T09:00:03Z","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"Process running with session ID 12"}}).to_string();
+        let done = apply_codex_rollout(&returned, now, "s", Some(state)).unwrap();
+        assert!(approval_hint(&done, now + Duration::from_secs(40)).is_none());
+        assert_eq!(done.status, TaskStatus::Running); // A returned tool is not a finished turn.
+    }
+
+    #[test]
+    fn unrelated_tool_results_cannot_clear_another_escalation_request() {
+        let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
+        let state = parse_codex_rollout(&escalation_log("c1"), now, "s").unwrap();
+        let other=serde_json::json!({"timestamp":"2026-10-12T09:00:05Z","payload":{"type":"function_call_output","call_id":"c-other"}}).to_string();
+        let waiting = apply_codex_rollout(&other, now, "s", Some(state)).unwrap();
+        assert_eq!(approval_hint(&waiting, now).unwrap().request_id, "c1");
+        let ended=serde_json::json!({"timestamp":"2026-10-12T09:00:30Z","payload":{"type":"task_complete","turn_id":"turn"}}).to_string();
+        let ended = apply_codex_rollout(&ended, now, "s", Some(waiting)).unwrap();
+        assert_eq!(
+            ended.waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+        assert!(approval_hint(&ended, now).is_none());
+    }
+
+    #[test]
+    fn escalation_words_in_shell_strings_comments_or_unrelated_objects_are_not_requests() {
+        for input in [
+            "// tools.exec_command({sandbox_permissions: 'require_escalated'})\nawait tools.exec_command({cmd:'ok'});",
+            "await tools.exec_command({cmd:'echo sandbox_permissions: require_escalated'});",
+            "const text=\"tools.exec_command({sandbox_permissions: 'require_escalated'})\";",
+            "const unrelated={sandbox_permissions:'require_escalated'};await tools.exec_command({cmd:'ok'});",
+            "await tools.exec_command({sandbox_permissions: dynamic});",
+        ] {assert!(!requests_escalation(&serde_json::json!({"name":"exec","input":input})),"{input}");}
+        assert!(requests_escalation(
+            &serde_json::json!({"name":"exec","input":"await tools.exec_command({'sandbox_permissions':'require_escalated',cmd:'ok'})"})
+        ));
+        assert!(requests_escalation(
+            &serde_json::json!({"name":"functions.exec_command","arguments":"{\"sandbox_permissions\":\"require_escalated\"}"})
+        ));
+        assert!(!requests_escalation(
+            &serde_json::json!({"name":"search","arguments":"{\"sandbox_permissions\":\"require_escalated\"}"})
+        ));
+    }
+
+    #[test]
+    fn explicit_approval_events_wait_until_the_matching_request_is_resolved() {
+        let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
+        let base = parse_codex_rollout(&escalation_log("c1"), now, "s").unwrap();
+        let requested=serde_json::json!({"timestamp":"2026-10-12T09:00:02Z","id":42,"method":"item/commandExecution/requestApproval","params":{"threadId":"s","turnId":"turn","itemId":"c1"}}).to_string();
+        let state = apply_codex_rollout(&requested, now, "s", Some(base)).unwrap();
+        assert_eq!(
+            state.waiting_reason,
+            Some(crate::domain::WaitingReason::Approval)
+        );
+        assert_eq!(state.input_request_id.as_deref(), Some("42"));
+        let wrong=serde_json::json!({"method":"serverRequest/resolved","params":{"threadId":"s","requestId":43}}).to_string();
+        let still = apply_codex_rollout(&wrong, now, "s", Some(state)).unwrap();
+        assert_eq!(still.status, TaskStatus::WaitingInput);
+        let resolved=serde_json::json!({"timestamp":"2026-10-12T09:00:05Z","method":"serverRequest/resolved","params":{"threadId":"s","requestId":42}}).to_string();
+        let resumed = apply_codex_rollout(&resolved, now, "s", Some(still)).unwrap();
+        assert_eq!(resumed.status, TaskStatus::Running);
+        assert_eq!(resumed.waiting_reason, None);
+        assert!(approval_hint(&resumed, now).is_none());
+    }
+
+    #[test]
+    fn remote_snapshots_use_the_same_pending_request_rules_and_never_invent_completion() {
+        let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
+        let section=format!("===S:project===F:rollout-2026-10-12T09-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl===\n{}",escalation_log("c1"));
+        let tasks = tasks_from_codex_section(&section, "test-host", "host", now);
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks[0].remote);
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+        assert!(tasks[0].approval_hint.as_ref().unwrap().check_due);
+        assert_eq!(
+            tasks[0].session_id.as_deref(),
+            Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        );
+    }
 
     fn native_db(dir: &Path, path: &Path, updated: i64) -> PathBuf {
         let db = dir.join("state.sqlite");

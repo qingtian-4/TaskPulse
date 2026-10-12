@@ -20,6 +20,8 @@ use crate::providers::{HostHealth, HostStatus};
 /// A meaningful change worth surfacing (notification + UI emphasis).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskEvent {
+    /// Explicit escalation request remains unresolved; actual approval is unknown.
+    ApprovalCheck { task: TaskSnapshot },
     /// Agent finished its turn and needs the user (local agents).
     WaitingInput {
         task: TaskSnapshot,
@@ -59,6 +61,10 @@ pub struct TransitionEngine {
     prev_waits: HashMap<String, (Option<crate::domain::WaitingReason>, Option<String>)>,
     prev_hosts: HashMap<String, HostStatus>,
     notified: HashSet<(String, EventKind)>,
+    #[serde(default)]
+    approval_checks: HashSet<(String, String)>,
+    #[serde(default)]
+    input_notifications: HashSet<(String, String)>,
     #[serde(skip)]
     path: Option<std::path::PathBuf>,
 }
@@ -69,6 +75,8 @@ impl TransitionEngine {
         self.prev_turns.retain(|id, _| !ids.contains(id));
         self.prev_waits.retain(|id, _| !ids.contains(id));
         self.notified.retain(|(id, _)| !ids.contains(id));
+        self.approval_checks.retain(|(id, _)| !ids.contains(id));
+        self.input_notifications.retain(|(id, _)| !ids.contains(id));
     }
     pub fn new() -> Self {
         Self::default()
@@ -126,6 +134,16 @@ impl TransitionEngine {
 
         for task in tasks {
             let id = task.id.clone();
+            if !task.stale && task.status == TaskStatus::Running {
+                if let Some(hint) = task.approval_hint.as_ref().filter(|h| h.check_due) {
+                    if self
+                        .approval_checks
+                        .insert((id.clone(), hint.request_id.clone()))
+                    {
+                        events.push(TaskEvent::ApprovalCheck { task: task.clone() });
+                    }
+                }
+            }
             if task.is_agent_session() {
                 // v3 could infer an end during thinking. Do not let that false
                 // event suppress the next genuine failure/completion.
@@ -148,7 +166,10 @@ impl TransitionEngine {
 
             let prev_status = match self.prev.get(&id).copied() {
                 Some(status) => status,
-                None if task.new_execution && task.turn_key.is_some() && !task.stale => {
+                None if !task.stale
+                    && (task.new_execution && task.turn_key.is_some()
+                        || task.requires_action() && task.input_request_id.is_some()) =>
+                {
                     TaskStatus::Running
                 }
                 None => continue,
@@ -177,16 +198,20 @@ impl TransitionEngine {
                 continue;
             }
 
-            if baseline && !task.unread || task.stale {
+            if baseline && !task.unread && !task.requires_action() || task.stale {
                 continue;
             }
 
             match status {
                 TaskStatus::WaitingInput => {
+                    let duplicate_request=task.input_request_id.as_ref().is_some_and(|request| {
+                        let key=serde_json::to_string(&(&task.turn_key,task.waiting_reason,request)).unwrap_or_default();
+                        !self.input_notifications.insert((id.clone(),key))
+                    });
                     let kind = if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
                         EventKind::TurnEnded
                     } else { EventKind::WaitingInput };
-                    if !already(&mut self.notified, &id, kind) {
+                    if !duplicate_request && !already(&mut self.notified, &id, kind) {
                         events.push(TaskEvent::WaitingInput {
                             task: task.clone(),
                             reason: task.hook_matcher.clone(),
@@ -271,6 +296,8 @@ impl TransitionEngine {
         self.prev_waits.clear();
         self.prev_hosts.clear();
         self.notified.clear();
+        self.approval_checks.clear();
+        self.input_notifications.clear();
     }
 }
 
@@ -286,6 +313,38 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn permission_checks_and_confirmed_requests_dedup_by_request_across_flaps_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut t = task_turn("codex:s", TaskStatus::Running, "turn");
+        t.approval_hint = Some(crate::domain::ApprovalHint {
+            request_id: "c1".into(),
+            requested_at: 0,
+            check_due: false,
+        });
+        assert!(apply_once(&mut engine, &[t.clone()]).is_empty());
+        t.approval_hint.as_mut().unwrap().check_due = true;
+        assert!(matches!(
+            apply_once(&mut engine, &[t.clone()]).as_slice(),
+            [TaskEvent::ApprovalCheck { .. }]
+        ));
+        let mut restart = TransitionEngine::open(path);
+        assert!(apply_once(&mut restart, &[t.clone()]).is_empty());
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        t.input_request_id = Some("q1".into());
+        assert_eq!(apply_once(&mut restart, &[t.clone()]).len(), 1);
+        t.status = TaskStatus::Running;
+        t.waiting_reason = None;
+        assert!(apply_once(&mut restart, &[t.clone()]).is_empty());
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        assert!(apply_once(&mut restart, &[t.clone()]).is_empty());
+        t.input_request_id = Some("q2".into());
+        assert_eq!(apply_once(&mut restart, &[t]).len(), 1);
+    }
     #[test]
     fn agent_cpu_idle_flapping_never_announces_end_or_resets_dedup() {
         let dir = tempfile::tempdir().unwrap();

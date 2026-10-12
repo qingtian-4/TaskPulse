@@ -44,7 +44,7 @@ try{
   const first=await root.invoke('get_task_notice');
   if(!first.current?.test || first.current.task_id!==null)throw Error('Test created fake monitored task');
   const focusPreserved=await root.invoke('plugin:window|is_focused',{label:'popup'});
-  if(!focusPreserved)throw Error('Alert stole dashboard focus');
+  if(!focusPreserved)throw Error('Focus changed during creation: '+JSON.stringify({noticeFocused:await root.invoke('plugin:window|is_focused',{label:'task-notice'}),popupVisible:await root.invoke('plugin:window|is_visible',{label:'popup'})}));
   const layout=await alert.evaluate(`(()=>{const p=document.querySelector('.notice-window');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,background:getComputedStyle(p).backgroundColor,overflow:document.documentElement.scrollWidth>320||document.documentElement.scrollHeight>132,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)};})()`);
   if(layout.width!==320||layout.height!==132||layout.background!=='rgb(26, 27, 30)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
   const name=await alert.evaluate(`document.querySelector('.heading')?.textContent`);
@@ -70,6 +70,13 @@ try{
   await Bun.write(out+'/native-failure-notice.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await alert.evaluate(`[...document.querySelectorAll('.actions button')].find(b=>b.textContent==='稍后处理').click()`);
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
+  const stickyApproval=await root.invoke('get_task_notice');
+  if(stickyApproval.current.auto_dismiss_ms!==null)throw Error('Confirmed approval still has an automatic timer');
+  await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
+  await root.invoke('dismiss_task_notice',{id:stickyApproval.current.id,reason:'timeout'});
+  if((await root.invoke('get_task_notice')).current?.id!==stickyApproval.current.id)throw Error('Backend allowed timeout to dismiss a blocker');
+  await Bun.sleep(16000);
+  if((await root.invoke('get_task_notice')).current?.id!==stickyApproval.current.id)throw Error('Approval disappeared after 15 seconds');
   await alert.wait(`document.querySelector('.primary')?.disabled===false`);
   await Bun.sleep(200); // Wait for entrance animation before visual capture.
   await Bun.write(out+'/native-approval-notice.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -78,6 +85,25 @@ try{
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>!s.current)`);
   if(!await root.invoke('plugin:window|is_visible',{label:'popup'}))throw Error('View details did not show dashboard');
   if(await root.invoke('plugin:window|is_visible',{label:'task-notice'}))throw Error('Dismissed alert still visible');
+  await root.invoke('test_notification',{kind:'approval_check'});
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('授权状态待确认')`);
+  const check=await root.invoke('get_task_notice');
+  if(check.current.auto_dismiss_ms!==null)throw Error('Approval-check reminder is not sticky');
+  await root.invoke('test_notification',{kind:'turn_ended'});
+  await alert.wait(`!!document.querySelector('button.pending')`);
+  await alert.evaluate(`document.querySelector('button.pending').click()`);
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('本轮结束')`);
+  await root.invoke('dismiss_task_notice',{id:check.current.id,reason:'timeout'});
+  if((await root.invoke('get_task_notice')).current?.test!==true)throw Error('Late timeout affected the current test reminder');
+  const endQueued=await root.invoke('get_task_notice');
+  await root.invoke('dismiss_task_notice',{id:endQueued.current.id});
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('授权状态待确认')`);
+  const rotated=await root.invoke('get_task_notice');
+  if(rotated.current.id===check.current.id)throw Error('Rotated reminder reused a stale presentation ID');
+  await alert.wait(`document.querySelector('.close')?.disabled===false`);
+  await Bun.sleep(200); // Capture after the entrance animation, not at partial opacity.
+  await Bun.write(out+'/native-approval-check.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await root.invoke('dismiss_task_notice',{id:rotated.current.id});
   await root.invoke('test_notification');
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
@@ -107,7 +133,23 @@ try{
   if(after.some((t:any)=>t.id==='notification-test'))throw Error('Test polluted attention');
   for(const old of before.filter((t:any)=>t.unread)){const next=after.find((t:any)=>t.id===old.id);if(next && !next.unread)throw Error('Alert dismissed unread task state');}
   if(root.errors.length||alert.errors.length)throw Error('Native console/CSP error: '+[...root.errors,...alert.errors].join(';'));
-  const result={passed:true,layout,longTitleLayout,focusPreserved,autoDismissMs,checks:['actual completion/failure/approval windows rendered','native task title is primary heading','narrow dark strip and long title layout','action buttons inside compact window','message card pointer click opens dashboard','separate queued alerts','late callback safe','hover pauses timer','view details opens dashboard','15s auto-hide','master off clears popup','no fake task or viewed-state mutations','no native console/CSP errors'],notVerified:['fresh real Agent task finish during acceptance','OS system banner delivery']};
+  const delivery=await root.invoke('get_notification_log');
+  const tested=delivery.filter((r:any)=>r.test);
+  for(const stage of ['queued','window_visible','rendered','auto_dismissed','user_dismissed','details_opened'])if(!tested.some((r:any)=>r.stage===stage))throw Error('Missing real delivery stage: '+stage);
+  phase='management delivery log';
+  await root.invoke('open_management');
+  let manageTab:Tab|undefined;
+  for(let n=0;n<100;n++){manageTab=(await tabs()).find(t=>t.url.includes('/manage'));if(manageTab)break;await Bun.sleep(100);}
+  if(!manageTab)throw Error('Real management window unavailable');
+  const management=await connect(manageTab);
+  try{
+    await management.wait(`!!document.querySelector('nav[aria-label="管理页面"]')`);
+    await management.evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='通知与显示').click()`);
+    await management.wait(`document.querySelectorAll('.delivery-row').length>0`);
+    if(await management.evaluate(`!!document.querySelector('.delivery [role=alert]')`))throw Error('Delivery log failed in real management IPC');
+    await management.invoke('plugin:window|close',{label:'management'});
+  }finally{management.close();}
+  const result={passed:true,layout,longTitleLayout,focusPreserved,autoDismissMs,checks:['actual completion/failure/approval windows rendered','approval remains beyond 15s and backend refuses timeout','uncertain approval wording and sticky reminder','queue navigation preserves pending blocker with fresh presentation ID','delivery stages persisted without asserting user-read','native task title is primary heading','narrow dark strip and long title layout','action buttons inside compact window','message card pointer click opens dashboard','separate queued alerts','late callback safe','hover pauses timer','view details opens dashboard','15s auto-hide for ordinary results','master off clears popup','no fake task or viewed-state mutations','no native console/CSP errors'],notVerified:['fresh real Agent task finish during acceptance','OS system banner delivery','exact approval stream not exposed by current Desktop rollout']};
   await Bun.write(out+'/native-notice-result.json',JSON.stringify(result,null,2));
   console.log(JSON.stringify(result));
 }catch(error){

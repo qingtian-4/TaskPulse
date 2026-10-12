@@ -37,6 +37,7 @@ export interface TaskSnapshot {
   tmux_pane?: string;
   tmux_target?: string;
   waiting_reason?: 'turn_ended' | 'approval' | 'question' | 'unknown';
+  approval_hint?: { request_id: string; requested_at: number; check_due: boolean };
   input_request_id?: string;
   attention_since?: number;
   id: string;
@@ -47,7 +48,7 @@ export interface TaskSnapshot {
   project?: string;
   message?: string;
   activity?: string;
-  phase?: 'thinking' | 'tool' | 'responding' | 'awaiting_model';
+  phase?: 'thinking' | 'tool' | 'responding' | 'awaiting_model' | 'awaiting_tool';
   started_at?: number; // epoch ms
   updated_at: number; // epoch ms
   finished_at?: number; // epoch ms
@@ -88,8 +89,10 @@ export interface DashboardSettings {
 export interface TaskNotice {
   id: number; title: string; body: string; created_at: number; task_id: string | null; test: boolean;
   context?: { task_name: string; source: Source; project: string | null; host: string | null } | null;
+  auto_dismiss_ms?: number | null;
 }
 export interface NoticeState { current: TaskNotice | null; pending: number }
+export interface DeliveryRecord { at:number; channel:string; stage:string; notice_id:number | null; task_id:string | null; request_id:string | null; title:string; test:boolean }
 export interface SourceDiscovery { id: string; available: boolean; detail: string; candidate?: MonitorSource }
 export interface SessionPage { items: Array<{ task: TaskSnapshot; reason: string }>; total: number }
 

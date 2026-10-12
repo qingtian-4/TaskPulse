@@ -99,6 +99,7 @@ impl From<AgentStatus> for TaskSnapshot {
             tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
+            approval_hint: None,
             attention_since: 0,
             new_execution: false,
             host: None,
@@ -1067,6 +1068,7 @@ fn meaningful_file_event(event: &notify::Event) -> bool {
                 "attention.json"
                     | "recent.json"
                     | "notifications.json"
+                    | "notification-log.json"
                     | "config.toml"
                     | "config.toml.pre-dashboard.bak"
             )
@@ -1426,6 +1428,7 @@ mod tests {
             "attention.json",
             "recent.json",
             "notifications.json",
+            "notification-log.json",
             ".tmpAbcd",
             "state_5.sqlite-shm",
         ] {

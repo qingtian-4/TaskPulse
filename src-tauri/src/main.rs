@@ -8,6 +8,7 @@ mod focusers;
 mod heuristics;
 mod history;
 mod monitoring;
+mod notification_log;
 mod notifier;
 mod providers;
 mod scanner;
@@ -175,8 +176,11 @@ fn main() {
             claude_integration::configure_claude_events,
             notifier::test_notification,
             notifier::get_notification_error,
+            notification_log::get_notification_log,
             task_notice::get_task_notice,
             task_notice::dismiss_task_notice,
+            task_notice::next_task_notice,
+            task_notice::ack_task_notice,
             task_notice::open_task_notice,
             tray::toggle_pin,
             tray::get_pinned,

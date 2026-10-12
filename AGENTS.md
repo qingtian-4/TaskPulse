@@ -47,6 +47,8 @@ The main view defaults to a configurable 7-day execution-activity window (`dashb
 
 ## Data and configuration
 
+Codex escalation requests are not proof of human blocking. Literal requests to actual command tools remain RUNNING / awaiting_tool; after 20 seconds without a matching result, emit one explicitly uncertain approval-check reminder. Never infer completion, execute Code Mode snippets, or install hooks/change approval policies automatically. Clear by matching call ID; confirmed approval messages use stable request IDs. Blocking/check popups have no automatic timer, may rotate without dismissal, and reconcile only against fresh matching observations. Delivery evidence in `~/.taskpulse/notification-log.json` is bounded to 500 records, excluded from collection/watcher triggers, and never asserts user-read or includes commands/prompts/credentials. See `docs/PRODUCT_DASHBOARD.md` for the fallback limitations.
+
 - TaskPulse state: `~/.taskpulse/attention.json` and `~/.taskpulse/recent.json`.
 - Notification dedup: `~/.taskpulse/notifications.json` (must survive restarts).
 - Monitoring/remote configuration: `~/.taskpulse/config.toml`.

@@ -43,6 +43,7 @@ pub struct TaskNotice {
     pub task_id: Option<String>,
     pub test: bool,
     pub context: Option<NoticeContext>,
+    pub auto_dismiss_ms: Option<u64>,
 }
 
 #[derive(Default, Clone, Serialize)]
@@ -71,17 +72,74 @@ impl NoticeQueue {
     fn push(&mut self, entry: Entry) {
         self.entries.push_back(entry);
     }
-    fn dismiss(&mut self, id: u64) {
+    fn dismiss(&mut self, id: u64) -> Option<Entry> {
         // A late timer/click for the previous alert must not dismiss the next.
         if self.entries.front().is_some_and(|e| e.notice.id == id) {
-            self.entries.pop_front();
+            return self.entries.pop_front();
         }
+        None
+    }
+    fn rotate(&mut self, id: u64) {
+        if self.entries.len() > 1 && self.entries.front().is_some_and(|e| e.notice.id == id) {
+            let mut entry = self.entries.pop_front().unwrap();
+            entry.notice.id = next_id(); // Late callbacks belong to the old presentation.
+            self.entries.push_back(entry);
+        }
+    }
+    fn reconcile(&mut self, tasks: &[TaskSnapshot]) -> Vec<Entry> {
+        let mut removed = Vec::new();
+        self.entries.retain(|entry| {
+            let Some(previous) = entry.task.as_ref() else {
+                return true;
+            };
+            if entry.notice.auto_dismiss_ms.is_some() {
+                return true;
+            }
+            let Some(current) = tasks.iter().find(|t| t.id == previous.id && !t.stale) else {
+                return true;
+            };
+            let same_request = if previous.requires_action() {
+                current.requires_action()
+                    && current.waiting_reason == previous.waiting_reason
+                    && current.input_request_id == previous.input_request_id
+                    && current.turn_key == previous.turn_key
+            } else {
+                current.approval_hint.as_ref().map(|h| &h.request_id)
+                    == previous.approval_hint.as_ref().map(|h| &h.request_id)
+            };
+            if !same_request {
+                removed.push(entry.clone());
+            }
+            same_request
+        });
+        removed
     }
 }
 
 static QUEUE: LazyLock<Mutex<NoticeQueue>> = LazyLock::new(|| Mutex::new(NoticeQueue::default()));
-static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+static NEXT_ID: LazyLock<AtomicU64> = LazyLock::new(|| {
+    AtomicU64::new(
+        SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64
+            * 1000,
+    )
+});
 static CREATING: AtomicBool = AtomicBool::new(false);
+fn next_id() -> u64 {
+    NEXT_ID.fetch_add(1, Ordering::Relaxed)
+}
+fn audit(entry: &Entry, stage: &str) {
+    crate::notification_log::record(
+        entry.task.as_ref(),
+        "popup",
+        stage,
+        &entry.notice.title,
+        Some(entry.notice.id),
+        entry.notice.test,
+    );
+}
 
 pub fn enqueue(
     app: &AppHandle,
@@ -94,10 +152,18 @@ pub fn enqueue(
         return;
     }
     let context = task.as_ref().map(NoticeContext::from);
+    let auto_dismiss_ms = if task
+        .as_ref()
+        .is_some_and(|t| t.requires_action() || t.approval_hint.is_some())
+    {
+        None
+    } else {
+        Some(15_000)
+    };
     // Tests may exercise presentation metadata, but never point to a real task.
     let task = task.filter(|_| !test);
     let notice = TaskNotice {
-        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
+        id: next_id(),
         title,
         body,
         created_at: SystemTime::now()
@@ -107,11 +173,11 @@ pub fn enqueue(
         task_id: task.as_ref().map(|t| t.id.clone()),
         test,
         context,
+        auto_dismiss_ms,
     };
-    QUEUE
-        .lock()
-        .unwrap_or_else(|e| e.into_inner())
-        .push(Entry { notice, task });
+    let entry = Entry { notice, task };
+    audit(&entry, "queued");
+    QUEUE.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
     publish(app);
 }
 
@@ -121,10 +187,74 @@ pub fn get_task_notice() -> NoticeState {
 }
 
 #[tauri::command]
-pub fn dismiss_task_notice(app: AppHandle, id: u64) -> NoticeState {
-    QUEUE.lock().unwrap_or_else(|e| e.into_inner()).dismiss(id);
+pub fn dismiss_task_notice(app: AppHandle, id: u64, reason: Option<String>) -> NoticeState {
+    let entry = {
+        let mut queue = QUEUE.lock().unwrap_or_else(|e| e.into_inner());
+        if reason.as_deref() == Some("timeout")
+            && queue
+                .entries
+                .front()
+                .is_some_and(|e| e.notice.id == id && e.notice.auto_dismiss_ms.is_none())
+        {
+            return queue.state();
+        }
+        queue.dismiss(id)
+    };
+    if let Some(entry) = entry {
+        audit(
+            &entry,
+            if reason.as_deref() == Some("timeout") {
+                "auto_dismissed"
+            } else {
+                "user_dismissed"
+            },
+        );
+    }
     publish(&app);
     get_task_notice()
+}
+
+#[tauri::command]
+pub fn next_task_notice(app: AppHandle, id: u64) -> NoticeState {
+    QUEUE.lock().unwrap_or_else(|e| e.into_inner()).rotate(id);
+    publish(&app);
+    get_task_notice()
+}
+
+#[tauri::command]
+pub fn ack_task_notice(app: AppHandle, id: u64) -> bool {
+    if !app
+        .get_webview_window("task-notice")
+        .is_some_and(|w| w.is_visible().unwrap_or(false))
+    {
+        return false;
+    }
+    let entry = QUEUE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entries
+        .front()
+        .filter(|e| e.notice.id == id)
+        .cloned();
+    if let Some(entry) = entry {
+        audit(&entry, "rendered");
+        return true;
+    }
+    false
+}
+
+pub fn reconcile(app: &AppHandle, tasks: &[TaskSnapshot]) {
+    let removed = QUEUE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .reconcile(tasks);
+    if removed.is_empty() {
+        return;
+    }
+    for entry in removed {
+        audit(&entry, "request_resolved");
+    }
+    publish(app);
 }
 
 #[tauri::command]
@@ -137,13 +267,14 @@ pub async fn open_task_notice(app: AppHandle, id: u64) -> Result<(), String> {
         .filter(|e| e.notice.id == id)
         .cloned()
         .ok_or("这条提醒已关闭")?;
-    if let Some(task) = entry.task {
+    if let Some(task) = entry.task.clone() {
         let current = crate::monitoring::find_session(&task.id).unwrap_or(task);
         crate::watcher::select_task(&app, current);
     } else {
         crate::tray::show_popup(&app);
     }
-    dismiss_task_notice(app, id);
+    audit(&entry, "details_opened");
+    dismiss_task_notice(app, id, Some("details".into()));
     Ok(())
 }
 
@@ -211,8 +342,16 @@ fn publish(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("task-notice") {
         // The window is non-focusable; never activate the user's current editor.
         if !win.is_visible().unwrap_or(false) {
-            let _ = win.show();
+            if let Err(error) = win.show() {
+                audit_current("failed");
+                crate::notifier::report_notification_error(
+                    app,
+                    format!("任务弹窗显示失败：{error}"),
+                );
+                return;
+            }
         }
+        audit_current("window_visible");
         return;
     }
     if CREATING.swap(true, Ordering::AcqRel) {
@@ -252,13 +391,24 @@ fn publish(app: &AppHandle) {
                 }
                 // Creation may overlap dismiss/disable; re-read, don't resurrect it.
                 if get_task_notice().current.is_some() {
-                    let _ = win.show();
+                    if let Err(error) = win.show() {
+                        audit_current("failed");
+                        crate::notifier::report_notification_error(
+                            &app,
+                            format!("任务弹窗显示失败：{error}"),
+                        );
+                    } else {
+                        audit_current("window_visible");
+                    }
                 }
             }
-            Err(error) => crate::notifier::report_notification_error(
-                &app,
-                format!("任务弹窗创建失败：{error}"),
-            ),
+            Err(error) => {
+                audit_current("failed");
+                crate::notifier::report_notification_error(
+                    &app,
+                    format!("任务弹窗创建失败：{error}"),
+                );
+            }
         }
         CREATING.store(false, Ordering::Release);
     });
@@ -270,6 +420,18 @@ fn corner_position(x: i32, y: i32, width: u32, height: u32, scale: f64) -> (i32,
     let top =
         i64::from(y) + i64::from(height) - ((NOTICE_HEIGHT + NOTICE_MARGIN) * scale).ceil() as i64;
     (left.max(i64::from(x)) as i32, top.max(i64::from(y)) as i32)
+}
+
+fn audit_current(stage: &str) {
+    let entry = QUEUE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .entries
+        .front()
+        .cloned();
+    if let Some(entry) = entry {
+        audit(&entry, stage);
+    }
 }
 
 #[cfg(test)]
@@ -285,6 +447,7 @@ mod tests {
                 task_id: Some(format!("task:{id}")),
                 test: false,
                 context: None,
+                auto_dismiss_ms: Some(15_000),
             },
             task: None,
         }
@@ -297,14 +460,60 @@ mod tests {
         }
         assert_eq!(queue.state().current.unwrap().id, 1);
         assert_eq!(queue.state().pending, 99);
-        queue.dismiss(1);
-        queue.dismiss(1);
+        let _ = queue.dismiss(1);
+        let _ = queue.dismiss(1);
         assert_eq!(queue.state().current.unwrap().id, 2);
         assert_eq!(queue.state().pending, 98);
         for id in 2..=100 {
-            queue.dismiss(id);
+            let _ = queue.dismiss(id);
         }
         assert!(queue.state().current.is_none());
+    }
+    #[test]
+    fn sticky_alerts_can_rotate_and_old_presentations_cannot_dismiss_them() {
+        let mut queue = NoticeQueue::default();
+        let mut sticky = entry(1);
+        sticky.notice.auto_dismiss_ms = None;
+        queue.push(sticky);
+        queue.push(entry(2));
+        queue.rotate(1);
+        assert_eq!(queue.state().current.unwrap().id, 2);
+        assert_eq!(queue.state().pending, 1);
+        let _ = queue.dismiss(2);
+        assert!(queue.dismiss(1).is_none());
+        assert!(queue.state().current.unwrap().auto_dismiss_ms.is_none());
+    }
+    #[test]
+    fn request_resolution_removes_only_its_sticky_notice_and_never_marks_viewed() {
+        let mut task = TaskSnapshot::new(
+            "codex:s",
+            "native",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::Running,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        task.unread = true;
+        task.approval_hint = Some(crate::domain::ApprovalHint {
+            request_id: "c1".into(),
+            requested_at: 0,
+            check_due: true,
+        });
+        let mut sticky = entry(1);
+        sticky.notice.auto_dismiss_ms = None;
+        sticky.task = Some(task.clone());
+        let mut queue = NoticeQueue::default();
+        queue.push(sticky);
+        queue.push(entry(2));
+        assert!(queue.reconcile(&[]).is_empty());
+        let mut stale = task.clone();
+        stale.stale = true;
+        stale.approval_hint = None;
+        assert!(queue.reconcile(&[stale]).is_empty());
+        task.approval_hint = None;
+        assert_eq!(queue.reconcile(&[task.clone()]).len(), 1);
+        assert!(task.unread);
+        assert_eq!(queue.state().current.unwrap().id, 2);
     }
     #[test]
     fn placement_respects_work_area_dpi_and_negative_monitor_origin() {

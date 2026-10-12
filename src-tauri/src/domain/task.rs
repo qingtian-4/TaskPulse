@@ -214,6 +214,15 @@ pub enum ExecutionPhase {
     Tool,
     Responding,
     AwaitingModel,
+    /// Tool request submitted; execution/approval has not been confirmed.
+    AwaitingTool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ApprovalHint {
+    pub request_id: String,
+    pub requested_at: u64,
+    pub check_due: bool,
 }
 
 /// The unified task snapshot.
@@ -246,6 +255,9 @@ pub struct TaskSnapshot {
     pub waiting_reason: Option<WaitingReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_request_id: Option<String>,
+    /// Unconfirmed escalation request, never equivalent to WaitingInput.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_hint: Option<ApprovalHint>,
     #[serde(default)]
     pub attention_since: u64,
     #[serde(default)]
@@ -388,6 +400,7 @@ impl TaskSnapshot {
             tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
+            approval_hint: None,
             attention_since: 0,
             new_execution: false,
             host: None,

@@ -107,7 +107,13 @@ impl DeepSeekHarnessProvider {
 
     /// Run a command inside WSL and capture stdout as raw bytes.
     fn wsl(&self, script: &str) -> std::io::Result<Vec<u8>> {
-        let mut child = Command::new("wsl.exe")
+        let mut command = Command::new("wsl.exe");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            command.creation_flags(0x08000000);
+        }
+        let mut child = command
             .args(["--distribution", &self.distro, "-e", "bash", "-lc", script])
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())

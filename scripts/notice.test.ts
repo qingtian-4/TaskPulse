@@ -1,11 +1,18 @@
 import { expect, test } from 'bun:test';
-import { noticeContent } from '../src/lib/notice';
+import { noticeContent, noticeTimeout, deliveryStage } from '../src/lib/notice';
 import type { TaskNotice } from '../src/lib/types';
 
 const base: TaskNotice = {
   id: 1, title: 'TaskPulse · 本轮结束，等待后续输入',
   body: 'Codex · Project · Task', created_at: 1, task_id: 'codex:stable', test: false,
 };
+test('blocking and approval-check reminders have no timer, while legacy completion remains 15 seconds',()=>{
+  expect(noticeTimeout({...base,auto_dismiss_ms:null})).toBeNull();
+  expect(noticeTimeout(base)).toBe(15000);
+  expect(noticeTimeout({...base,auto_dismiss_ms:15000})).toBe(15000);
+  expect(deliveryStage('rendered')).toBe('界面已渲染');
+  expect(deliveryStage('api_accepted')).not.toContain('已阅读');
+});
 
 test('native task title and sender do not split names at punctuation', () => {
   const content = noticeContent({ ...base, context: {
