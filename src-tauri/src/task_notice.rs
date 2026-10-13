@@ -302,22 +302,36 @@ pub fn retain_in_scope(app: &AppHandle) {
         .iter()
         .cloned()
         .collect();
-    let excluded: std::collections::HashSet<_> = entries
-        .iter()
-        .filter(|entry| {
-            entry
-                .task
-                .as_ref()
-                .is_some_and(|t| !crate::monitoring::allows(t) || crate::watcher::is_ignored(&t.id))
-        })
-        .map(|entry| entry.notice.id)
-        .collect();
+    if entries.is_empty() {
+        return;
+    }
+    let excluded = excluded_notices(&entries, |t| {
+        // Entries can predate a newly discovered native origin. Eligibility
+        // uses the latest classification, not the old queued task snapshot.
+        let current = crate::monitoring::find_session(&t.id).unwrap_or_else(|| t.clone());
+        crate::monitoring::allows(&current) && !crate::watcher::is_ignored(&t.id)
+    });
+    // Polling must not re-publish unchanged presentations/reset UI timers.
+    if excluded.is_empty() && crate::monitoring::get_monitoring_settings().popup_notifications() {
+        return;
+    }
     QUEUE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .entries
         .retain(|e| !excluded.contains(&e.notice.id));
     publish(app);
+}
+
+fn excluded_notices(
+    entries: &[Entry],
+    mut eligible: impl FnMut(&TaskSnapshot) -> bool,
+) -> std::collections::HashSet<u64> {
+    entries
+        .iter()
+        .filter(|entry| entry.task.as_ref().is_some_and(|t| !eligible(t)))
+        .map(|entry| entry.notice.id)
+        .collect()
 }
 
 fn publish(app: &AppHandle) {
@@ -523,6 +537,33 @@ mod tests {
         assert_eq!(corner_position(0, 0, 1920, 1040, 1.0), (1584, 892));
         assert_eq!(corner_position(-1920, 0, 1920, 1040, 1.5), (-504, 818));
         assert_eq!(corner_position(0, 0, 300, 130, 1.0), (0, 0));
+    }
+
+    #[test]
+    fn latest_origin_can_remove_an_old_guardian_notice_without_viewing_the_task() {
+        let mut old = TaskSnapshot::new(
+            "child",
+            "Guardian review",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        old.unread = true;
+        let mut latest = old.clone();
+        latest.internal = true;
+        let mut guardian = entry(1);
+        guardian.task = Some(old.clone());
+        let mut user = entry(2);
+        let mut same_title = old.clone();
+        same_title.id = "user".into();
+        user.task = Some(same_title);
+        let excluded = excluded_notices(&[guardian, user, entry(3)], |task| {
+            let current = if task.id == latest.id { &latest } else { task };
+            !current.internal
+        });
+        assert_eq!(excluded, std::collections::HashSet::from([1]));
+        assert!(old.unread && latest.unread);
     }
 
     #[test]

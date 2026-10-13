@@ -1268,14 +1268,37 @@ mod tests {
         }
         for t in &out.tasks {
             println!(
-                "  task: id={} name={:?} status={:?} conf={:?} host={:?}",
-                t.id, t.name, t.status, t.confidence, t.host
+                "  task: id={} name={:?} status={:?} conf={:?} host={:?} internal={}",
+                t.id, t.name, t.status, t.confidence, t.host, t.internal
             );
         }
         // Whatever the servers report, the snapshot must parse without panics
         // and every task must carry a stable id.
         for t in &out.tasks {
             assert!(!t.id.is_empty());
+            if t.internal {
+                assert!(
+                    !crate::monitoring::allows(t),
+                    "internal session entered monitoring scope"
+                );
+            }
+        }
+        if let Ok(id) = std::env::var("TASKPULSE_EXPECT_INTERNAL_THREAD_ID") {
+            let origin = out
+                .catalog
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some(id.as_str()))
+                .expect("expected internal thread missing from native catalog");
+            assert!(
+                origin.internal,
+                "native origin classification was lost in catalog"
+            );
+            if let Some(task) = out.tasks.iter().find(|t| t.id == origin.id) {
+                assert!(
+                    task.internal,
+                    "native origin classification was lost in execution task"
+                );
+            }
         }
         if let Ok(project) = std::env::var("TASKPULSE_EXPECT_REMOTE_PROJECT") {
             assert!(

@@ -128,6 +128,11 @@ impl TransitionEngine {
         let mut current_waits = HashMap::new();
 
         for task in tasks {
+            // Scope filtering normally happens upstream. Keep the lifecycle
+            // boundary safe for direct callers and recovered old snapshots.
+            if task.internal {
+                continue;
+            }
             let id = task.id.clone();
             // Legacy pane-scoped exact results move to their own run identity.
             // Match the run key before transferring dedup, never apply A's
@@ -346,6 +351,19 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reclassifying_a_previously_observed_service_never_emits_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = TransitionEngine::open(dir.path().join("notifications.json"));
+        let mut task = task_turn("codex:child", TaskStatus::Running, "child-turn");
+        apply_once(&mut engine, &[task.clone()]);
+        task.internal = true;
+        task.status = TaskStatus::WaitingInput;
+        task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert!(apply_once(&mut engine, &[task.clone()]).is_empty());
+        task.status = TaskStatus::Failed;
+        assert!(apply_once(&mut engine, &[task]).is_empty());
+    }
     #[test]
     fn coalesced_parallel_requests_notify_once_each_across_restart() {
         let dir = tempfile::tempdir().unwrap();

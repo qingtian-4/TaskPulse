@@ -425,6 +425,7 @@ fn platform_beep() -> Result<(), String> {
 
 /// Drive one-shot notifications from transition-engine events.
 pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapshot]) {
+    crate::task_notice::retain_in_scope(app);
     crate::task_notice::reconcile(app, _tasks);
     for event in events {
         let task = match event {
@@ -434,6 +435,12 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
             | TaskEvent::InferredFinished { task } => Some(task),
             _ => None,
         };
+        if task.is_some_and(|task| {
+            task.internal
+                || crate::monitoring::find_session(&task.id).is_some_and(|latest| latest.internal)
+        }) {
+            continue;
+        }
         // Audit the event category, not arbitrary native titles/prompt fallbacks.
         let title = match event {
             TaskEvent::WaitingInput { task, .. }

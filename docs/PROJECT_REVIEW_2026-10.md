@@ -534,3 +534,21 @@ bun run test:ui-model
 - 后续同一分支的 `docs: record review fixes and verified limitations` 提交：失败结果快捷查看、审查记录与产品说明同步。
 
 提交保留在 `codex/desktop-discovery-visibility`，本次不 push／PR；正常托盘已重新启动，临时 CDP 调试实例关闭。远端旧 tp-run 和既有 Claude Hook 不自动更新，需用户明确操作。
+
+## 12. Guardian 内部会话误提醒修复
+
+2026-10-13 用户反馈：YOLO-RDD 主任务仍在执行，却收到未手动启动的“Guardian review · 本轮结束”提醒。只读核对 Server1 原生 SQLite 和 rollout：该 thread 的 source 为 `subagent.other = guardian`，并关联到用户主 thread；通知记录确认了 13:12、13:13、13:15 三次内部 turn 结束的误投递。
+
+根因是来源语义在 SSH 传输／映射中丢失，而不是完成计时或任务标题错误：`codex_metadata.py` 未导出 source；`flush_codex` 未复制解析器已有的 internal；发现目录及仅元数据固定分支也没有来源标记。上次 SSH 验收检查了标题和生命周期，但未断言内部来源，所以漏检。
+
+修复内容：
+
+- 元数据导出 source，统一支持原生对象和 SQLite JSON 文本；共享远端元数据结构同时保留标题、项目和来源，标题暂缺也不能丢来源。
+- rollout 原生 session_meta 作为旧数据库／尾部截断路径的来源补充；执行、目录、固定记录均传递 internal。依据来源而非“Guardian”标题，保留同名用户任务和非 Guardian 的 coding 子任务。
+- 目录对已证实的内部身份保持稳定，后续缺字段的局部刷新不能重新分类成用户任务；旧关注记录通过正常刷新纠正 internal，不删除未读／固定数据，也不修改 Agent 原生会话。
+- Transition 与通知边界拒绝内部会话事件；已排队的旧提醒按最新来源分类移出，既不标记已查看，也不解除用户真实批准。普通轮询不重复发布未变化的提醒，不重置弹窗计时。
+- 新增回归：主任务持续运行时内部三轮完成无提醒、同名用户完成正常提醒、完整／截断／旧 schema／无标题路径一致、仅元数据固定不绕过过滤、旧分类修正及排队移除。
+
+验证：Rust 328 通过、7 个默认 opt-in 跳过；fmt／clippy `-D warnings` 和构建通过。前端 check 0 errors/warnings、16 项模型测试及生产构建通过。真实 SSH 快照确认两个 Guardian 的 internal 都为 true 且范围过滤拒绝它们，YOLO-RDD 主会话仍为普通任务；HyperMem 目录与两台主机各采集分段仍正常。新增 `scripts/native-origin-smoke.ts` 的真实 WebView2 只读验收通过：主任务保留，内部会话从关注和可选目录排除，旧记录保留且仍为未读，没有当前内部提醒或新投递，不改配置或已查看状态。结果保存于 `src-tauri/target/ui-smoke/native-origin-result.json`。`native-notice-smoke.ts` 也通过：普通提醒约 15 秒隐藏，真实类型批准无计时，队列／旧回调／总开关没有回归；焦点验证跳过。测试后配置 SHA256 与执行前一致。
+
+限制：本次不主动触发真实 Guardian 或执行服务器任务；“主任务运行、内部任务结束”的时序由确定性回放覆盖，真实来源验证的是已存在会话的分类与隔离。来源字段和原生 header 都缺失时不能凭名字断言内部身份。没有自动关闭整个项目、屏蔽所有子 Agent 或恢复不可靠的结束／批准猜测。

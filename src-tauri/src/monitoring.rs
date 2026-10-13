@@ -544,17 +544,25 @@ pub fn allows(task: &TaskSnapshot) -> bool {
 pub fn observe(tasks: &[TaskSnapshot]) {
     let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
     for task in tasks {
-        if task.status == crate::domain::TaskStatus::Unknown {
-            if let Some(previous) = state.catalog.get_mut(&task.id) {
-                previous.name = task.name.clone();
-                previous.project = task.project.clone();
-                previous.project_path = task.project_path.clone();
-                previous.internal = task.internal;
-                continue;
-            }
-        }
-        state.catalog.insert(task.id.clone(), task.clone());
+        let merged = catalog_observation(state.catalog.get(&task.id), task);
+        state.catalog.insert(task.id.clone(), merged);
     }
+}
+
+fn catalog_observation(previous: Option<&TaskSnapshot>, incoming: &TaskSnapshot) -> TaskSnapshot {
+    let mut merged = if incoming.status == crate::domain::TaskStatus::Unknown {
+        let mut task = previous.cloned().unwrap_or_else(|| incoming.clone());
+        task.name = incoming.name.clone();
+        task.project = incoming.project.clone();
+        task.project_path = incoming.project_path.clone();
+        task
+    } else {
+        incoming.clone()
+    };
+    // Native session origin belongs to stable identity. A missing source in
+    // a later partial snapshot must not reclassify a proven internal session.
+    merged.internal = incoming.internal || previous.is_some_and(|t| t.internal);
+    merged
 }
 
 pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
@@ -881,6 +889,36 @@ mod tests {
         assert!(exclusion(&settings, &task).is_none());
         task.internal = true;
         assert!(exclusion(&settings, &task).is_some());
+    }
+
+    #[test]
+    fn native_internal_reclassification_preserves_lifecycle_and_partial_refresh_cannot_undo_it() {
+        let mut old = TaskSnapshot::new(
+            "codex:child",
+            "Guardian review",
+            TaskSource::Codex,
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+            std::time::SystemTime::now(),
+        );
+        old.unread = true;
+        old.pinned = true;
+        old.turn_key = Some("child-turn".into());
+        old.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        let mut metadata = old.clone();
+        metadata.status = TaskStatus::Unknown;
+        metadata.internal = true;
+        metadata.name = "Renamed internal service".into();
+        let classified = catalog_observation(Some(&old), &metadata);
+        assert!(classified.internal);
+        assert!(classified.unread && classified.pinned);
+        assert_eq!(classified.status, old.status);
+        assert_eq!(classified.turn_key, old.turn_key);
+        assert_eq!(classified.updated_at, old.updated_at);
+        metadata.internal = false; // source absent in a later partial snapshot
+        assert!(catalog_observation(Some(&classified), &metadata).internal);
+        metadata.status = TaskStatus::Running;
+        assert!(catalog_observation(Some(&classified), &metadata).internal);
     }
     #[test]
     fn legacy_scopes_and_source_identity_are_preserved() {

@@ -551,6 +551,15 @@ struct AppThreadMeta {
 }
 
 fn internal_guardian(source: &serde_json::Value) -> bool {
+    // SQLite may carry JSON text while app-server / rollout carry an object.
+    // Classify the native origin, never a task name or prompt substring.
+    let parsed;
+    let source = if let Some(raw) = source.as_str() {
+        parsed = serde_json::from_str::<serde_json::Value>(raw).unwrap_or_default();
+        &parsed
+    } else {
+        source
+    };
     source.pointer("/subagent/other").and_then(|v| v.as_str()) == Some("guardian")
 }
 
@@ -1337,38 +1346,65 @@ fn value_timestamp_key(timestamp: Option<SystemTime>) -> Option<String> {
     })
 }
 
-/// Build remote Codex tasks from the snapshot's `__TP_CODEX__` section.
-///
-/// Each remote rollout is prefixed by a `===S:<slug>===` header (the workspace
-/// slug the rollout lives under). We parse each rollout body with the shared
-/// `parse_codex_rollout` and emit a task per live session.
+/// Remote metadata is origin evidence as well as a sidebar title lookup.
+#[derive(serde::Deserialize)]
+struct RemoteThreadMeta {
+    id: String,
+    #[serde(default, rename = "t")]
+    title: String,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default, rename = "p")]
+    pinned: bool,
+    #[serde(default, rename = "u")]
+    updated_at: u64,
+    #[serde(default)]
+    source: serde_json::Value,
+    #[serde(skip)]
+    internal: bool,
+}
+
+fn remote_thread_metadata(section: &str) -> HashMap<String, RemoteThreadMeta> {
+    let mut metadata = HashMap::new();
+    let mut internal_origins = std::collections::HashSet::new();
+    for line in section.lines() {
+        if let Some(raw) = line.strip_prefix("META\t") {
+            if let Ok(mut meta) = serde_json::from_str::<RemoteThreadMeta>(raw) {
+                if !meta.id.trim().is_empty() {
+                    meta.internal = internal_guardian(&meta.source);
+                    // Retain origin even if the native title is unavailable.
+                    metadata.insert(meta.id.clone(), meta);
+                }
+            }
+        } else if let Ok(row) = serde_json::from_str::<serde_json::Value>(line) {
+            if row.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+                if let Some(payload) = row.get("payload") {
+                    if payload.get("source").is_some_and(internal_guardian) {
+                        if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                            internal_origins.insert(id.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Old DBs may lack source, but the supplied rollout header still proves
+    // origin. Catalog and execution paths must agree on that classification.
+    for meta in metadata.values_mut() {
+        meta.internal |= internal_origins.contains(&meta.id);
+    }
+    metadata
+}
+
+/// Parse remote rollouts using the shared lifecycle parser, preserving native
+/// origin even when logs are truncated or metadata has no title yet.
 pub fn tasks_from_codex_section(
     section: &str,
     ssh_host: &str,
     host_id: &str,
     now: SystemTime,
 ) -> Vec<TaskSnapshot> {
-    let mut titles: HashMap<String, (String, String, bool)> = HashMap::new();
-    for line in section.lines() {
-        if let Some(rest) = line.strip_prefix("META\t") {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
-                if let (Some(id), Some(t)) = (
-                    v.get("id").and_then(|x| x.as_str()),
-                    v.get("t").and_then(|x| x.as_str()),
-                ) {
-                    if !t.trim().is_empty() {
-                        let cwd = v
-                            .get("cwd")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let pinned = v.get("p").and_then(|x| x.as_bool()).unwrap_or(false);
-                        titles.insert(id.to_string(), (t.to_string(), cwd, pinned));
-                    }
-                }
-            }
-        }
-    }
+    let titles = remote_thread_metadata(section);
 
     let mut out = Vec::new();
     let mut current_slug: Option<String> = None;
@@ -1419,13 +1455,13 @@ pub fn tasks_from_codex_section(
         .iter()
         .filter_map(|task| task.session_id.clone())
         .collect();
-    for (id, (title, cwd, pinned)) in &titles {
-        if !*pinned || emitted.contains(id) || title.trim().is_empty() {
+    for (id, meta) in &titles {
+        if !meta.pinned || emitted.contains(id) || meta.title.trim().is_empty() {
             continue;
         }
         let mut task = TaskSnapshot::new(
             format!("codex-remote:{host_id}:{id}"),
-            clean_task_name(title),
+            clean_task_name(&meta.title),
             TaskSource::Codex,
             TaskStatus::Idle,
             DetectionConfidence::Hook,
@@ -1433,10 +1469,11 @@ pub fn tasks_from_codex_section(
         )
         .with_host(ssh_host.to_string())
         .with_remote();
-        task.project = project_from_cwd(Some(cwd));
-        task.project_path = Some(cwd.clone());
+        task.project = project_from_cwd(Some(&meta.cwd));
+        task.project_path = Some(meta.cwd.clone());
         task.session_id = Some(id.clone());
         task.pinned = true;
+        task.internal = meta.internal;
         out.push(task);
     }
     // Metadata is lookup-only. Do not synthesize an Idle task for every
@@ -1452,17 +1489,14 @@ pub fn catalog_from_codex_section(
     ssh_host: &str,
     host_id: &str,
 ) -> Vec<TaskSnapshot> {
-    section
-        .lines()
-        .filter_map(|line| {
-            let value: serde_json::Value =
-                serde_json::from_str(line.strip_prefix("META\t")?).ok()?;
-            let id = value.get("id")?.as_str()?;
-            let title = value.get("t")?.as_str()?;
+    remote_thread_metadata(section)
+        .into_values()
+        .filter_map(|meta| {
+            let id = &meta.id;
+            let title = &meta.title;
             if is_synthetic_title(title) {
                 return None;
             }
-            let seconds = value.get("u").and_then(|v| v.as_u64()).unwrap_or(0);
             let mut task = TaskSnapshot::new(
                 format!("codex-remote:{host_id}:{id}"),
                 if title.trim().is_empty() {
@@ -1473,17 +1507,16 @@ pub fn catalog_from_codex_section(
                 TaskSource::Codex,
                 TaskStatus::Unknown,
                 DetectionConfidence::Hook,
-                UNIX_EPOCH + Duration::from_secs(seconds),
+                UNIX_EPOCH
+                    .checked_add(Duration::from_secs(meta.updated_at))
+                    .unwrap_or(UNIX_EPOCH),
             )
             .with_host(ssh_host)
             .with_remote();
-            task.project_path = value
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
+            task.project_path = (!meta.cwd.is_empty()).then_some(meta.cwd);
             task.project = project_from_cwd(task.project_path.as_deref());
             task.session_id = Some(id.to_string());
+            task.internal = meta.internal;
             Some(task)
         })
         .collect()
@@ -1525,7 +1558,7 @@ fn flush_codex(
     now: SystemTime,
     ssh_host: &str,
     host_id: &str,
-    titles: &HashMap<String, (String, String, bool)>,
+    titles: &HashMap<String, RemoteThreadMeta>,
     out: &mut Vec<TaskSnapshot>,
 ) {
     if buf.trim().is_empty() {
@@ -1539,7 +1572,8 @@ fn flush_codex(
             .as_deref()
             .map(str::to_string)
             .unwrap_or_else(|| state.session_id.clone());
-        let title = titles.get(&sid).map(|(t, _, _)| t.as_str());
+        let meta = titles.get(&sid);
+        let title = meta.map(|m| m.title.as_str());
         // Drop explicit synthetic sub-agent boilerplate, but never lose an
         // actual live task just because its title is temporarily unavailable.
         if title.is_some_and(is_synthetic_title) {
@@ -1560,17 +1594,21 @@ fn flush_codex(
         )
         .with_host(ssh_host.to_string())
         .with_remote();
+        t.internal = state.internal || meta.is_some_and(|m| m.internal);
         // Remote tails usually do not include the file's early session_meta
         // record. The authoritative cwd travels with META; use it before the
         // date-directory slug from the rollout header, otherwise project
         // scoping can incorrectly filter a valid task (for example HyperMem).
         t.project = titles
             .get(&sid)
-            .and_then(|(_, cwd, _)| project_from_cwd(Some(cwd)))
+            .and_then(|m| project_from_cwd(Some(&m.cwd)))
             .or(state.project)
             .or_else(|| Some(slug.clone()));
         t.updated_at = state.updated_at;
-        t.project_path = titles.get(&sid).map(|(_, cwd, _)| cwd.clone());
+        t.project_path = meta
+            .map(|m| m.cwd.clone())
+            .filter(|cwd| !cwd.is_empty())
+            .or(state.cwd);
         t.waiting_reason = state.waiting_reason;
         t.input_request_id = state.input_request_id;
         t.started_at = state.started_at;
@@ -1582,7 +1620,7 @@ fn flush_codex(
         t.turn_key = state.turn_key;
         t.pinned = titles
             .get(t.session_id.as_deref().unwrap_or(""))
-            .is_some_and(|(_, _, pinned)| *pinned);
+            .is_some_and(|m| m.pinned);
         t.quota_5h_used_pct = state.quota_5h_used_pct;
         t.quota_5h_resets_at = state.quota_5h_resets_at;
         t.quota_1w_used_pct = state.quota_1w_used_pct;
@@ -2218,6 +2256,153 @@ for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread
             .tasks
             .remove(0);
         assert!(task.internal);
+    }
+
+    fn remote_origin_fixture(
+        id: &str,
+        title: &str,
+        database_source: Option<serde_json::Value>,
+        rollout_source: Option<serde_json::Value>,
+        event: &str,
+        turn: &str,
+    ) -> String {
+        let metadata = serde_json::json!({"id":id,"t":title,"cwd":"/project","source":database_source,"p":true});
+        let header = rollout_source
+            .map(|source| {
+                serde_json::json!({"type":"session_meta",
+            "payload":{"id":id,"source":source,"cwd":"/project"}})
+                .to_string()
+                    + "\n"
+            })
+            .unwrap_or_default();
+        let event = serde_json::json!({"timestamp":recent_rfc3339(1),"type":"event_msg",
+            "payload":{"type":event,"turn_id":turn}});
+        format!("META\t{metadata}\n===S:10===F:rollout-2026-10-13T13-00-00-{id}.jsonl===\n{header}{event}\n")
+    }
+
+    #[test]
+    fn remote_guardian_origin_survives_full_truncated_and_legacy_metadata_paths() {
+        let id = "11111111-1111-7111-8111-111111111111";
+        let origin = serde_json::json!({"subagent":{"other":"guardian"}});
+        for (db, rollout, title) in [
+            (
+                Some(origin.clone()),
+                Some(origin.clone()),
+                "Guardian review",
+            ),
+            (Some(origin.clone()), None, "Renamed internal service"),
+            (None, Some(origin.clone()), "Guardian review"),
+            (
+                Some(serde_json::Value::String(origin.to_string())),
+                None,
+                "",
+            ),
+        ] {
+            let section =
+                remote_origin_fixture(id, title, db, rollout, "task_complete", "child-turn");
+            let tasks = tasks_from_codex_section(&section, "Server1", "server1", SystemTime::now());
+            assert_eq!(tasks.len(), 1);
+            assert!(tasks[0].internal, "origin was lost for {title:?}");
+            assert_eq!(tasks[0].session_id.as_deref(), Some(id));
+            let catalog = catalog_from_codex_section(&section, "Server1", "server1");
+            assert_eq!(catalog.len(), 1);
+            assert!(
+                catalog[0].internal,
+                "catalog disagreed with execution origin"
+            );
+        }
+    }
+
+    #[test]
+    fn guardian_completions_never_notify_while_user_parent_is_running() {
+        use crate::domain::WaitingReason;
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine =
+            crate::transition::TransitionEngine::open(dir.path().join("notifications.json"));
+        let child = "11111111-1111-7111-8111-111111111111";
+        let parent = "22222222-2222-7222-8222-222222222222";
+        let now = SystemTime::now();
+        // A real user can name their task Guardian review; it must still notify.
+        let parent_running = remote_origin_fixture(
+            parent,
+            "Guardian review",
+            Some(serde_json::json!("appServer")),
+            None,
+            "task_started",
+            "parent-turn",
+        );
+        let initial = format!(
+            "{parent_running}{}",
+            remote_origin_fixture(
+                child,
+                "Guardian review",
+                Some(serde_json::json!({"subagent":{"other":"guardian"}})),
+                None,
+                "task_started",
+                "child-0"
+            )
+        );
+        assert!(engine
+            .apply(
+                &tasks_from_codex_section(&initial, "Server1", "server1", now),
+                &[],
+                now
+            )
+            .is_empty());
+        for round in 0..3 {
+            let section = format!(
+                "{parent_running}{}",
+                remote_origin_fixture(
+                    child,
+                    "Guardian review",
+                    Some(serde_json::json!({"subagent":{"other":"guardian"}})),
+                    None,
+                    "task_complete",
+                    &format!("child-{round}")
+                )
+            );
+            let tasks = tasks_from_codex_section(&section, "Server1", "server1", now);
+            assert_eq!(tasks.iter().filter(|t| !t.internal).count(), 1);
+            assert_eq!(
+                tasks.iter().find(|t| !t.internal).unwrap().status,
+                TaskStatus::Running
+            );
+            // Even a direct engine caller cannot bypass the internal guard.
+            assert!(engine.apply(&tasks, &[], now).is_empty());
+        }
+        let section = remote_origin_fixture(
+            parent,
+            "Guardian review",
+            Some(serde_json::json!("appServer")),
+            None,
+            "task_complete",
+            "parent-turn",
+        );
+        let tasks = tasks_from_codex_section(&section, "Server1", "server1", now);
+        assert!(!tasks[0].internal);
+        assert_eq!(tasks[0].waiting_reason, Some(WaitingReason::TurnEnded));
+        assert_eq!(engine.apply(&tasks, &[], now).len(), 1);
+        assert!(engine.apply(&tasks, &[], now).is_empty());
+    }
+
+    #[test]
+    fn metadata_only_pins_do_not_override_native_internal_origin() {
+        let section = "META\t{\"id\":\"internal\",\"t\":\"Renamed service\",\"cwd\":\"/project\",\"p\":true,\"source\":{\"subagent\":{\"other\":\"guardian\"}}}\nMETA\t{\"id\":\"user\",\"t\":\"Guardian review\",\"cwd\":\"/project\",\"p\":true,\"source\":\"appServer\"}\n";
+        let tasks = tasks_from_codex_section(section, "Server1", "server1", SystemTime::now());
+        assert!(
+            tasks
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some("internal"))
+                .unwrap()
+                .internal
+        );
+        assert!(
+            !tasks
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some("user"))
+                .unwrap()
+                .internal
+        );
     }
 
     #[test]
