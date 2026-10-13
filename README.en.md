@@ -6,7 +6,7 @@
 
 TaskPulse is an **alpha, Windows-first** desktop application derived from
 [AgentTray](https://github.com/sprklai/agenttray). The executable and package are
-still named `agent-tray`. A final public project name is being evaluated.
+named `agent-tray`.
 
 ## Features
 

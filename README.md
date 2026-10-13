@@ -6,7 +6,7 @@
 
 TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的 Windows 优先桌面应用，目前处于 **Alpha** 阶段。适合同时使用多个 coding agent、在本机与服务器之间切换、运行训练或评测任务的开发者。
 
-项目当前展示名为 TaskPulse；包名和可执行文件仍为 `agent-tray`。最终开源名称尚在评估，见[命名候选](docs/PROJECT_REVIEW_2026-10.md#9-命名候选与迁移)。
+项目当前展示名为 TaskPulse；包名和可执行文件为 `agent-tray`。
 
 ## 功能
 
