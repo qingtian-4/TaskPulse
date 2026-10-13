@@ -1,100 +1,150 @@
-#!/usr/bin/env bash
-#
-# tp-run — exact-mode wrapper for remote tmux tasks (TaskPulse).
-#
-# Usage:
-#   tp-run "LoCoMo Eval" -- python eval.py
-#   tp-run "run all" -- bash run_eval.sh
-#
-# Behavior:
-#   * Binds to $TMUX_PANE when running inside tmux (pane_id recorded).
-#   * Writes a status file to ~/.local/state/taskpulse/runs/<run_id>.json
-#     (atomic: tmp + rename), so TaskPulse's RemoteTmuxProvider can merge
-#     EXACT state over its INFERRED process-tree state.
-#   * Preserves stdin/stdout/stderr exactly — no capture-and-replay.
-#   * Preserves the child's exit code (`exit "$rc"`).
-#   * SIGINT/SIGTERM traps record the final state (failed/interrupted).
-#
-# Run file schema (v1):
-#   schema_version, run_id, label, hostname, pane_id, cwd, command,
-#   started_at, finished_at, status, exit_code
-#   status: running | succeeded | failed | interrupted
-#
-# License: MIT (TaskPulse)
+#!/usr/bin/env python3
+"""TaskPulse foreground command supervisor. Usage: tp-run <name> -- executable args...
+Stdio is inherited, never captured or scanned for approvals. A launcher/container/
+sbatch returning 0 proves only that launcher exited, not that its job completed.
+Requires Python 3.
+"""
+import json
+import os
+from pathlib import Path
+import signal
+import socket
+import subprocess
+import sys
+import tempfile
+import time
+import uuid
 
-set -u
 
-SCHEMA_VERSION=1
-STATE_DIR="${TASKPULSE_STATE_DIR:-$HOME/.local/state/taskpulse/runs}"
-LABEL="${1:-untitled}"
-shift
-if [ "$#" -ge 1 ] && [ "$1" = "--" ]; then
-    shift
-fi
-if [ "$#" -eq 0 ]; then
-    echo "tp-run: no command given" >&2
-    exit 2
-fi
+def atomic_json(path, value):
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent,
+                                         prefix=path.name + ".", suffix=".tmp", delete=False) as stream:
+            temporary = Path(stream.name)
+            json.dump(value, stream, ensure_ascii=False)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        if temporary is not None and temporary.exists():
+            temporary.unlink()
 
-mkdir -p "$STATE_DIR" || exit 2
 
-RUN_ID="$(date +%s)-$$"
-RUN_FILE="$STATE_DIR/$RUN_ID.json"
-HOSTNAME="$(hostname 2>/dev/null || echo unknown)"
-PANE_ID="${TMUX_PANE:-}"
-CWD="$(pwd)"
-STARTED_AT="$(date +%s)"
-CMD_TEXT="$*"
+def redacted_args(argv):
+    result, hide = [], False
+    flags = {"--api-key", "--token", "--password", "--secret", "--access-token", "--auth-token"}
+    for arg in argv:
+        if hide:
+            result.append("<redacted>")
+            hide = False
+        elif arg.split("=", 1)[0].lower() in flags:
+            if "=" in arg:
+                result.append(arg.split("=", 1)[0] + "=<redacted>")
+            else:
+                result.append(arg)
+                hide = True
+        else:
+            result.append(arg)
+    return result
 
-# JSON-string escape a value (backslash, quote, control chars).
-json_str() {
-    printf '%s' "$1" | sed 's/\\/\\\\/g; s/"/\\"/g' | tr '\n' ' ' | tr '\r' ' ' | tr '\t' ' '
-}
 
-write_run() {
-    # atomic write: tmp + rename
-    local status="$1"
-    local exit_code="${2:-null}"
-    local finished_at="${3:-null}"
-    local tmp="$RUN_FILE.tmp"
-    {
-        echo "{"
-        echo "  \"schema_version\": $SCHEMA_VERSION,"
-        echo "  \"run_id\": \"$(json_str "$RUN_ID")\","
-        echo "  \"label\": \"$(json_str "$LABEL")\","
-        echo "  \"hostname\": \"$(json_str "$HOSTNAME")\","
-        echo "  \"pane_id\": \"$(json_str "$PANE_ID")\","
-        echo "  \"cwd\": \"$(json_str "$CWD")\","
-        echo "  \"command\": \"$(json_str "$CMD_TEXT")\","
-        echo "  \"pid\": $$,"
-        echo "  \"started_at\": $STARTED_AT,"
-        echo "  \"finished_at\": $finished_at,"
-        echo "  \"status\": \"$status\","
-        echo "  \"exit_code\": $exit_code"
-        echo "}"
-    } > "$tmp"
-    mv -f "$tmp" "$RUN_FILE"
-}
+def main():
+    if len(sys.argv) < 3:
+        print("Usage: tp-run <name> -- <executable> [args...]", file=sys.stderr)
+        return 2
+    name, argv = sys.argv[1], sys.argv[2:]
+    if argv and argv[0] == "--":
+        argv = argv[1:]
+    if not argv:
+        print("tp-run: no command given", file=sys.stderr)
+        return 2
+    try:
+        interval = max(0.1, min(10.0, float(os.environ.get("TASKPULSE_HEARTBEAT_SECONDS", "5"))))
+    except ValueError:
+        print("tp-run: invalid heartbeat interval", file=sys.stderr)
+        return 2
+    directory = Path(os.environ.get("TASKPULSE_STATE_DIR", Path.home() / ".local/state/taskpulse/runs"))
+    directory.mkdir(parents=True, exist_ok=True)
+    run_id = str(uuid.uuid4())
+    path = directory / (run_id + ".json")
+    started = time.time_ns() // 1000000
+    pid = os.getpid()
+    try:
+        stat = Path(f"/proc/{pid}/stat").read_text()
+        ticks = stat[stat.rfind(")") + 2:].split()[19]
+        boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
+    except OSError:
+        ticks, boot = None, None
+    safe_argv = redacted_args(argv)
+    state = {"schema_version": 2, "run_id": run_id, "label": name, "hostname": socket.gethostname(),
+             "pane_id": os.environ.get("TMUX_PANE", ""), "cwd": os.getcwd(),
+             "argv": safe_argv, "command": subprocess.list2cmdline(safe_argv),
+             "pid": pid, "pid_start_ticks": ticks, "boot_id": boot,
+             "started_at": started // 1000, "started_at_ms": started,
+             "execution_activity_at": started // 1000, "execution_activity_at_ms": started}
+    local = os.environ.get("TASKPULSE_STATUS_DIR")
+    local_path = None
+    if local:
+        local_dir = Path(local)
+        local_dir.mkdir(parents=True, exist_ok=True)
+        local_path = local_dir / (run_id + ".status")
 
-cleanup() {
-    local rc="${1:-130}"
-    write_run "failed" "$rc" "$(date +%s)"
-    exit "$rc"
-}
+    def write(status, code=None):
+        at = time.time_ns() // 1000000
+        state.update(status=status, exit_code=code, heartbeat_at=at // 1000, heartbeat_at_ms=at)
+        if status != "running":
+            state.update(finished_at=at // 1000, finished_at_ms=at,
+                         execution_activity_at=at // 1000, execution_activity_at_ms=at)
+        atomic_json(path, state)
+        if local_path:
+            atomic_json(local_path, {"v": 2, "name": name, "status": "failed" if status == "interrupted" else status,
+                                    "run_id": run_id, "turn_key": run_id, "cwd": os.getcwd(),
+                                    "pid": pid, "started_at": started, "finished_at": state.get("finished_at_ms"),
+                                    "execution_activity_at": state["execution_activity_at_ms"],
+                                    "heartbeat_at": at, "exit_code": code, "message": state["command"],
+                                    "activity": state["command"] if status == "running" else None,
+                                    "confidence": "exact"})
 
-trap 'cleanup 130' INT
-trap 'cleanup 143' TERM
+    child = None
+    requested_signal = None
 
-write_run "running"
+    def cancel(signum, frame):
+        nonlocal requested_signal
+        requested_signal = signum
+        if child is not None and child.poll() is None:
+            try:
+                child.send_signal(signum)
+            except ProcessLookupError:
+                pass
 
-# Run the real command.  stdin/stdout/stderr pass through untouched.
-"$@"
-rc=$?
+    for name_of_signal in ("SIGINT", "SIGTERM", "SIGHUP"):
+        if hasattr(signal, name_of_signal):
+            signal.signal(getattr(signal, name_of_signal), cancel)
+    write("running")
+    if requested_signal is not None:
+        write("interrupted", 128 + requested_signal)
+        return 128 + requested_signal
+    try:
+        child = subprocess.Popen(argv)  # Original argv; no shell or output pipes.
+    except OSError as error:
+        state["error"] = type(error).__name__
+        write("failed", 127)
+        return 127
+    while True:
+        try:
+            code = child.wait(timeout=interval)
+            break
+        except subprocess.TimeoutExpired:
+            write("running")
+    interrupted = requested_signal is not None or code < 0
+    code = 128 + (-code) if code < 0 else code
+    if requested_signal is not None:
+        code = 128 + requested_signal
+    write("interrupted" if interrupted else "succeeded" if code == 0 else "failed", code)
+    return code
 
-if [ "$rc" -eq 0 ]; then
-    write_run "succeeded" 0 "$(date +%s)"
-else
-    write_run "failed" "$rc" "$(date +%s)"
-fi
 
-exit "$rc"
+if __name__ == "__main__":
+    sys.exit(main())
