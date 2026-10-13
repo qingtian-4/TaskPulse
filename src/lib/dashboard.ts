@@ -94,5 +94,5 @@ export function refreshProgress(settings: DashboardSettings | null, providers: P
 
 export function isEndedResult(task: TaskSnapshot): boolean {
   return !task.stale && !needsAction(task) && task.unread === true &&
-    (task.status === 'succeeded' || task.status === 'waiting_input' && task.waiting_reason === 'turn_ended');
+    (task.status === 'failed' || task.status === 'succeeded' || task.status === 'waiting_input' && task.waiting_reason === 'turn_ended');
 }

@@ -3,6 +3,12 @@ import { test, expect } from 'bun:test';
 import { taskSection, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+test('a failed result can be marked viewed without turning it into success',()=>{
+  const failed = {...base,status:'failed' as const};
+  expect(isEndedResult(failed)).toBe(true);
+  expect(isEndedResult({...failed,unread:false})).toBe(false);
+  expect(isEndedResult({...failed,stale:true})).toBe(false);
+});
 test('obsolete approval hints cannot create a blocker label, action section or completed result',()=>{
   const pending={...base,phase:'awaiting_tool' as const,approval_hint:{request_id:'c',requested_at:1,check_due:true}};
   expect(taskLabel(pending)).toBe('运行中');expect(taskSection(pending)).toBe(1);
@@ -100,7 +106,8 @@ test('refresh waits for actual attempts, failures count as returned, disabled so
 test('quick viewed action is only offered for explicit ended results',()=>{
   expect(isEndedResult({...base,status:'waiting_input',waiting_reason:'turn_ended'})).toBe(true);
   expect(isEndedResult({...base,status:'succeeded'})).toBe(true);
-  for(const status of ['running','failed','idle'] as const)expect(isEndedResult({...base,status})).toBe(false);
+  expect(isEndedResult({...base,status:'failed'})).toBe(true);
+  for(const status of ['running','idle'] as const)expect(isEndedResult({...base,status})).toBe(false);
   expect(isEndedResult({...base,status:'waiting_input',waiting_reason:'question'})).toBe(false);
   expect(isEndedResult({...base,status:'succeeded',stale:true})).toBe(false);
 });

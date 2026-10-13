@@ -41,14 +41,14 @@ Codex 的 app-server 只负责原生标题和重命名同步。运行状态仍�
 ### 状态边界
 
 - `RUNNING`：存在明确的进行中 turn、有效运行租约、未结束的工具调用，或仍存活的受监控进程。仅仅“会话窗口仍打开”不算运行中。
-- `WAITING_INPUT`：对话型 Agent 的本轮已经结束，会话仍可继续，下一步需要用户输入、确认或发起新 turn。Hermes 的 turn lease 已释放、Codex 的 `task_complete`、DSH 的 `turn/end` 都属于这一类。
+- `WAITING_INPUT`：明确的本轮结束，或来源明确请求用户批准／回答。Codex 的 `task_complete`、DSH 的 `turn/end`、Claude 的 `Stop`／原生 `end_turn` 属于本轮结束；不是项目完成。Hermes 仅在原生 `ended_at/end_reason` 明确结束时确认，租约释放或过期本身不属于结束事件。
 - `SUCCEEDED`：有权威的成功结束信号，例如 wrapper 的退出码 0，或 Agent 原生的明确完成阶段。普通对话回复完成默认是 `WAITING_INPUT`，不是 `SUCCEEDED`。
 - `FAILED`：有权威失败信号，例如非零退出码、原生 failed/error/crash 状态。不能只根据文本中出现“失败”二字推断。
 - `IDLE`：没有正在执行的 turn，也没有一个需要用户继续响应的开放对话；常见于空闲 shell、正常关闭的会话或只有进程级推断的结束状态。
 - `DISCONNECTED`：配置的远程主机连续探测失败并越过防抖阈值。它描述连接健康，不代表任务本身失败。
 - `UNKNOWN`：数据源尚未给出足够信号，或状态无法可靠映射。不得把 `UNKNOWN` 自动当作 `RUNNING`。
 
-Provider 的原生事件时间用于展示最后活动时间；Store 的轮询时间不能覆盖它。相同 Provider 的下一次权威快照可以在原生时间戳不变时更新生命周期，例如 Hermes 在写完最后一条 assistant 消息后释放 turn lease。
+Provider 的原生事件时间用于展示最后活动时间；Store 的轮询时间和 wrapper 心跳不能覆盖它。Hermes 缺失／过期租约保留之前的生命周期并标为过期；冷启动且没有可信证据时为 UNKNOWN。远端采集错误和 pane 消失也不是结束证据。
 
 - “隐藏”只清除当前 turn 的关注状态；同一稳定会话 ID 出现新的 `turn_key` 时自动重新加入。
 - 在运行期间标记已查看，不会吞掉结束通知；从 `RUNNING` 进入结束状态时会再次标为未读。

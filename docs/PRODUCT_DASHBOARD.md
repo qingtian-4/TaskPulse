@@ -67,6 +67,8 @@ attention v4 升级前备份 `attention.json.pre-lifecycle.bak`（更旧的 v1/v
 
 升级兼容旧关注记录中的 `approval_hint`（忽略该字段）和 `awaiting_tool` 阶段（只显示等待工具响应）。保留会话身份、未读、固定与通知去重；旧的投递记录仅作历史证据保留，不再产生检查提醒。临时弹窗队列不跨重启补弹。
 
+Claude 的显式 Hook 接入现在写入按会话加锁、递增 sequence 的 JSONL 事件日志，latest JSON 仅作兼容检查点。官方 [PermissionRequest 输入](https://code.claude.com/docs/en/hooks#permissionrequest-input) 不包含 `tool_use_id`；只在 tool name/input 指纹唯一匹配 preceding PreToolUse 时关联 call ID。多个批准分别保留与通知；Notification 复用未解决请求，匹配的 PostToolUse／PostToolUseFailure 只解除该请求，不代表整轮完成。无可靠关联时保持不确定的显式批准，直到明确结束／新 turn；不猜测批准结果。仅 busy/idle 心跳或 thinking 不能解除批准或通知完成。Hook 安装仍须用户显式确认；不会自动改现有 Hook／statusLine／代理。
+
 ### 投递证据
 
 管理窗口“通知与显示”提供投递记录，只读刷新。`~/.taskpulse/notification-log.json` 原子保存最近 500 条事件：已识别、关闭/范围抑制、已入队、原生窗口可见、渲染器确认、用户收起、计时收起、打开详情、请求返回/处理以及投递失败。系统渠道仅记录 API 接受/失败，不冒充横幅显示。“已渲染”不证明用户阅读；与 `notifications.json` 的生命周期去重职责独立。记录不包含 Agent 命令、提示词或凭据，升级前的投递不能追溯补录；审计文件不进入监控来源，也不触发采集循环。

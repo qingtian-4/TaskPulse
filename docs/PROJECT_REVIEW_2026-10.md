@@ -486,3 +486,51 @@ bun run test:ui-model
 | 提交 | 当前任务对应 commit，不包含无关用户文件 |
 
 全局完成标准：身份稳定、状态不误报、通知不重复、来源故障不伪装结束、长代码任务不因时间窗口丢失、运行优先且结果可回查；支持矩阵与实际能力一致。
+
+## 11. 第一阶段执行记录
+
+本次继续执行先落实 T00–T04 的已确认可靠性问题，以及 T08 的配置保存和 DeepSeek WSL 防唤醒问题；不是宣称 T05–T10 路线图全部完成。原始审查与勾选清单保留，实际状态以下表为准。
+
+| 项目 | 核对与实施状态 | 实现和限制 |
+|---|---|---|
+| T00 | 已修复，保留 `ef52b0f` 的禁用降级批准逻辑 | 没有恢复计时批准猜测；普通慢工具／思考仍为运行阶段 |
+| T01 | 确认存在，代码修复；真实存储读取通过 | Hermes 缺失／过期 lease 不再生成本轮结束，保留原生命周期为过期；冷启动无证据为 UNKNOWN。原生 ended_at/end_reason 才确认结束；释放 lease 不换已观察 run identity。真实来源本次无新鲜运行／结束，不冒称实时 turn 验收 |
+| T02 | 确认存在，代码修复；真实原生读取通过，真实新 Hook 批准尚未验收 | 官方 PermissionRequest 没有 tool_use_id；改成加锁、有序 JSONL 回放＋兼容 checkpoint。唯一工具输入指纹关联 call；并行请求独立去重，匹配结果单独解除。PostToolUseFailure 不等于整轮失败；thinking／coarse idle 不结束任务。新增 Hook 事件仍需用户明确重新确认，不自动安装 |
+| T03 | 确认存在，代码修复，真实 SSH 分段验收通过 | 独立 tmux/ps/runs/Codex 成功和错误，watcher 按来源实例更新，不因某段失败阻塞成功来源。pane 消失／重建只未知或过期；仅同 root PID 的新鲜 shell-return 可推断结束，退出码未知 |
+| T04 | 确认存在，代码和隔离运行验收通过 | run ID 为身份；A 结果不覆盖 B，匹配 wrapper 后代才抑制重复推断。活跃 run／本地状态文件不因 TTL 消失；心跳不刷新执行活动。核对 PID/start ticks/boot ID，失联不写成功。旧 wrapper 保留参数、并发输出、退出码和终态；Python 3 和 Windows 原生可执行文件限制见下 |
+| T05 | 部分基础已具备，完整工作流未实施 | 已有 v2 前台监督脚本和本地兼容状态，不等于新增 JobRunProvider、统一 run/attach CLI 或管理来源；后台、容器、Slurm 仍不能视为受监督作业 |
+| T06 | 仅修复失败结果快捷“已查看”，其余未实施 | 保留失败事实，不伪造成功；运行优先分组、语义组号和推断退出码未知的全面 UI 尚待下一阶段 |
+| T07 | 保留现有设计并补并行请求匹配；恢复策略未实施 | 原生弹窗烟测通过，真实阻塞无计时且旧 timer 不误关下一条；队列持久化／重启可恢复入口仍待实施 |
+| T08 | 确认配置／WSL 问题并修复，其余未实施 | 递归保留 TOML 未知字段，sources 按稳定 ID 合并，删除项不复活；DSH WSL 查询前检查 running distro，不自动唤醒。Claude WSL/SSH、Hermes WSL 尚未新增 |
+| T09/T10 | 未实施 | 新 Agent 能力调查、通用外部契约与额度停采集／展示开关留给后续 |
+
+### 实现与兼容
+
+- 生命周期／配置：`providers/hermes.rs`、`providers/deepseek_harness.rs`、`providers/local_file.rs`、`monitoring.rs`。
+- Claude：`claude_events.rs`、`claude_integration.rs`、`providers/claude_code.rs`；`domain/task.rs` 的 input_request_ids 兼容原 scalar。新增序号回放、并行请求／旧结果／重启测试。关联不唯一时不猜测 call，不用其他工具结果解除请求。[官方 Hook 输入文档](https://code.claude.com/docs/en/hooks#permissionrequest-input)支持该限制。
+- 远端：`remote_tmux/{mod.rs,runfile.rs,state.rs,snapshot.py}`、`providers/mod.rs`、`watcher.rs`。没有执行日志里的 Code Mode，只运行仓库自带只读 collector。远端需要 Python 3；Codex 24 小时发现／64 KiB 尾部窗口仍在，窗口外不能宣称结束。
+- 迁移：`attention.rs`／`history.rs` 备份 `*.pre-run-identity.bak` 后规范旧精确 run ID；`transition/mod.rs` 仅迁移相同 run/turn 的通知记忆，保留未读／固定，不给下一 run 继承上一 run 的去重。
+- 运行器：`tp-run`／`wrap.sh` 使用 Python 3、继承 stdio、不拼 shell。`wrap.ps1` 保留 CRT argv；重定向宿主的 stdout/stderr 同时进行原始字节转发，不扫描批准文本。批处理需明确调用 cmd.exe。`.gitattributes` 固定 Linux 脚本 LF，避免 Windows checkout 导致启动失败。
+
+### 实际验证（Windows 主机，2026-10-13）
+
+- Rust 全量：`cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray`，322 通过，7 个 opt-in 默认跳过；fmt、clippy `-D warnings` 和构建通过。托盘运行时使用隔离 target，不覆盖实时可执行文件。
+- Svelte check：0 errors、0 warnings；`bun run test:ui-model`：16 通过；前端生产构建通过。沙箱下 Vite spawn EPERM 属环境限制，经审批在正常环境重跑通过。
+- Windows `bun scripts/run-wrapper-smoke.ts`：空字符串、引号、尾反斜杠、Unicode、重定向 stdin、250 KB stderr、非零退出、静默心跳、启动失败通过；状态全部在 target/wrapper-smoke 内，未写真实监控目录。
+- 已运行 Ubuntu 的 `python3 scripts/run-wrapper-smoke.py`：参数、大输出、静默、成功、失败、SIGTERM、SIGKILL、旧 wrap.sh 兼容入口通过。长于 3 小时、PID 复用／重启由 Rust 模拟时间测试覆盖，不宣称连续运行了三小时。
+- 真实 SSH：`live_remote_snapshot`，Server1_wanghy／Server3 的四类分段全部健康；154 个原生会话目录；确认 YOLO-RDD 的“梳理 YOLO-RDD 项目流程”和目录里的 HyperMem。HyperMem 本次无近期执行任务，未批量导入空闲历史。用 EXPECT_REMOTE_CATALOG_PROJECT 与 EXPECT_REMOTE_PROJECT 分别验收目录发现／活跃结果。
+- 真实只读来源：`live_hermes_snapshot`、`live_claude_snapshot`、`live_wsl_codex_snapshot`、`live_desktop_snapshot`、`live_desktop_schema` 通过。Claude 已安装 VSCode 扩展 2.1.296；DSH 读取 v4 事件和原生标题；WSL Codex 冷采集约 1.2 秒、下一次约 0.4 秒。本次没有发起真实 Agent 任务，也未自动安装 Hook。
+- 原生 WebView2 `native-notice-smoke.ts` 两轮通过：深色 320×132、长标题和按钮、悬停、批准超过 15 秒仍保留、普通结果约 15 秒隐藏、多条队列、旧回调、点击详情、总开关和无假任务／已查看变更。结果及 PNG 在 `src-tauri/target/ui-smoke/`。第二轮因屏保跳过编辑器焦点验证；新真实 Agent 完成／批准、OS 系统横幅和编辑器真实焦点仍未验收。不能把测试提醒通过说成真实批准全链路通过。
+- 没有更改现有项目白名单、代理、statusLine、批准策略；测试后 config.toml SHA256 与执行前相同。`docs/REVIEW_HANDOFF.md` 是用户已有未跟踪文件，保持原样，不提交。
+
+### 下一步
+
+先由用户显式确认 Claude Hook 接入，验证一次真实新任务／批准／失败恢复链路；再执行 T05 的统一运行监控与 T06 的运行优先 UI，随后处理 T07 的提醒恢复。来源缺少明确事件时保持诚实的不确定性，不用新的静默计时补丁换取看似实时。
+
+### 版本管理
+
+- `35c7a4e`：生命周期证据、Claude 事件回放与并行请求、远端分段健康、run 身份迁移、配置与 WSL 保护。
+- `148e281`：Windows／Linux 前台运行监督器、标准流与 argv 修复、隔离实机验收脚本、LF 约束。
+- 后续同一分支的 `docs: record review fixes and verified limitations` 提交：失败结果快捷查看、审查记录与产品说明同步。
+
+提交保留在 `codex/desktop-discovery-visibility`，本次不 push／PR；正常托盘已重新启动，临时 CDP 调试实例关闭。远端旧 tp-run 和既有 Claude Hook 不自动更新，需用户明确操作。

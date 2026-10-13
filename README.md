@@ -27,7 +27,7 @@ TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的 
 |---|---|---|---|---|
 | Codex | 已实现 | 已实现，按发行版启用 | 已实现 | 元数据与 rollout 日志；远端有截取窗口，不能保证与本机观察完全等价 |
 | Claude Code | 已实现 | 无专用适配 | 无专用适配 | 默认只读原生记录；可显式安装生命周期 Hook |
-| Hermes Agent | 已实现 | 无专用适配 | 无专用适配 | 读取本机 SQLite 与运行租约；租约结束语义仍需改进 |
+| Hermes Agent | 已实现 | 无专用适配 | 无专用适配 | 读取本机 SQLite 与运行租约；租约过期不判结束，缺少原生结束事件时显示不确定 |
 | DeepSeek Harness | 已实现，Desktop/CLI | 已实现，独立来源 | 无专用适配 | 支持旧版与 v4 压缩日志、原生标题投影 |
 | Gemini CLI | 兼容 Hook／进程扫描 | 无专用适配 | 无专用适配 | 不等同于完整原生会话适配 |
 | ZCode、Trae、WorkBuddy 等 | 无专用适配 | 无专用适配 | 无专用适配 | 可评估官方事件、只读记录或通用状态协议 |
@@ -103,7 +103,7 @@ install -m 755 scripts/tp-run ~/.local/bin/tp-run
 ~/.local/bin/tp-run "训练实验" -- python train.py
 ```
 
-`tp-run` 也能在 tmux 外生成运行记录。当前仍通过 tmux 来源读取这类记录，需将 tmux 会话／pane 限定留空，并配置正确项目范围。**当前采集仅读取最近 3 小时修改的运行文件，wrapper 没有心跳，长任务存在状态丢失风险**；尚不能视为完善的长期作业监控。具体限制见[审查报告](docs/PROJECT_REVIEW_2026-10.md)。
+`tp-run` 需要 Python 3，也能在 tmux 外生成运行记录。当前仍通过 tmux 来源读取这类记录，需将会话／pane 限定留空，并配置正确项目范围。活跃记录不受 3 小时窗口淘汰；心跳、PID 启动标识和主机 boot ID 用来核对可信度，失联只标为过期，不伪造成功。仅保证被监督的前台命令边界，不代表后台、容器或 Slurm 作业完成；统一 run/attach 工作流仍待实现。验证与限制见[审查执行记录](docs/PROJECT_REVIEW_2026-10.md#11-第一阶段执行记录)。
 
 ## 状态与通知
 

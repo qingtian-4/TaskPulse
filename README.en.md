@@ -33,14 +33,17 @@ capabilities, not a guarantee covering every installed Agent version.
 
 Seeing an Agent process inside remote tmux does not provide its conversation
 lifecycle or approval events. Native undocumented formats are best-effort.
-Hermes lease expiry currently needs stronger completion semantics.
+Hermes lease loss/expiry is stale evidence, never a completion event. If native
+end metadata is unavailable, completion remains unconfirmed.
 
 Remote tmux code runs can be observed without a wrapper. `tp-run` adds real exit
 codes and also writes records outside tmux, provided the configured source does
-not restrict sessions/panes. Collection currently only reads run files modified
-within three hours, and the wrapper has no heartbeat. Long runs are a known gap.
+not restrict sessions/panes. It requires Python 3. Active records have no age
+cutoff; heartbeats, PID start ticks and boot IDs verify liveness without renewing
+execution activity. Lost evidence becomes stale, not success.
 Arbitrary local, WSL, and unwrapped non-tmux remote runs do not yet have a complete
-monitoring workflow. Legacy local wrappers should not be treated as reliable job supervisors.
+monitoring workflow. Repaired local wrappers preserve argv and exit codes, but
+only supervise the foreground child, not background/container/Slurm jobs.
 
 ## Run from source
 
