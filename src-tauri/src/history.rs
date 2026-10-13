@@ -24,12 +24,24 @@ pub struct HistoryStore {
 impl HistoryStore {
     pub fn open(path: PathBuf) -> (Self, Vec<TaskSnapshot>) {
         let payload = std::fs::read(&path).ok();
-        let tasks = payload
+        let mut tasks = payload
             .as_deref()
             .and_then(|bytes| serde_json::from_slice::<PersistedHistory>(bytes).ok())
             .filter(|history| history.version == HISTORY_VERSION)
             .map(|history| history.tasks)
             .unwrap_or_default();
+        let mut migrated = false;
+        for task in &mut tasks {
+            migrated |= task.normalize_run_identity();
+        }
+        if migrated {
+            let backup = path.with_extension("json.pre-run-identity.bak");
+            if !backup.exists() {
+                if let Err(error) = std::fs::copy(&path, backup) {
+                    log::warn!("recent run identity backup: {error}");
+                }
+            }
+        }
         (
             Self {
                 path,

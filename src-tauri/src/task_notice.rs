@@ -101,7 +101,11 @@ impl NoticeQueue {
             let same_request = previous.requires_action()
                 && current.requires_action()
                 && current.waiting_reason == previous.waiting_reason
-                && current.input_request_id == previous.input_request_id
+                && (current.input_request_id == previous.input_request_id
+                    || previous
+                        .input_request_id
+                        .as_ref()
+                        .is_some_and(|id| current.input_request_ids.contains(id)))
                 && current.turn_key == previous.turn_key;
             if !same_request {
                 removed.push(entry.clone());
@@ -497,6 +501,10 @@ mod tests {
         queue.push(sticky);
         queue.push(entry(2));
         assert!(queue.reconcile(&[]).is_empty());
+        let mut parallel = task.clone();
+        parallel.input_request_id = Some("q2".into());
+        parallel.input_request_ids = vec!["q2".into(), "q1".into()];
+        assert!(queue.reconcile(&[parallel]).is_empty());
         let mut stale = task.clone();
         stale.stale = true;
         stale.status = crate::domain::TaskStatus::Running;

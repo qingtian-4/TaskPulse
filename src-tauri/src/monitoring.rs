@@ -357,6 +357,34 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
     Ok(())
 }
 
+// Preserve fields owned by a newer version, without resurrecting deleted
+// sources or merging user-edited project arrays by their array position.
+fn preserve_unknown(old: &toml::Value, updated: &mut toml::Value) {
+    if let (Some(old), Some(updated)) = (old.as_table(), updated.as_table_mut()) {
+        for (key, value) in old {
+            if let Some(current) = updated.get_mut(key) {
+                if key == "sources" {
+                    if let (Some(before), Some(after)) = (value.as_array(), current.as_array_mut())
+                    {
+                        for source in after {
+                            if let Some(previous) = before.iter().find(|previous| {
+                                source.get("id").and_then(toml::Value::as_str).is_some()
+                                    && source.get("id") == previous.get("id")
+                            }) {
+                                preserve_unknown(previous, source);
+                            }
+                        }
+                    }
+                } else {
+                    preserve_unknown(value, current);
+                }
+            } else {
+                updated.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 pub fn write_settings(path: &Path, settings: &DashboardSettings) -> Result<(), String> {
     validate(settings)?;
     let old = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
@@ -368,10 +396,14 @@ pub fn write_settings(path: &Path, settings: &DashboardSettings) -> Result<(), S
             std::fs::copy(path, &backup).map_err(|e| e.to_string())?;
         }
     }
-    value.as_table_mut().ok_or("无效配置")?.insert(
-        "dashboard".into(),
-        toml::Value::try_from(settings).map_err(|e| e.to_string())?,
-    );
+    let mut dashboard = toml::Value::try_from(settings).map_err(|e| e.to_string())?;
+    if let Some(previous) = value.get("dashboard") {
+        preserve_unknown(previous, &mut dashboard);
+    }
+    value
+        .as_table_mut()
+        .ok_or("无效配置")?
+        .insert("dashboard".into(), dashboard);
     let text = toml::to_string_pretty(&value).map_err(|e| e.to_string())?;
     let mut file = tempfile::NamedTempFile::new_in(path.parent().ok_or("无效配置路径")?)
         .map_err(|e| e.to_string())?;
@@ -963,5 +995,65 @@ mod tests {
         assert!(path.with_extension("toml.pre-dashboard.bak").exists());
         let value: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["custom"].as_str(), Some("keep"));
+    }
+
+    #[test]
+    fn nested_unknown_fields_follow_source_identity_not_position_or_deleted_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        let mut old = toml::Value::try_from(&settings).unwrap();
+        old.as_table_mut()
+            .unwrap()
+            .insert("future".into(), toml::Value::String("root".into()));
+        old.as_table_mut().unwrap().insert(
+            "future_table".into(),
+            toml::toml! { nested = { enabled = true } }.into(),
+        );
+        let first_id = settings.sources[0].id.clone();
+        old["sources"][0].as_table_mut().unwrap().insert(
+            "future_source".into(),
+            toml::Value::String(first_id.clone()),
+        );
+        let removed_id = settings.sources[1].id.clone();
+        old["sources"][1].as_table_mut().unwrap().insert(
+            "future_source".into(),
+            toml::Value::String("do not resurrect".into()),
+        );
+        let outer = toml::toml! { custom = "keep" };
+        let mut original = toml::Value::Table(outer);
+        original
+            .as_table_mut()
+            .unwrap()
+            .insert("dashboard".into(), old);
+        std::fs::write(&path, toml::to_string(&original).unwrap()).unwrap();
+        settings.sources.remove(1);
+        settings.sources.reverse();
+        settings
+            .sources
+            .iter_mut()
+            .find(|s| s.id == first_id)
+            .unwrap()
+            .projects = vec!["changed".into()];
+        settings.notifications = false;
+        write_settings(&path, &settings).unwrap();
+        let saved: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(saved["custom"].as_str(), Some("keep"));
+        assert_eq!(saved["dashboard"]["future"].as_str(), Some("root"));
+        assert_eq!(
+            saved["dashboard"]["future_table"]["nested"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(saved["dashboard"]["notifications"].as_bool(), Some(false));
+        let sources = saved["dashboard"]["sources"].as_array().unwrap();
+        assert!(!sources
+            .iter()
+            .any(|s| s["id"].as_str() == Some(&removed_id)));
+        let first = sources
+            .iter()
+            .find(|s| s["id"].as_str() == Some(&first_id))
+            .unwrap();
+        assert_eq!(first["future_source"].as_str(), Some(first_id.as_str()));
+        assert_eq!(first["projects"][0].as_str(), Some("changed"));
     }
 }

@@ -111,6 +111,27 @@ impl AttentionTracker {
                 record.last_execution_at = millis(record.task.updated_at);
             }
         }
+        let legacy_keys: Vec<_> = records
+            .iter()
+            .filter(|(_, record)| {
+                record.task.legacy_run_alias().as_deref() == Some(&record.task.id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !legacy_keys.is_empty() {
+            let backup = path.with_extension("json.pre-run-identity.bak");
+            let backed_up = backup.exists() || std::fs::copy(&path, &backup).is_ok();
+            if backed_up {
+                for old in legacy_keys {
+                    let mut record = records.remove(&old).unwrap();
+                    record.task.normalize_run_identity();
+                    // An existing canonical record owns the latest user choice.
+                    records.entry(record.task.id.clone()).or_insert(record);
+                }
+            } else {
+                log::warn!("run identity migration: backup failed; preserving original records");
+            }
+        }
         Self {
             path,
             records,
@@ -491,6 +512,28 @@ fn effective_turn_key(task: &TaskSnapshot) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn pane_scoped_exact_records_migrate_with_backup_without_losing_unread_or_manual_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        let mut old = task("ssh:host:%3", TaskStatus::Running, Some("run-a"));
+        old.source = TaskSource::RemoteTmux;
+        old.confidence = DetectionConfidence::Exact;
+        old.host = Some("host".into());
+        old.tmux_pane = Some("%3".into());
+        tracker.reconcile(vec![old.clone()]);
+        tracker.set_pinned(&old.id, true).unwrap();
+        old.status = TaskStatus::Succeeded;
+        tracker.reconcile(vec![old]);
+        let restored = AttentionTracker::open(path.clone());
+        assert!(path.with_extension("json.pre-run-identity.bak").exists());
+        let tasks = restored.display();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, "ssh:host:run:run-a");
+        assert!(tasks[0].unread && tasks[0].pinned);
+        assert_eq!(tasks[0].turn_key.as_deref(), Some("run-a"));
+    }
     #[test]
     fn legacy_false_failure_import_is_archived_without_acknowledging_or_deleting() {
         let dir = tempfile::tempdir().unwrap();

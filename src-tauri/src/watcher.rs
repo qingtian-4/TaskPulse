@@ -99,6 +99,7 @@ impl From<AgentStatus> for TaskSnapshot {
             tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
+            input_request_ids: vec![],
             attention_since: 0,
             new_execution: false,
             host: None,
@@ -1152,6 +1153,8 @@ pub fn watch(app: AppHandle) {
     });
     let mut hosts = Vec::new();
     let mut remote_attempts = std::collections::HashMap::new();
+    let mut remote_source_health = std::collections::HashMap::new();
+    let mut remote_source_success = std::collections::HashMap::new();
     let mut revision = crate::monitoring::revision();
     let mut active_settings = crate::monitoring::get_monitoring_settings();
     let mut watcher: Option<RecommendedWatcher> = None;
@@ -1230,6 +1233,25 @@ pub fn watch(app: AppHandle) {
                 continue;
             }
             hosts = output.hosts;
+            for health in output.remote_health {
+                for source in active_settings
+                    .sources
+                    .iter()
+                    .filter(|source| source.enabled && source.location == health.host)
+                {
+                    let matches = matches!(
+                        (source.kind, health.source),
+                        (
+                            crate::monitoring::SourceKind::RemoteCodex,
+                            TaskSource::Codex
+                        ) | (crate::monitoring::SourceKind::Tmux, TaskSource::RemoteTmux)
+                    );
+                    if matches && health.authoritative {
+                        remote_source_success.insert(source.id.clone(), SystemTime::now());
+                    }
+                }
+                remote_source_health.insert((health.host.clone(), health.source), health);
+            }
             for host in &hosts {
                 remote_attempts.insert(host.host.clone(), SystemTime::now());
             }
@@ -1240,11 +1262,23 @@ pub fn watch(app: AppHandle) {
                 .into_iter()
                 .filter(crate::monitoring::allows)
                 .collect();
-            if output.authoritative {
-                store.merge_partition(tasks, true, SystemTime::now());
-            } else {
-                store.merge(tasks, SystemTime::now());
-            }
+            let authoritative = active_settings
+                .sources
+                .iter()
+                .filter(|source| source.enabled)
+                .filter(|source| {
+                    let kind = match source.kind {
+                        crate::monitoring::SourceKind::RemoteCodex => TaskSource::Codex,
+                        crate::monitoring::SourceKind::Tmux => TaskSource::RemoteTmux,
+                        _ => return false,
+                    };
+                    remote_source_health
+                        .get(&(source.location.clone(), kind))
+                        .is_some_and(|health| health.authoritative)
+                })
+                .map(|source| source.id.clone())
+                .collect();
+            store.merge_instances(tasks, &authoritative, SystemTime::now());
             changed = true;
         }
         if providers.collect_ready() || last_scan.elapsed() >= Duration::from_secs(2) {
@@ -1285,17 +1319,24 @@ pub fn watch(app: AppHandle) {
                     )
             }) {
                 if let Some(host) = hosts.iter().find(|h| h.host == source.location) {
+                    let kind = if source.kind == crate::monitoring::SourceKind::RemoteCodex {
+                        TaskSource::Codex
+                    } else {
+                        TaskSource::RemoteTmux
+                    };
+                    let segment = remote_source_health.get(&(source.location.clone(), kind));
                     health.push(ProviderHealth {
                         provider: source.id.clone(),
-                        status: if host.status == crate::providers::HostStatus::Connected {
+                        status: if host.status == crate::providers::HostStatus::Connected
+                            && segment.is_some_and(|health| health.authoritative)
+                        {
                             ProviderStatus::Connected
                         } else {
                             ProviderStatus::Degraded
                         },
-                        last_success: host.last_seen,
+                        last_success: remote_source_success.get(&source.id).copied(),
                         last_attempt: remote_attempts.get(&host.host).copied(),
-                        message: (host.status == crate::providers::HostStatus::Disconnected)
-                            .then(|| "SSH 连接失败；保留上次任务状态，请检查连接".into()),
+                        message: segment.and_then(|health| health.error.clone()),
                     });
                 }
             }

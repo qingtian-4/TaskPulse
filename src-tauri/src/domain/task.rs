@@ -249,6 +249,9 @@ pub struct TaskSnapshot {
     pub waiting_reason: Option<WaitingReason>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_request_id: Option<String>,
+    /// All outstanding explicit requests; the scalar above is the primary one.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub input_request_ids: Vec<String>,
     #[serde(default)]
     pub attention_since: u64,
     #[serde(default)]
@@ -366,7 +369,31 @@ impl TaskSnapshot {
                 Some(WaitingReason::Approval | WaitingReason::Question)
             )
     }
-    /// Small constructor for tests and providers.
+    /// Compatibility alias for a legacy pane-scoped exact run.
+    pub fn legacy_run_alias(&self) -> Option<String> {
+        if self.source != TaskSource::RemoteTmux || self.confidence != DetectionConfidence::Exact {
+            return None;
+        }
+        let host = self.host.as_deref()?;
+        let pane = self.tmux_pane.as_deref().filter(|p| !p.is_empty())?;
+        let run = self.turn_key.as_deref().filter(|r| !r.is_empty())?;
+        let legacy = format!("ssh:{host}:{pane}");
+        let current = format!("ssh:{host}:run:{run}");
+        (self.id == legacy || self.id == current).then_some(legacy)
+    }
+
+    pub fn normalize_run_identity(&mut self) -> bool {
+        if self.legacy_run_alias().as_deref() == Some(&self.id) {
+            self.id = format!(
+                "ssh:{}:run:{}",
+                self.host.as_deref().unwrap(),
+                self.turn_key.as_deref().unwrap()
+            );
+            return true;
+        }
+        false
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         id: impl Into<String>,
@@ -391,6 +418,7 @@ impl TaskSnapshot {
             tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
+            input_request_ids: vec![],
             attention_since: 0,
             new_execution: false,
             host: None,

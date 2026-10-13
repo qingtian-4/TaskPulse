@@ -4,8 +4,8 @@
 //! Hermes (this agent) stores per-session state in a SQLite DB; we read the
 //! `sessions` table for live session metadata and `session_turn_leases` for
 //! turn state — a held (unexpired) turn lease means the agent is actively
-//! processing (RUNNING); otherwise the agent is waiting for the user
-//! (WAITING_INPUT).
+//! processing (RUNNING). Missing/expired leases prove neither turn completion
+//! nor a user-input gate; retain the prior lifecycle with stale evidence.
 //!
 //! DB discovery order:
 //!   1. `$HERMES_STATE_DB` env override
@@ -44,6 +44,38 @@ impl HermesProvider {
             db_path: Some(path),
             last_tasks: Vec::new(),
         }
+    }
+
+    fn snapshot(
+        &self,
+        row: &SessionRow,
+        lease: Option<TurnLease>,
+        now: SystemTime,
+    ) -> TaskSnapshot {
+        let mut task = row_to_snapshot(row, lease, now);
+        if task.finished_at.is_some() && lease.is_none() {
+            if let Some(previous) = self.last_tasks.iter().find(|t| t.id == task.id) {
+                // Releasing the lease must not change the identity of the
+                // execution that the native ended_at just finished.
+                task.turn_key = previous.turn_key.clone();
+                task.started_at = previous.started_at;
+            }
+        }
+        if task.status == TaskStatus::Unknown {
+            if let Some(previous) = self.last_tasks.iter().find(|t| t.id == task.id) {
+                // Metadata refresh/rename and lease expiry are not lifecycle events.
+                task.status = previous.status;
+                task.waiting_reason = previous.waiting_reason;
+                task.input_request_id = previous.input_request_id.clone();
+                task.turn_key = previous.turn_key.clone();
+                task.started_at = previous.started_at;
+                task.finished_at = previous.finished_at;
+                task.phase = previous.phase;
+                task.activity = previous.activity.clone();
+                task.updated_at = previous.updated_at;
+            }
+        }
+        task
     }
 
     fn degraded(&self, error: impl Into<String>) -> ProviderOutput {
@@ -115,33 +147,39 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
             let short: String = row.id.chars().take(8).collect();
             format!("未命名任务 · {short}")
         });
-    let waiting_for_user = row
-        .description
-        .as_deref()
-        .is_some_and(description_waits_for_user)
-        && row.ended_at.and_then(epoch_to_time).is_none();
+    let ended = row.ended_at.and_then(epoch_to_time).filter(|ended| {
+        lease
+            .and_then(|l| epoch_to_time(l.acquired_at))
+            .is_none_or(|start| *ended >= start)
+    });
+    let waiting_for_user = lease.is_some_and(|l| l.live)
+        && row
+            .description
+            .as_deref()
+            .is_some_and(description_waits_for_user)
+        && ended.is_none();
     let status = if waiting_for_user {
         // Hermes can keep the turn lease while an approval/input gate is
         // open. The native activity description is more specific than the
         // coarse lease and represents a user-blocked turn.
         TaskStatus::WaitingInput
-    } else if lease.is_some_and(|lease| lease.live) {
-        TaskStatus::Running
-    } else if row.ended_at.and_then(epoch_to_time).is_some() {
+    } else if ended.is_some() {
         let failed = row.end_reason.as_deref().is_some_and(|reason| {
             let reason = reason.to_ascii_lowercase();
-            reason.contains("fail")
-                || reason.contains("error")
-                || reason.contains("panic")
-                || reason.contains("crash")
+            matches!(
+                reason.as_str(),
+                "failed" | "failure" | "error" | "panic" | "crash" | "crashed"
+            )
         });
         if failed {
             TaskStatus::Failed
         } else {
-            TaskStatus::Idle
+            TaskStatus::WaitingInput
         }
+    } else if lease.is_some_and(|lease| lease.live) {
+        TaskStatus::Running
     } else {
-        TaskStatus::WaitingInput
+        TaskStatus::Unknown
     };
     let at = row.last_activity_at.and_then(epoch_to_time).unwrap_or(now);
     let project = row
@@ -159,9 +197,14 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
         name,
         TaskSource::Hermes,
         status,
-        DetectionConfidence::Hook,
+        if ended.is_some() {
+            DetectionConfidence::Hook
+        } else {
+            DetectionConfidence::Inferred
+        },
         now,
     );
+    task.stale = status == TaskStatus::Unknown;
     task.project = project;
     task.project_path = row.cwd.clone().or_else(|| row.git_repo_root.clone());
     if task.status == TaskStatus::WaitingInput {
@@ -196,11 +239,11 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
         .or_else(|| row.started_at.and_then(epoch_to_time))
         .or(Some(at));
     task.updated_at = at;
-    task.finished_at = row.ended_at.and_then(epoch_to_time);
+    task.finished_at = ended;
     task.turn_key = Some(
         lease
             .map(|lease| format!("lease:{:.6}", lease.acquired_at))
-            .unwrap_or_else(|| format!("settled:{:.6}", row.last_activity_at.unwrap_or(0.0))),
+            .unwrap_or_else(|| format!("session:{:.6}", row.started_at.unwrap_or(0.0))),
     );
     task.native_unread = row
         .last_read_at
@@ -236,7 +279,9 @@ fn description_waits_for_user(description: &str) -> bool {
 
 fn epoch_to_time(secs: f64) -> Option<SystemTime> {
     if secs > 0.0 {
-        Some(UNIX_EPOCH + Duration::from_secs_f64(secs))
+        Duration::try_from_secs_f64(secs)
+            .ok()
+            .and_then(|d| UNIX_EPOCH.checked_add(d))
     } else {
         None
     }
@@ -368,7 +413,7 @@ impl Provider for HermesProvider {
         let catalog = rows
             .iter()
             .filter(|row| !row.archived)
-            .map(|row| row_to_snapshot(row, leases.get(&row.id).copied(), now))
+            .map(|row| self.snapshot(row, leases.get(&row.id).copied(), now))
             .collect();
         let mut tasks = Vec::new();
         for row in rows {
@@ -385,10 +430,13 @@ impl Provider for HermesProvider {
                 continue;
             }
             let age = now.duration_since(at).unwrap_or_default();
-            if !running && age > DISCOVERY_TTL && !row.pinned {
+            let known_running = self.last_tasks.iter().any(|t| {
+                t.session_id.as_deref() == Some(&row.id) && t.status == TaskStatus::Running
+            });
+            if !running && !known_running && age > DISCOVERY_TTL && !row.pinned {
                 continue;
             }
-            tasks.push(row_to_snapshot(&row, lease, now));
+            tasks.push(self.snapshot(&row, lease, now));
         }
 
         self.last_tasks = tasks.clone();
@@ -460,16 +508,18 @@ mod tests {
     }
 
     #[test]
-    fn expired_lease_is_waiting_input() {
+    fn expired_lease_without_history_is_unknown_not_a_completed_turn() {
         let now = now_secs();
         let (_dir, db) = make_db(
             &[("s2", "Other", now - 30.0, "/home/user/proj", false, 0.0)],
-            &[("s2", now - 60.0)], // expired lease → done, waiting for user
+            &[("s2", now - 60.0)], // expired lease is not an end event
         );
         let mut provider = HermesProvider::with_db_path(db);
         let out = provider.poll(SystemTime::now());
         assert_eq!(out.tasks.len(), 1);
-        assert_eq!(out.tasks[0].status, TaskStatus::WaitingInput);
+        assert_eq!(out.tasks[0].status, TaskStatus::Unknown);
+        assert!(out.tasks[0].stale);
+        assert_eq!(out.tasks[0].waiting_reason, None);
     }
 
     #[test]
@@ -528,8 +578,55 @@ mod tests {
         let mut p = HermesProvider::with_db_path(db);
         let out = p.poll(SystemTime::now());
         assert_eq!(out.tasks.len(), 1);
-        assert_eq!(out.tasks[0].status, TaskStatus::Idle);
+        assert_eq!(out.tasks[0].status, TaskStatus::WaitingInput);
+        assert_eq!(
+            out.tasks[0].waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
         assert!(out.tasks[0].finished_at.is_some());
+    }
+
+    #[test]
+    fn lease_expiry_and_missing_row_preserve_running_without_end_notifications() {
+        let seconds = now_secs();
+        let start = UNIX_EPOCH + Duration::from_secs_f64(seconds);
+        let (_dir, db) = make_db(
+            &[("s", "original", seconds, "/proj", false, 0.0)],
+            &[("s", seconds + 10.0)],
+        );
+        let mut provider = HermesProvider::with_db_path(db.clone());
+        let mut engine = crate::transition::TransitionEngine::new();
+        let first = provider.poll(start).tasks;
+        assert_eq!(first[0].confidence, DetectionConfidence::Inferred);
+        assert!(engine.apply(&first, &[], start).is_empty());
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute("UPDATE sessions SET display_name='renamed'", [])
+            .unwrap();
+        let expired = provider.poll(start + Duration::from_secs(3600)).tasks;
+        assert_eq!(expired[0].status, TaskStatus::Running);
+        assert!(expired[0].stale);
+        assert_eq!(expired[0].name, "renamed");
+        assert_eq!(expired[0].turn_key, first[0].turn_key);
+        assert!(engine.apply(&expired, &[], start).is_empty());
+        conn.execute("DELETE FROM session_turn_leases", []).unwrap();
+        let missing = provider.poll(start + Duration::from_secs(7200)).tasks;
+        assert_eq!(missing[0].status, TaskStatus::Running);
+        assert_eq!(missing[0].turn_key, first[0].turn_key);
+        assert!(engine.apply(&missing, &[], start).is_empty());
+        conn.execute(
+            "UPDATE sessions SET ended_at=?1, end_reason='completed'",
+            [seconds + 7201.0],
+        )
+        .unwrap();
+        let ended = provider.poll(start + Duration::from_secs(7202)).tasks;
+        assert!(!ended[0].stale);
+        assert_eq!(
+            ended[0].waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+        // Removing the lease must not split the same execution identity.
+        assert_eq!(engine.apply(&ended, &[], start).len(), 1);
+        assert!(engine.apply(&ended, &[], start).is_empty());
     }
 
     #[test]

@@ -107,6 +107,9 @@ impl DeepSeekHarnessProvider {
 
     /// Run a command inside WSL and capture stdout as raw bytes.
     fn wsl(&self, script: &str) -> std::io::Result<Vec<u8>> {
+        super::codex_wsl::validate_distro(&self.distro).map_err(std::io::Error::other)?;
+        let running = super::codex_wsl::running_distros().map_err(std::io::Error::other)?;
+        require_running_distro(&self.distro, &running)?;
         let mut command = Command::new("wsl.exe");
         #[cfg(windows)]
         {
@@ -346,6 +349,16 @@ impl DeepSeekHarnessProvider {
         task.updated_at = updated_at;
         task.cli = Some("dsh".into());
         task
+    }
+}
+
+fn require_running_distro(distro: &str, running: &[String]) -> std::io::Result<()> {
+    if running.iter().any(|name| name.eq_ignore_ascii_case(distro)) {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "WSL {distro} 未运行；不会自动启动发行版"
+        )))
     }
 }
 
@@ -986,6 +999,13 @@ mod tests {
         let output = provider.poll(SystemTime::now());
         assert!(output.authoritative);
         assert!(output.tasks.is_empty());
+    }
+
+    #[test]
+    fn stopped_wsl_is_rejected_without_starting_a_command() {
+        assert!(require_running_distro("Ubuntu", &[]).is_err());
+        assert!(require_running_distro("Ubuntu", &["Other".into()]).is_err());
+        assert!(require_running_distro("Ubuntu", &["ubuntu".into()]).is_ok());
     }
 
     #[test]

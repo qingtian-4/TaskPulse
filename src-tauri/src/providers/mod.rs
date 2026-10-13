@@ -84,11 +84,20 @@ impl HostHealth {
 
 /// Output of one provider poll: normalized tasks plus (for remote providers)
 /// per-host health.
+#[derive(Debug, Clone)]
+pub struct RemoteSourceHealth {
+    pub host: String,
+    pub source: crate::domain::TaskSource,
+    pub authoritative: bool,
+    pub error: Option<String>,
+}
+
 #[derive(Debug)]
 pub struct ProviderOutput {
     pub tasks: Vec<TaskSnapshot>,
     pub catalog: Vec<TaskSnapshot>,
     pub hosts: Vec<HostHealth>,
+    pub remote_health: Vec<RemoteSourceHealth>,
     /// Whether this poll is a complete, authoritative view of the provider.
     /// A degraded poll may re-emit stale tasks, but must never reconcile away
     /// tasks that are absent from its partial result.
@@ -102,6 +111,7 @@ impl Default for ProviderOutput {
             tasks: Vec::new(),
             catalog: Vec::new(),
             hosts: Vec::new(),
+            remote_health: Vec::new(),
             authoritative: true,
             error: None,
         }
@@ -114,6 +124,7 @@ impl ProviderOutput {
             tasks,
             catalog: vec![],
             hosts: Vec::new(),
+            remote_health: Vec::new(),
             authoritative: true,
             error: None,
         }
@@ -124,6 +135,7 @@ impl ProviderOutput {
             tasks,
             catalog: vec![],
             hosts: Vec::new(),
+            remote_health: Vec::new(),
             authoritative: false,
             error: Some(error.into()),
         }

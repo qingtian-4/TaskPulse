@@ -129,6 +129,36 @@ impl TransitionEngine {
 
         for task in tasks {
             let id = task.id.clone();
+            // Legacy pane-scoped exact results move to their own run identity.
+            // Match the run key before transferring dedup, never apply A's
+            // memory to a new B run in the same pane.
+            if let Some(alias) = task.legacy_run_alias().filter(|alias| alias != &id) {
+                if self.prev_turns.get(&alias) == Some(&task.turn_key)
+                    && !self.prev.contains_key(&id)
+                {
+                    if let Some(status) = self.prev.remove(&alias) {
+                        self.prev.insert(id.clone(), status);
+                    }
+                    if let Some(turn) = self.prev_turns.remove(&alias) {
+                        self.prev_turns.insert(id.clone(), turn);
+                    }
+                    if let Some(wait) = self.prev_waits.remove(&alias) {
+                        self.prev_waits.insert(id.clone(), wait);
+                    }
+                    self.notified = self
+                        .notified
+                        .drain()
+                        .map(|(key, kind)| (if key == alias { id.clone() } else { key }, kind))
+                        .collect();
+                    self.input_notifications = self
+                        .input_notifications
+                        .drain()
+                        .map(|(key, request)| {
+                            (if key == alias { id.clone() } else { key }, request)
+                        })
+                        .collect();
+                }
+            }
             if task.is_agent_session() {
                 // v3 could infer an end during thinking. Do not let that false
                 // event suppress the next genuine failure/completion.
@@ -147,6 +177,25 @@ impl TransitionEngine {
                     .is_some_and(|previous| previous != &wait);
             if wait_changed && task.requires_action() {
                 self.notified.remove(&(id.clone(), EventKind::WaitingInput));
+            }
+
+            // A poll may coalesce several concurrent explicit requests. Dedup
+            // every request independently, rather than only the primary gate.
+            if !task.stale && task.requires_action() && !task.input_request_ids.is_empty() {
+                for request in &task.input_request_ids {
+                    let key =
+                        serde_json::to_string(&(&task.turn_key, task.waiting_reason, request))
+                            .unwrap_or_default();
+                    if self.input_notifications.insert((id.clone(), key)) {
+                        let mut requested = task.clone();
+                        requested.input_request_id = Some(request.clone());
+                        events.push(TaskEvent::WaitingInput {
+                            task: requested,
+                            reason: task.hook_matcher.clone(),
+                        });
+                    }
+                }
+                self.notified.insert((id.clone(), EventKind::WaitingInput));
             }
 
             let prev_status = match self.prev.get(&id).copied() {
@@ -297,6 +346,49 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn coalesced_parallel_requests_notify_once_each_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut task = task_turn("claude:s", TaskStatus::WaitingInput, "turn");
+        task.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        task.input_request_id = Some("a".into());
+        task.input_request_ids = vec!["a".into(), "b".into()];
+        let now = SystemTime::now();
+        assert_eq!(engine.apply(&[task.clone()], &[], now).len(), 2);
+        assert!(engine.apply(&[task.clone()], &[], now).is_empty());
+        task.input_request_ids = vec!["a".into()];
+        let mut restarted = TransitionEngine::open(path);
+        assert!(restarted.apply(&[task], &[], now).is_empty());
+    }
+    #[test]
+    fn run_identity_migration_preserves_delivered_events_but_not_a_different_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let now = SystemTime::now();
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut old = task_turn("ssh:host:%3", TaskStatus::Running, "a");
+        old.source = crate::domain::TaskSource::RemoteTmux;
+        old.confidence = crate::domain::DetectionConfidence::Exact;
+        old.host = Some("host".into());
+        old.tmux_pane = Some("%3".into());
+        engine.apply(&[old.clone()], &[], now);
+        old.status = TaskStatus::Succeeded;
+        assert_eq!(engine.apply(&[old.clone()], &[], now).len(), 1);
+        old.normalize_run_identity();
+        let mut restarted = TransitionEngine::open(path);
+        assert!(restarted.apply(&[old.clone()], &[], now).is_empty());
+        let mut other = old.clone();
+        other.id = "ssh:host:run:b".into();
+        other.turn_key = Some("b".into());
+        other.status = TaskStatus::Running;
+        assert!(restarted
+            .apply(&[old.clone(), other.clone()], &[], now)
+            .is_empty());
+        other.status = TaskStatus::Succeeded;
+        assert_eq!(restarted.apply(&[old, other], &[], now).len(), 1);
+    }
     #[test]
     fn confirmed_requests_dedup_by_request_across_flaps_and_restart() {
         let dir = tempfile::tempdir().unwrap();
