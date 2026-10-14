@@ -630,3 +630,15 @@ Alpha.2 使用新提交、新 PR、新标签，不覆盖已推送的历史。
 本地 Alpha.2 再验收：Rust 333 通过、7 个默认 opt-in 跳过；fmt/clippy/内嵌构建
 通过；Svelte 0 errors/warnings、UI 19、发布模型 5、生产构建与安装脚本语法通过。
 新的 MSVC MSI/安装/草稿结果必须等待实际流水线；干净机器等人工门禁继续保留。
+
+### 本次停止点：GitHub 审批连接不可用
+
+Alpha.2 修复 `2db67f2` 已推送至 codex/desktop-discovery-visibility；远端 main 为
+`a9e879c`（已合并 PR #2）。alpha.1 标签保留；尚未创建 alpha.2 标签或发布。
+创建修复 PR 的自动审批返回 stream disconnected，明确说明操作未执行；后续
+只读 GitHub 连接健康检查也失败。因此不通过直接写 main/替代认证 API 绕过审批。
+
+本地正常内嵌托盘已构建并启动 Alpha.2；测试调试端口已关闭，用户范围/代理/
+Hook 配置不变。待连接恢复，先只读核对有无同分支新 PR，避免重复创建；然后
+完成修复 PR 的 CI/合并、验证 main 树、推送新标签、实际安装烟测与草稿交付。
+当前没有可宣称完成验收的安装包，也没有公开稳定 Release。
