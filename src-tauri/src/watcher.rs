@@ -329,6 +329,10 @@ fn emit_agents(
         *cache = providers.to_vec();
     }
     crate::tray::update_icon(app, tasks, hosts);
+    let _ = app.emit(
+        "pending-prompts-updated",
+        crate::task_notice::get_pending_task_prompts(),
+    );
     let _ = app.emit("agents-updated", tasks);
     static ARCHIVED: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
     let archived = get_archived_attention();

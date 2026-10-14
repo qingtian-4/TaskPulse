@@ -1,11 +1,20 @@
 import { expect, test } from 'bun:test';
-import { noticeContent, noticeTimeout, deliveryStage } from '../src/lib/notice';
+import { noticeContent, noticeTimeout, noticeRotation, deliveryStage } from '../src/lib/notice';
 import type { TaskNotice } from '../src/lib/types';
 
 const base: TaskNotice = {
   id: 1, title: 'TaskPulse · 本轮结束，等待后续输入',
   body: 'Codex · Project · Task', created_at: 1, task_id: 'codex:stable', test: false,
 };
+
+test('confirmed blockers rotate for fairness but are never auto-dismissed',()=>{
+  const blocker={...base,auto_dismiss_ms:null};
+  expect(noticeRotation(blocker,1)).toBe(15000);
+  expect(noticeRotation(blocker,0)).toBeNull();
+  expect(noticeTimeout(blocker)).toBeNull();
+  expect(noticeRotation(base,1)).toBeNull();
+  expect(deliveryStage('reopened')).toContain('非新事件');
+});
 test('confirmed blocking reminders have no timer, while legacy completion remains 15 seconds',()=>{
   expect(noticeTimeout({...base,auto_dismiss_ms:null})).toBeNull();
   expect(noticeTimeout(base)).toBe(15000);

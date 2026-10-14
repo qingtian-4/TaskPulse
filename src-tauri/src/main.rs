@@ -25,6 +25,10 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if std::env::args().any(|arg| arg == "--version") {
+        println!("TaskPulse {}", env!("CARGO_PKG_VERSION"));
+        return;
+    }
     if std::env::args().any(|arg| arg == "--claude-event") {
         if let Err(error) = claude_integration::receive_event() {
             log::warn!("TaskPulse event bridge: {error}");
@@ -179,6 +183,8 @@ fn main() {
             notifier::get_notification_error,
             notification_log::get_notification_log,
             task_notice::get_task_notice,
+            task_notice::get_pending_task_prompts,
+            task_notice::reopen_task_prompt,
             task_notice::dismiss_task_notice,
             task_notice::next_task_notice,
             task_notice::ack_task_notice,

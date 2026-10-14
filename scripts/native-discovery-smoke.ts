@@ -55,7 +55,7 @@ try{
   await evaluate(`(()=>{const s=document.querySelector('[aria-label="筛选来源"]');if(!s)throw Error('Filter select not visible');s.value=${JSON.stringify(other.id)};s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await waitFor(`!!document.querySelector('.outside-running')`);
   await waitFor(`document.querySelector('.filter-note')?.textContent.includes(${JSON.stringify(other.name)})`);
-  await evaluate(`[...document.querySelectorAll('.counts button')].find(b=>b.textContent.trim().startsWith('运行')).click()`);
+  await evaluate(`[...document.querySelectorAll('.counts button')].find(b=>b.textContent.trim().startsWith('进行中')).click()`);
   for(const task of running)await waitFor(`!!document.querySelector('[data-task-id='+CSS.escape(${JSON.stringify(task.id)})+']')`);
   await waitFor(`!document.querySelector('.outside-running')`);
   if(JSON.stringify(await invoke('get_monitoring_settings'))!==JSON.stringify(original))throw Error('Read-only acceptance changed monitoring configuration');

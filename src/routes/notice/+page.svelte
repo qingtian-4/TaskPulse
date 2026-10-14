@@ -4,9 +4,10 @@
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type { NoticeState } from '$lib/types';
-  import { noticeContent, noticeTimeout } from '$lib/notice';
+  import { noticeContent, noticeTimeout, noticeRotation } from '$lib/notice';
   let noticeState=$state<NoticeState>({current:null,pending:0});
   let remaining=$state(15000);
+  let rotationRemaining=15000;
   let hovered=$state(false);
   let busy=$state(false);
   let error=$state('');
@@ -15,7 +16,7 @@
   let acknowledging=false;
   const content=$derived(noticeState.current ? noticeContent(noticeState.current) : null);
   function apply(next:NoticeState){
-    if(next.current?.id!==currentId){currentId=next.current?.id ?? null;remaining=next.current ? noticeTimeout(next.current) ?? 15000 : 15000;error='';busy=false;}
+    if(next.current?.id!==currentId){currentId=next.current?.id ?? null;remaining=next.current ? noticeTimeout(next.current) ?? 15000 : 15000;rotationRemaining=15000;error='';busy=false;}
     noticeState=next;
   }
   async function dismiss(reason='user'){
@@ -55,6 +56,7 @@
       const now=performance.now();const elapsed=now-last;last=now;
       void acknowledge();
       if(noticeState.current && noticeTimeout(noticeState.current)!==null && !hovered && !busy && !error){remaining=Math.max(0,remaining-elapsed);if(remaining===0)void dismiss('timeout');}
+      if(noticeState.current && noticeRotation(noticeState.current,noticeState.pending)!==null && !hovered && !busy && !error){rotationRemaining=Math.max(0,rotationRemaining-elapsed);if(rotationRemaining===0)void next();}
     },200);
     return()=>{mounted=false;cleanup?.();clearInterval(timer);};
   });

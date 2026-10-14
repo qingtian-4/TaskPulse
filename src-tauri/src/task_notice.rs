@@ -13,6 +13,7 @@ use crate::domain::{TaskSnapshot, TaskSource};
 const NOTICE_WIDTH: f64 = 320.0;
 const NOTICE_HEIGHT: f64 = 132.0;
 const NOTICE_MARGIN: f64 = 16.0;
+const MAX_QUEUED_NOTICES: usize = 128;
 
 /// Presentation fields are separate: native task titles may themselves contain ` · `.
 #[derive(Debug, Clone, Serialize)]
@@ -69,8 +70,57 @@ impl NoticeQueue {
             pending: self.entries.len().saturating_sub(1),
         }
     }
-    fn push(&mut self, entry: Entry) {
+    fn push(&mut self, entry: Entry) -> Option<Entry> {
+        // Results remain unread in AttentionTracker even if their transient
+        // presentation is evicted. Never grow the in-memory queue indefinitely.
+        let dropped = if self.entries.len() >= MAX_QUEUED_NOTICES {
+            let disposable = self
+                .entries
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find(|(_, e)| e.notice.auto_dismiss_ms.is_some())
+                .map(|(i, _)| i);
+            if let Some(index) = disposable {
+                self.entries.remove(index)
+            } else {
+                // Do not remove the visible blocker or reset its callback ID.
+                // Overflowed requests are still available in the durable inbox.
+                return Some(entry);
+            }
+        } else {
+            None
+        };
         self.entries.push_back(entry);
+        dropped
+    }
+    fn reopen(&mut self, entry: Entry) -> Option<Entry> {
+        if let Some(index) = self.entries.iter().position(|old| {
+            old.task
+                .as_ref()
+                .zip(entry.task.as_ref())
+                .is_some_and(|(old, new)| {
+                    old.id == new.id
+                        && old.turn_key == new.turn_key
+                        && old.input_request_id == new.input_request_id
+                })
+        }) {
+            self.entries.remove(index);
+        }
+        // Explicit user interaction can put this presentation first, without
+        // emitting a new lifecycle event or changing persisted notification dedup.
+        let dropped = self.push(entry.clone());
+        if dropped
+            .as_ref()
+            .is_some_and(|e| e.notice.id == entry.notice.id)
+        {
+            let displaced = self.entries.pop_back();
+            self.entries.push_front(entry);
+            return displaced;
+        }
+        let last = self.entries.pop_back().unwrap();
+        self.entries.push_front(last);
+        dropped
     }
     fn dismiss(&mut self, id: u64) -> Option<Entry> {
         // A late timer/click for the previous alert must not dismiss the next.
@@ -174,13 +224,114 @@ pub fn enqueue(
     };
     let entry = Entry { notice, task };
     audit(&entry, "queued");
-    QUEUE.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
+    let dropped = QUEUE.lock().unwrap_or_else(|e| e.into_inner()).push(entry);
+    if let Some(entry) = dropped {
+        audit(&entry, "queue_overflow");
+    }
     publish(app);
 }
 
 #[tauri::command]
 pub fn get_task_notice() -> NoticeState {
     QUEUE.lock().unwrap_or_else(|e| e.into_inner()).state()
+}
+
+/// The inbox is reconstructed from durable attention state, not replayed
+/// delivery records. A dismissed popup is neither read nor a resolved request.
+#[tauri::command]
+pub fn get_pending_task_prompts() -> Vec<TaskSnapshot> {
+    let settings = crate::monitoring::get_monitoring_settings();
+    let health = crate::watcher::get_providers();
+    let now = SystemTime::now();
+    let mut tasks: Vec<_> = crate::watcher::known_sessions()
+        .into_iter()
+        .filter(|t| {
+            t.requires_action()
+                && !t.internal
+                && crate::monitoring::allows(t)
+                && !crate::watcher::is_ignored(&t.id)
+        })
+        .map(|mut task| {
+            let source = crate::monitoring::source_for(&settings, &task);
+            let provider = source.and_then(|s| health.iter().find(|p| p.provider == s.id));
+            let interval = source.map_or(3000, |s| s.poll_interval_ms);
+            task.stale |= !prompt_source_fresh(provider, now, interval);
+            task
+        })
+        .collect();
+    tasks.sort_by(|a, b| {
+        b.updated_at
+            .cmp(&a.updated_at)
+            .then_with(|| a.id.cmp(&b.id))
+    });
+    tasks
+}
+
+fn prompt_source_fresh(
+    health: Option<&crate::providers::ProviderHealth>,
+    now: SystemTime,
+    interval: u64,
+) -> bool {
+    health.is_some_and(|h| {
+        h.status == crate::providers::ProviderStatus::Connected
+            && h.last_success
+                .and_then(|at| now.duration_since(at).ok())
+                .is_some_and(|age| {
+                    age.as_millis() <= u128::from(interval.saturating_mul(3).max(30_000))
+                })
+    })
+}
+
+fn reopenable(task: &TaskSnapshot) -> bool {
+    task.requires_action()
+        && !task.stale
+        && !task.internal
+        && task.confidence != crate::domain::DetectionConfidence::Inferred
+}
+
+#[tauri::command]
+pub async fn reopen_task_prompt(app: AppHandle, id: String) -> Result<NoticeState, String> {
+    if !crate::monitoring::get_monitoring_settings().popup_notifications() {
+        return Err("请先启用 TaskPulse 弹窗提醒；请求仍可在面板查看".into());
+    }
+    let task = get_pending_task_prompts()
+        .into_iter()
+        .find(|t| t.id == id)
+        .ok_or("该请求已处理或不在监控范围")?;
+    if !reopenable(&task) {
+        return Err("来源尚未确认最新状态，请刷新或打开 Agent 核对；不会重发过期请求".into());
+    }
+    let notice = TaskNotice {
+        id: next_id(),
+        title: if task.waiting_reason == Some(crate::domain::WaitingReason::Approval) {
+            "TaskPulse · 需要授权".into()
+        } else {
+            "TaskPulse · 需要你确认".into()
+        },
+        body: "未解决请求 · 手动重新打开，请在原 Agent 中处理".into(),
+        created_at: SystemTime::now()
+            .duration_since(SystemTime::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64,
+        task_id: Some(task.id.clone()),
+        test: false,
+        context: Some(NoticeContext::from(&task)),
+        auto_dismiss_ms: None,
+    };
+    let entry = Entry {
+        notice,
+        task: Some(task),
+    };
+    audit(&entry, "reopened");
+    let dropped = QUEUE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .reopen(entry);
+    if let Some(entry) = dropped {
+        audit(&entry, "queue_overflow");
+    }
+    publish(&app);
+    Ok(get_task_notice())
 }
 
 #[tauri::command]
@@ -462,6 +613,122 @@ mod tests {
             },
             task: None,
         }
+    }
+    #[test]
+    fn unresolved_requests_are_recoverable_from_attention_after_viewing_and_restart() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("attention.json");
+        let mut tracker = crate::attention::AttentionTracker::open(path.clone());
+        let mut task = TaskSnapshot::new(
+            "session",
+            "native",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::Running,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        task.turn_key = Some("turn".into());
+        tracker.reconcile(vec![task.clone()]);
+        task.status = crate::domain::TaskStatus::WaitingInput;
+        task.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        task.input_request_id = Some("q2".into());
+        task.input_request_ids = vec!["q1".into(), "q2".into()];
+        tracker.reconcile(vec![task]);
+        tracker.mark_viewed("session").unwrap();
+        drop(tracker);
+        let restored = crate::attention::AttentionTracker::open(path).known();
+        assert_eq!(restored.len(), 1);
+        assert!(restored[0].requires_action());
+        assert_eq!(restored[0].input_request_ids, vec!["q1", "q2"]);
+        assert!(!restored[0].unread); // Viewed and resolved are distinct facts.
+        assert!(!prompt_source_fresh(None, SystemTime::now(), 3000));
+    }
+    #[test]
+    fn restored_prompts_require_a_fresh_success_of_their_own_source() {
+        use crate::providers::{ProviderHealth, ProviderStatus};
+        let now = SystemTime::now();
+        let mut health = ProviderHealth {
+            provider: "source".into(),
+            status: ProviderStatus::Connected,
+            last_success: Some(now),
+            last_attempt: Some(now),
+            message: None,
+        };
+        assert!(prompt_source_fresh(Some(&health), now, 3000));
+        health.status = ProviderStatus::Degraded;
+        assert!(!prompt_source_fresh(Some(&health), now, 3000));
+        health.status = ProviderStatus::Connected;
+        health.last_success = Some(now - std::time::Duration::from_secs(31));
+        assert!(!prompt_source_fresh(Some(&health), now, 3000));
+        assert!(prompt_source_fresh(Some(&health), now, 20_000));
+        health.last_success = None;
+        assert!(!prompt_source_fresh(Some(&health), now, 3000));
+        assert!(!prompt_source_fresh(None, now, 3000));
+    }
+    #[test]
+    fn queue_is_bounded_without_dismissing_the_visible_notice() {
+        let mut queue = NoticeQueue::default();
+        for id in 1..=1000 {
+            let _ = queue.push(entry(id));
+        }
+        assert_eq!(queue.entries.len(), MAX_QUEUED_NOTICES);
+        assert_eq!(queue.state().current.unwrap().id, 1);
+        assert_eq!(queue.entries.back().unwrap().notice.id, 1000);
+        assert!(queue.dismiss(2).is_none());
+    }
+    #[test]
+    fn all_blocker_overflow_is_recoverable_and_reopen_does_not_acknowledge() {
+        let mut queue = NoticeQueue::default();
+        for id in 1..=MAX_QUEUED_NOTICES as u64 {
+            let mut item = entry(id);
+            item.notice.auto_dismiss_ms = None;
+            let _ = queue.push(item);
+        }
+        let mut overflow = entry(1000);
+        overflow.notice.auto_dismiss_ms = None;
+        assert_eq!(queue.push(overflow.clone()).unwrap().notice.id, 1000);
+        let _ = queue.reopen(overflow);
+        assert_eq!(queue.entries.len(), MAX_QUEUED_NOTICES);
+        assert_eq!(queue.state().current.unwrap().id, 1000);
+        assert!(queue.dismiss(1).is_none());
+    }
+    #[test]
+    fn reopen_deduplicates_the_same_request_but_invalidates_old_callbacks() {
+        let mut task = TaskSnapshot::new(
+            "session",
+            "native",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        task.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        task.input_request_id = Some("q1".into());
+        task.turn_key = Some("turn".into());
+        task.unread = true;
+        let mut old = entry(1);
+        old.task = Some(task.clone());
+        old.notice.auto_dismiss_ms = None;
+        let mut new = old.clone();
+        new.notice.id = 1000;
+        let mut queue = NoticeQueue::default();
+        let _ = queue.push(old);
+        let _ = queue.push(entry(2));
+        let _ = queue.reopen(new);
+        assert_eq!(queue.entries.len(), 2);
+        assert_eq!(queue.state().current.unwrap().id, 1000);
+        assert!(queue.dismiss(1).is_none());
+        assert!(task.unread);
+        assert!(reopenable(&task));
+        task.stale = true;
+        assert!(!reopenable(&task));
+        task.stale = false;
+        task.internal = true;
+        assert!(!reopenable(&task));
+        task.internal = false;
+        task.status = crate::domain::TaskStatus::Running;
+        assert!(!reopenable(&task));
+        assert!(!prompt_source_fresh(None, SystemTime::now(), 3000));
     }
     #[test]
     fn alerts_are_separate_and_old_dismiss_cannot_close_next() {

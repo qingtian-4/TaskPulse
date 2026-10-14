@@ -1,32 +1,41 @@
 import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
-export interface DashboardFilters { source: string; project: string; location: string; section: number | null }
-export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null};
-export const SECTION_NAMES = ['需要处理', '正在运行', '结果待查看', '固定的空闲任务'];
+export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
+export type TaskSignal = 'approval' | 'question' | 'failed';
+export interface DashboardFilters { source: string; project: string; location: string; section: TaskSection | null; signal?: TaskSignal | null }
+export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null,signal:null};
+export const SECTION_ORDER: TaskSection[] = ['ongoing', 'results', 'uncertain', 'pinned'];
+export const SECTION_NAMES: Record<TaskSection,string> = {ongoing:'进行中',results:'结果待查看',uncertain:'状态待更新',pinned:'固定与已查看'};
+export function sectionRank(task: TaskSnapshot): number { return SECTION_ORDER.indexOf(taskSection(task)); }
+export function matchesSignal(task:TaskSnapshot, signal:TaskSignal):boolean {
+  return signal==='failed' ? task.status==='failed' && isEndedResult(task) : needsAction(task) && task.waiting_reason===signal;
+}
 
 export function filterTasks(tasks: TaskSnapshot[], filters: DashboardFilters, settings?: DashboardSettings | null): TaskSnapshot[] {
   return tasks.filter(t => (!filters.source || taskSource(t,settings)?.id === filters.source) &&
     (!filters.project || projectKey(t,settings) === filters.project) &&
     (!filters.location || (t.host ?? '本机') === filters.location) &&
-    (filters.section === null || taskSection(t) === filters.section));
+    (filters.section === null || taskSection(t) === filters.section) &&
+    (!filters.signal || matchesSignal(t,filters.signal)));
 }
 
 // Global counters mean ALL monitored tasks, not the intersection with a
 // forgotten project/source filter. One click must show the counted tasks.
-export function overviewFilters(section: number, currentSection: number | null): DashboardFilters {
+export function overviewFilters(section: TaskSection, currentSection: TaskSection | null): DashboardFilters {
   return {...EMPTY_FILTERS,section:section === currentSection ? null : section};
 }
 
 export function runningOutsideView(tasks: TaskSnapshot[], visible: TaskSnapshot[]): TaskSnapshot[] {
   const ids=new Set(visible.map(t=>t.id));
-  return tasks.filter(t=>taskSection(t) === 1 && !ids.has(t.id));
+  return tasks.filter(t=>t.status === 'running' && !t.stale && !ids.has(t.id));
 }
 
 export function filterDescription(filters: DashboardFilters, tasks: TaskSnapshot[], settings?: DashboardSettings | null): string {
   return [filters.source && `来源：${settings?.sources.find(s=>s.id===filters.source)?.name ?? filters.source}`,
     filters.project && `项目：${tasks.find(t=>projectKey(t,settings)===filters.project)?.project ?? '已不在当前列表'}`,
     filters.location && `位置：${filters.location}`,
-    filters.section !== null && `状态：${SECTION_NAMES[filters.section]}`].filter(Boolean).join(' · ');
+    filters.section !== null && `状态：${SECTION_NAMES[filters.section]}`,
+    filters.signal && `提醒：${{approval:'待批准',question:'待回答',failed:'失败结果'}[filters.signal]}`].filter(Boolean).join(' · ');
 }
 
 export function needsAction(task: TaskSnapshot): boolean {
@@ -35,6 +44,7 @@ export function needsAction(task: TaskSnapshot): boolean {
 export function taskLabel(task: TaskSnapshot): string {
   if (task.stale) return '状态待更新';
   if (needsAction(task)) return task.waiting_reason === 'approval' ? '需要授权' : '需要你确认';
+  if (isInferredCommandEnd(task)) return '观察到结束 · 退出码未知';
   if (task.status === 'running') return '运行中';
   if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '等待输入';
   return { succeeded: '已完成', failed: '失败', idle: '空闲', disconnected: '已断开', unknown: '状态未知' }[task.status];
@@ -52,11 +62,12 @@ export function taskActivity(task: TaskSnapshot): string {
     default: return task.activity ?? '运行中 · 来源未提供执行阶段';
   }
 }
-export function taskSection(task: TaskSnapshot): number {
-  if (task.stale || task.status === 'failed' || needsAction(task)) return 0;
-  if (task.status === 'running') return 1;
-  if (task.unread) return 2;
-  return 3;
+export function taskSection(task: TaskSnapshot): TaskSection {
+  if (task.stale) return 'uncertain';
+  if (task.status === 'running' || needsAction(task)) return 'ongoing';
+  if (isEndedResult(task)) return 'results';
+  if (task.status === 'unknown' || task.status === 'disconnected' || task.status === 'waiting_input') return 'uncertain';
+  return 'pinned';
 }
 export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
   const explicit = settings?.sources.find(s => s.id === task.source_instance);
@@ -94,5 +105,9 @@ export function refreshProgress(settings: DashboardSettings | null, providers: P
 
 export function isEndedResult(task: TaskSnapshot): boolean {
   return !task.stale && !needsAction(task) && task.unread === true &&
-    (task.status === 'failed' || task.status === 'succeeded' || task.status === 'waiting_input' && task.waiting_reason === 'turn_ended');
+    (task.status === 'failed' || task.status === 'succeeded' || isInferredCommandEnd(task) || task.status === 'waiting_input' && task.waiting_reason === 'turn_ended');
+}
+
+export function isInferredCommandEnd(task:TaskSnapshot):boolean {
+  return task.source==='remote_tmux' && task.confidence==='inferred' && task.status==='idle' && task.finished_at!==undefined && task.exit_code===undefined;
 }

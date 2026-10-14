@@ -116,6 +116,22 @@ try{
   await Bun.sleep(200); // Capture after the entrance animation, not at partial opacity.
   await Bun.write(out+'/native-approval-queue.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.invoke('dismiss_task_notice',{id:rotated.current.id});
+  phase='automatic blocker rotation without dismissal';
+  await root.invoke('test_notification',{kind:'approval'});
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
+  const beforeAutomaticRotation=await root.invoke('get_task_notice');
+  await root.invoke('test_notification',{kind:'turn_ended'});
+  await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('本轮结束')`,20000);
+  const automaticRotation=await root.invoke('get_task_notice');
+  if(automaticRotation.pending!==1)throw Error('Automatic rotation dismissed the unresolved blocker');
+  await root.invoke('dismiss_task_notice',{id:beforeAutomaticRotation.current.id,reason:'timeout'});
+  if((await root.invoke('get_task_notice')).current?.id!==automaticRotation.current.id)throw Error('Old blocker timer dismissed the completion after rotation');
+  await root.invoke('dismiss_task_notice',{id:automaticRotation.current.id});
+  await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
+  const restoredBlocker=await root.invoke('get_task_notice');
+  if(restoredBlocker.current.auto_dismiss_ms!==null || restoredBlocker.current.id===beforeAutomaticRotation.current.id)throw Error('Blocker not preserved with a fresh presentation after rotation');
+  await root.invoke('dismiss_task_notice',{id:restoredBlocker.current.id});
   await root.invoke('test_notification');
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
