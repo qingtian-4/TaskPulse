@@ -77,6 +77,17 @@ function Test-NativeIPC([string]$Url) {
 try {
     $manifest = Get-Content -Raw -Encoding UTF8 (Join-Path $assetRoot 'release-manifest.json') | ConvertFrom-Json
     if ($manifest.version -ne $Version -or $manifest.commit -notmatch '^[a-f0-9]{40}$') { throw 'Release metadata mismatch' }
+    $msiFile=Join-Path $assetRoot "TaskPulse_${Version}_windows_x64.msi"
+    $windowsInstaller=New-Object -ComObject WindowsInstaller.Installer
+    $database=$windowsInstaller.OpenDatabase($msiFile,0)
+    $view=$database.OpenView("SELECT Value FROM Property WHERE Property='ProductVersion'")
+    $view.Execute()
+    $productVersion=$view.Fetch().StringData(1)
+    $view.Close()
+    if ($productVersion -ne $manifest.msi_product_version) { throw 'MSI numeric ProductVersion mismatch' }
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)
+    [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($windowsInstaller)
     foreach ($line in Get-Content -Encoding UTF8 (Join-Path $assetRoot 'SHA256SUMS.txt')) {
         if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9_.-]+)$') { throw 'Invalid checksum path' }
         if ((Get-FileHash -LiteralPath (Join-Path $assetRoot $Matches[2]) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1]) { throw 'Installer checksum mismatch' }

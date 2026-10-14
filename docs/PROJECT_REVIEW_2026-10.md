@@ -1,6 +1,6 @@
 # TaskPulse 功能改进与实施交接文档
 
-更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.1`（未发布）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
+更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.2`（未发布；alpha.1 打包失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
 
 本文面向接手实施的 Agent。第 2–10 节保留历史审查、问题和原始验收清单；未勾选不能直接当作当前未修复证据。第 11–13 节记录后续实际实施，**当前状态以本节摘要和最新执行记录为准**。原有 `REVIEW_HANDOFF.md` 不作修改。
 
@@ -613,3 +613,20 @@ T05 完整运行入口、T08 剩余传输、T09/T10 仍未完成；不能用本�
 
 源码提交：`a851fe7`（T06/T07 与原生测试）、`23d4e54`（Windows Alpha 发布/安装
 门禁与内嵌构建）。后续文档提交记录实际范围，不包含用户未跟踪 REVIEW_HANDOFF.md。
+
+## 14. 实际发行构建发现 MSI 版本约束
+
+PR #2 已经 Windows CI 验证并合入 main（`a9e879c`），源代码与本地已验证树相同。
+`v0.2.0-alpha.1` 的实际发行流水线 `38614949382`：preflight、前后端门禁、
+MSVC ci-release 程序、NSIS EXE 均通过；MSI 在打包时拒绝非数字 prerelease
+`alpha.1`，安装烟测和草稿发布被跳过。没有把成功编译或已生成 EXE 冒充完整发行。
+
+修复采用不同数据域，而不是删除 Alpha 标签或伪造稳定版：应用/标签/四文件版本
+为 `0.2.0-alpha.2`，WiX 为数字 `0.2.0.1002`；校验器派生并检查映射，manifest
+明确记录两种版本，安装烟测读取 MSI ProductVersion 和真正程序 --version。
+Windows 升级忽略第 4 字段，未据此宣称跨版本升级通过。失败的 alpha.1 标签保留，
+Alpha.2 使用新提交、新 PR、新标签，不覆盖已推送的历史。
+
+本地 Alpha.2 再验收：Rust 333 通过、7 个默认 opt-in 跳过；fmt/clippy/内嵌构建
+通过；Svelte 0 errors/warnings、UI 19、发布模型 5、生产构建与安装脚本语法通过。
+新的 MSVC MSI/安装/草稿结果必须等待实际流水线；干净机器等人工门禁继续保留。

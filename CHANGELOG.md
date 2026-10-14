@@ -2,7 +2,17 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
-## 0.2.0-alpha.1 — Unreleased
+## 0.2.0-alpha.2 — Unreleased
+
+### Fixed
+
+- Actual Windows packaging found that MSI rejects non-numeric `alpha.N`. Keep
+  the app/tag version unchanged and derive/validate numeric WiX metadata separately
+  (`0.2.0-alpha.2` → `0.2.0.1002`). Runtime `--version` remains the semantic version.
+- Retain the failed alpha.1 tag without rewriting it. Installers and draft
+  publication still require actual CI smoke and remaining manual acceptance.
+
+## 0.2.0-alpha.1 — Build failed, not released
 
 ### Added
 

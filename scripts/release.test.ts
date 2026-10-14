@@ -2,13 +2,14 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { installerNames, projectVersions, stageInstallers, validateRelease, verifyChecksums } from './release';
+import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateMsiVersion, validateRelease, verifyChecksums } from './release';
 
 const version='0.2.0-alpha.1';
 test('repository versions and release workflow keep publication draft-only and separate from experimental platforms',()=>{
   const root=join(import.meta.dir,'..');
   const versions=projectVersions(root);
   expect(validateRelease(`v${versions[0]}`,versions)).toBe(versions[0]);
+  expect(()=>validateMsiVersion(root,versions[0])).not.toThrow();
   const workflow=Bun.YAML.parse(readFileSync(join(root,'.github/workflows/release.yml'),'utf8')) as any;
   expect(workflow.permissions.contents).toBe('read');
   expect(workflow.jobs.windows['runs-on']).toBe('windows-latest');
@@ -25,6 +26,12 @@ test('repository versions and release workflow keep publication draft-only and s
   expect(commands).toContain('bun install --frozen-lockfile');
   expect(commands.some((s:string)=>s.includes('cargo clippy --locked'))).toBe(true);
   expect(commands.every((s:string)=>s.trim().split('\n').length===1)).toBe(true);
+});
+test('MSI numeric metadata is separate from SemVer but derived and bounded',()=>{
+  expect(msiVersionFor('0.2.0-alpha.2')).toBe('0.2.0.1002');
+  expect(msiVersionFor('0.2.0-beta.2')).toBe('0.2.0.2002');
+  expect(msiVersionFor('0.2.0-rc.2')).toBe('0.2.0.3002');
+  for(const v of ['256.2.0-alpha.1','0.256.0-alpha.1','0.2.65536-alpha.1','0.2.0-alpha.1000'])expect(()=>msiVersionFor(v)).toThrow();
 });
 test('release tag, app versions and lockfile must agree; stable publication is disabled',()=>{
   expect(validateRelease(`v${version}`,Array(4).fill(version))).toBe(version);

@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.1'
+        default: 'v0.2.0-alpha.2'
 
 permissions:
   contents: read
@@ -60,6 +60,7 @@ jobs:
       - uses: swatinem/rust-cache@v2
         with:
           workspaces: src-tauri
+          cache-on-failure: true
       - name: Install locked frontend dependencies
         run: bun install --frozen-lockfile
       # Each native command has its own step; a later success cannot hide failure.
