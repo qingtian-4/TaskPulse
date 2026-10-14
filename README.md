@@ -1,10 +1,22 @@
 # TaskPulse
 
-**在一个托盘面板里查看 AI Agent 和代码任务的运行状态，在需要介入或有新结果时收到提醒。**
+**同时开着几个 Coding Agent，不必再一个个切换查看。TaskPulse 一眼汇总任务状态，在本轮结束或明确需要你输入时提醒你。**
 
 [English](README.en.md) · [开发与贡献](CONTRIBUTING.md) · [架构](docs/ARCHITECTURE.md) · [现状审查与改进方案](docs/PROJECT_REVIEW_2026-10.md)
 
-TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的 Windows 优先桌面应用，目前处于 **Alpha** 阶段。适合同时使用多个 coding agent、在本机与服务器之间切换、运行训练或评测任务的开发者。
+TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的独立托盘应用，不是 VS Code 插件。目前准备 **0.2.0-alpha.1 · Windows x64**，不宣称稳定版或支持任意 Agent。
+
+![TaskPulse 产品界面示意，非真实采集数据](assets/taskpulse-overview.svg)
+
+## 安装与开始
+
+[下载／查看预发布](https://github.com/qingtian-4/TaskPulse/releases) · [安装说明](docs/INSTALL.md) · [更新日志](CHANGELOG.md) · [问题反馈](https://github.com/qingtian-4/TaskPulse/issues)
+
+1. 在 Release **Assets** 中下载 `TaskPulse_<版本>_windows_x64_setup.exe`，安装并启动。需要 Windows 10/11 x64 和 WebView2，不需要 Rust/Bun/Node。
+2. 确认监控来源并保存：新来源可以关注所有项目的新执行，也可以选择项目。WSL 和 SSH 独立配置。
+3. 发送一次“测试提醒”，在启用范围内开始任务。托盘或 `Ctrl+Shift+A` 打开面板，完成/失败结果保留到你标记已查看。
+
+**安装包尚待 CI 与干净系统验收，草稿对普通用户不可见。** 若 Release 没有对应资产，请使用[源码运行](#从源码运行)。`Source code.zip` 不是安装器；未验收的 Portable、Linux/macOS 不作为当前下载承诺。Alpha 的支持范围和剩余验收见[发布门禁](docs/RELEASING.md)。
 
 项目当前展示名为 TaskPulse；包名和可执行文件为 `agent-tray`。
 
@@ -107,14 +119,16 @@ install -m 755 scripts/tp-run ~/.local/bin/tp-run
 
 ## 状态与通知
 
-当前主面板按“需处理 → 运行 → 待查看”展示，另有固定空闲任务和较早关注视图。这是当前行为；“运行优先”的调整仍属于[设计建议](docs/PROJECT_REVIEW_2026-10.md#5-ui-分组建议)。
+主面板按“进行中 → 结果待查看 → 状态待更新 → 固定与已查看”展示，较早关注保留在独立视图。待批准、待回答、失败结果和来源异常各有紧凑入口，不混为业务失败。
 
 - **运行**：思考、调用工具、生成回复、等待模型响应都属于运行。
-- **需处理**：包含来源明确报告的批准、提问、失败与过期状态，不再包含推测的授权检查提示。
+- **进行中**：包含实际运行与来源明确报告的批准／提问阻塞；行内仍区分“运行中”和“需要授权”。
 - **待查看**：主要是已结束但尚未确认查看的任务结果。Agent 应理解为“本轮结果”，普通命令应结合退出码判断。
 - **批准提醒**：仅依据来源明确报告的审批请求。提权参数和长时间未返回的命令不触发授权提醒；如果来源未提供审批事件，可能无法检测授权等待。
 
 默认使用独立、非激活式提醒窗口。完成类提醒约 15 秒后收起，鼠标悬停暂停计时；明确的授权与提问提醒不自动关闭。可切换下一条，关闭提醒不会清除未查看状态。批准操作仍在原 Agent 内完成。
+
+面板右上角铃铛可回查未解决请求，重启后由关注记录恢复。只有新鲜、明确的请求可手动重新打开弹窗，不重发旧完成通知。临时弹窗队列最多 128 条；溢出的结果／请求仍可在面板回查。阻塞提醒有后续消息时会轮转，不会被自动解除。
 
 默认按最近 7 天的执行活动展示关注任务；运行任务和明确手动固定的任务不会因时间过期。较早关注保留原有未查看与固定状态，设置 `recent_days=0` 可关闭时间归档。
 
@@ -176,7 +190,7 @@ bun run test:ui-model
 
 - 补齐本机／WSL／SSH 普通代码运行的统一入口，优先解决长任务、退出码和中断语义。
 - 补齐 Claude Code 的 WSL／SSH 与 Hermes 的 WSL 来源。
-- 主面板运行优先，以任务标记和持久提醒入口保留待批准与异常。
+- 持续验收运行优先界面与提醒恢复，记录真实来源的检测／通知延迟。
 - 为新 Agent 提供稳定的事件接入协议和能力说明。
 - 将账号额度查询与展示拆成可选功能。
 

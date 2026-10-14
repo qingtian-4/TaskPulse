@@ -1,8 +1,19 @@
 # TaskPulse 功能改进与实施交接文档
 
-更新日期：2026-10-13（Asia/Shanghai）。当前核对基线：`codex/desktop-discovery-visibility`，`ef52b0f`。初次审查为 2026-10-12，基线 `f3aca96`。
+更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.1`（未发布）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
 
-本文面向接手实施的 Agent，可作为单独的交接材料。第 2–7 节给出现状、问题和方案，第 9 节提供任务编号、依赖和验收清单，第 10 节提供可直接复制的执行说明。本次仅整理文档，未实施其中的功能建议；原有 `REVIEW_HANDOFF.md` 不作修改。
+本文面向接手实施的 Agent。第 2–10 节保留历史审查、问题和原始验收清单；未勾选不能直接当作当前未修复证据。第 11–13 节记录后续实际实施，**当前状态以本节摘要和最新执行记录为准**。原有 `REVIEW_HANDOFF.md` 不作修改。
+
+| 任务 | 当前实现 | 尚未完成的验收／范围 |
+|---|---|---|
+| T00–T04 | 主要可靠性修复已实现；Guardian 过滤另见第 12 节 | 新真实 Claude 批准、Hermes 实时本轮边界与长期端到端延迟仍需验收 |
+| T05 | 前台 wrapper 基础已实现，统一工作流未完成 | JobRunProvider、run/attach、独立管理来源 |
+| T06 | 运行优先、语义分类、失败结果查看、推断退出码未知已实现 | 本轮原生界面验证与持续使用验收见第 13 节 |
+| T07 | 有界队列、轮转、持久请求回查／手动重开已实现 | 不持久化/重播短暂弹窗；依赖 attention 状态恢复，真实新批准链路待验收 |
+| T08 | 配置保留与 DSH WSL 防唤醒已完成 | Claude WSL/SSH、Hermes WSL 未新增 |
+| T09/T10 | 未实施 | 通用外部事件契约／新 Agent、额度独立开关 |
+
+开源准备：Windows Alpha 版本、发布前检查、草稿预发布和安装验收门禁已加入；不等于安装包已发布或干净系统验收通过。见 [发布流程](RELEASING.md) 和 [更新日志](../CHANGELOG.md)。
 
 以下“已实现”指源码中已有入口，不等于已在全部真实环境验收；静态审查发现应先核对最新代码并复现，再修改。执行时以仓库最新 `AGENTS.md` 和用户要求为准。
 
@@ -386,7 +397,7 @@ Agent parser / JobRun parser
 
 **完成条件：** 本机、WSL、SSH 各有一条可复现操作步骤与验证记录；环境不可用的路径列为未验收。Agent 会话生命周期不因加入代码运行 Provider 而改变。
 
-### T06：运行优先的主面板
+### T06：运行优先的主面板（原始验收清单）
 
 **范围：** dashboard.ts、Dashboard.svelte、TaskList.svelte、types.ts；必要时联动 attention.rs、产品文档与测试。
 
@@ -401,7 +412,7 @@ Agent parser / JobRun parser
 
 **完成条件：** 前端模型测试和真实 Tauri 面板验收通过；筛选清空后能找到所有对应任务，不出现计数与列表不一致。
 
-### T07：提醒回查与恢复
+### T07：提醒回查与恢复（原始验收清单）
 
 **范围：** task_notice.rs、notice 页面、Transition／通知记录及面板提醒入口。
 
@@ -552,3 +563,50 @@ bun run test:ui-model
 验证：Rust 328 通过、7 个默认 opt-in 跳过；fmt／clippy `-D warnings` 和构建通过。前端 check 0 errors/warnings、16 项模型测试及生产构建通过。真实 SSH 快照确认两个 Guardian 的 internal 都为 true 且范围过滤拒绝它们，YOLO-RDD 主会话仍为普通任务；HyperMem 目录与两台主机各采集分段仍正常。新增 `scripts/native-origin-smoke.ts` 的真实 WebView2 只读验收通过：主任务保留，内部会话从关注和可选目录排除，旧记录保留且仍为未读，没有当前内部提醒或新投递，不改配置或已查看状态。结果保存于 `src-tauri/target/ui-smoke/native-origin-result.json`。`native-notice-smoke.ts` 也通过：普通提醒约 15 秒隐藏，真实类型批准无计时，队列／旧回调／总开关没有回归；焦点验证跳过。测试后配置 SHA256 与执行前一致。
 
 限制：本次不主动触发真实 Guardian 或执行服务器任务；“主任务运行、内部任务结束”的时序由确定性回放覆盖，真实来源验证的是已存在会话的分类与隔离。来源字段和原生 header 都缺失时不能凭名字断言内部身份。没有自动关闭整个项目、屏蔽所有子 Agent 或恢复不可靠的结束／批准猜测。
+
+## 13. 2026-10-15：Alpha 交付准备与 T06/T07
+
+### 本轮实现
+
+- T06：ongoing/results/uncertain/pinned 语义分类共用于排序、分组、计数和筛选。
+  进行中包含运行与明确阻塞；失败是结果，来源故障不是失败；非 Agent shell-return
+  显示退出码未知。旧项目筛选不能挡住全局计数入口。
+- T07：铃铛从持久 attention 重建未解决请求，包括已查看但未解决的请求；队列
+  最多 128 条，溢出的结果/请求可回查。确认阻塞在有后续消息时轮转，不自动解除。
+  手动重开要求来源最近成功采集、非过期/推断、仍在范围内；使用新展示 ID，
+  不修改已查看/批准/通知去重，不在重启时批量补发旧完成通知。
+- 开源交付：四文件版本统一为 0.2.0-alpha.1；Windows x64 MSVC 工作流明确绑定
+  标签/SHA、锁定依赖、规范资产名/平铺校验和，安装验收后只创建草稿预发布。
+  Linux/macOS 保留独立实验构建，移除对 Windows 发布的 Apple 证书依赖。
+- 真正发现的交付问题：普通 cargo build 使用 devUrl，需要开发服务器。补入
+  custom-protocol feature，独立构建/验证/CI 明确内嵌前端；verify 先构建前端再
+  编译 Rust，避免验证旧资源。WiX upgradeCode 固定为当前 TaskPulse 默认值。
+- README 增加安装入口、三步入门、能力边界和明确标注的示意图；示意图不是实机
+  截图。新增安装/发布/适配指南、版本说明、CHANGELOG；保留 MIT 和上游历史。
+
+### 已实际运行的验证
+
+- Windows `scripts/verify.ps1 -Frontend`：Rust 333 通过、7 个默认 opt-in 跳过；
+  fmt/clippy -D warnings、内嵌前端可执行文件构建通过。Svelte 0 errors/warnings，
+  UI 模型 19 通过，发布模型/工作流结构 4 通过，前端生产构建通过。
+- PowerShell installer-smoke 脚本语法检查通过；不是实际安装验收。
+- 隔离 Edge＋模拟 IPC UI smoke：28 条任务滚动、全局入口清除旧筛选、新项目执行、
+  请求回查/手动重开不调用已查看、管理窗口通过；不当作真实 Agent 验收。
+- 真实内嵌 WebView2 inbox smoke：IPC、分组顺序、回查空状态、440×720 上限与
+  无横向溢出、配置不变通过。实际 6 条关注、0 条明确待处理请求，**不是新批准
+  到恢复/重开/解除的实机全链路**；多请求和重启由隔离存储回归测试覆盖。
+- 原生 notice smoke 两轮：320×132 深色窗口、长标题、悬停、普通约 15 秒收起、
+  明确阻塞超过 15 秒保留、手动及自动轮转、旧 ID 回调安全、点击详情、总开关、
+  无假任务/已查看变更通过。恢复原配置；桌面锁定时未验证编辑器焦点。
+- 真实 SSH 只读快照：两台已配置主机的 tmux/ps/runs/Codex 分段健康，160 个
+  原生目录；用户主会话保留，两个 Guardian 都标为 internal。没有发起服务器任务。
+
+### 尚未完成，不应宣称通过
+
+Windows MSVC 安装器的云端构建/实际安装烟测待工作流结果；干净物理机/VM、
+缺少 WebView2、跨版本升级、真实新 Claude 批准与编辑器焦点、长期端到端 P50/P95
+仍需专门验收。没有签名证书或自动更新器，也没有发布 Portable/稳定版。
+T05 完整运行入口、T08 剩余传输、T09/T10 仍未完成；不能用本轮发布整理代替它们。
+
+源码提交：`a851fe7`（T06/T07 与原生测试）、`23d4e54`（Windows Alpha 发布/安装
+门禁与内嵌构建）。后续文档提交记录实际范围，不包含用户未跟踪 REVIEW_HANDOFF.md。

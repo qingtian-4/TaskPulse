@@ -1,12 +1,24 @@
 # TaskPulse
 
-**A tray dashboard for AI-agent sessions and code runs, with alerts when work needs attention or produces a result.**
+**Running several coding agents? Stop switching windows to check each one. See their task states at a glance and get notified when a turn ends or explicitly needs your input.**
 
 [中文](README.md) · [Contributing](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Implementation review](docs/PROJECT_REVIEW_2026-10.md)
 
 TaskPulse is an **alpha, Windows-first** desktop application derived from
 [AgentTray](https://github.com/sprklai/agenttray). The executable and package are
 named `agent-tray`.
+
+![Illustrative TaskPulse UI, not live monitoring data](assets/taskpulse-overview.svg)
+
+## Install and start
+
+[Download / pre-releases](https://github.com/qingtian-4/TaskPulse/releases) · [Installation](docs/INSTALL.md) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/qingtian-4/TaskPulse/issues)
+
+1. On Windows 10/11 x64, choose `TaskPulse_<version>_windows_x64_setup.exe` under Release **Assets**. WebView2 is required; the installed app needs no Rust/Bun/Node.
+2. Confirm your sources and project scopes. New sources can watch all projects' new executions; WSL and SSH are separate opt-in sources.
+3. Send a labelled test reminder, start a task, and open the dashboard from the tray or `Ctrl+Shift+A`.
+
+**0.2.0-alpha.1 installers are pending CI and clean-system acceptance.** Drafts are not public. If no matching installer asset is available, [run from source](#run-from-source). Source archives are not installers. Portable and experimental Linux/macOS bundles are not supported release promises. This is a standalone desktop companion, not a VS Code extension. See [release gates](docs/RELEASING.md).
 
 ## Features
 
@@ -78,9 +90,10 @@ limitation above still applies.
 
 ## State and notifications
 
-The current dashboard orders actionable tasks, running tasks, then unviewed
-results, with pinned idle and older-attention views. A running-first layout is a
-proposal, not an implemented change.
+The dashboard orders ongoing work, unviewed results, uncertain/stale state, then
+pinned/viewed tasks. Explicit blockers remain ongoing with their actual status;
+failed results and source faults are not conflated. Compact counters expose
+approvals, questions, failed results and source health.
 
 Thinking, tool execution and model-response waits remain running. An Agent turn
 ending is not proof that its project is complete. Only real exit codes establish
@@ -89,6 +102,11 @@ command success. Missing logs and failed probes never establish completion.
 Completion popups normally close after 15 seconds, pausing while hovered.
 Confirmed approval/question popups do not time out. Closing a popup or opening details
 does not mark a result viewed. Approval is performed in the original Agent.
+The bell opens an unresolved-request inbox restored from attention state after
+restart, without replaying old completion notifications. Only fresh confirmed
+requests can be explicitly reopened. The transient queue holds up to 128 alerts;
+overflowed items remain in the dashboard. Blockers rotate when other alerts wait,
+without resolving the request or marking it viewed.
 Codex escalation parameters and slow commands are not evidence of pending human
 approval. Only explicit source approval events trigger authorization reminders;
 sources without these events may miss approval waits. Timed approval guesses are
@@ -129,7 +147,7 @@ Real Agent, SSH, WSL and native WebView2 acceptance checks are opt-in and separa
 from unit tests. See [AGENTS.md](AGENTS.md) and [contributing](CONTRIBUTING.md).
 
 Planned priorities are reliable cross-environment code-run monitoring, missing
-Claude/Hermes transports, running-first presentation with recoverable alerts,
+Claude/Hermes transports, continued live validation of presentation and recovery,
 a generic Agent event contract, and optional quota display/querying. These are
 not current capabilities. There is no general third-party plugin loader yet.
 

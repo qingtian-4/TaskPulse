@@ -76,7 +76,7 @@ $env:RUSTFLAGS = '-C link-self-contained=yes'
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray
-cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray
+cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray --features custom-protocol
 ```
 
 When the tray app is running, use the isolated verification target so Windows
@@ -126,3 +126,18 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - For remote-provider changes, run the ignored live snapshot test and confirm the expected server/project/task in its output.
 - For wrapper changes, run `bun scripts/run-wrapper-smoke.ts` on Windows and `python3 scripts/run-wrapper-smoke.py` inside an already-running opted-in WSL/Linux environment. These use isolated target directories, never real watched state paths. `tp-run` requires Python 3; direct foreground child exit does not prove a detached/container/Slurm job ended.
 - Keep unrelated user changes intact. Use small logical commits on the current `codex/*` branch; do not push or open a PR unless requested.
+
+## Windows Alpha releases
+
+- Versions in package.json, Cargo.toml, Cargo.lock and tauri.conf.json must match
+  the explicit pre-release tag. Run `bun run release:check` and `bun run test:release`.
+- release.yml builds Windows x64 MSVC, validates actual installers on a separate
+  runner and creates a **draft pre-release only**. Read docs/RELEASING.md before
+  tagging/publishing; no stable release or automatic version override is enabled.
+- Linux/macOS remain opt-in experimental artifact builds, independent of Windows.
+- Bounded ephemeral popup queues do not replace durable attention. The bell inbox
+  restores unresolved prompts without replaying lifecycle notifications. Manual
+  reopening requires fresh matching source health and explicit pending state;
+  unknown/stale/inferred/internal/disabled/ignored requests must not be reopened.
+- Semantic dashboard sections are ongoing/results/uncertain/pinned; thinking and
+  model waits stay ongoing. Failures are results, source faults are uncertainty.
