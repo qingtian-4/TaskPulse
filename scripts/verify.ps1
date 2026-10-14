@@ -16,6 +16,22 @@ if (Test-Path -LiteralPath $mingwBin) {
 
 Push-Location $repoRoot
 try {
+    # Build frontend before Rust embeds it; compiling Rust first can validate an
+    # old UI while the subsequent frontend step succeeds on different assets.
+    if ($Frontend) {
+        $bun = Join-Path $env:LOCALAPPDATA 'hermes\node\bun.cmd'
+        if (-not (Test-Path -LiteralPath $bun)) { $bun = 'bun.cmd' }
+        & $bun run check
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:ui-model
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run release:check
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:release
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run build
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+    }
     cargo fmt --manifest-path $manifest -- --check
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -25,17 +41,9 @@ try {
     cargo test --manifest-path $manifest --bin agent-tray
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    cargo build --manifest-path $manifest --bin agent-tray
+    cargo build --manifest-path $manifest --bin agent-tray --features custom-protocol
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-    if ($Frontend) {
-        $bun = Join-Path $env:LOCALAPPDATA 'hermes\node\bun.cmd'
-        if (-not (Test-Path -LiteralPath $bun)) { $bun = 'bun.cmd' }
-        & $bun run check
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & $bun run build
-        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-    }
 }
 finally {
     Pop-Location

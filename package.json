@@ -1,7 +1,7 @@
 {
   "name": "agent-tray",
   "private": true,
-  "version": "0.1.11",
+  "version": "0.2.0-alpha.1",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -10,6 +10,8 @@
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:ui-model": "bun test scripts/dashboard.test.ts scripts/notice.test.ts",
+    "test:release": "bun test scripts/release.test.ts",
+    "release:check": "bun scripts/release.ts check",
     "tauri": "tauri"
   },
   "dependencies": {
