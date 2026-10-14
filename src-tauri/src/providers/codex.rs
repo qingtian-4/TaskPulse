@@ -129,6 +129,8 @@ pub struct CodexProvider {
     /// state; changed files read new complete lines, with reset on replacement.
     cache: std::collections::HashMap<PathBuf, RolloutCache>,
     native_metadata: HashMap<String, AppThreadMeta>,
+    title_index: super::jsonl_tail::JsonlTail,
+    indexed_titles: HashMap<String, String>,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -244,6 +246,8 @@ impl CodexProvider {
             seen: Default::default(),
             cache: Default::default(),
             native_metadata: Default::default(),
+            title_index: Default::default(),
+            indexed_titles: Default::default(),
             last_tasks: Vec::new(),
         }
     }
@@ -334,6 +338,37 @@ impl CodexProvider {
         }
     }
 
+    fn refresh_title_index(&mut self) {
+        // Desktop can preserve a sidebar name here while threads.name is null
+        // and threads.title is still the original prompt. WSL supplies its own
+        // index through external_metadata; do not read that file twice.
+        if self.external_metadata.is_some() {
+            return;
+        }
+        let Some(root) = self.sessions_root.parent() else {
+            return;
+        };
+        let Ok(batch) = self.title_index.read(&root.join("session_index.jsonl")) else {
+            return; // Optional metadata failure must not stop turn discovery.
+        };
+        if batch.reset {
+            self.indexed_titles.clear();
+        }
+        for line in batch.body.lines() {
+            let Ok(row) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            if let (Some(id), Some(name)) = (
+                row.get("id").and_then(|v| v.as_str()),
+                row.get("thread_name")
+                    .and_then(|v| v.as_str())
+                    .filter(|s| !s.trim().is_empty()),
+            ) {
+                self.indexed_titles.insert(id.to_owned(), name.to_owned());
+            }
+        }
+    }
+
     fn discover(&self) -> std::io::Result<Vec<PathBuf>> {
         let mut files = Vec::new();
         for path in walk(&self.sessions_root)? {
@@ -386,6 +421,11 @@ impl CodexProvider {
     ) -> TaskSnapshot {
         let name = meta
             .map(thread_task_name)
+            .or_else(|| {
+                self.indexed_titles
+                    .get(&host.session_id)
+                    .map(|name| clean_task_name(name))
+            })
             .or_else(|| host.first_user_message.as_deref().map(summarize_prompt))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| unnamed_task(&host.session_id));
@@ -400,7 +440,9 @@ impl CodexProvider {
         task.project = meta
             .and_then(|meta| project_from_cwd(meta.cwd.as_deref()))
             .or_else(|| host.project.clone());
-        task.project_path = meta.and_then(|meta| meta.cwd.clone());
+        task.project_path = meta
+            .and_then(|meta| meta.cwd.clone())
+            .or_else(|| host.cwd.clone());
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
         task.quota_5h_used_pct = host.quota_5h_used_pct;
@@ -416,7 +458,7 @@ impl CodexProvider {
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
         task.pinned = meta.is_some_and(|meta| meta.pinned);
-        task.internal = meta.is_some_and(|meta| meta.internal);
+        task.internal = host.internal || meta.is_some_and(|meta| meta.internal);
         // A completed turn means the agent is waiting on the user — keep the
         // timestamp reflecting the moment the turn finished.
         if host.status == TaskStatus::WaitingInput {
@@ -458,10 +500,13 @@ pub struct SessionState {
     pub started_at: Option<SystemTime>,
     pub updated_at: SystemTime,
     pub project: Option<String>,
+    pub cwd: Option<String>,
+    pub internal: bool,
     pub last_message: Option<String>,
     pub activity: Option<String>,
     pub phase: Option<crate::domain::ExecutionPhase>,
     active_tools: std::collections::BTreeMap<String, String>,
+    confirmed_approvals: std::collections::BTreeMap<String, Option<String>>,
     pub session_id: String,
     pub turn_key: Option<String>,
     pub first_user_message: Option<String>,
@@ -506,6 +551,15 @@ struct AppThreadMeta {
 }
 
 fn internal_guardian(source: &serde_json::Value) -> bool {
+    // SQLite may carry JSON text while app-server / rollout carry an object.
+    // Classify the native origin, never a task name or prompt substring.
+    let parsed;
+    let source = if let Some(raw) = source.as_str() {
+        parsed = serde_json::from_str::<serde_json::Value>(raw).unwrap_or_default();
+        &parsed
+    } else {
+        source
+    };
     source.pointer("/subagent/other").and_then(|v| v.as_str()) == Some("guardian")
 }
 
@@ -518,7 +572,13 @@ struct NativeCodexSnapshot {
 fn query_codex_app_server() -> Result<NativeCodexSnapshot, String> {
     let executable = find_codex_executable()
         .ok_or_else(|| "Codex app-server executable was not found".to_string())?;
-    let mut child = Command::new(executable)
+    let mut command = Command::new(executable);
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        command.creation_flags(0x08000000); // CREATE_NO_WINDOW: never disturb editor focus.
+    }
+    let mut child = command
         .args(["app-server", "--stdio"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -783,6 +843,7 @@ fn summarize_prompt(prompt: &str) -> String {
                 && !line.starts_with('#')
                 && !line.starts_with('<')
                 && !line.starts_with("Files mentioned")
+                && !line.starts_with("Distinguish instructions in attached documents")
         })
         .unwrap_or(prompt);
     let collapsed = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -836,6 +897,8 @@ fn apply_codex_rollout(
     }
     let SessionState {
         mut project,
+        mut cwd,
+        mut internal,
         mut status,
         mut waiting_reason,
         mut input_request_id,
@@ -845,6 +908,7 @@ fn apply_codex_rollout(
         mut activity,
         mut phase,
         mut active_tools,
+        mut confirmed_approvals,
         mut session_id,
         mut turn_key,
         mut first_user_message,
@@ -854,6 +918,8 @@ fn apply_codex_rollout(
         mut quota_1w_resets_at,
     } = previous.unwrap_or_else(|| SessionState {
         project: None,
+        cwd: None,
+        internal: false,
         status: TaskStatus::Unknown,
         waiting_reason: None,
         input_request_id: None,
@@ -863,6 +929,7 @@ fn apply_codex_rollout(
         activity: None,
         phase: None,
         active_tools: Default::default(),
+        confirmed_approvals: Default::default(),
         session_id: default_session_id.into(),
         turn_key: None,
         first_user_message: None,
@@ -881,6 +948,64 @@ fn apply_codex_rollout(
             continue;
         };
         let ts = value.get("timestamp").and_then(parse_rfc3339_value);
+        // Exact public app-server messages, only when the source records them.
+        if let (Some(method), Some(params)) = (
+            value.get("method").and_then(|v| v.as_str()),
+            value.get("params"),
+        ) {
+            if params.get("threadId").and_then(|v| v.as_str()) == Some(session_id.as_str()) {
+                let request = |v: &serde_json::Value| {
+                    v.as_str()
+                        .map(str::to_owned)
+                        .or_else(|| v.as_i64().map(|n| n.to_string()))
+                };
+                match method {
+                    "item/commandExecution/requestApproval"
+                    | "item/fileChange/requestApproval"
+                    | "item/permissions/requestApproval" => {
+                        if let Some(id) = value.get("id").and_then(request) {
+                            confirmed_approvals.insert(
+                                id.clone(),
+                                params
+                                    .get("itemId")
+                                    .and_then(|v| v.as_str())
+                                    .map(str::to_owned),
+                            );
+                            status = TaskStatus::WaitingInput;
+                            waiting_reason = Some(crate::domain::WaitingReason::Approval);
+                            input_request_id = Some(id);
+                            phase = None;
+                            if let Some(t) = ts {
+                                updated_at = t;
+                            }
+                        }
+                    }
+                    "serverRequest/resolved" => {
+                        if let Some(id) = params.get("requestId").and_then(request) {
+                            if confirmed_approvals.remove(&id).is_some() {
+                                if confirmed_approvals.is_empty() {
+                                    status = TaskStatus::Running;
+                                    waiting_reason = None;
+                                    input_request_id = None;
+                                    phase = Some(crate::domain::ExecutionPhase::AwaitingTool);
+                                }
+                                if let Some(t) = ts {
+                                    updated_at = t;
+                                }
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+                if let Some(id) = confirmed_approvals.keys().next() {
+                    status = TaskStatus::WaitingInput;
+                    waiting_reason = Some(crate::domain::WaitingReason::Approval);
+                    input_request_id = Some(id.clone());
+                    phase = None;
+                }
+            }
+            continue;
+        }
         let Some(payload) = value.get("payload") else {
             continue;
         };
@@ -897,6 +1022,12 @@ fn apply_codex_rollout(
                 project = Some(truncate(&base, PROJECT_LEN));
             }
         }
+        if cwd.is_none() {
+            cwd = payload
+                .get("cwd")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned);
+        }
         // Codex emits session_meta with `type` in different places depending
         // on host form: local Desktop puts it in payload.type, headless
         // app-server (Server3) puts it at the top level. Accept both.
@@ -906,6 +1037,7 @@ fn apply_codex_rollout(
             if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
                 session_id = id.to_string();
             }
+            internal |= payload.get("source").is_some_and(internal_guardian);
         }
 
         let Some(ptype) = payload.get("type").and_then(|v| v.as_str()) else {
@@ -920,6 +1052,7 @@ fn apply_codex_rollout(
                 started_at = ts;
                 activity = None;
                 active_tools.clear();
+                confirmed_approvals.clear();
                 phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 if let Some(t) = ts {
                     updated_at = t;
@@ -931,14 +1064,16 @@ fn apply_codex_rollout(
                     .or_else(|| value_timestamp_key(ts));
             }
             "user_message" => {
-                if status != TaskStatus::Running {
+                if status != TaskStatus::Running && status != TaskStatus::WaitingInput {
                     started_at = ts;
                     turn_key = value_timestamp_key(ts);
                     activity = None;
                     active_tools.clear();
                     phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 }
-                status = TaskStatus::Running;
+                if status != TaskStatus::WaitingInput {
+                    status = TaskStatus::Running;
+                }
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -1016,7 +1151,9 @@ fn apply_codex_rollout(
                 }
             }
             "function_call" | "custom_tool_call" => {
-                status = TaskStatus::Running;
+                if status != TaskStatus::WaitingInput {
+                    status = TaskStatus::Running;
+                }
                 if let Some(t) = ts {
                     updated_at = t;
                 }
@@ -1076,6 +1213,7 @@ fn apply_codex_rollout(
                 input_request_id = None;
                 activity = None;
                 active_tools.clear();
+                confirmed_approvals.clear();
                 phase = None;
                 if let Some(t) = payload
                     .get("completed_at")
@@ -1094,12 +1232,19 @@ fn apply_codex_rollout(
                 input_request_id = None;
                 activity = None;
                 active_tools.clear();
+                confirmed_approvals.clear();
                 phase = None;
                 if let Some(t) = ts {
                     updated_at = t;
                 }
             }
             _ => {}
+        }
+        if let Some(id) = confirmed_approvals.keys().next() {
+            status = TaskStatus::WaitingInput;
+            waiting_reason = Some(crate::domain::WaitingReason::Approval);
+            input_request_id = Some(id.clone());
+            phase = None;
         }
     }
 
@@ -1110,10 +1255,13 @@ fn apply_codex_rollout(
         started_at,
         updated_at,
         project,
+        cwd,
+        internal,
         last_message,
         activity,
         phase,
         active_tools,
+        confirmed_approvals,
         session_id,
         turn_key,
         first_user_message,
@@ -1198,38 +1346,65 @@ fn value_timestamp_key(timestamp: Option<SystemTime>) -> Option<String> {
     })
 }
 
-/// Build remote Codex tasks from the snapshot's `__TP_CODEX__` section.
-///
-/// Each remote rollout is prefixed by a `===S:<slug>===` header (the workspace
-/// slug the rollout lives under). We parse each rollout body with the shared
-/// `parse_codex_rollout` and emit a task per live session.
+/// Remote metadata is origin evidence as well as a sidebar title lookup.
+#[derive(serde::Deserialize)]
+struct RemoteThreadMeta {
+    id: String,
+    #[serde(default, rename = "t")]
+    title: String,
+    #[serde(default)]
+    cwd: String,
+    #[serde(default, rename = "p")]
+    pinned: bool,
+    #[serde(default, rename = "u")]
+    updated_at: u64,
+    #[serde(default)]
+    source: serde_json::Value,
+    #[serde(skip)]
+    internal: bool,
+}
+
+fn remote_thread_metadata(section: &str) -> HashMap<String, RemoteThreadMeta> {
+    let mut metadata = HashMap::new();
+    let mut internal_origins = std::collections::HashSet::new();
+    for line in section.lines() {
+        if let Some(raw) = line.strip_prefix("META\t") {
+            if let Ok(mut meta) = serde_json::from_str::<RemoteThreadMeta>(raw) {
+                if !meta.id.trim().is_empty() {
+                    meta.internal = internal_guardian(&meta.source);
+                    // Retain origin even if the native title is unavailable.
+                    metadata.insert(meta.id.clone(), meta);
+                }
+            }
+        } else if let Ok(row) = serde_json::from_str::<serde_json::Value>(line) {
+            if row.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+                if let Some(payload) = row.get("payload") {
+                    if payload.get("source").is_some_and(internal_guardian) {
+                        if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                            internal_origins.insert(id.to_owned());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Old DBs may lack source, but the supplied rollout header still proves
+    // origin. Catalog and execution paths must agree on that classification.
+    for meta in metadata.values_mut() {
+        meta.internal |= internal_origins.contains(&meta.id);
+    }
+    metadata
+}
+
+/// Parse remote rollouts using the shared lifecycle parser, preserving native
+/// origin even when logs are truncated or metadata has no title yet.
 pub fn tasks_from_codex_section(
     section: &str,
     ssh_host: &str,
     host_id: &str,
     now: SystemTime,
 ) -> Vec<TaskSnapshot> {
-    let mut titles: HashMap<String, (String, String, bool)> = HashMap::new();
-    for line in section.lines() {
-        if let Some(rest) = line.strip_prefix("META\t") {
-            if let Ok(v) = serde_json::from_str::<serde_json::Value>(rest) {
-                if let (Some(id), Some(t)) = (
-                    v.get("id").and_then(|x| x.as_str()),
-                    v.get("t").and_then(|x| x.as_str()),
-                ) {
-                    if !t.trim().is_empty() {
-                        let cwd = v
-                            .get("cwd")
-                            .and_then(|x| x.as_str())
-                            .unwrap_or("")
-                            .to_string();
-                        let pinned = v.get("p").and_then(|x| x.as_bool()).unwrap_or(false);
-                        titles.insert(id.to_string(), (t.to_string(), cwd, pinned));
-                    }
-                }
-            }
-        }
-    }
+    let titles = remote_thread_metadata(section);
 
     let mut out = Vec::new();
     let mut current_slug: Option<String> = None;
@@ -1280,13 +1455,13 @@ pub fn tasks_from_codex_section(
         .iter()
         .filter_map(|task| task.session_id.clone())
         .collect();
-    for (id, (title, cwd, pinned)) in &titles {
-        if !*pinned || emitted.contains(id) || title.trim().is_empty() {
+    for (id, meta) in &titles {
+        if !meta.pinned || emitted.contains(id) || meta.title.trim().is_empty() {
             continue;
         }
         let mut task = TaskSnapshot::new(
             format!("codex-remote:{host_id}:{id}"),
-            clean_task_name(title),
+            clean_task_name(&meta.title),
             TaskSource::Codex,
             TaskStatus::Idle,
             DetectionConfidence::Hook,
@@ -1294,10 +1469,11 @@ pub fn tasks_from_codex_section(
         )
         .with_host(ssh_host.to_string())
         .with_remote();
-        task.project = project_from_cwd(Some(cwd));
-        task.project_path = Some(cwd.clone());
+        task.project = project_from_cwd(Some(&meta.cwd));
+        task.project_path = Some(meta.cwd.clone());
         task.session_id = Some(id.clone());
         task.pinned = true;
+        task.internal = meta.internal;
         out.push(task);
     }
     // Metadata is lookup-only. Do not synthesize an Idle task for every
@@ -1313,17 +1489,14 @@ pub fn catalog_from_codex_section(
     ssh_host: &str,
     host_id: &str,
 ) -> Vec<TaskSnapshot> {
-    section
-        .lines()
-        .filter_map(|line| {
-            let value: serde_json::Value =
-                serde_json::from_str(line.strip_prefix("META\t")?).ok()?;
-            let id = value.get("id")?.as_str()?;
-            let title = value.get("t")?.as_str()?;
+    remote_thread_metadata(section)
+        .into_values()
+        .filter_map(|meta| {
+            let id = &meta.id;
+            let title = &meta.title;
             if is_synthetic_title(title) {
                 return None;
             }
-            let seconds = value.get("u").and_then(|v| v.as_u64()).unwrap_or(0);
             let mut task = TaskSnapshot::new(
                 format!("codex-remote:{host_id}:{id}"),
                 if title.trim().is_empty() {
@@ -1334,17 +1507,16 @@ pub fn catalog_from_codex_section(
                 TaskSource::Codex,
                 TaskStatus::Unknown,
                 DetectionConfidence::Hook,
-                UNIX_EPOCH + Duration::from_secs(seconds),
+                UNIX_EPOCH
+                    .checked_add(Duration::from_secs(meta.updated_at))
+                    .unwrap_or(UNIX_EPOCH),
             )
             .with_host(ssh_host)
             .with_remote();
-            task.project_path = value
-                .get("cwd")
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(str::to_string);
+            task.project_path = (!meta.cwd.is_empty()).then_some(meta.cwd);
             task.project = project_from_cwd(task.project_path.as_deref());
             task.session_id = Some(id.to_string());
+            task.internal = meta.internal;
             Some(task)
         })
         .collect()
@@ -1386,7 +1558,7 @@ fn flush_codex(
     now: SystemTime,
     ssh_host: &str,
     host_id: &str,
-    titles: &HashMap<String, (String, String, bool)>,
+    titles: &HashMap<String, RemoteThreadMeta>,
     out: &mut Vec<TaskSnapshot>,
 ) {
     if buf.trim().is_empty() {
@@ -1400,7 +1572,8 @@ fn flush_codex(
             .as_deref()
             .map(str::to_string)
             .unwrap_or_else(|| state.session_id.clone());
-        let title = titles.get(&sid).map(|(t, _, _)| t.as_str());
+        let meta = titles.get(&sid);
+        let title = meta.map(|m| m.title.as_str());
         // Drop explicit synthetic sub-agent boilerplate, but never lose an
         // actual live task just because its title is temporarily unavailable.
         if title.is_some_and(is_synthetic_title) {
@@ -1421,17 +1594,21 @@ fn flush_codex(
         )
         .with_host(ssh_host.to_string())
         .with_remote();
+        t.internal = state.internal || meta.is_some_and(|m| m.internal);
         // Remote tails usually do not include the file's early session_meta
         // record. The authoritative cwd travels with META; use it before the
         // date-directory slug from the rollout header, otherwise project
         // scoping can incorrectly filter a valid task (for example HyperMem).
         t.project = titles
             .get(&sid)
-            .and_then(|(_, cwd, _)| project_from_cwd(Some(cwd)))
+            .and_then(|m| project_from_cwd(Some(&m.cwd)))
             .or(state.project)
             .or_else(|| Some(slug.clone()));
         t.updated_at = state.updated_at;
-        t.project_path = titles.get(&sid).map(|(_, cwd, _)| cwd.clone());
+        t.project_path = meta
+            .map(|m| m.cwd.clone())
+            .filter(|cwd| !cwd.is_empty())
+            .or(state.cwd);
         t.waiting_reason = state.waiting_reason;
         t.input_request_id = state.input_request_id;
         t.started_at = state.started_at;
@@ -1443,7 +1620,7 @@ fn flush_codex(
         t.turn_key = state.turn_key;
         t.pinned = titles
             .get(t.session_id.as_deref().unwrap_or(""))
-            .is_some_and(|(_, _, pinned)| *pinned);
+            .is_some_and(|m| m.pinned);
         t.quota_5h_used_pct = state.quota_5h_used_pct;
         t.quota_5h_resets_at = state.quota_5h_resets_at;
         t.quota_1w_used_pct = state.quota_1w_used_pct;
@@ -1458,6 +1635,7 @@ impl Provider for CodexProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
+        self.refresh_title_index();
         let discovered = match self.discover() {
             Ok(files) => files,
             Err(error) => {
@@ -1475,7 +1653,7 @@ impl Provider for CodexProvider {
                 return ProviderOutput::degraded(tasks, message);
             }
         };
-        let metadata = match self.thread_metadata(now) {
+        let mut metadata = match self.thread_metadata(now) {
             Ok(metadata) => metadata,
             Err(error) => {
                 log::warn!("codex: {error}; falling back to rollout metadata");
@@ -1486,6 +1664,15 @@ impl Provider for CodexProvider {
                     .collect()
             }
         };
+        for meta in metadata.values_mut() {
+            if meta
+                .native_name
+                .as_deref()
+                .is_none_or(|name| name.trim().is_empty())
+            {
+                meta.native_name = self.indexed_titles.get(&meta.id).cloned();
+            }
+        }
         let now_secs = now.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs() as i64;
         let eligible_paths: std::collections::HashSet<PathBuf> = metadata
             .values()
@@ -1501,18 +1688,31 @@ impl Provider for CodexProvider {
             .filter_map(|meta| meta.rollout_path.as_deref())
             .map(|path| self.resolve_rollout_path(path))
             .collect();
-        let files: Vec<PathBuf> = if eligible_paths.is_empty() {
-            discovered
-        } else {
-            discovered
-                .into_iter()
-                .filter(|path| eligible_paths.contains(path))
-                .collect()
-        };
+        // Metadata is an enrichment/discovery hint, never an allowlist of
+        // executions. A new/resumed rollout may precede the DB or app-server
+        // update, or the DB may retain the previous rollout path.
+        let files: Vec<PathBuf> = discovered
+            .into_iter()
+            .filter(|path| {
+                eligible_paths.contains(path)
+                    || self.cache.contains_key(path)
+                    || path
+                        .metadata()
+                        .and_then(|m| m.modified())
+                        .is_ok_and(|modified| {
+                            now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
+                        })
+            })
+            .collect();
         let mut tasks = Vec::new();
         let mut live: std::collections::HashMap<String, SystemTime> = Default::default();
+        let mut sessions: HashMap<String, (PathBuf, SessionState)> = HashMap::new();
         for path in &files {
             if let Some(state) = self.cached_session_state(path, now) {
+                // A header-only new file is not a lifecycle observation.
+                if state.status == TaskStatus::Unknown {
+                    continue;
+                }
                 let known = self.seen.contains_key(&state.session_id)
                     || metadata.get(&state.session_id).is_some_and(|m| m.pinned)
                     || crate::watcher::known_sessions().iter().any(|t| {
@@ -1531,15 +1731,36 @@ impl Provider for CodexProvider {
                 {
                     continue;
                 }
-                live.insert(state.session_id.clone(), state.updated_at);
-                let mut task = self.session_to_task(&state, metadata.get(&state.session_id), now);
-                if state.status == TaskStatus::Running
-                    && now.duration_since(state.updated_at).unwrap_or_default() > RUNNING_TTL
-                {
-                    task.stale = true;
+                // Resuming a thread can create another rollout with the SAME
+                // native ID. Emit one observation, not conflicting old/new
+                // turns whose final state depends on file enumeration order.
+                let replace = sessions
+                    .get(&state.session_id)
+                    .is_none_or(|(old_path, old)| {
+                        state.updated_at > old.updated_at
+                            || state.updated_at == old.updated_at
+                                && metadata
+                                    .get(&state.session_id)
+                                    .and_then(|m| m.rollout_path.as_deref())
+                                    .is_some_and(|canonical| {
+                                        self.resolve_rollout_path(canonical) == *path
+                                            && old_path != path
+                                    })
+                    });
+                if replace {
+                    sessions.insert(state.session_id.clone(), (path.clone(), state));
                 }
-                tasks.push(task);
             }
+        }
+        for (_, state) in sessions.into_values() {
+            live.insert(state.session_id.clone(), state.updated_at);
+            let mut task = self.session_to_task(&state, metadata.get(&state.session_id), now);
+            if state.status == TaskStatus::Running
+                && now.duration_since(state.updated_at).unwrap_or_default() > RUNNING_TTL
+            {
+                task.stale = true;
+            }
+            tasks.push(task);
         }
         let emitted: std::collections::HashSet<String> = tasks
             .iter()
@@ -1615,7 +1836,19 @@ pub(crate) fn parse_rfc3339(s: &str) -> Option<SystemTime> {
     // Accept "2026-07-06T08:22:01.075Z" and "+00:00" offsets.
     let cleaned = s.replace('Z', "+00:00");
     let dt = chrono_like_parse(&cleaned)?;
-    Some(UNIX_EPOCH + Duration::from_secs(dt))
+    // Preserve sub-second event order. Resumed rollouts and very short turns
+    // can both change within one second; truncating precision lets the old
+    // turn override the new one or gives two executions the same fallback ID.
+    let fraction = cleaned.get(19..).and_then(|tail| tail.strip_prefix('.'));
+    let mut nanos = 0;
+    let mut place = 100_000_000;
+    if let Some(fraction) = fraction {
+        for digit in fraction.bytes().take_while(u8::is_ascii_digit).take(9) {
+            nanos += u32::from(digit - b'0') * place;
+            place /= 10;
+        }
+    }
+    Some(UNIX_EPOCH + Duration::new(dt, nanos))
 }
 
 /// Minimal RFC3339 → unix-seconds parser (no external chrono dependency in the
@@ -1659,6 +1892,547 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    fn escalation_log(id: &str) -> String {
+        format!(
+            "{}\n{}\n{}\n",
+            serde_json::json!({"timestamp":"2026-10-12T09:00:00Z","type":"session_meta","payload":{"id":"s","cwd":"/project"}}),
+            serde_json::json!({"timestamp":"2026-10-12T09:00:00Z","payload":{"type":"task_started","turn_id":"turn"}}),
+            serde_json::json!({"timestamp":"2026-10-12T09:00:01Z","payload":{"type":"custom_tool_call","name":"exec","call_id":id,"input":"const r = await tools.exec_command({cmd: \"gpu-check\", sandbox_permissions: \"require_escalated\"});"}})
+        )
+    }
+
+    /// Replay a real, read-only SSH transcript at a caller-selected historical
+    /// cutoff. Never prompts an Agent, executes its commands, or edits a log.
+    #[test]
+    #[ignore = "requires TASKPULSE_APPROVAL_SSH_HOST, THREAD_ID and REPLAY_UNTIL"]
+    fn live_remote_approval_replay() {
+        use base64::Engine;
+        let host = std::env::var("TASKPULSE_APPROVAL_SSH_HOST").expect("Set SSH host");
+        let id = std::env::var("TASKPULSE_APPROVAL_THREAD_ID").expect("Set thread ID");
+        assert!(id.bytes().all(|b| b.is_ascii_hexdigit() || b == b'-'));
+        let until = std::env::var("TASKPULSE_APPROVAL_REPLAY_UNTIL").expect("Set RFC3339 cutoff");
+        let now = parse_rfc3339(&until).expect("Valid cutoff");
+        let script = format!(
+            r#"import glob,json,os
+from datetime import datetime
+thread={id:?}
+cutoff=datetime.fromisoformat({until:?}.replace('Z','+00:00'))
+for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread+'*.jsonl'),recursive=True):
+ with open(path,encoding='utf-8') as stream:
+  for line in stream:
+   try:
+    row=json.loads(line)
+    if datetime.fromisoformat(row['timestamp'].replace('Z','+00:00'))<=cutoff: print(line,end='')
+   except (ValueError,KeyError): pass
+"#
+        );
+        let encoded = base64::engine::general_purpose::STANDARD.encode(script);
+        let output = Command::new("ssh")
+            .args([
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "ConnectTimeout=6",
+                &host,
+                &format!("echo {encoded} | base64 -d | python3"),
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "SSH read failed");
+        let body = String::from_utf8(output.stdout).unwrap();
+        let state = parse_codex_rollout(&body, now, &id).expect("Real rollout available");
+        assert!(
+            !state.active_tools.is_empty(),
+            "Unresolved native tool at cutoff"
+        );
+        assert_eq!(state.phase, Some(crate::domain::ExecutionPhase::Tool));
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.waiting_reason, None);
+        assert_eq!(state.session_id, id);
+        let mut task = TaskSnapshot::new(
+            format!("replay:{id}"),
+            "Read-only replay (not monitored)",
+            TaskSource::Codex,
+            state.status,
+            DetectionConfidence::Hook,
+            now,
+        );
+        task.phase = state.phase;
+        task.turn_key = state.turn_key;
+        let mut engine = crate::transition::TransitionEngine::new();
+        assert!(engine.apply(&[task.clone()], &[], now).is_empty());
+        assert!(engine
+            .apply(&[task], &[], now + Duration::from_secs(7200))
+            .is_empty());
+        println!("Read-only replay passed: unresolved native tool, state RUNNING, no inferred approval alert or completion");
+    }
+
+    #[test]
+    fn long_escalated_calls_never_infer_approval_or_emit_notifications() {
+        let started = parse_rfc3339("2026-10-12T09:00:00Z").unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout.jsonl");
+        std::fs::write(&path, escalation_log("c1")).unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().to_path_buf());
+        let mut engine = crate::transition::TransitionEngine::new();
+        // Both the first parse and unchanged incremental cache must stay running.
+        for seconds in [10, 22, 600, 7200] {
+            let now = started + Duration::from_secs(seconds);
+            let state = provider.cached_session_state(&path, now).unwrap();
+            assert_eq!(state.status, TaskStatus::Running);
+            assert_eq!(state.waiting_reason, None);
+            assert_eq!(state.input_request_id, None);
+            assert_eq!(state.phase, Some(crate::domain::ExecutionPhase::Tool));
+            assert!(state.active_tools.contains_key("c1"));
+            let snapshot = provider.session_to_task(&state, None, now);
+            assert!(!snapshot.requires_action());
+            assert!(engine.apply(&[snapshot], &[], now).is_empty());
+        }
+        let now = started + Duration::from_secs(7201);
+        let returned = serde_json::json!({"timestamp":"2026-10-12T11:00:01Z","payload":{"type":"custom_tool_call_output","call_id":"c1","output":"Process running with session ID 12"}}).to_string();
+        let state = provider.cached_session_state(&path, now).unwrap();
+        let returned = apply_codex_rollout(&returned, now, "s", Some(state)).unwrap();
+        assert!(returned.active_tools.is_empty());
+        assert_eq!(returned.status, TaskStatus::Running);
+        assert_eq!(
+            returned.phase,
+            Some(crate::domain::ExecutionPhase::AwaitingModel)
+        );
+        assert!(engine
+            .apply(&[provider.session_to_task(&returned, None, now)], &[], now)
+            .is_empty());
+        let ended = serde_json::json!({"timestamp":"2026-10-12T11:00:02Z","payload":{"type":"task_complete","turn_id":"turn"}}).to_string();
+        let ended = apply_codex_rollout(&ended, now, "s", Some(returned)).unwrap();
+        let snapshot = provider.session_to_task(&ended, None, now);
+        assert!(
+            matches!(engine.apply(&[snapshot.clone()], &[], now).as_slice(),
+            [crate::transition::TaskEvent::WaitingInput { task, .. }]
+            if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded))
+        );
+        assert!(engine.apply(&[snapshot], &[], now).is_empty());
+    }
+
+    #[test]
+    fn unrelated_tool_results_preserve_the_active_command_without_an_approval_guess() {
+        let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
+        let state = parse_codex_rollout(&escalation_log("c1"), now, "s").unwrap();
+        let other = serde_json::json!({"timestamp":"2026-10-12T09:00:05Z","payload":{"type":"function_call_output","call_id":"c-other"}}).to_string();
+        let running = apply_codex_rollout(&other, now, "s", Some(state)).unwrap();
+        assert!(running.active_tools.contains_key("c1"));
+        assert_eq!(running.status, TaskStatus::Running);
+        assert_eq!(running.phase, Some(crate::domain::ExecutionPhase::Tool));
+        assert_eq!(running.waiting_reason, None);
+        let ended = serde_json::json!({"timestamp":"2026-10-12T09:00:30Z","payload":{"type":"task_complete","turn_id":"turn"}}).to_string();
+        let ended = apply_codex_rollout(&ended, now, "s", Some(running)).unwrap();
+        assert_eq!(
+            ended.waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+        assert!(ended.active_tools.is_empty());
+    }
+
+    #[test]
+    fn command_permissions_are_not_evidence_of_a_pending_approval() {
+        let now = parse_rfc3339("2026-10-12T09:01:00Z").unwrap();
+        for (name, arguments) in [
+            (
+                "exec_command",
+                r#"{"cmd":"gpu-check","sandbox_permissions":"require_escalated"}"#,
+            ),
+            (
+                "functions.exec_command",
+                r#"{"sandbox_permissions":"require_escalated","justification":"Check GPU"}"#,
+            ),
+            (
+                "exec_command",
+                r#"{"cmd":"long-command","sandbox_permissions":"use_default"}"#,
+            ),
+        ] {
+            let call = serde_json::json!({"timestamp":"2026-10-12T09:00:02Z","payload":{"type":"function_call","name":name,"call_id":"c2","arguments":arguments}}).to_string();
+            let state = parse_codex_rollout(&(escalation_log("c1") + &call), now, "s").unwrap();
+            assert_eq!(state.status, TaskStatus::Running);
+            assert_eq!(state.phase, Some(crate::domain::ExecutionPhase::Tool));
+            assert_eq!(state.waiting_reason, None);
+            assert_eq!(state.input_request_id, None);
+        }
+    }
+
+    #[test]
+    fn explicit_approval_events_wait_until_the_matching_request_is_resolved() {
+        let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
+        let base = parse_codex_rollout(&escalation_log("c1"), now, "s").unwrap();
+        let requested=serde_json::json!({"timestamp":"2026-10-12T09:00:02Z","id":42,"method":"item/commandExecution/requestApproval","params":{"threadId":"s","turnId":"turn","itemId":"c1"}}).to_string();
+        let state = apply_codex_rollout(&requested, now, "s", Some(base)).unwrap();
+        assert_eq!(
+            state.waiting_reason,
+            Some(crate::domain::WaitingReason::Approval)
+        );
+        assert_eq!(state.input_request_id.as_deref(), Some("42"));
+        let wrong=serde_json::json!({"method":"serverRequest/resolved","params":{"threadId":"s","requestId":43}}).to_string();
+        let still = apply_codex_rollout(&wrong, now, "s", Some(state)).unwrap();
+        assert_eq!(still.status, TaskStatus::WaitingInput);
+        let resolved=serde_json::json!({"timestamp":"2026-10-12T09:00:05Z","method":"serverRequest/resolved","params":{"threadId":"s","requestId":42}}).to_string();
+        let resumed = apply_codex_rollout(&resolved, now, "s", Some(still)).unwrap();
+        assert_eq!(resumed.status, TaskStatus::Running);
+        assert_eq!(resumed.waiting_reason, None);
+        assert_eq!(resumed.input_request_id, None);
+        assert_eq!(
+            resumed.phase,
+            Some(crate::domain::ExecutionPhase::AwaitingTool)
+        );
+    }
+
+    #[test]
+    fn remote_snapshots_never_infer_approval_or_invent_completion() {
+        let now = parse_rfc3339("2026-10-12T09:00:25Z").unwrap();
+        let section=format!("===S:project===F:rollout-2026-10-12T09-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl===\n{}",escalation_log("c1"));
+        let tasks = tasks_from_codex_section(&section, "test-host", "host", now);
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks[0].remote);
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+        assert_eq!(tasks[0].phase, Some(crate::domain::ExecutionPhase::Tool));
+        assert!(!tasks[0].requires_action());
+        assert!(crate::transition::TransitionEngine::new()
+            .apply(&tasks, &[], now)
+            .is_empty());
+        assert_eq!(
+            tasks[0].session_id.as_deref(),
+            Some("aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee")
+        );
+    }
+
+    fn native_db(dir: &Path, path: &Path, updated: i64) -> PathBuf {
+        let db = dir.join("state.sqlite");
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch("CREATE TABLE threads (id TEXT, name TEXT, title TEXT, first_user_message TEXT, cwd TEXT, rollout_path TEXT, updated_at INTEGER, is_pinned INTEGER, source TEXT, archived INTEGER);").unwrap();
+        conn.execute("INSERT INTO threads VALUES ('sess-1',NULL,'Old prompt','Old prompt','C:/old-project',?, ?,0,'appServer',0)", (path.to_string_lossy().as_ref(),updated)).unwrap();
+        db
+    }
+
+    fn turn_event(kind: &str, turn: &str, ago: u64) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(ago),"type":"event_msg","payload":{"type":kind,"turn_id":turn}})
+        )
+    }
+
+    #[test]
+    fn desktop_sidebar_index_renames_without_lifecycle_or_activity_changes() {
+        use crate::attention::AttentionTracker;
+        use crate::transition::TransitionEngine;
+        let dir = tempfile::tempdir().unwrap();
+        let sessions = dir.path().join("sessions");
+        std::fs::create_dir(&sessions).unwrap();
+        let path = sessions.join("rollout-test.jsonl");
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                header("/project"),
+                turn_event("task_started", "current-turn", 1)
+            ),
+        )
+        .unwrap();
+        let index = dir.path().join("session_index.jsonl");
+        std::fs::write(
+            &index,
+            "{\"id\":\"sess-1\",\"thread_name\":\"Native sidebar name\"}\ninvalid future row\n",
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(sessions);
+        provider.state_db = Some(native_db(dir.path(), &path, 0));
+        let first = provider.poll(SystemTime::now());
+        assert_eq!(first.tasks[0].name, "Native sidebar name");
+        let before = first.tasks[0].clone();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let mut engine = TransitionEngine::new();
+        engine.apply(&first.tasks, &[], SystemTime::now());
+        tracker.reconcile(first.tasks);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&index)
+            .unwrap()
+            .write_all(b"{\"id\":\"sess-1\",\"thread_name\":\"Renamed in Desktop\"}\n")
+            .unwrap();
+        let renamed = provider.poll(SystemTime::now()).tasks;
+        assert_eq!(renamed[0].name, "Renamed in Desktop");
+        assert_eq!(renamed[0].id, before.id);
+        assert_eq!(renamed[0].turn_key, before.turn_key);
+        assert_eq!(renamed[0].updated_at, before.updated_at);
+        assert!(engine.apply(&renamed, &[], SystemTime::now()).is_empty());
+        assert!(!tracker.reconcile(renamed)[0].new_execution);
+        let conn = rusqlite::Connection::open(provider.state_db.as_ref().unwrap()).unwrap();
+        conn.execute("UPDATE threads SET name='Manual override'", [])
+            .unwrap();
+        assert_eq!(
+            provider.poll(SystemTime::now()).tasks[0].name,
+            "Manual override"
+        );
+    }
+
+    #[test]
+    fn new_project_rollout_is_detected_before_metadata_and_title_are_available() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("rollout-existing.jsonl");
+        std::fs::write(
+            &old,
+            format!(
+                "{}{}",
+                header("/old-project"),
+                turn_event("task_complete", "old-turn", 60)
+            ),
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().to_owned());
+        provider.state_db = Some(native_db(
+            dir.path(),
+            &old,
+            SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_secs() as i64,
+        ));
+        provider.poll(SystemTime::now());
+        let fresh = dir.path().join("rollout-brand-new.jsonl");
+        std::fs::write(&fresh,format!("{}\n{}",serde_json::json!({"type":"session_meta","payload":{"id":"new-id","cwd":"D:/never-monitored-before"}}),turn_event("task_started","new-turn",0))).unwrap();
+        let tasks = provider.poll(SystemTime::now()).tasks;
+        let task = tasks
+            .iter()
+            .find(|t| t.session_id.as_deref() == Some("new-id"))
+            .expect("new execution is independent of metadata allowlist");
+        assert_eq!(task.status, TaskStatus::Running);
+        assert_eq!(task.project.as_deref(), Some("never-monitored-before"));
+        assert_eq!(
+            task.project_path.as_deref(),
+            Some("D:/never-monitored-before")
+        );
+        assert_eq!(task.name, "未命名任务 · new-id");
+        let id = task.id.clone();
+        let mut tracker =
+            crate::attention::AttentionTracker::open(dir.path().join("attention.json"));
+        assert!(tracker.reconcile(tasks).iter().any(|t| t.id == id));
+    }
+
+    #[test]
+    fn resumed_thread_uses_newest_events_not_old_metadata_path_or_file_order() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = dir.path().join("rollout-old.jsonl");
+        let resumed = dir.path().join("rollout-resumed.jsonl");
+        let now = SystemTime::now();
+        let secs = now.duration_since(UNIX_EPOCH).unwrap().as_secs() - 1;
+        let stamp = format_unix(secs);
+        let old_stamp = stamp.replace(".000Z", ".100Z");
+        let new_stamp = stamp.replace(".000Z", ".900Z");
+        let body = |kind: &str, turn: &str, ts: &str| {
+            format!(
+                "{}{}\n",
+                header("/project"),
+                serde_json::json!({"timestamp":ts,"payload":{"type":kind,"turn_id":turn}})
+            )
+        };
+        std::fs::write(&resumed, body("task_started", "new-turn", &new_stamp)).unwrap();
+        // Write the old file LAST: discovery mtime order must not choose it.
+        std::fs::write(&old, body("task_complete", "old-turn", &old_stamp)).unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().to_owned());
+        provider.state_db = Some(native_db(dir.path(), &old, secs as i64));
+        let tasks = provider.poll(now).tasks;
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, "codex:sess-1");
+        assert_eq!(tasks[0].status, TaskStatus::Running);
+        assert_eq!(tasks[0].turn_key.as_deref(), Some("new-turn"));
+    }
+
+    #[test]
+    fn unknown_metadata_guardian_is_marked_internal_from_rollout_source() {
+        let body = format!(
+            "{}\n{}",
+            serde_json::json!({"type":"session_meta","payload":{"id":"internal","source":{"subagent":{"other":"guardian"}},"cwd":"/project"}}),
+            turn_event("task_started", "turn", 0)
+        );
+        let (dir, _) = temp_rollout(&body);
+        let task = CodexProvider::with_root(dir.path().to_owned())
+            .poll(SystemTime::now())
+            .tasks
+            .remove(0);
+        assert!(task.internal);
+    }
+
+    fn remote_origin_fixture(
+        id: &str,
+        title: &str,
+        database_source: Option<serde_json::Value>,
+        rollout_source: Option<serde_json::Value>,
+        event: &str,
+        turn: &str,
+    ) -> String {
+        let metadata = serde_json::json!({"id":id,"t":title,"cwd":"/project","source":database_source,"p":true});
+        let header = rollout_source
+            .map(|source| {
+                serde_json::json!({"type":"session_meta",
+            "payload":{"id":id,"source":source,"cwd":"/project"}})
+                .to_string()
+                    + "\n"
+            })
+            .unwrap_or_default();
+        let event = serde_json::json!({"timestamp":recent_rfc3339(1),"type":"event_msg",
+            "payload":{"type":event,"turn_id":turn}});
+        format!("META\t{metadata}\n===S:10===F:rollout-2026-10-13T13-00-00-{id}.jsonl===\n{header}{event}\n")
+    }
+
+    #[test]
+    fn remote_guardian_origin_survives_full_truncated_and_legacy_metadata_paths() {
+        let id = "11111111-1111-7111-8111-111111111111";
+        let origin = serde_json::json!({"subagent":{"other":"guardian"}});
+        for (db, rollout, title) in [
+            (
+                Some(origin.clone()),
+                Some(origin.clone()),
+                "Guardian review",
+            ),
+            (Some(origin.clone()), None, "Renamed internal service"),
+            (None, Some(origin.clone()), "Guardian review"),
+            (
+                Some(serde_json::Value::String(origin.to_string())),
+                None,
+                "",
+            ),
+        ] {
+            let section =
+                remote_origin_fixture(id, title, db, rollout, "task_complete", "child-turn");
+            let tasks = tasks_from_codex_section(&section, "Server1", "server1", SystemTime::now());
+            assert_eq!(tasks.len(), 1);
+            assert!(tasks[0].internal, "origin was lost for {title:?}");
+            assert_eq!(tasks[0].session_id.as_deref(), Some(id));
+            let catalog = catalog_from_codex_section(&section, "Server1", "server1");
+            assert_eq!(catalog.len(), 1);
+            assert!(
+                catalog[0].internal,
+                "catalog disagreed with execution origin"
+            );
+        }
+    }
+
+    #[test]
+    fn guardian_completions_never_notify_while_user_parent_is_running() {
+        use crate::domain::WaitingReason;
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine =
+            crate::transition::TransitionEngine::open(dir.path().join("notifications.json"));
+        let child = "11111111-1111-7111-8111-111111111111";
+        let parent = "22222222-2222-7222-8222-222222222222";
+        let now = SystemTime::now();
+        // A real user can name their task Guardian review; it must still notify.
+        let parent_running = remote_origin_fixture(
+            parent,
+            "Guardian review",
+            Some(serde_json::json!("appServer")),
+            None,
+            "task_started",
+            "parent-turn",
+        );
+        let initial = format!(
+            "{parent_running}{}",
+            remote_origin_fixture(
+                child,
+                "Guardian review",
+                Some(serde_json::json!({"subagent":{"other":"guardian"}})),
+                None,
+                "task_started",
+                "child-0"
+            )
+        );
+        assert!(engine
+            .apply(
+                &tasks_from_codex_section(&initial, "Server1", "server1", now),
+                &[],
+                now
+            )
+            .is_empty());
+        for round in 0..3 {
+            let section = format!(
+                "{parent_running}{}",
+                remote_origin_fixture(
+                    child,
+                    "Guardian review",
+                    Some(serde_json::json!({"subagent":{"other":"guardian"}})),
+                    None,
+                    "task_complete",
+                    &format!("child-{round}")
+                )
+            );
+            let tasks = tasks_from_codex_section(&section, "Server1", "server1", now);
+            assert_eq!(tasks.iter().filter(|t| !t.internal).count(), 1);
+            assert_eq!(
+                tasks.iter().find(|t| !t.internal).unwrap().status,
+                TaskStatus::Running
+            );
+            // Even a direct engine caller cannot bypass the internal guard.
+            assert!(engine.apply(&tasks, &[], now).is_empty());
+        }
+        let section = remote_origin_fixture(
+            parent,
+            "Guardian review",
+            Some(serde_json::json!("appServer")),
+            None,
+            "task_complete",
+            "parent-turn",
+        );
+        let tasks = tasks_from_codex_section(&section, "Server1", "server1", now);
+        assert!(!tasks[0].internal);
+        assert_eq!(tasks[0].waiting_reason, Some(WaitingReason::TurnEnded));
+        assert_eq!(engine.apply(&tasks, &[], now).len(), 1);
+        assert!(engine.apply(&tasks, &[], now).is_empty());
+    }
+
+    #[test]
+    fn metadata_only_pins_do_not_override_native_internal_origin() {
+        let section = "META\t{\"id\":\"internal\",\"t\":\"Renamed service\",\"cwd\":\"/project\",\"p\":true,\"source\":{\"subagent\":{\"other\":\"guardian\"}}}\nMETA\t{\"id\":\"user\",\"t\":\"Guardian review\",\"cwd\":\"/project\",\"p\":true,\"source\":\"appServer\"}\n";
+        let tasks = tasks_from_codex_section(section, "Server1", "server1", SystemTime::now());
+        assert!(
+            tasks
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some("internal"))
+                .unwrap()
+                .internal
+        );
+        assert!(
+            !tasks
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some("user"))
+                .unwrap()
+                .internal
+        );
+    }
+
+    #[test]
+    fn sidebar_index_tolerates_partial_appends_and_replacement() {
+        let dir = tempfile::tempdir().unwrap();
+        let index = dir.path().join("session_index.jsonl");
+        let mut provider = CodexProvider::with_root(dir.path().join("sessions"));
+        std::fs::write(
+            &index,
+            "{\"id\":\"one\",\"thread_name\":\"First\"}\n{\"id\":\"two\"",
+        )
+        .unwrap();
+        provider.refresh_title_index();
+        assert_eq!(provider.indexed_titles.len(), 1);
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&index)
+            .unwrap()
+            .write_all(b",\"thread_name\":\"Second\"}\n")
+            .unwrap();
+        provider.refresh_title_index();
+        assert_eq!(
+            provider.indexed_titles.get("two").map(String::as_str),
+            Some("Second")
+        );
+        std::fs::write(&index, "{\"id\":\"one\",\"thread_name\":\"Replaced\"}\n").unwrap();
+        provider.refresh_title_index();
+        assert_eq!(provider.indexed_titles.len(), 1);
+        assert_eq!(provider.indexed_titles["one"], "Replaced");
+    }
 
     #[test]
     fn wsl_mapping_sidebar_rename_and_incremental_turn_share_native_rules() {

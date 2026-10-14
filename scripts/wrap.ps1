@@ -1,116 +1,113 @@
-# wrap.ps1 <agent-name> <command> [args...]
-# Wraps an AI agent command and writes real-time status to ~/.agent-monitor/
-# PowerShell equivalent of wrap.sh for Windows users.
-
+﻿# Compatibility entry: wrap.ps1 <name> <native executable> [arguments...]
+# Supervises process boundaries, not internal Agent turns or approvals.
 param(
-    [Parameter(Mandatory=$true, Position=0)]
-    [string]$AgentName,
-
-    [Parameter(Mandatory=$true, Position=1, ValueFromRemainingArguments=$true)]
-    [string[]]$Command
+    [Parameter(Mandatory=$true, Position=0)][string]$AgentName,
+    [Parameter(Mandatory=$true, Position=1, ValueFromRemainingArguments=$true)][AllowEmptyString()][string[]]$Command
 )
-
 $ErrorActionPreference = 'Stop'
+$jobDirectory = if ($env:TASKPULSE_STATUS_DIR) { $env:TASKPULSE_STATUS_DIR } else { Join-Path $env:USERPROFILE '.agent-monitor' }
+$null = New-Item -ItemType Directory -Path $jobDirectory -Force
+$jobId = [Guid]::NewGuid().ToString()
+$jobStatus = Join-Path $jobDirectory "$jobId.status"
+$jobStart = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+$jobActivity = $jobStart
+$jobProcess = $null
+$jobStarted = $false
+$jobOutputCopy = $null
+$jobErrorCopy = $null
+$jobInputCopy = $null
+$jobMessage = $Command[0]
 
-$MonitorDir = Join-Path $env:USERPROFILE '.agent-monitor'
-$StatusFile = Join-Path $MonitorDir "$AgentName.status"
-
-if (-not (Test-Path $MonitorDir)) {
-    New-Item -ItemType Directory -Path $MonitorDir -Force | Out-Null
+# Windows CRT argv quoting, including empty strings, quotes and trailing slashes.
+function Quote-JobArgument([string]$value) {
+    $result = '"'
+    $slashes = 0
+    foreach ($character in $value.ToCharArray()) {
+        if ($character -eq '\') { $slashes++; continue }
+        if ($character -eq '"') { $result += ('\' * (2 * $slashes + 1)) + '"' }
+        else { $result += ('\' * $slashes) + $character }
+        $slashes = 0
+    }
+    return $result + ('\' * (2 * $slashes)) + '"'
 }
-
-# Detect terminal
-$TerminalJson = $null
-$RegistryScript = Join-Path $PSScriptRoot 'registry.ps1'
-if (Test-Path $RegistryScript) {
-    try { $TerminalJson = & $RegistryScript 2>$null } catch {}
+function Write-JobStatus([string]$status, $code=$null, $finished=$null) {
+    $value = @{
+        v=2; name=$AgentName; run_id=$jobId; turn_key=$jobId; status=$status
+        cwd=(Get-Location).Path; started_at=$jobStart; finished_at=$finished
+        execution_activity_at=$jobActivity
+        heartbeat_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        pid=$PID; exit_code=$code; confidence='exact'; message=$jobMessage
+        activity=$(if ($status -eq 'running') { $Command[0] } else { $null })
+    }
+    $temporary = "$jobStatus.tmp"
+    [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
+    Move-Item -LiteralPath $temporary -Destination $jobStatus -Force
 }
-if (-not $TerminalJson) {
-    $parentPid = (Get-Process -Id $PID).Parent.Id
-    $termApp = 'Windows Terminal'
-    try {
-        $parent = Get-Process -Id $parentPid -ErrorAction SilentlyContinue
-        if ($parent.ProcessName -match 'WindowsTerminal') { $termApp = 'Windows Terminal' }
-        elseif ($parent.ProcessName -match 'powershell|pwsh') { $termApp = 'PowerShell' }
-        elseif ($parent.ProcessName -match 'cmd') { $termApp = 'CMD' }
-    } catch {}
-    $TerminalJson = "{`"kind`":`"windows_native`",`"focus_id`":`"$parentPid`",`"outer_id`":`"`",`"label`":`"$termApp`"}"
-}
-
-# Input detection patterns
-$InputPatterns = @(
-    '\? $', '\? .*\[', '\[y/n\]', '\[Y/n\]', '\[yes/no\]',
-    'password:', 'Password:', 'passphrase:', 'Passphrase:',
-    'Enter to', 'Press .* to', 'Overwrite\?', 'Continue\?',
-    'Confirm\?', 'Proceed\?', 'Are you sure'
-)
-$InputRegex = ($InputPatterns -join '|')
-
-function Write-Status {
-    param([string]$Status, [string]$Message)
-    if ($Message.Length -gt 500) { $Message = $Message.Substring(0, 500) }
-    # Escape JSON special characters
-    $SafeMessage = $Message -replace '\\', '\\\\' -replace '"', '\"' -replace "`n", '\n' -replace "`r", '\r' -replace "`t", '\t'
-    $Json = "{`"v`":1,`"status`":`"$Status`",`"message`":`"$SafeMessage`",`"terminal`":$TerminalJson}"
-    $TmpFile = "$StatusFile.tmp"
-    [System.IO.File]::WriteAllText($TmpFile, $Json)
-    Move-Item -Path $TmpFile -Destination $StatusFile -Force
-}
-
-function Remove-StatusFile {
-    Remove-Item -Path $StatusFile -Force -ErrorAction SilentlyContinue
-    Remove-Item -Path "$StatusFile.tmp" -Force -ErrorAction SilentlyContinue
-}
-
-# Cleanup on exit
-$null = Register-EngineEvent -SourceIdentifier PowerShell.Exiting -Action { Remove-StatusFile }
+$jobExit = 1
 try {
-    # Write starting status
-    Write-Status -Status 'starting' -Message ''
-
-    # Run the command and capture output line by line
-    $process = New-Object System.Diagnostics.Process
-    $process.StartInfo.FileName = $Command[0]
+    $jobExecutable = (Get-Command $Command[0] -CommandType Application -ErrorAction Stop).Source
+    if ([IO.Path]::GetExtension($jobExecutable) -in @('.cmd','.bat')) {
+        throw 'Batch files require an explicit cmd.exe command; shell syntax is not reinterpreted.'
+    }
+    $jobProcess = New-Object System.Diagnostics.Process
+    $jobProcess.StartInfo.FileName = $jobExecutable
+    $jobProcess.StartInfo.WorkingDirectory = (Get-Location).ProviderPath
     if ($Command.Length -gt 1) {
-        $process.StartInfo.Arguments = ($Command[1..($Command.Length-1)] -join ' ')
+        $jobProcess.StartInfo.Arguments = (($Command[1..($Command.Length - 1)] | ForEach-Object { Quote-JobArgument $_ }) -join ' ')
     }
-    $process.StartInfo.UseShellExecute = $false
-    $process.StartInfo.RedirectStandardOutput = $true
-    $process.StartInfo.RedirectStandardError = $true
-    $process.StartInfo.CreateNoWindow = $true
-
-    $process.Start() | Out-Null
-
-    # Read stdout and stderr merged
-    while (-not $process.HasExited -or -not $process.StandardOutput.EndOfStream) {
-        $line = $process.StandardOutput.ReadLine()
-        if ($null -eq $line) { continue }
-
-        Write-Host $line
-
-        if ($line -match $InputRegex) {
-            Write-Status -Status 'needs-input' -Message $line
-        } else {
-            Write-Status -Status 'working' -Message $line
-        }
-    }
-
-    # Also drain stderr
-    $stderr = $process.StandardError.ReadToEnd()
-    if ($stderr) { Write-Host $stderr -ForegroundColor Red }
-
-    $process.WaitForExit()
-
-    if ($process.ExitCode -eq 0) {
-        Remove-StatusFile
-    } else {
-        Write-Status -Status 'error' -Message "Exit code $($process.ExitCode)"
-    }
-} catch {
-    Write-Status -Status 'error' -Message $_.Exception.Message
-} finally {
-    # Ensure cleanup on Ctrl+C
-    if ($process -and -not $process.HasExited) {
-        $process.Kill()
+    $jobProcess.StartInfo.UseShellExecute = $false
+    $jobProcess.StartInfo.CreateNoWindow = $true
+    # Keep terminal streams inherited. A redirected PowerShell host cannot
+    # reliably inherit its pipes through Process.Start, so relay both pipes
+    # concurrently as raw bytes (never scan prompts or drain sequentially).
+    $jobProcess.StartInfo.RedirectStandardOutput = [Console]::IsOutputRedirected
+    $jobProcess.StartInfo.RedirectStandardError = [Console]::IsErrorRedirected
+    $jobProcess.StartInfo.RedirectStandardInput = [Console]::IsInputRedirected
+    if ($jobProcess.StartInfo.RedirectStandardInput -and -not ('TaskPulseInputRelay' -as [type])) {
+        Add-Type -TypeDefinition @'
+using System; using System.IO; using System.Threading.Tasks;
+public static class TaskPulseInputRelay {
+    public static async Task Copy(Stream source, Stream target) {
+        try { await source.CopyToAsync(target).ConfigureAwait(false); }
+        catch (IOException) { } catch (ObjectDisposedException) { }
+        finally { target.Dispose(); }
     }
 }
+'@
+    }
+    Write-JobStatus 'running'
+    $null = $jobProcess.Start()
+    $jobStarted = $true
+    if ($jobProcess.StartInfo.RedirectStandardInput) {
+        $jobInputCopy = [TaskPulseInputRelay]::Copy([Console]::OpenStandardInput(), $jobProcess.StandardInput.BaseStream)
+    }
+    if ($jobProcess.StartInfo.RedirectStandardOutput) {
+        $jobOutputCopy = $jobProcess.StandardOutput.BaseStream.CopyToAsync([Console]::OpenStandardOutput())
+    }
+    if ($jobProcess.StartInfo.RedirectStandardError) {
+        $jobErrorCopy = $jobProcess.StandardError.BaseStream.CopyToAsync([Console]::OpenStandardError())
+    }
+    while (-not $jobProcess.WaitForExit(1000)) { Write-JobStatus 'running' }
+    if ($jobOutputCopy) { $null = $jobOutputCopy.GetAwaiter().GetResult() }
+    if ($jobErrorCopy) { $null = $jobErrorCopy.GetAwaiter().GetResult() }
+    $jobExit = $jobProcess.ExitCode
+    $jobActivity = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    $jobResult = if ($jobExit -eq 0) { 'succeeded' } else { 'failed' }
+    Write-JobStatus $jobResult $jobExit $jobActivity
+} catch {
+    $jobExit = 127
+    $jobMessage = "运行监督器错误：$($_.Exception.GetType().Name)"
+    $jobActivity = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+    Write-JobStatus 'failed' $jobExit $jobActivity
+    Write-Error $_ -ErrorAction Continue
+} finally {
+    if ($jobStarted -and -not $jobProcess.HasExited) {
+        $jobProcess.Kill()
+        $jobProcess.WaitForExit()
+        $jobExit = 130
+        $jobActivity = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+        Write-JobStatus 'failed' $jobExit $jobActivity
+    }
+    if ($jobProcess) { $jobProcess.Dispose() }
+}
+exit $jobExit

@@ -357,6 +357,34 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
     Ok(())
 }
 
+// Preserve fields owned by a newer version, without resurrecting deleted
+// sources or merging user-edited project arrays by their array position.
+fn preserve_unknown(old: &toml::Value, updated: &mut toml::Value) {
+    if let (Some(old), Some(updated)) = (old.as_table(), updated.as_table_mut()) {
+        for (key, value) in old {
+            if let Some(current) = updated.get_mut(key) {
+                if key == "sources" {
+                    if let (Some(before), Some(after)) = (value.as_array(), current.as_array_mut())
+                    {
+                        for source in after {
+                            if let Some(previous) = before.iter().find(|previous| {
+                                source.get("id").and_then(toml::Value::as_str).is_some()
+                                    && source.get("id") == previous.get("id")
+                            }) {
+                                preserve_unknown(previous, source);
+                            }
+                        }
+                    }
+                } else {
+                    preserve_unknown(value, current);
+                }
+            } else {
+                updated.insert(key.clone(), value.clone());
+            }
+        }
+    }
+}
+
 pub fn write_settings(path: &Path, settings: &DashboardSettings) -> Result<(), String> {
     validate(settings)?;
     let old = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
@@ -368,10 +396,14 @@ pub fn write_settings(path: &Path, settings: &DashboardSettings) -> Result<(), S
             std::fs::copy(path, &backup).map_err(|e| e.to_string())?;
         }
     }
-    value.as_table_mut().ok_or("无效配置")?.insert(
-        "dashboard".into(),
-        toml::Value::try_from(settings).map_err(|e| e.to_string())?,
-    );
+    let mut dashboard = toml::Value::try_from(settings).map_err(|e| e.to_string())?;
+    if let Some(previous) = value.get("dashboard") {
+        preserve_unknown(previous, &mut dashboard);
+    }
+    value
+        .as_table_mut()
+        .ok_or("无效配置")?
+        .insert("dashboard".into(), dashboard);
     let text = toml::to_string_pretty(&value).map_err(|e| e.to_string())?;
     let mut file = tempfile::NamedTempFile::new_in(path.parent().ok_or("无效配置路径")?)
         .map_err(|e| e.to_string())?;
@@ -512,17 +544,25 @@ pub fn allows(task: &TaskSnapshot) -> bool {
 pub fn observe(tasks: &[TaskSnapshot]) {
     let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
     for task in tasks {
-        if task.status == crate::domain::TaskStatus::Unknown {
-            if let Some(previous) = state.catalog.get_mut(&task.id) {
-                previous.name = task.name.clone();
-                previous.project = task.project.clone();
-                previous.project_path = task.project_path.clone();
-                previous.internal = task.internal;
-                continue;
-            }
-        }
-        state.catalog.insert(task.id.clone(), task.clone());
+        let merged = catalog_observation(state.catalog.get(&task.id), task);
+        state.catalog.insert(task.id.clone(), merged);
     }
+}
+
+fn catalog_observation(previous: Option<&TaskSnapshot>, incoming: &TaskSnapshot) -> TaskSnapshot {
+    let mut merged = if incoming.status == crate::domain::TaskStatus::Unknown {
+        let mut task = previous.cloned().unwrap_or_else(|| incoming.clone());
+        task.name = incoming.name.clone();
+        task.project = incoming.project.clone();
+        task.project_path = incoming.project_path.clone();
+        task
+    } else {
+        incoming.clone()
+    };
+    // Native session origin belongs to stable identity. A missing source in
+    // a later partial snapshot must not reclassify a proven internal session.
+    merged.internal = incoming.internal || previous.is_some_and(|t| t.internal);
+    merged
 }
 
 pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
@@ -850,6 +890,36 @@ mod tests {
         task.internal = true;
         assert!(exclusion(&settings, &task).is_some());
     }
+
+    #[test]
+    fn native_internal_reclassification_preserves_lifecycle_and_partial_refresh_cannot_undo_it() {
+        let mut old = TaskSnapshot::new(
+            "codex:child",
+            "Guardian review",
+            TaskSource::Codex,
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+            std::time::SystemTime::now(),
+        );
+        old.unread = true;
+        old.pinned = true;
+        old.turn_key = Some("child-turn".into());
+        old.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        let mut metadata = old.clone();
+        metadata.status = TaskStatus::Unknown;
+        metadata.internal = true;
+        metadata.name = "Renamed internal service".into();
+        let classified = catalog_observation(Some(&old), &metadata);
+        assert!(classified.internal);
+        assert!(classified.unread && classified.pinned);
+        assert_eq!(classified.status, old.status);
+        assert_eq!(classified.turn_key, old.turn_key);
+        assert_eq!(classified.updated_at, old.updated_at);
+        metadata.internal = false; // source absent in a later partial snapshot
+        assert!(catalog_observation(Some(&classified), &metadata).internal);
+        metadata.status = TaskStatus::Running;
+        assert!(catalog_observation(Some(&classified), &metadata).internal);
+    }
     #[test]
     fn legacy_scopes_and_source_identity_are_preserved() {
         let mut cfg = TaskPulseConfig::default();
@@ -963,5 +1033,65 @@ mod tests {
         assert!(path.with_extension("toml.pre-dashboard.bak").exists());
         let value: toml::Value = toml::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         assert_eq!(value["custom"].as_str(), Some("keep"));
+    }
+
+    #[test]
+    fn nested_unknown_fields_follow_source_identity_not_position_or_deleted_sources() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        let mut old = toml::Value::try_from(&settings).unwrap();
+        old.as_table_mut()
+            .unwrap()
+            .insert("future".into(), toml::Value::String("root".into()));
+        old.as_table_mut().unwrap().insert(
+            "future_table".into(),
+            toml::toml! { nested = { enabled = true } }.into(),
+        );
+        let first_id = settings.sources[0].id.clone();
+        old["sources"][0].as_table_mut().unwrap().insert(
+            "future_source".into(),
+            toml::Value::String(first_id.clone()),
+        );
+        let removed_id = settings.sources[1].id.clone();
+        old["sources"][1].as_table_mut().unwrap().insert(
+            "future_source".into(),
+            toml::Value::String("do not resurrect".into()),
+        );
+        let outer = toml::toml! { custom = "keep" };
+        let mut original = toml::Value::Table(outer);
+        original
+            .as_table_mut()
+            .unwrap()
+            .insert("dashboard".into(), old);
+        std::fs::write(&path, toml::to_string(&original).unwrap()).unwrap();
+        settings.sources.remove(1);
+        settings.sources.reverse();
+        settings
+            .sources
+            .iter_mut()
+            .find(|s| s.id == first_id)
+            .unwrap()
+            .projects = vec!["changed".into()];
+        settings.notifications = false;
+        write_settings(&path, &settings).unwrap();
+        let saved: toml::Value = toml::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        assert_eq!(saved["custom"].as_str(), Some("keep"));
+        assert_eq!(saved["dashboard"]["future"].as_str(), Some("root"));
+        assert_eq!(
+            saved["dashboard"]["future_table"]["nested"]["enabled"].as_bool(),
+            Some(true)
+        );
+        assert_eq!(saved["dashboard"]["notifications"].as_bool(), Some(false));
+        let sources = saved["dashboard"]["sources"].as_array().unwrap();
+        assert!(!sources
+            .iter()
+            .any(|s| s["id"].as_str() == Some(&removed_id)));
+        let first = sources
+            .iter()
+            .find(|s| s["id"].as_str() == Some(&first_id))
+            .unwrap();
+        assert_eq!(first["future_source"].as_str(), Some(first_id.as_str()));
+        assert_eq!(first["projects"][0].as_str(), Some("changed"));
     }
 }

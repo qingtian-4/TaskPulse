@@ -1,5 +1,8 @@
 # Contributing to TaskPulse
 
+For Agent adapters, start with the [capability and fixture checklist](docs/PROVIDER_GUIDE.md).
+For Windows Alpha installers, follow the [draft-release and acceptance gates](docs/RELEASING.md).
+
 TaskPulse is an alpha, Windows-first Tauri 2 tray companion for coding-agent tasks.
 Read [AGENTS.md](AGENTS.md) for the current development contract. Preserve other
 platforms where practical, but do not claim untested paths are supported.

@@ -103,9 +103,26 @@ impl Notifier for DesktopNotifier {
             _ => None,
         };
         std::thread::spawn(move || {
-            if let Err(error) =
-                send_actionable_notification(&title, &body, &identifier, Some(app.clone()), task)
-            {
+            let result = send_actionable_notification(
+                &title,
+                &body,
+                &identifier,
+                Some(app.clone()),
+                task.clone(),
+            );
+            crate::notification_log::record(
+                task.as_ref(),
+                "system",
+                if result.is_ok() {
+                    "api_accepted"
+                } else {
+                    "failed"
+                },
+                &title,
+                None,
+                false,
+            );
+            if let Err(error) = result {
                 report_notification_error(&app, error);
             }
         });
@@ -408,9 +425,8 @@ fn platform_beep() -> Result<(), String> {
 
 /// Drive one-shot notifications from transition-engine events.
 pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapshot]) {
-    if !crate::monitoring::get_monitoring_settings().notifications {
-        return;
-    }
+    crate::task_notice::retain_in_scope(app);
+    crate::task_notice::reconcile(app, _tasks);
     for event in events {
         let task = match event {
             TaskEvent::WaitingInput { task, .. }
@@ -419,8 +435,34 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
             | TaskEvent::InferredFinished { task } => Some(task),
             _ => None,
         };
+        if task.is_some_and(|task| {
+            task.internal
+                || crate::monitoring::find_session(&task.id).is_some_and(|latest| latest.internal)
+        }) {
+            continue;
+        }
+        // Audit the event category, not arbitrary native titles/prompt fallbacks.
+        let title = match event {
+            TaskEvent::WaitingInput { task, .. }
+                if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) =>
+            {
+                "本轮结束"
+            }
+            TaskEvent::WaitingInput { .. } => "等待输入/授权",
+            TaskEvent::Succeeded { .. } => "任务已完成",
+            TaskEvent::Failed { .. } => "任务失败",
+            TaskEvent::InferredFinished { .. } => "非 Agent 命令推断结束",
+            TaskEvent::HostDisconnected { .. } => "服务器断连",
+            TaskEvent::HostReconnected { .. } => "服务器恢复",
+        };
+        crate::notification_log::record(task, "lifecycle", "detected", title, None, false);
+        if !crate::monitoring::get_monitoring_settings().notifications {
+            crate::notification_log::record(task, "all", "suppressed_disabled", title, None, false);
+            continue;
+        }
         if task.is_some_and(|t| !crate::monitoring::allows(t) || crate::watcher::is_ignored(&t.id))
         {
+            crate::notification_log::record(task, "all", "suppressed_scope", title, None, false);
             continue;
         }
         let notify_event = match event {
@@ -603,6 +645,7 @@ mod tests {
             panic!("expected long title reminder");
         }
         assert!(test_event("anything").is_err());
+        assert!(test_event("approval_check").is_err());
     }
 
     #[test]

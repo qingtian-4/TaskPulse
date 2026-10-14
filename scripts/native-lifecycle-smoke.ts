@@ -24,6 +24,8 @@ try {
   for(let n=0;n<60;n++){
     const tasks=await invoke('get_agents');
     const notice=await invoke('get_task_notice');
+    if(tasks.some((t:any)=>Object.hasOwn(t,'approval_hint')))throw Error('Removed approval hint leaked into actual task snapshots');
+    if(notice.current && !notice.current.test && notice.current.title.includes('授权状态待确认'))throw Error('A real task received a removed inferred approval reminder');
     if(notice.current && !notice.current.test && notice.current.context?.source!=='remote_tmux' && notice.current.body.includes('任务可能已结束'))throw Error('Native Agent received an inferred finish notice');
     for(const t of tasks.filter((t:any)=>t.status==='running' && t.session_id && !t.stale)){
       running++;

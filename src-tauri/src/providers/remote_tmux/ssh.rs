@@ -36,6 +36,11 @@ impl SshExecutor for SystemSshExecutor {
     fn run(&self, host: &str, command: &str, timeout: Duration) -> Result<String, String> {
         let connect_timeout = timeout.as_secs().clamp(1, 10).to_string();
         let mut cmd = Command::new("ssh");
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // Background polling must not open consoles.
+        }
         cmd.arg("-o").arg("BatchMode=yes");
         // Suppress non-fatal stderr noise (e.g. the post-quantum KEX WARNING)
         // that would otherwise make ssh exit with status 1 on success.

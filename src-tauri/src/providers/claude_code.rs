@@ -23,12 +23,23 @@ struct Transcript {
     native_title: Option<String>,
     first_prompt: Option<String>,
     active_tools: std::collections::BTreeMap<String, String>,
+    resolved_tools: HashSet<String>,
+    explicit_end: bool,
+}
+
+#[derive(Default)]
+struct HookLog {
+    tail: JsonlTail,
+    task: Option<TaskSnapshot>,
+    latest: Value,
+    sequence: u64,
 }
 
 pub struct ClaudeCodeProvider {
     root: PathBuf,
     events: PathBuf,
     transcripts: HashMap<PathBuf, Transcript>,
+    hook_logs: HashMap<PathBuf, HookLog>,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -40,10 +51,12 @@ impl ClaudeCodeProvider {
                 .unwrap_or_default()
                 .join(".taskpulse/claude-events"),
             transcripts: HashMap::new(),
+            hook_logs: HashMap::new(),
             last_tasks: vec![],
         }
     }
     fn sample(&mut self, now: SystemTime) -> std::io::Result<ProviderOutput> {
+        let hooks = self.read_hook_states(now)?;
         let mut live = HashMap::new();
         for path in json_files(&self.root.join("sessions"))? {
             let Ok(value) = read_json(&path) else {
@@ -113,6 +126,8 @@ impl ClaudeCodeProvider {
                         transcript.native_title = None;
                         transcript.first_prompt = None;
                         transcript.active_tools.clear();
+                        transcript.resolved_tools.clear();
+                        transcript.explicit_end = false;
                     }
                     for line in batch.body.lines() {
                         if let Ok(value) = serde_json::from_str::<Value>(line) {
@@ -148,7 +163,7 @@ impl ClaudeCodeProvider {
                 let at = millis(lease.get("updatedAt"));
                 if at.is_some_and(|at| at >= task.updated_at) {
                     match text(lease, "status") {
-                        Some("busy") => {
+                        Some("busy") if !transcript.explicit_end => {
                             if task.status != TaskStatus::Running {
                                 task.activity = None;
                                 task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
@@ -160,28 +175,75 @@ impl ClaudeCodeProvider {
                         Some("idle")
                             if task.turn_key.is_some() && task.status == TaskStatus::Running =>
                         {
-                            task.status = TaskStatus::WaitingInput;
-                            task.waiting_reason = Some(WaitingReason::TurnEnded);
-                            task.activity = None;
-                            task.phase = None;
-                            task.confidence = DetectionConfidence::Inferred;
+                            // A coarse session lease becoming idle is not a
+                            // turn-end event. Await native end_turn/Stop.
+                            task.stale = true;
                         }
                         _ => {}
                     }
                 }
             }
-            if let Ok(event) = read_json(&self.events.join(format!("{id}.json"))) {
-                if text(&event, "session_id") == Some(id.as_str())
-                    && event_belongs_to_root(&event, &self.root)
+            if let Some((hook, event)) = hooks.get(&id) {
+                if text(event, "session_id") == Some(id.as_str())
+                    && event_belongs_to_root(event, &self.root)
                 {
-                    reconcile_hook_turn(&mut task, &event);
-                    if millis(event.get("observed_at")).is_some_and(|at| at >= task.updated_at) {
-                        apply_hook(&mut task, &event);
-                        if text(&event, "hook_event_name") == Some("PostToolUse") {
-                            if let Some(id) = text(&event, "tool_use_id") {
+                    reconcile_hook_turn(&mut task, event);
+                    let mut hook = hook.clone();
+                    // Native thinking/busy heartbeats cannot answer an explicit
+                    // request. Only its matching tool result or a genuine end can.
+                    let pending_same_turn = hook.requires_action()
+                        && task.started_at.is_none_or(|start| {
+                            millis(event.get("observed_at")).is_some_and(|at| at >= start)
+                        });
+                    if pending_same_turn {
+                        if let Some(requests) =
+                            event.get("pending_requests").and_then(Value::as_array)
+                        {
+                            hook.input_request_ids = requests
+                                .iter()
+                                .filter(|r| {
+                                    !text(r, "call_id")
+                                        .is_some_and(|id| transcript.resolved_tools.contains(id))
+                                })
+                                .filter_map(|r| text(r, "id").map(str::to_owned))
+                                .collect();
+                            hook.input_request_id = hook.input_request_ids.first().cloned();
+                        }
+                    }
+                    let native_ended = transcript.explicit_end
+                        && hook.started_at.is_none_or(|start| task.updated_at >= start);
+                    let protect_pending =
+                        pending_same_turn && !native_ended && hook.input_request_id.is_some();
+                    let native_resolved =
+                        pending_same_turn && (native_ended || hook.input_request_id.is_none());
+                    if protect_pending
+                        || !native_resolved
+                            && millis(event.get("observed_at"))
+                                .is_some_and(|at| at >= task.updated_at)
+                    {
+                        task.status = hook.status;
+                        task.waiting_reason = hook.waiting_reason;
+                        task.input_request_id = hook.input_request_id.clone();
+                        task.input_request_ids = hook.input_request_ids.clone();
+                        task.activity = hook.activity.clone();
+                        task.phase = hook.phase;
+                        task.confidence = DetectionConfidence::Hook;
+                        task.updated_at = hook.updated_at;
+                        task.hook_event = hook.hook_event.clone();
+                        task.stale = false;
+                        if matches!(
+                            text(event, "hook_event_name"),
+                            Some("PostToolUse" | "PostToolUseFailure")
+                        ) {
+                            if let Some(id) = text(event, "tool_use_id") {
                                 transcript.active_tools.remove(id);
                             }
-                            if let Some(activity) = transcript.active_tools.values().next_back() {
+                            if let Some(activity) = transcript
+                                .active_tools
+                                .values()
+                                .next_back()
+                                .filter(|_| task.status == TaskStatus::Running)
+                            {
                                 task.activity = Some(activity.clone());
                                 task.phase = Some(crate::domain::ExecutionPhase::Tool);
                             }
@@ -209,30 +271,11 @@ impl ClaudeCodeProvider {
             tasks.push(task);
         }
         // Hooks can precede the first transcript write.
-        for path in json_files(&self.events)? {
-            let Ok(event) = read_json(&path) else {
-                continue;
-            };
-            if !event_belongs_to_root(&event, &self.root) {
+        for (id, (mut task, _)) in hooks {
+            if tasks.iter().any(|t| t.session_id.as_deref() == Some(&id)) {
                 continue;
             }
-            let Some(id) = text(&event, "session_id") else {
-                continue;
-            };
-            if tasks.iter().any(|t| t.session_id.as_deref() == Some(id)) {
-                continue;
-            }
-            let mut task = TaskSnapshot::new(
-                format!("claude:{id}"),
-                format!("未命名任务 · {}", id.chars().take(8).collect::<String>()),
-                TaskSource::ClaudeCode,
-                TaskStatus::Unknown,
-                DetectionConfidence::Hook,
-                now,
-            );
-            task.session_id = Some(id.into());
-            apply_hook(&mut task, &event);
-            if task.status == TaskStatus::Running && !live.contains_key(id) {
+            if task.status == TaskStatus::Running && !live.contains_key(&id) {
                 task.stale = now.duration_since(task.updated_at).unwrap_or_default()
                     > Duration::from_secs(30);
                 if task.stale
@@ -264,6 +307,78 @@ impl ClaudeCodeProvider {
             error: failed.then(|| "Claude 会话暂不可读；保留上次观测".into()),
             ..Default::default()
         })
+    }
+
+    fn read_hook_states(
+        &mut self,
+        now: SystemTime,
+    ) -> std::io::Result<HashMap<String, (TaskSnapshot, Value)>> {
+        let mut output = HashMap::new();
+        if !self.events.exists() {
+            return Ok(output);
+        }
+        for entry in std::fs::read_dir(&self.events)? {
+            let path = entry?.path();
+            let extension = path.extension().and_then(|s| s.to_str());
+            if extension != Some("jsonl") && extension != Some("json") {
+                continue;
+            }
+            if extension == Some("json") && path.with_extension("jsonl").exists() {
+                continue;
+            }
+            let id = path
+                .file_stem()
+                .unwrap_or_default()
+                .to_string_lossy()
+                .into_owned();
+            let cache = self.hook_logs.entry(path.clone()).or_default();
+            let records = if extension == Some("jsonl") {
+                let batch = cache.tail.read(&path)?;
+                if batch.reset {
+                    cache.task = None;
+                    cache.sequence = 0;
+                }
+                batch
+                    .body
+                    .lines()
+                    .map(serde_json::from_str::<Value>)
+                    .collect::<Result<Vec<_>, _>>()
+                    .map_err(std::io::Error::other)?
+            } else {
+                vec![read_json(&path)?]
+            };
+            for event in records {
+                if text(&event, "session_id") != Some(&id)
+                    || !event_belongs_to_root(&event, &self.root)
+                {
+                    continue;
+                }
+                if let Some(sequence) = event.get("sequence").and_then(Value::as_u64) {
+                    if sequence <= cache.sequence {
+                        continue;
+                    }
+                    cache.sequence = sequence;
+                }
+                let task = cache.task.get_or_insert_with(|| {
+                    let mut t = TaskSnapshot::new(
+                        format!("claude:{id}"),
+                        format!("未命名任务 · {}", id.chars().take(8).collect::<String>()),
+                        TaskSource::ClaudeCode,
+                        TaskStatus::Unknown,
+                        DetectionConfidence::Hook,
+                        now,
+                    );
+                    t.session_id = Some(id.clone());
+                    t
+                });
+                apply_hook(task, &event);
+                cache.latest = event;
+            }
+            if let Some(task) = cache.task.as_ref() {
+                output.insert(id, (task.clone(), cache.latest.clone()));
+            }
+        }
+        Ok(output)
     }
 }
 
@@ -364,6 +479,8 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                 task.stale = false;
                 task.activity = None;
                 state.active_tools.clear();
+                state.resolved_tools.clear();
+                state.explicit_end = false;
                 task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
             }
         }
@@ -375,6 +492,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                     if text(item, "type") == Some("tool_result") {
                         if let Some(id) = text(item, "tool_use_id") {
                             state.active_tools.remove(id);
+                            state.resolved_tools.insert(id.into());
                         }
                     }
                 }
@@ -394,6 +512,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
         Some("assistant") => {
             let api_error = value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true);
             if api_error {
+                state.explicit_end = true;
                 task.status = TaskStatus::Failed;
                 task.waiting_reason = None;
                 task.activity = None;
@@ -402,6 +521,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                 task.stale = false;
             } else if task.status == TaskStatus::Failed {
                 task.status = TaskStatus::Running;
+                state.explicit_end = false;
             }
             if let Some(model) = value
                 .pointer("/message/model")
@@ -455,6 +575,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                     == Some("end_turn")
             {
                 task.status = TaskStatus::WaitingInput;
+                state.explicit_end = true;
                 task.waiting_reason = Some(WaitingReason::TurnEnded);
                 task.activity = None;
                 state.active_tools.clear();
@@ -465,6 +586,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
             if text(value, "subtype") == Some("turn_duration")
                 && task.status != TaskStatus::Failed =>
         {
+            state.explicit_end = true;
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(WaitingReason::TurnEnded);
             task.activity = None;
@@ -501,10 +623,27 @@ fn reconcile_hook_turn(task: &mut TaskSnapshot, event: &Value) {
 
 fn apply_hook(task: &mut TaskSnapshot, event: &Value) {
     let name = text(event, "hook_event_name").unwrap_or("");
+    let permission = task.waiting_reason == Some(WaitingReason::Approval)
+        && task.status == TaskStatus::WaitingInput;
+    // A late return from an unrelated call is never evidence that the current
+    // approval gate was answered. Tool errors are not whole-turn failures.
+    if matches!(name, "PostToolUse" | "PostToolUseFailure")
+        && permission
+        && event.get("pending_request_ids").is_none()
+    {
+        let resolved = text(event, "resolved_request_id").or_else(|| text(event, "tool_use_id"));
+        if resolved.is_none() || resolved != task.input_request_id.as_deref() {
+            return;
+        }
+    }
+    if name == "PreToolUse" && permission && event.get("pending_request_ids").is_none() {
+        return;
+    }
     match name {
         "UserPromptSubmit" => {
             task.status = TaskStatus::Running;
             task.waiting_reason = None;
+            task.input_request_id = None;
             task.started_at = millis(event.get("observed_at"));
             task.activity = None;
             task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
@@ -512,36 +651,61 @@ fn apply_hook(task: &mut TaskSnapshot, event: &Value) {
         "PreToolUse" => {
             task.status = TaskStatus::Running;
             task.waiting_reason = None;
+            task.input_request_id = None;
             task.activity = text(event, "activity").map(str::to_owned);
             task.phase = Some(crate::domain::ExecutionPhase::Tool);
         }
-        "PostToolUse" => {
+        "PostToolUse" | "PostToolUseFailure" => {
             task.status = TaskStatus::Running;
             task.waiting_reason = None;
+            task.input_request_id = None;
             task.activity = None;
             task.phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
         }
         "PermissionRequest" => {
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(WaitingReason::Approval);
-            task.input_request_id = text(event, "tool_use_id").map(str::to_owned);
+            task.input_request_id = hook_request_id(event);
+            task.phase = None;
         }
         "Stop" => {
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(WaitingReason::TurnEnded);
+            task.input_request_id = None;
             task.activity = None;
             task.phase = None;
         }
         "StopFailure" => {
             task.status = TaskStatus::Failed;
+            task.waiting_reason = None;
+            task.input_request_id = None;
             task.activity = None;
             task.phase = None;
         }
         "Notification" if text(event, "notification_type") == Some("permission_prompt") => {
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(WaitingReason::Approval);
+            task.input_request_id = text(event, "request_id")
+                .map(str::to_owned)
+                .or_else(|| task.input_request_id.clone())
+                .or_else(|| hook_request_id(event));
+            task.phase = None;
         }
         _ => return,
+    }
+    if let Some(ids) = event.get("pending_request_ids").and_then(Value::as_array) {
+        task.input_request_ids = ids
+            .iter()
+            .filter_map(|v| v.as_str().map(str::to_owned))
+            .collect();
+        task.input_request_id = task.input_request_ids.first().cloned();
+        if task.input_request_id.is_some() {
+            task.status = TaskStatus::WaitingInput;
+            task.waiting_reason = Some(WaitingReason::Approval);
+            task.phase = None;
+        }
+    } else {
+        task.input_request_ids = task.input_request_id.iter().cloned().collect();
     }
     if name == "UserPromptSubmit" || task.turn_key.is_none() {
         if let Some(turn) = text(event, "turn_key") {
@@ -557,6 +721,20 @@ fn apply_hook(task: &mut TaskSnapshot, event: &Value) {
     task.confidence = DetectionConfidence::Hook;
     task.stale = false;
     task.hook_event = Some(name.into());
+}
+
+fn hook_request_id(event: &Value) -> Option<String> {
+    text(event, "request_id")
+        .or_else(|| text(event, "tool_use_id"))
+        .map(str::to_owned)
+        .or_else(|| {
+            event.get("observed_at").and_then(Value::as_u64).map(|at| {
+                format!(
+                    "legacy:{}:{at}",
+                    text(event, "session_id").unwrap_or("unknown")
+                )
+            })
+        })
 }
 
 fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
@@ -709,6 +887,121 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn native_thinking_does_not_clear_a_hook_permission_but_matching_result_does() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("claude");
+        let events = dir.path().join("events");
+        let log_dir = root.join("projects/p");
+        std::fs::create_dir_all(&log_dir).unwrap();
+        let at = 1_780_000_000_000u64;
+        let input = |name: &str, call: Option<&str>| {
+            serde_json::json!({"session_id":"s","cwd":"/project",
+            "hook_event_name":name,"tool_name":"Bash","tool_use_id":call,"tool_input":{"command":"tool-a"}})
+        };
+        crate::claude_events::record(&events, &input("UserPromptSubmit", None), at, &root).unwrap();
+        crate::claude_events::record(&events, &input("PreToolUse", Some("a")), at + 1, &root)
+            .unwrap();
+        crate::claude_events::record(&events, &input("PermissionRequest", None), at + 2, &root)
+            .unwrap();
+        let log = log_dir.join("s.jsonl");
+        let prompt = serde_json::json!({"type":"user","timestamp":"2026-05-28T20:26:40Z","uuid":"turn","message":{"content":"run"}});
+        let thinking = serde_json::json!({"type":"assistant","timestamp":"2026-05-28T20:27:10Z","message":{"content":[{"type":"thinking"}]}});
+        let mut body = format!("{prompt}\n{thinking}\n");
+        std::fs::write(&log, &body).unwrap();
+        let mut provider = ClaudeCodeProvider::new(root);
+        provider.events = events;
+        let now = UNIX_EPOCH + Duration::from_millis(at + 60_000);
+        let tasks = provider.poll(now).tasks;
+        assert_eq!(tasks[0].waiting_reason, Some(WaitingReason::Approval));
+        assert!(tasks[0].input_request_id.is_some());
+        body.push_str(
+            &serde_json::json!({"type":"user","timestamp":"2026-05-28T20:27:20Z",
+            "message":{"content":[{"type":"tool_result","tool_use_id":"a"}]}})
+            .to_string(),
+        );
+        body.push('\n');
+        std::fs::write(log, body).unwrap();
+        let tasks = provider.poll(now).tasks;
+        assert_ne!(tasks[0].waiting_reason, Some(WaitingReason::Approval));
+        assert!(tasks[0].input_request_id.is_none());
+    }
+    #[test]
+    fn journal_replay_preserves_two_approvals_and_dedup_across_provider_and_engine_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("claude");
+        let events = dir.path().join("events");
+        let engine_path = dir.path().join("notifications.json");
+        let now = SystemTime::now();
+        let at = now.duration_since(UNIX_EPOCH).unwrap().as_millis() as u64;
+        let write = |name: &str, call: Option<&str>, offset: u64| {
+            crate::claude_events::record(&events, &serde_json::json!({"session_id":"s","hook_event_name":name,
+                "tool_use_id":call,"cwd":"/project","tool_name":"Bash","notification_type":"permission_prompt"}), at + offset, &root).unwrap()
+        };
+        let mut provider = ClaudeCodeProvider::new(root.clone());
+        provider.events = events.clone();
+        let mut engine = crate::transition::TransitionEngine::open(engine_path.clone());
+        write("UserPromptSubmit", None, 0);
+        assert!(engine.apply(&provider.poll(now).tasks, &[], now).is_empty());
+        write("PreToolUse", Some("a"), 1);
+        let a = write("PermissionRequest", None, 2);
+        let first = provider.poll(now).tasks;
+        assert_eq!(
+            first[0].input_request_id.as_deref(),
+            a["request_id"].as_str()
+        );
+        assert_eq!(engine.apply(&first, &[], now).len(), 1);
+        write("Notification", None, 3);
+        assert!(engine.apply(&provider.poll(now).tasks, &[], now).is_empty());
+        write("PostToolUse", Some("a"), 4);
+        write("PreToolUse", Some("b"), 5);
+        let b = write("PermissionRequest", None, 6);
+        let second = provider.poll(now).tasks;
+        assert_ne!(first[0].input_request_id, second[0].input_request_id);
+        assert_eq!(engine.apply(&second, &[], now).len(), 1);
+        write("PostToolUse", Some("a"), 7); // Late old result must not unblock b.
+        let still = provider.poll(now).tasks;
+        assert_eq!(still[0].status, TaskStatus::WaitingInput);
+        assert_eq!(
+            still[0].input_request_id.as_deref(),
+            b["request_id"].as_str()
+        );
+        assert!(engine.apply(&still, &[], now).is_empty());
+        let mut restart = ClaudeCodeProvider::new(root.clone());
+        restart.events = events.clone();
+        let mut restored = crate::transition::TransitionEngine::open(engine_path);
+        assert!(restored
+            .apply(&restart.poll(now).tasks, &[], now)
+            .is_empty());
+        write("PostToolUseFailure", Some("b"), 8);
+        let returned = restart.poll(now).tasks;
+        assert_eq!(returned[0].status, TaskStatus::Running);
+        assert!(returned[0].input_request_id.is_none());
+        assert!(restored.apply(&returned, &[], now).is_empty());
+        write("Stop", None, 9);
+        let ended = restart.poll(now).tasks;
+        assert_eq!(ended[0].waiting_reason, Some(WaitingReason::TurnEnded));
+        assert_eq!(restored.apply(&ended, &[], now).len(), 1);
+        assert!(restored.apply(&ended, &[], now).is_empty());
+    }
+
+    #[test]
+    fn requestless_legacy_permissions_have_a_stable_record_identity_not_poll_time() {
+        let event = serde_json::json!({"session_id":"s","hook_event_name":"PermissionRequest","observed_at":123});
+        let mut task = TaskSnapshot::new(
+            "claude:s",
+            "s",
+            TaskSource::ClaudeCode,
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        apply_hook(&mut task, &event);
+        let id = task.input_request_id.clone();
+        apply_hook(&mut task, &event);
+        assert_eq!(task.input_request_id, id);
+        assert_eq!(id.as_deref(), Some("legacy:s:123"));
+    }
     #[test]
     fn tool_result_is_not_a_new_turn_and_retry_clears_previous_failure() {
         use crate::domain::ExecutionPhase;

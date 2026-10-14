@@ -48,6 +48,70 @@ struct RemoteSnapshot {
     procs: HashMap<u32, ProcInfo>,
     runs: Vec<runfile::RunFile>,
     codex_section: String,
+    tmux_ok: bool,
+    ps_ok: bool,
+    runs_ok: bool,
+    codex_ok: bool,
+    errors: Vec<String>,
+}
+
+impl RemoteSnapshot {
+    fn decode(output: &str) -> Self {
+        let value = serde_json::from_str::<serde_json::Value>(output).unwrap_or_default();
+        let mut errors = Vec::new();
+        let mut read = |name: &str| {
+            let segment = &value["segments"][name];
+            let ok = value["schema_version"] == 2
+                && segment["ok"] == true
+                && segment["observed_at"].as_u64().is_some()
+                && segment["data"].is_string();
+            if !ok {
+                errors.push(format!(
+                    "{name}: {}",
+                    segment["error"]
+                        .as_str()
+                        .unwrap_or("missing/invalid segment")
+                ));
+            }
+            (ok, segment["data"].as_str().unwrap_or("").to_string())
+        };
+        let (mut tmux_ok, panes) = read("tmux");
+        let (mut ps_ok, procs) = read("ps");
+        let (mut runs_ok, runs) = read("runs");
+        let (codex_ok, codex_section) = read("codex");
+        let pane_rows = parser::parse_panes(&panes);
+        let proc_rows = parser::parse_procs(&procs);
+        if tmux_ok
+            && pane_rows.len() != panes.lines().filter(|line| !line.trim().is_empty()).count()
+        {
+            tmux_ok = false;
+            errors.push("tmux: invalid pane format".into());
+        }
+        if ps_ok && proc_rows.len() != procs.lines().filter(|line| !line.trim().is_empty()).count()
+        {
+            ps_ok = false;
+            errors.push("ps: invalid process format".into());
+        }
+        let run_rows = match runfile::parse_run_files_checked(&runs) {
+            Ok(rows) => rows,
+            Err(error) => {
+                runs_ok = false;
+                errors.push(format!("runs: {error}"));
+                Vec::new()
+            }
+        };
+        Self {
+            panes: pane_rows,
+            procs: proc_rows,
+            runs: run_rows,
+            codex_section,
+            tmux_ok,
+            ps_ok,
+            runs_ok,
+            codex_ok,
+            errors,
+        }
+    }
 }
 
 pub struct RemoteTmuxProvider {
@@ -112,30 +176,13 @@ impl RemoteTmuxProvider {
         self.config.enabled_hosts()
     }
 
-    /// Base64 avoids nested shell quoting on Windows OpenSSH. The script is
-    /// schema-adaptive and read-only, including on older IDE installations.
-    fn codex_meta_cmd() -> String {
-        use base64::Engine;
-        let script =
-            base64::engine::general_purpose::STANDARD.encode(include_str!("codex_metadata.py"));
-        format!("echo {script} | base64 -d | python3")
-    }
-
-    /// The single remote command that returns panes + process table + recent
-    /// tp-run run files (one SSH roundtrip per host per poll).
-    /// Trailing `; true` guarantees exit 0 even when `find` finds no run dir
-    /// (a non-zero exit would otherwise look like an SSH failure).
+    /// One read-only snapshot, independently reporting every segment's health.
     pub fn snapshot_command() -> String {
-        // REAL tab characters (not "\\t") — tmux -F does not interpret
-        // backslash escapes, so the remote output must contain actual tabs.
-        let fmt = "#{session_name}\t#{window_index}\t#{pane_index}\t#{pane_id}\t#{pane_pid}\t#{pane_tty}\t#{pane_current_path}\t#{pane_current_command}\t#{pane_title}\t#{window_name}";
-        format!(
-            "tmux list-panes -a -F \"{fmt}\" 2>&1; echo '{}'; ps -eo pid=,ppid=,comm=,args= --no-headers 2>&1; echo '{}'; find \"$HOME/.local/state/taskpulse/runs\" -maxdepth 1 -name '*.json' -mmin -180 -exec cat {{}} \\\\; 2>/dev/null; echo '{}'; find \"$HOME/.codex/sessions\" -name 'rollout-*.jsonl' -mmin -1440 -printf '%T@ %p\n' 2>/dev/null | sort -rn | cut -d' ' -f2- | while IFS= read -r f; do echo \"===S:$(basename \"$(dirname \"$(dirname \"$f\")\")\")===F:$(basename \"$f\")===\"; head -n 1 \"$f\"; tail -c 65536 \"$f\"; printf '\n'; done; {}; true",
-            parser::PS_MARKER,
-            runfile::RUNS_MARKER,
-            runfile::CODEX_MARKER,
-            Self::codex_meta_cmd()
-        )
+        use base64::Engine;
+        let script = base64::engine::general_purpose::STANDARD.encode(include_str!("snapshot.py"));
+        let metadata =
+            base64::engine::general_purpose::STANDARD.encode(include_str!("codex_metadata.py"));
+        format!("echo {script} | base64 -d | python3 - {metadata}")
     }
 
     /// Convert a successful remote snapshot into tasks + host health,
@@ -191,6 +238,7 @@ impl RemoteTmuxProvider {
                 detector::PaneClass::Running => {
                     seen_panes.insert(pane.pane_id.clone());
                     state.running_panes.insert(pane.pane_id.clone());
+                    state.pane_roots.insert(pane.pane_id.clone(), pane.pane_pid);
                     let pane_key = (host_id.to_string(), pane.pane_id.clone());
                     let detected_at = *self.detected.entry(pane_key).or_insert(now);
                     let workload = detector::workload_process(pane, procs);
@@ -229,7 +277,9 @@ impl RemoteTmuxProvider {
                     seen_panes.insert(pane.pane_id.clone());
                     // Was this pane running before?  Then the workload just
                     // finished (inferred — no exit code available).
-                    if state.running_panes.remove(&pane.pane_id) {
+                    if state.running_panes.remove(&pane.pane_id)
+                        && state.pane_roots.remove(&pane.pane_id) == Some(pane.pane_pid)
+                    {
                         let label = detector::workload_label(pane, procs);
                         let project = std::path::Path::new(&pane.pane_current_path)
                             .file_name()
@@ -260,6 +310,8 @@ impl RemoteTmuxProvider {
                         task.tmux_pane = Some(pane.pane_id.clone());
                         task.tmux_target = Some(pane.target());
                         tasks.push(task);
+                        self.detected
+                            .remove(&(host_id.to_string(), pane.pane_id.clone()));
                         log::info!(
                             "Remote pane {} on {} finished (inferred, no exit code)",
                             pane.pane_id,
@@ -271,8 +323,7 @@ impl RemoteTmuxProvider {
             }
         }
 
-        // Panes we saw running that are no longer in the snapshot at all
-        // (window/session destroyed) — inferred finish.
+        // Pane disappearance is loss of observation, NEVER a shell return.
         let gone: Vec<String> = state
             .running_panes
             .iter()
@@ -280,37 +331,20 @@ impl RemoteTmuxProvider {
             .cloned()
             .collect();
         for pane_id in gone {
-            state.running_panes.remove(&pane_id);
-            let detected_at = self
-                .detected
-                .get(&(host_id.to_string(), pane_id.clone()))
-                .copied();
-            let mut task = TaskSnapshot::new(
-                format!("ssh:{ssh_host}:{pane_id}"),
-                "tmux pane destroyed",
-                TaskSource::RemoteTmux,
-                TaskStatus::Idle,
-                DetectionConfidence::Inferred,
-                now,
-            )
-            .with_remote()
-            .with_host(ssh_host)
-            .with_started_at(detected_at.unwrap_or(now))
-            .with_finished_at(now)
-            .with_message("pane gone — finished (inferred)");
-            task.recent = true;
-            if let Some(previous) = state.last_tasks.iter().find(|t| t.id == task.id) {
-                task.name = previous.name.clone();
-                task.project = previous.project.clone();
-                task.project_path = previous.project_path.clone();
-                task.tmux_session = previous.tmux_session.clone();
-                task.tmux_pane = previous.tmux_pane.clone();
-                task.tmux_target = previous.tmux_target.clone();
+            state.running_panes.remove(&pane_id); // Break the inference chain across gaps.
+            state.pane_roots.remove(&pane_id);
+            if let Some(previous) = state
+                .last_tasks
+                .iter()
+                .find(|t| t.id == format!("ssh:{ssh_host}:{pane_id}"))
+            {
+                let mut task = previous.clone();
+                task.stale = true;
+                task.status = TaskStatus::Unknown;
+                task.finished_at = None;
+                task.exit_code = None;
+                tasks.push(task);
             }
-            tasks.push(task);
-            log::info!(
-                "Remote pane {pane_id} on {ssh_host} destroyed while running → inferred finish"
-            );
         }
 
         // Prune detected-at cache for panes that are gone.
@@ -320,9 +354,42 @@ impl RemoteTmuxProvider {
                 || state.running_panes.contains(pane_id)
         });
 
-        // EXACT mode: tp-run run files override inference for the same pane
-        // (store merges by id, EXACT > HOOK > INFERRED).
+        // Suppress inference only for a verified child of this exact wrapper,
+        // never for a different run merely sharing a pane.
         let exact = runfile::tasks_from_run_files(ssh_host, runs, procs, &panes, now);
+        for run in exact
+            .iter()
+            .filter(|run| run.status == TaskStatus::Running && !run.stale)
+        {
+            let (Some(pane), Some(wrapper)) = (run.tmux_pane.as_deref(), run.pid) else {
+                continue;
+            };
+            tasks.retain(|task| {
+                if task.confidence != DetectionConfidence::Inferred
+                    || task.tmux_pane.as_deref() != Some(pane)
+                {
+                    return true;
+                }
+                let mut pid = task.pid.unwrap_or(0);
+                for _ in 0..32 {
+                    if pid == wrapper {
+                        state.running_panes.remove(pane);
+                        state.pane_roots.remove(pane);
+                        self.detected
+                            .remove(&(host_id.to_string(), pane.to_string()));
+                        return false;
+                    }
+                    let Some(process) = procs.get(&pid) else {
+                        break;
+                    };
+                    if process.ppid == pid {
+                        break;
+                    }
+                    pid = process.ppid;
+                }
+                true
+            });
+        }
         if !exact.is_empty() {
             log::debug!("{}: {} exact tp-run task(s)", ssh_host, exact.len());
         }
@@ -359,6 +426,89 @@ impl RemoteTmuxProvider {
         }
     }
 
+    fn process_segments(
+        &mut self,
+        ssh_host: &str,
+        host_id: &str,
+        snapshot: RemoteSnapshot,
+        now: SystemTime,
+    ) -> ProviderOutput {
+        let previous = self
+            .hosts
+            .get(host_id)
+            .map(|state| state.last_tasks.clone())
+            .unwrap_or_default();
+        let running = self
+            .hosts
+            .get(host_id)
+            .map(|state| state.running_panes.clone())
+            .unwrap_or_default();
+        let inference_ok = snapshot.tmux_ok && snapshot.ps_ok;
+        let roots = self
+            .hosts
+            .get(host_id)
+            .map(|state| state.pane_roots.clone())
+            .unwrap_or_default();
+        let detected = self.detected.clone();
+        let mut output = self.process_snapshot(
+            ssh_host,
+            host_id,
+            if inference_ok { &snapshot.panes } else { &[] },
+            &snapshot.procs,
+            if snapshot.runs_ok {
+                &snapshot.runs
+            } else {
+                &[]
+            },
+            if snapshot.codex_ok {
+                &snapshot.codex_section
+            } else {
+                ""
+            },
+            now,
+        );
+        if !inference_ok {
+            self.hosts.get_mut(host_id).unwrap().running_panes = running;
+            self.hosts.get_mut(host_id).unwrap().pane_roots = roots;
+            self.detected = detected;
+        }
+        // A partial segment can update successful peers, but never authoritatively
+        // delete its old tasks. Preserve their original execution timestamps.
+        for mut task in previous {
+            let failed = if task.source == TaskSource::Codex {
+                !snapshot.codex_ok
+            } else if task.confidence == DetectionConfidence::Exact {
+                !snapshot.runs_ok || !snapshot.ps_ok && task.status == TaskStatus::Running
+            } else {
+                !inference_ok
+            };
+            if failed {
+                output.tasks.retain(|current| current.id != task.id);
+                task.stale = true;
+                output.tasks.push(task);
+            }
+        }
+        let tmux_ok = inference_ok && snapshot.runs_ok;
+        output.authoritative = tmux_ok && snapshot.codex_ok;
+        output.error = (!snapshot.errors.is_empty()).then(|| snapshot.errors.join("; "));
+        output.remote_health = vec![
+            crate::providers::RemoteSourceHealth {
+                host: ssh_host.into(),
+                source: TaskSource::RemoteTmux,
+                authoritative: tmux_ok,
+                error: (!tmux_ok).then(|| snapshot.errors.join("; ")),
+            },
+            crate::providers::RemoteSourceHealth {
+                host: ssh_host.into(),
+                source: TaskSource::Codex,
+                authoritative: snapshot.codex_ok,
+                error: (!snapshot.codex_ok).then(|| snapshot.errors.join("; ")),
+            },
+        ];
+        self.hosts.get_mut(host_id).unwrap().last_tasks = output.tasks.clone();
+        output
+    }
+
     /// Merge a failed poll result into host state.  Never emits finishes.
     fn handle_failure(
         &mut self,
@@ -386,11 +536,21 @@ impl RemoteTmuxProvider {
             .map(|t| {
                 let mut t = t.clone();
                 t.stale = true;
-                t.updated_at = now;
                 t
             })
             .collect();
         output.tasks.extend(tasks);
+        output.authoritative = false;
+        for source in [TaskSource::RemoteTmux, TaskSource::Codex] {
+            output
+                .remote_health
+                .push(crate::providers::RemoteSourceHealth {
+                    host: ssh_host.into(),
+                    source,
+                    authoritative: false,
+                    error: Some("SSH 采集失败；保留上次观察".into()),
+                });
+        }
         if state.is_connected() {
             output.hosts.push(HostHealth::connected(
                 ssh_host.to_string(),
@@ -417,7 +577,8 @@ impl Provider for RemoteTmuxProvider {
         }
 
         // Parallel per-host polling: one thread per host, each doing exactly
-        // ONE ssh roundtrip.  A stuck host cannot delay the others.
+        // ONE ssh roundtrip. Work overlaps, but this batch is bounded by the
+        // slowest host's SSH timeout; per-host streaming remains a future step.
         let executor = self.executor.clone();
         let results: Vec<HostPollResult> = std::thread::scope(|scope| {
             let handles: Vec<_> = hosts
@@ -429,20 +590,11 @@ impl Provider for RemoteTmuxProvider {
                     scope.spawn(move || {
                         let command = RemoteTmuxProvider::snapshot_command();
                         match executor.run(&ssh_host, &command, SSH_TIMEOUT) {
-                            Ok(output) => {
-                                let (panes_section, procs_section, runs_section, codex_section) =
-                                    runfile::split_snapshot_sections(&output);
-                                HostPollResult {
-                                    host_id: id,
-                                    ssh_host,
-                                    outcome: Ok(RemoteSnapshot {
-                                        panes: parser::parse_panes(&panes_section),
-                                        procs: parser::parse_procs(&procs_section),
-                                        runs: runfile::parse_run_files(&runs_section),
-                                        codex_section,
-                                    }),
-                                }
-                            }
+                            Ok(output) => HostPollResult {
+                                host_id: id,
+                                ssh_host,
+                                outcome: Ok(RemoteSnapshot::decode(&output)),
+                            },
                             Err(e) => HostPollResult {
                                 host_id: id,
                                 ssh_host,
@@ -477,15 +629,9 @@ impl Provider for RemoteTmuxProvider {
                     if just_recovered {
                         log::info!("Remote host {id} ({}) recovered", r.ssh_host);
                     }
-                    let host_out = self.process_snapshot(
-                        &r.ssh_host,
-                        &id,
-                        &snapshot.panes,
-                        &snapshot.procs,
-                        &snapshot.runs,
-                        &snapshot.codex_section,
-                        now,
-                    );
+                    let host_out = self.process_segments(&r.ssh_host, &id, snapshot, now);
+                    output.authoritative &= host_out.authoritative;
+                    output.remote_health.extend(host_out.remote_health);
                     output.tasks.extend(host_out.tasks);
                     output.catalog.extend(host_out.catalog);
                     output.hosts.extend(host_out.hosts);
@@ -534,6 +680,57 @@ mod tests {
     use ssh::FakeSshExecutor;
     use std::time::Instant;
 
+    #[test]
+    fn segment_errors_never_become_shell_return_and_healthy_codex_still_updates() {
+        let mut partial: serde_json::Value = serde_json::from_str(&idle_snapshot()).unwrap();
+        partial["segments"]["ps"]["ok"] = false.into();
+        partial["segments"]["ps"]["error"] = "PermissionError".into();
+        partial["segments"]["codex"]["data"] = format!("===S:project===F:rollout-2026-10-13T00-00-00-aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee.jsonl===\n{}\n{}\n",
+            serde_json::json!({"type":"session_meta","payload":{"id":"aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee","cwd":"/project"}}),
+            serde_json::json!({"payload":{"type":"task_started","turn_id":"t"}})).into();
+        let fake = FakeSshExecutor::new()
+            .with("Server3", &running_snapshot())
+            .with("Server3", &partial.to_string())
+            .arc();
+        let mut provider = provider_with(fake);
+        let now = SystemTime::now();
+        let first = provider.poll(now);
+        let second = provider.poll(now + Duration::from_secs(2));
+        let pane = second
+            .tasks
+            .iter()
+            .find(|task| task.id == first.tasks[0].id)
+            .unwrap();
+        assert_eq!(pane.status, TaskStatus::Running);
+        assert!(pane.stale && pane.finished_at.is_none());
+        assert_eq!(pane.updated_at, first.tasks[0].updated_at);
+        assert!(second
+            .tasks
+            .iter()
+            .any(|task| task.source == TaskSource::Codex && !task.stale));
+        assert!(second
+            .remote_health
+            .iter()
+            .any(|health| health.source == TaskSource::Codex && health.authoritative));
+        assert!(second
+            .remote_health
+            .iter()
+            .any(|health| health.source == TaskSource::RemoteTmux && !health.authoritative));
+        assert!(second.hosts[0].is_connected());
+    }
+
+    #[test]
+    fn malformed_wire_or_run_json_is_not_an_authoritative_empty_snapshot() {
+        for body in [
+            "not JSON".to_string(),
+            snapshot_body_with_runs(&[], &[], "{broken"),
+        ] {
+            let snapshot = RemoteSnapshot::decode(&body);
+            assert!(!snapshot.runs_ok);
+            assert!(!snapshot.errors.is_empty());
+        }
+    }
+
     fn pane_line(session: &str, pane_id: &str, pid: u32, cmd: &str, path: &str) -> String {
         format!("{session}\t0\t0\t{pane_id}\t{pid}\tpts/0\t{path}\t{cmd}\t\ttitle")
     }
@@ -547,22 +744,22 @@ mod tests {
     }
 
     fn snapshot_body_with_runs(panes: &[String], procs: &[String], runs: &str) -> String {
-        let mut s = panes.join("\n");
-        s.push('\n');
-        s.push_str(parser::PS_MARKER);
-        s.push('\n');
-        s.push_str(&procs.join("\n"));
-        s.push('\n');
-        s.push_str(runfile::RUNS_MARKER);
-        s.push('\n');
-        s.push_str(runs);
-        s
+        serde_json::json!({"schema_version":2,"segments":{
+            "tmux":{"ok":true,"observed_at":1,"data":panes.join("\n")},
+            "ps":{"ok":true,"observed_at":1,"data":procs.join("\n")},
+            "runs":{"ok":true,"observed_at":1,"data":runs},
+            "codex":{"ok":true,"observed_at":1,"data":""}
+        }})
+        .to_string()
     }
 
     fn running_snapshot() -> String {
         snapshot_body(
-            &[pane_line("demo", "%3", 500, "python", "/home/user/proj")],
-            &[ps_line(500, 400, "python", "python eval.py")],
+            &[pane_line("demo", "%3", 400, "python", "/home/user/proj")],
+            &[
+                ps_line(400, 300, "bash", "bash"),
+                ps_line(500, 400, "python", "python eval.py"),
+            ],
         )
     }
 
@@ -734,7 +931,7 @@ mod tests {
     }
 
     #[test]
-    fn pane_destroyed_while_running_is_inferred_finish() {
+    fn pane_disappearance_is_unknown_and_never_a_finished_result() {
         let fake = FakeSshExecutor::new()
             .with("Server3", &running_snapshot())
             .with("Server3", &empty_snapshot())
@@ -744,8 +941,9 @@ mod tests {
         provider.poll(now);
         let out = provider.poll(now + Duration::from_secs(5));
         assert_eq!(out.tasks.len(), 1);
-        assert_eq!(out.tasks[0].status, TaskStatus::Idle);
-        assert!(out.tasks[0].finished_at.is_some());
+        assert_eq!(out.tasks[0].status, TaskStatus::Unknown);
+        assert!(out.tasks[0].stale);
+        assert!(out.tasks[0].finished_at.is_none());
     }
 
     #[test]
@@ -966,7 +1164,9 @@ mod tests {
         let task = out2
             .tasks
             .iter()
-            .find(|t| t.id == "ssh:Server3:%3" && t.confidence == DetectionConfidence::Exact)
+            .find(|t| {
+                t.id.starts_with("ssh:Server3:run:") && t.confidence == DetectionConfidence::Exact
+            })
             .unwrap();
         assert_eq!(task.status, TaskStatus::Succeeded);
         assert_eq!(task.exit_code, Some(0));
@@ -988,7 +1188,9 @@ mod tests {
         let task = out
             .tasks
             .iter()
-            .find(|t| t.id == "ssh:Server3:%3" && t.confidence == DetectionConfidence::Exact)
+            .find(|t| {
+                t.id.starts_with("ssh:Server3:run:") && t.confidence == DetectionConfidence::Exact
+            })
             .unwrap();
         assert_eq!(task.status, TaskStatus::Failed);
         assert_eq!(task.exit_code, Some(2));
@@ -1014,7 +1216,9 @@ mod tests {
         let task = out
             .tasks
             .iter()
-            .find(|t| t.id == "ssh:Server3:%3" && t.confidence == DetectionConfidence::Exact)
+            .find(|t| {
+                t.id.starts_with("ssh:Server3:run:") && t.confidence == DetectionConfidence::Exact
+            })
             .unwrap();
         assert_eq!(task.status, TaskStatus::Running);
     }
@@ -1033,8 +1237,10 @@ mod tests {
         let fake = FakeSshExecutor::new().with("Server3", &body).arc();
         let mut provider = provider_with(fake);
         let out = provider.poll(now);
-        // No task: neither exact (dead) nor inferred (idle shell, never ran).
-        assert!(out.tasks.is_empty());
+        // Retain the reported run, but never call it freshly running/finished.
+        assert_eq!(out.tasks.len(), 1);
+        assert!(out.tasks[0].stale);
+        assert!(out.tasks[0].finished_at.is_none());
     }
 
     // ---- live smoke test against the user's real servers ----
@@ -1051,18 +1257,56 @@ mod tests {
             out.hosts,
             out.catalog.len()
         );
+        println!("source health: {:?}", out.remote_health);
+        if let Ok(project) = std::env::var("TASKPULSE_EXPECT_REMOTE_CATALOG_PROJECT") {
+            assert!(
+                out.catalog
+                    .iter()
+                    .any(|task| task.project.as_deref() == Some(project.as_str())),
+                "expected project absent from native catalog: {project}"
+            );
+        }
         for t in &out.tasks {
             println!(
-                "  task: id={} name={:?} status={:?} conf={:?} host={:?}",
-                t.id, t.name, t.status, t.confidence, t.host
+                "  task: id={} name={:?} status={:?} conf={:?} host={:?} internal={}",
+                t.id, t.name, t.status, t.confidence, t.host, t.internal
             );
         }
         // Whatever the servers report, the snapshot must parse without panics
         // and every task must carry a stable id.
         for t in &out.tasks {
             assert!(!t.id.is_empty());
+            if t.internal {
+                assert!(
+                    !crate::monitoring::allows(t),
+                    "internal session entered monitoring scope"
+                );
+            }
+        }
+        if let Ok(id) = std::env::var("TASKPULSE_EXPECT_INTERNAL_THREAD_ID") {
+            let origin = out
+                .catalog
+                .iter()
+                .find(|t| t.session_id.as_deref() == Some(id.as_str()))
+                .expect("expected internal thread missing from native catalog");
+            assert!(
+                origin.internal,
+                "native origin classification was lost in catalog"
+            );
+            if let Some(task) = out.tasks.iter().find(|t| t.id == origin.id) {
+                assert!(
+                    task.internal,
+                    "native origin classification was lost in execution task"
+                );
+            }
         }
         if let Ok(project) = std::env::var("TASKPULSE_EXPECT_REMOTE_PROJECT") {
+            assert!(
+                out.remote_health
+                    .iter()
+                    .any(|h| h.source == TaskSource::Codex && h.authoritative),
+                "no healthy Codex segment"
+            );
             assert!(
                 out.tasks
                     .iter()

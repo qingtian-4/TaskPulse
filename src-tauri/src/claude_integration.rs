@@ -4,10 +4,11 @@ use serde_json::{json, Value};
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::{SystemTime, UNIX_EPOCH};
-const EVENTS: &[&str] = &[
+pub(crate) const EVENTS: &[&str] = &[
     "UserPromptSubmit",
     "PreToolUse",
     "PostToolUse",
+    "PostToolUseFailure",
     "PermissionRequest",
     "Stop",
     "StopFailure",
@@ -139,21 +140,6 @@ pub fn receive_event() -> Result<(), String> {
         .read_to_end(&mut bytes)
         .map_err(|e| e.to_string())?;
     let input: Value = serde_json::from_slice(&bytes).map_err(|e| e.to_string())?;
-    let id = input
-        .get("session_id")
-        .and_then(Value::as_str)
-        .filter(|s| {
-            !s.is_empty()
-                && s.len() <= 160
-                && s.chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
-        })
-        .ok_or("invalid session ID")?;
-    let event = input
-        .get("hook_event_name")
-        .and_then(Value::as_str)
-        .filter(|e| EVENTS.contains(e))
-        .ok_or("unknown hook event")?;
     let at = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
@@ -161,40 +147,13 @@ pub fn receive_event() -> Result<(), String> {
     let dir = dirs_next::home_dir()
         .unwrap_or_default()
         .join(".taskpulse/claude-events");
-    std::fs::create_dir_all(&dir).map_err(|e| e.to_string())?;
-    let path = dir.join(format!("{id}.json"));
-    let previous: Value = std::fs::read(&path)
-        .ok()
-        .and_then(|b| serde_json::from_slice(&b).ok())
-        .unwrap_or_default();
-    let turn = if event == "UserPromptSubmit" {
-        format!("prompt:{at}")
-    } else {
-        previous
-            .get("turn_key")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string()
-    };
-    let turn_started_at = if event == "UserPromptSubmit" {
-        Some(at)
-    } else {
-        previous.get("turn_started_at").and_then(Value::as_u64)
-    };
-    let tool = input.get("tool_name").and_then(Value::as_str).unwrap_or("");
-    let command = input
-        .pointer("/tool_input/command")
-        .or_else(|| input.pointer("/tool_input/file_path"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let payload = json!({"session_id":id,"hook_event_name":event,"observed_at":at,"turn_key":turn,"turn_started_at":turn_started_at,
-        "config_dir":crate::providers::claude_code::default_root(),
-        "cwd":input.get("cwd"),"tool_use_id":input.get("tool_use_id"),"notification_type":input.get("notification_type"),
-        "activity":format!("{tool} · {}",command.chars().take(300).collect::<String>())});
-    atomic_write(
-        &path,
-        &serde_json::to_vec(&payload).map_err(|e| e.to_string())?,
+    crate::claude_events::record(
+        &dir,
+        &input,
+        at,
+        &crate::providers::claude_code::default_root(),
     )
+    .map(|_| ())
     .map_err(|e| e.to_string())
 }
 

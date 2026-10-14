@@ -1,22 +1,82 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import { taskSection, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult } from '../src/lib/dashboard';
+import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+test('a failed result can be marked viewed without turning it into success',()=>{
+  const failed = {...base,status:'failed' as const};
+  expect(isEndedResult(failed)).toBe(true);
+  expect(isEndedResult({...failed,unread:false})).toBe(false);
+  expect(isEndedResult({...failed,stale:true})).toBe(false);
+});
+test('obsolete approval hints cannot create a blocker label, action section or completed result',()=>{
+  const pending={...base,phase:'awaiting_tool' as const,approval_hint:{request_id:'c',requested_at:1,check_due:true}};
+  expect(taskLabel(pending)).toBe('运行中');expect(taskSection(pending)).toBe('ongoing');
+  expect(taskActivity(pending)).toBe('等待工具响应 · 本轮仍在运行');expect(isEndedResult(pending)).toBe(false);
+  expect(taskActivity(pending)).not.toContain('授权');
+  const confirmed={...base,status:'waiting_input' as const,waiting_reason:'approval' as const,input_request_id:'q1'};
+  expect(taskLabel(confirmed)).toBe('需要授权');expect(taskSection(confirmed)).toBe('ongoing');
+  expect(taskLabel({...base,phase:'thinking'})).toBe('运行中');
+});
+
+test('a newly detected project outside explicit filters is visible via the global running counter',()=>{
+  const old={...base,id:'old',project:'old-project',project_path:'C:/old',source_instance:'codex'};
+  const fresh={...base,id:'new',project:'new-project',project_path:'D:/new',source_instance:'codex'};
+  const filtered=filterTasks([old,fresh],{...EMPTY_FILTERS,project:projectKey(old)});
+  expect(filtered.map(t=>t.id)).toEqual(['old']);
+  expect(runningOutsideView([old,fresh],filtered).map(t=>t.id)).toEqual(['new']);
+  const global=overviewFilters('ongoing',null);
+  expect(filterTasks([old,fresh],global).map(t=>t.id)).toEqual(['old','new']);
+  expect(runningOutsideView([old,fresh],filterTasks([old,fresh],global))).toEqual([]);
+});
+
+test('zero matching rows is explicitly a filter state, not a lack of collected executions',()=>{
+  const filters={...EMPTY_FILTERS,project:'obsolete-project',location:'Old server',section:'uncertain' as const};
+  expect(filterTasks([base],filters)).toEqual([]);
+  expect(runningOutsideView([base],[])).toEqual([base]);
+  expect(filterDescription(filters,[base])).toContain('项目：已不在当前列表');
+  expect(filterDescription(filters,[base])).toContain('状态：状态待更新');
+  expect(overviewFilters('uncertain','uncertain')).toEqual(EMPTY_FILTERS);
+  expect(filterDescription(EMPTY_FILTERS,[base])).toBe('');
+});
 test('thinking and model waits are running, not command execution or task completion', () => {
   expect(taskActivity({...base,phase:'thinking',activity:'old command'})).toBe('正在思考');
   expect(taskActivity({...base,phase:'awaiting_model',activity:'old command'})).toContain('本轮仍在运行');
   expect(taskActivity({...base,phase:'tool',activity:'cargo test'})).toBe('cargo test');
   expect(taskActivity(base)).toContain('来源未提供执行阶段');
-  expect(taskSection({...base,phase:'thinking'})).toBe(1);
+  expect(taskSection({...base,phase:'thinking'})).toBe('ongoing');
 });
 test('normal turn end is an unread result, not a blocking prompt', () => {
   const ended = {...base,status:'waiting_input' as const,waiting_reason:'turn_ended' as const};
-  expect(taskSection(ended)).toBe(2);
+  expect(taskSection(ended)).toBe('results');
   expect(taskLabel(ended)).toBe('本轮结束');
-  expect(taskSection({...ended,waiting_reason:'approval'})).toBe(0);
-  expect(taskSection({...ended,waiting_reason:'question'})).toBe(0);
-  expect(taskSection({...base,stale:true})).toBe(0);
+  expect(taskSection({...ended,waiting_reason:'approval'})).toBe('ongoing');
+  expect(taskSection({...ended,waiting_reason:'question'})).toBe('ongoing');
+  expect(taskSection({...base,stale:true})).toBe('uncertain');
+});
+
+test('running and explicit blockers come first; failed results are viewable, source faults are not failures',()=>{
+  const failed={...base,status:'failed' as const};
+  expect(taskSection(failed)).toBe('results');
+  expect(taskSection({...failed,unread:false,pinned:true})).toBe('pinned');
+  expect(taskSection({...base,status:'unknown'})).toBe('uncertain');
+  expect(sectionRank(base)).toBeLessThan(sectionRank(failed));
+  expect(matchesSignal(failed,'failed')).toBe(true);
+  expect(matchesSignal({...failed,unread:false},'failed')).toBe(false);
+  expect(matchesSignal({...base,stale:true},'approval')).toBe(false);
+  expect(runningOutsideView([{...base,stale:true}],[])).toEqual([]);
+  expect(filterTasks([base,failed],{...EMPTY_FILTERS,signal:'failed'})).toEqual([failed]);
+  expect(overviewFilters('ongoing',null).signal).toBeNull();
+});
+
+test('only a recorded non-Agent shell return is an inferred result; never advertise exit success',()=>{
+  const ended={...base,source:'remote_tmux' as const,confidence:'inferred' as const,status:'idle' as const,finished_at:100};
+  expect(taskLabel(ended)).toBe('观察到结束 · 退出码未知');
+  expect(isEndedResult(ended)).toBe(true);
+  expect(taskSection(ended)).toBe('results');
+  expect(isEndedResult({...ended,finished_at:undefined})).toBe(false);
+  expect(isEndedResult({...ended,source:'codex'})).toBe(false);
+  expect(isEndedResult({...ended,stale:true})).toBe(false);
 });
 test('project identity uses path and source instance, not just the basename', () => {
   const task = {...base,project:'demo',project_path:'C:/demo',source_instance:'codex'};
@@ -70,7 +130,8 @@ test('refresh waits for actual attempts, failures count as returned, disabled so
 test('quick viewed action is only offered for explicit ended results',()=>{
   expect(isEndedResult({...base,status:'waiting_input',waiting_reason:'turn_ended'})).toBe(true);
   expect(isEndedResult({...base,status:'succeeded'})).toBe(true);
-  for(const status of ['running','failed','idle'] as const)expect(isEndedResult({...base,status})).toBe(false);
+  expect(isEndedResult({...base,status:'failed'})).toBe(true);
+  for(const status of ['running','idle'] as const)expect(isEndedResult({...base,status})).toBe(false);
   expect(isEndedResult({...base,status:'waiting_input',waiting_reason:'question'})).toBe(false);
   expect(isEndedResult({...base,status:'succeeded',stale:true})).toBe(false);
 });

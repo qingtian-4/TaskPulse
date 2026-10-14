@@ -7,7 +7,7 @@
 <ul class="m-0 p-0 list-none">
   {#each tasks as task (task.id)}
     <li class="task-item">
-      <button type="button" class:selected={selectedId === task.id} class="task-row" onclick={() => onSelect(task)} aria-pressed={selectedId === task.id}>
+      <button type="button" data-task-id={task.id} class:selected={selectedId === task.id} class="task-row" onclick={() => onSelect(task)} aria-pressed={selectedId === task.id}>
         <span class="dot" class:running={task.status === 'running' && !task.stale} class:failed={task.status === 'failed'} class:waiting={task.status==='waiting_input'} class:stale={task.stale}></span>
         <span class="row-copy">
           <span class="row-title" title={task.name}>{task.name}</span>

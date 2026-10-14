@@ -1,5 +1,12 @@
 # Scripts
 
+Windows Alpha releases: `bun run release:check`, `bun run test:release` and
+[docs/RELEASING.md](../docs/RELEASING.md). `release.sh` is read-only; no implicit
+commit/tag/push. `installer-smoke.ps1` installs real packages only on disposable
+GitHub Actions Windows runners and must not run against a developer's profile.
+`native-inbox-smoke.ts` is read-only WebView2 inbox/section acceptance at temporary
+CDP 9337; restart the app without CDP after use. It does not reopen real requests.
+
 These scripts are how hook setup, custom CLI support, and local builds work today.
 
 ## Common Tasks

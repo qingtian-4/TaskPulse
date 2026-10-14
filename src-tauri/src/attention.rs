@@ -111,6 +111,27 @@ impl AttentionTracker {
                 record.last_execution_at = millis(record.task.updated_at);
             }
         }
+        let legacy_keys: Vec<_> = records
+            .iter()
+            .filter(|(_, record)| {
+                record.task.legacy_run_alias().as_deref() == Some(&record.task.id)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        if !legacy_keys.is_empty() {
+            let backup = path.with_extension("json.pre-run-identity.bak");
+            let backed_up = backup.exists() || std::fs::copy(&path, &backup).is_ok();
+            if backed_up {
+                for old in legacy_keys {
+                    let mut record = records.remove(&old).unwrap();
+                    record.task.normalize_run_identity();
+                    // An existing canonical record owns the latest user choice.
+                    records.entry(record.task.id.clone()).or_insert(record);
+                }
+            } else {
+                log::warn!("run identity migration: backup failed; preserving original records");
+            }
+        }
         Self {
             path,
             records,
@@ -492,6 +513,28 @@ fn effective_turn_key(task: &TaskSnapshot) -> Option<String> {
 mod tests {
     use super::*;
     #[test]
+    fn pane_scoped_exact_records_migrate_with_backup_without_losing_unread_or_manual_pin() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        let mut old = task("ssh:host:%3", TaskStatus::Running, Some("run-a"));
+        old.source = TaskSource::RemoteTmux;
+        old.confidence = DetectionConfidence::Exact;
+        old.host = Some("host".into());
+        old.tmux_pane = Some("%3".into());
+        tracker.reconcile(vec![old.clone()]);
+        tracker.set_pinned(&old.id, true).unwrap();
+        old.status = TaskStatus::Succeeded;
+        tracker.reconcile(vec![old]);
+        let restored = AttentionTracker::open(path.clone());
+        assert!(path.with_extension("json.pre-run-identity.bak").exists());
+        let tasks = restored.display();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, "ssh:host:run:run-a");
+        assert!(tasks[0].unread && tasks[0].pinned);
+        assert_eq!(tasks[0].turn_key.as_deref(), Some("run-a"));
+    }
+    #[test]
     fn legacy_false_failure_import_is_archived_without_acknowledging_or_deleting() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("attention.json");
@@ -559,6 +602,46 @@ mod tests {
         );
         assert_eq!(restored.display()[0].id, "a");
         assert!(!restored.display()[0].new_execution);
+    }
+
+    #[test]
+    fn obsolete_approval_hint_loads_without_losing_attention_preferences_or_identity() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        let mut running = task("codex:s", TaskStatus::Running, Some("turn"));
+        running.source = TaskSource::Codex;
+        running.session_id = Some("s".into());
+        tracker.reconcile(vec![running]);
+        tracker.set_pinned("codex:s", true).unwrap();
+        let expected = tracker.known()[0].clone();
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        let record = &mut legacy["records"]["codex:s"];
+        record["task"]["approval_hint"] =
+            serde_json::json!({"request_id":"c1","requested_at":1,"check_due":true});
+        record["task"]["phase"] = "awaiting_tool".into();
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let restored = AttentionTracker::open(path);
+        let tasks = restored.display();
+        assert_eq!(tasks.len(), 1);
+        assert_eq!(tasks[0].id, expected.id);
+        assert_eq!(tasks[0].turn_key, expected.turn_key);
+        assert_eq!(tasks[0].attention_since, expected.attention_since);
+        assert_eq!(tasks[0].unread, expected.unread);
+        assert!(tasks[0].pinned);
+        assert!(!tasks[0].requires_action());
+        assert_eq!(
+            tasks[0].phase,
+            Some(crate::domain::ExecutionPhase::AwaitingTool)
+        );
+        assert!(serde_json::to_value(&tasks[0])
+            .unwrap()
+            .get("approval_hint")
+            .is_none());
+        assert!(crate::transition::TransitionEngine::new()
+            .apply(&tasks, &[], SystemTime::now())
+            .is_empty());
     }
 
     #[test]

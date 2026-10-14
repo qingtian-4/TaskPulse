@@ -47,6 +47,8 @@ The main view defaults to a configurable 7-day execution-activity window (`dashb
 
 ## Data and configuration
 
+Codex command permission parameters, slow tool results, silent logs and CPU activity are never proof of pending human approval. Do not infer authorization waits or emit timed approval-check reminders. Only an explicit source approval request sets WAITING_INPUT / approval, cleared by its matching request ID. Preserve RUNNING tool/thinking phases; legacy awaiting_tool snapshots remain readable and are not human blockers. Never execute Code Mode snippets or install hooks/change approval policies automatically. Confirmed blocking popups have no automatic timer, may rotate without dismissal, and reconcile only against fresh matching observations. Delivery evidence in `~/.taskpulse/notification-log.json` is bounded to 500 records, excluded from collection/watcher triggers, and never asserts user-read or includes commands/prompts/credentials. See `docs/PRODUCT_DASHBOARD.md` for source limitations.
+
 - TaskPulse state: `~/.taskpulse/attention.json` and `~/.taskpulse/recent.json`.
 - Notification dedup: `~/.taskpulse/notifications.json` (must survive restarts).
 - Monitoring/remote configuration: `~/.taskpulse/config.toml`.
@@ -55,6 +57,7 @@ The main view defaults to a configurable 7-day execution-activity window (`dashb
 - Codex: native thread/app-server metadata plus rollout logs; local and configured remote projects are supported.
 - Codex WSL: independent opt-in `codex_wsl` sources per running distro. Read metadata inside Linux using Python 3 / read-only SQLite plus `session_index.jsonl`; never open WSL SQLite/WAL through Windows UNC. Reuse the Codex incremental rollout parser via `\\wsl.localhost\<distro>`. IDs are `<source-instance>:codex:<thread-id>` and Linux project paths stay separate from Windows / SSH. Never auto-wake a stopped distro or query Windows account quota for WSL tasks. See `docs/WSL_CODEX.md`.
 - Claude Code: read-only `CLAUDE_CONFIG_DIR` (default `~/.claude`) projects/*.jsonl, sessions/*.json and IDE *.lock evidence; never read *.key. Native formats are best-effort/inferred. Explicit, reversible official hooks write a minimal event envelope to `~/.taskpulse/claude-events/`. Agent identity is independent from the reported/proxy model. Never auto-install hooks or overwrite statusLine/other hooks/proxy settings.
+  Hook envelopes use an OS-locked per-session JSONL journal with monotonic sequence; latest JSON is a compatibility checkpoint. PermissionRequest has no native call ID: associate only a unique preceding tool/input signature, preserve all explicit pending request IDs, and resolve only a matching call or explicit end. Native thinking/busy/idle metadata cannot clear an approval or prove turn end. Rust 1.89+ is required for File locking.
 - Hermes: native SQLite session metadata and runtime lease state.
 - DeepSeek Harness: native Desktop/CLI `$DSH_HOME` (default `~/.dsh`, override with `TASKPULSE_DSH_HOME`) plus an independent WSL worker. Support both `session.jsonl.zstd` and `session.v4.jsonl.zstd`. Native v4 titles/state use `storages/session_projcache/sessions/<id>.json` (`version`/`record` envelope); legacy versions use `storages/session_projcache.json`. Projection event seq must not override a newer log state. Native IDs are `dsh-native:<session-id>`; existing WSL IDs stay `dsh:<session-id>`.
 - Remote: configured SSH hosts, projects, and tmux sessions/panes.
@@ -73,7 +76,7 @@ $env:RUSTFLAGS = '-C link-self-contained=yes'
 cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
 cargo clippy --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
 cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray
-cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray
+cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray --features custom-protocol
 ```
 
 When the tray app is running, use the isolated verification target so Windows
@@ -121,4 +124,20 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - Run `cargo clippy ... -- -D warnings`, `bun run check`, and `bun run build` before handoff.
 - For provider changes, validate against the real local data source when available; do not rely only on fixtures.
 - For remote-provider changes, run the ignored live snapshot test and confirm the expected server/project/task in its output.
+- For wrapper changes, run `bun scripts/run-wrapper-smoke.ts` on Windows and `python3 scripts/run-wrapper-smoke.py` inside an already-running opted-in WSL/Linux environment. These use isolated target directories, never real watched state paths. `tp-run` requires Python 3; direct foreground child exit does not prove a detached/container/Slurm job ended.
 - Keep unrelated user changes intact. Use small logical commits on the current `codex/*` branch; do not push or open a PR unless requested.
+
+## Windows Alpha releases
+
+- Versions in package.json, Cargo.toml, Cargo.lock and tauri.conf.json must match
+  the explicit pre-release tag. Run `bun run release:check` and `bun run test:release`.
+- release.yml builds Windows x64 MSVC, validates actual installers on a separate
+  runner and creates a **draft pre-release only**. Read docs/RELEASING.md before
+  tagging/publishing; no stable release or automatic version override is enabled.
+- Linux/macOS remain opt-in experimental artifact builds, independent of Windows.
+- Bounded ephemeral popup queues do not replace durable attention. The bell inbox
+  restores unresolved prompts without replaying lifecycle notifications. Manual
+  reopening requires fresh matching source health and explicit pending state;
+  unknown/stale/inferred/internal/disabled/ignored requests must not be reopened.
+- Semantic dashboard sections are ongoing/results/uncertain/pinned; thinking and
+  model waits stay ongoing. Failures are results, source faults are uncertainty.

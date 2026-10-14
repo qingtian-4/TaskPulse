@@ -1,7 +1,7 @@
 //! Per-host poll state: failure debounce, preserved last-known tasks, and
 //! running-pane tracking for finish detection.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::SystemTime;
 
 use crate::domain::TaskSnapshot;
@@ -22,6 +22,7 @@ pub struct HostPollState {
     /// Panes we have seen running.  A pane that leaves this set (observed
     /// idle or gone during a SUCCESSFUL poll) is an inferred finish.
     pub running_panes: HashSet<String>,
+    pub pane_roots: HashMap<String, u32>,
 }
 
 impl Default for HostPollState {
@@ -32,6 +33,7 @@ impl Default for HostPollState {
             last_seen: None,
             last_tasks: Vec::new(),
             running_panes: HashSet::new(),
+            pane_roots: HashMap::new(),
         }
     }
 }

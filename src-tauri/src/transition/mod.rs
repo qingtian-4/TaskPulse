@@ -59,6 +59,8 @@ pub struct TransitionEngine {
     prev_waits: HashMap<String, (Option<crate::domain::WaitingReason>, Option<String>)>,
     prev_hosts: HashMap<String, HostStatus>,
     notified: HashSet<(String, EventKind)>,
+    #[serde(default)]
+    input_notifications: HashSet<(String, String)>,
     #[serde(skip)]
     path: Option<std::path::PathBuf>,
 }
@@ -69,6 +71,7 @@ impl TransitionEngine {
         self.prev_turns.retain(|id, _| !ids.contains(id));
         self.prev_waits.retain(|id, _| !ids.contains(id));
         self.notified.retain(|(id, _)| !ids.contains(id));
+        self.input_notifications.retain(|(id, _)| !ids.contains(id));
     }
     pub fn new() -> Self {
         Self::default()
@@ -125,7 +128,42 @@ impl TransitionEngine {
         let mut current_waits = HashMap::new();
 
         for task in tasks {
+            // Scope filtering normally happens upstream. Keep the lifecycle
+            // boundary safe for direct callers and recovered old snapshots.
+            if task.internal {
+                continue;
+            }
             let id = task.id.clone();
+            // Legacy pane-scoped exact results move to their own run identity.
+            // Match the run key before transferring dedup, never apply A's
+            // memory to a new B run in the same pane.
+            if let Some(alias) = task.legacy_run_alias().filter(|alias| alias != &id) {
+                if self.prev_turns.get(&alias) == Some(&task.turn_key)
+                    && !self.prev.contains_key(&id)
+                {
+                    if let Some(status) = self.prev.remove(&alias) {
+                        self.prev.insert(id.clone(), status);
+                    }
+                    if let Some(turn) = self.prev_turns.remove(&alias) {
+                        self.prev_turns.insert(id.clone(), turn);
+                    }
+                    if let Some(wait) = self.prev_waits.remove(&alias) {
+                        self.prev_waits.insert(id.clone(), wait);
+                    }
+                    self.notified = self
+                        .notified
+                        .drain()
+                        .map(|(key, kind)| (if key == alias { id.clone() } else { key }, kind))
+                        .collect();
+                    self.input_notifications = self
+                        .input_notifications
+                        .drain()
+                        .map(|(key, request)| {
+                            (if key == alias { id.clone() } else { key }, request)
+                        })
+                        .collect();
+                }
+            }
             if task.is_agent_session() {
                 // v3 could infer an end during thinking. Do not let that false
                 // event suppress the next genuine failure/completion.
@@ -146,9 +184,31 @@ impl TransitionEngine {
                 self.notified.remove(&(id.clone(), EventKind::WaitingInput));
             }
 
+            // A poll may coalesce several concurrent explicit requests. Dedup
+            // every request independently, rather than only the primary gate.
+            if !task.stale && task.requires_action() && !task.input_request_ids.is_empty() {
+                for request in &task.input_request_ids {
+                    let key =
+                        serde_json::to_string(&(&task.turn_key, task.waiting_reason, request))
+                            .unwrap_or_default();
+                    if self.input_notifications.insert((id.clone(), key)) {
+                        let mut requested = task.clone();
+                        requested.input_request_id = Some(request.clone());
+                        events.push(TaskEvent::WaitingInput {
+                            task: requested,
+                            reason: task.hook_matcher.clone(),
+                        });
+                    }
+                }
+                self.notified.insert((id.clone(), EventKind::WaitingInput));
+            }
+
             let prev_status = match self.prev.get(&id).copied() {
                 Some(status) => status,
-                None if task.new_execution && task.turn_key.is_some() && !task.stale => {
+                None if !task.stale
+                    && (task.new_execution && task.turn_key.is_some()
+                        || task.requires_action() && task.input_request_id.is_some()) =>
+                {
                     TaskStatus::Running
                 }
                 None => continue,
@@ -177,16 +237,20 @@ impl TransitionEngine {
                 continue;
             }
 
-            if baseline && !task.unread || task.stale {
+            if baseline && !task.unread && !task.requires_action() || task.stale {
                 continue;
             }
 
             match status {
                 TaskStatus::WaitingInput => {
+                    let duplicate_request=task.input_request_id.as_ref().is_some_and(|request| {
+                        let key=serde_json::to_string(&(&task.turn_key,task.waiting_reason,request)).unwrap_or_default();
+                        !self.input_notifications.insert((id.clone(),key))
+                    });
                     let kind = if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
                         EventKind::TurnEnded
                     } else { EventKind::WaitingInput };
-                    if !already(&mut self.notified, &id, kind) {
+                    if !duplicate_request && !already(&mut self.notified, &id, kind) {
                         events.push(TaskEvent::WaitingInput {
                             task: task.clone(),
                             reason: task.hook_matcher.clone(),
@@ -271,6 +335,7 @@ impl TransitionEngine {
         self.prev_waits.clear();
         self.prev_hosts.clear();
         self.notified.clear();
+        self.input_notifications.clear();
     }
 }
 
@@ -286,6 +351,118 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn reclassifying_a_previously_observed_service_never_emits_completion() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut engine = TransitionEngine::open(dir.path().join("notifications.json"));
+        let mut task = task_turn("codex:child", TaskStatus::Running, "child-turn");
+        apply_once(&mut engine, &[task.clone()]);
+        task.internal = true;
+        task.status = TaskStatus::WaitingInput;
+        task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert!(apply_once(&mut engine, &[task.clone()]).is_empty());
+        task.status = TaskStatus::Failed;
+        assert!(apply_once(&mut engine, &[task]).is_empty());
+    }
+    #[test]
+    fn coalesced_parallel_requests_notify_once_each_across_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut task = task_turn("claude:s", TaskStatus::WaitingInput, "turn");
+        task.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        task.input_request_id = Some("a".into());
+        task.input_request_ids = vec!["a".into(), "b".into()];
+        let now = SystemTime::now();
+        assert_eq!(engine.apply(&[task.clone()], &[], now).len(), 2);
+        assert!(engine.apply(&[task.clone()], &[], now).is_empty());
+        task.input_request_ids = vec!["a".into()];
+        let mut restarted = TransitionEngine::open(path);
+        assert!(restarted.apply(&[task], &[], now).is_empty());
+    }
+    #[test]
+    fn run_identity_migration_preserves_delivered_events_but_not_a_different_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let now = SystemTime::now();
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut old = task_turn("ssh:host:%3", TaskStatus::Running, "a");
+        old.source = crate::domain::TaskSource::RemoteTmux;
+        old.confidence = crate::domain::DetectionConfidence::Exact;
+        old.host = Some("host".into());
+        old.tmux_pane = Some("%3".into());
+        engine.apply(&[old.clone()], &[], now);
+        old.status = TaskStatus::Succeeded;
+        assert_eq!(engine.apply(&[old.clone()], &[], now).len(), 1);
+        old.normalize_run_identity();
+        let mut restarted = TransitionEngine::open(path);
+        assert!(restarted.apply(&[old.clone()], &[], now).is_empty());
+        let mut other = old.clone();
+        other.id = "ssh:host:run:b".into();
+        other.turn_key = Some("b".into());
+        other.status = TaskStatus::Running;
+        assert!(restarted
+            .apply(&[old.clone(), other.clone()], &[], now)
+            .is_empty());
+        other.status = TaskStatus::Succeeded;
+        assert_eq!(restarted.apply(&[old, other], &[], now).len(), 1);
+    }
+    #[test]
+    fn confirmed_requests_dedup_by_request_across_flaps_and_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut t = task_turn("codex:s", TaskStatus::Running, "turn");
+        assert!(apply_once(&mut engine, &[t.clone()]).is_empty());
+        let mut restart = TransitionEngine::open(path);
+        assert!(apply_once(&mut restart, &[t.clone()]).is_empty());
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        t.input_request_id = Some("q1".into());
+        assert_eq!(apply_once(&mut restart, &[t.clone()]).len(), 1);
+        t.status = TaskStatus::Running;
+        t.waiting_reason = None;
+        assert!(apply_once(&mut restart, &[t.clone()]).is_empty());
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        assert!(apply_once(&mut restart, &[t.clone()]).is_empty());
+        t.input_request_id = Some("q2".into());
+        assert_eq!(apply_once(&mut restart, &[t]).len(), 1);
+    }
+    #[test]
+    fn obsolete_approval_checks_do_not_reset_persisted_completion_or_request_dedup() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut t = task_turn("codex:s", TaskStatus::Running, "turn");
+        apply_once(&mut engine, &[t.clone()]);
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        t.input_request_id = Some("q1".into());
+        assert_eq!(apply_once(&mut engine, &[t.clone()]).len(), 1);
+        t.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        t.input_request_id = None;
+        assert_eq!(apply_once(&mut engine, &[t.clone()]).len(), 1);
+        let mut legacy: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        legacy["approval_checks"] = serde_json::json!([["codex:s", "c1"]]);
+        std::fs::write(&path, serde_json::to_vec(&legacy).unwrap()).unwrap();
+        let mut restored = TransitionEngine::open(path.clone());
+        assert!(apply_once(&mut restored, &[t.clone()]).is_empty());
+        t.status = TaskStatus::Running;
+        t.waiting_reason = None;
+        assert!(apply_once(&mut restored, &[t.clone()]).is_empty());
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        t.input_request_id = Some("q1".into());
+        assert!(apply_once(&mut restored, &[t.clone()]).is_empty());
+        t.input_request_id = Some("q2".into());
+        assert_eq!(apply_once(&mut restored, &[t]).len(), 1);
+        let saved: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert!(saved.get("approval_checks").is_none());
+    }
+
     #[test]
     fn agent_cpu_idle_flapping_never_announces_end_or_resets_dedup() {
         let dir = tempfile::tempdir().unwrap();

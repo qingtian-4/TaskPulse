@@ -153,11 +153,16 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             .and_then(|n| n.to_str())
             .map(|s| s.to_string());
 
-        let display_name = match (cwd_project.as_deref(), terminal.as_ref()) {
-            (Some(proj), Some(t)) if !t.label.is_empty() => format!("{proj} · {}", t.label),
-            (Some(proj), _) => proj.to_string(),
-            _ => name.clone(),
-        };
+        let display_name = val
+            .get("name")
+            .and_then(|name| name.as_str())
+            .filter(|name| !name.trim().is_empty())
+            .map(str::to_owned)
+            .unwrap_or_else(|| match (cwd_project.as_deref(), terminal.as_ref()) {
+                (Some(proj), Some(t)) if !t.label.is_empty() => format!("{proj} · {}", t.label),
+                (Some(proj), _) => proj.to_string(),
+                _ => name.clone(),
+            });
 
         let mut snapshot = TaskSnapshot {
             source_instance: None,
@@ -169,6 +174,7 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
+            input_request_ids: vec![],
             attention_since: 0,
             new_execution: false,
             id: format!("file:{name}"),
@@ -178,12 +184,20 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             host: None,
             project: cwd_project,
             message: (!message.is_empty()).then_some(message),
-            activity: None,
+            activity: val
+                .get("activity")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
             phase: None,
             started_at: started_at.or_else(|| file_mtime(path)),
-            updated_at: file_mtime(path).unwrap_or(now),
+            updated_at: parse_epoch_ms(val.get("execution_activity_at"))
+                .or(finished_at)
+                .unwrap_or_else(|| file_mtime(path).unwrap_or(now)),
             finished_at,
-            pid: None,
+            pid: val
+                .get("pid")
+                .and_then(|v| v.as_u64())
+                .and_then(|p| u32::try_from(p).ok()),
             exit_code,
             confidence,
             remote: false,
@@ -191,7 +205,10 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             recent: false,
             unread: false,
             pinned: false,
-            turn_key: None,
+            turn_key: val
+                .get("turn_key")
+                .and_then(|v| v.as_str())
+                .map(str::to_owned),
             native_unread: None,
             terminal,
             can_focus,
@@ -250,6 +267,7 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             tmux_target: None,
             waiting_reason: None,
             input_request_id: None,
+            input_request_ids: vec![],
             attention_since: 0,
             new_execution: false,
             id: format!("file:{name}"),
@@ -340,7 +358,8 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> Option<i64> {
     Some(era * 146_097 + doe - 719_468)
 }
 
-/// Read all `*.status` files in a directory, cleaning up stale ones.
+/// Read status files without deleting producer-owned records. A missing
+/// heartbeat is uncertainty, never an exit or permission event.
 fn read_dir_tasks(dir: &Path, now: SystemTime) -> std::io::Result<Vec<TaskSnapshot>> {
     if !dir.exists() {
         return Ok(Vec::new());
@@ -368,10 +387,12 @@ fn read_dir_tasks(dir: &Path, now: SystemTime) -> std::io::Result<Vec<TaskSnapsh
                 .map(|p| p.ends_with(".taskpulse"))
                 .unwrap_or(false);
         let ttl = if is_v2 { V2_STALE_TTL } else { STALE_TTL };
-        let mtime = task.updated_at;
+        let mtime = file_mtime(&path).unwrap_or(task.updated_at);
         if now.duration_since(mtime).unwrap_or_default() > ttl {
-            let _ = std::fs::remove_file(&path);
-            continue;
+            if task.status.is_terminal() || task.finished_at.is_some() {
+                continue; // Retention applies only to completed results.
+            }
+            task.stale = true; // Keep long/silent running and pending tasks.
         }
 
         if task.status.is_terminal() || task.finished_at.is_some() {
@@ -404,6 +425,48 @@ pub fn status_from_legacy(s: &str) -> TaskStatus {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn old_running_and_pending_files_survive_ttl_without_becoming_finished() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, body) in [
+            (
+                "quiet",
+                r#"{"v":2,"status":"running","execution_activity_at":1000}"#,
+            ),
+            ("pending", r#"{"v":1,"status":"needs-input"}"#),
+        ] {
+            let path = dir.path().join(format!("{name}.status"));
+            std::fs::write(&path, body).unwrap();
+        }
+        let at = SystemTime::now();
+        let old = read_dir_tasks(dir.path(), at + Duration::from_secs(4 * 3600)).unwrap();
+        assert_eq!(old.len(), 2);
+        assert!(old
+            .iter()
+            .all(|task| task.stale && task.finished_at.is_none()));
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 2);
+        assert_eq!(
+            old.iter()
+                .find(|t| t.id.contains("quiet"))
+                .unwrap()
+                .updated_at,
+            std::time::UNIX_EPOCH + Duration::from_millis(1000)
+        );
+    }
+
+    #[test]
+    fn expired_results_are_hidden_but_producer_owned_files_are_not_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("result.status");
+        std::fs::write(&path, r#"{"v":2,"status":"succeeded","exit_code":0}"#).unwrap();
+        assert!(
+            read_dir_tasks(dir.path(), SystemTime::now() + Duration::from_secs(3600))
+                .unwrap()
+                .is_empty()
+        );
+        assert!(path.exists());
+    }
 
     fn temp_file(content: &str) -> tempfile::NamedTempFile {
         let mut f = tempfile::NamedTempFile::new().unwrap();

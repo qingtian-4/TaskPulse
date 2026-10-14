@@ -4,23 +4,36 @@
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type { NoticeState } from '$lib/types';
-  import { noticeContent } from '$lib/notice';
+  import { noticeContent, noticeTimeout, noticeRotation } from '$lib/notice';
   let noticeState=$state<NoticeState>({current:null,pending:0});
   let remaining=$state(15000);
+  let rotationRemaining=15000;
   let hovered=$state(false);
   let busy=$state(false);
   let error=$state('');
   let currentId:number | null=null;
+  let acknowledgedId:number | null=null;
+  let acknowledging=false;
   const content=$derived(noticeState.current ? noticeContent(noticeState.current) : null);
   function apply(next:NoticeState){
-    if(next.current?.id!==currentId){currentId=next.current?.id ?? null;remaining=15000;error='';busy=false;}
+    if(next.current?.id!==currentId){currentId=next.current?.id ?? null;remaining=next.current ? noticeTimeout(next.current) ?? 15000 : 15000;rotationRemaining=15000;error='';busy=false;}
     noticeState=next;
   }
-  async function dismiss(){
+  async function dismiss(reason='user'){
     if(!noticeState.current || busy)return;
     busy=true;
-    try{apply(await invoke<NoticeState>('dismiss_task_notice',{id:noticeState.current.id}));}
+    try{apply(await invoke<NoticeState>('dismiss_task_notice',{id:noticeState.current.id,reason}));}
     catch(e){error=String(e);}finally{busy=false;}
+  }
+  async function next(){
+    if(!noticeState.current || busy)return;busy=true;
+    try{apply(await invoke<NoticeState>('next_task_notice',{id:noticeState.current.id}));}catch(e){error=String(e);}finally{busy=false;}
+  }
+  async function acknowledge(){
+    const id=noticeState.current?.id;
+    if(!id || id===acknowledgedId || acknowledging)return;
+    acknowledging=true;
+    try{if(await invoke<boolean>('ack_task_notice',{id}))acknowledgedId=id;}catch(e){error='展示记录未确认：'+String(e);}finally{acknowledging=false;}
   }
   async function open(){
     if(!noticeState.current || busy)return;
@@ -41,14 +54,16 @@
     let last=performance.now();
     const timer=setInterval(()=>{
       const now=performance.now();const elapsed=now-last;last=now;
-      if(noticeState.current && !hovered && !busy && !error){remaining=Math.max(0,remaining-elapsed);if(remaining===0)void dismiss();}
+      void acknowledge();
+      if(noticeState.current && noticeTimeout(noticeState.current)!==null && !hovered && !busy && !error){remaining=Math.max(0,remaining-elapsed);if(remaining===0)void dismiss('timeout');}
+      if(noticeState.current && noticeRotation(noticeState.current,noticeState.pending)!==null && !hovered && !busy && !error){rotationRemaining=Math.max(0,rotationRemaining-elapsed);if(rotationRemaining===0)void next();}
     },200);
     return()=>{mounted=false;cleanup?.();clearInterval(timer);};
   });
 </script>
 
 <div class="notice-window" role="region" aria-label="TaskPulse 任务提醒" onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
-  <button class="close" aria-label="关闭提醒（保持未查看）" title="关闭提醒，任务仍未查看" disabled={busy || !noticeState.current} onclick={dismiss}><X size={16} strokeWidth={1.7}/></button>
+  <button class="close" aria-label="关闭提醒（保持未查看）" title="关闭提醒，任务仍未查看" disabled={busy || !noticeState.current} onclick={()=>void dismiss()}><X size={16} strokeWidth={1.7}/></button>
   {#if noticeState.current && content}
     {#key noticeState.current.id}
       <button class="message" disabled={busy} aria-label={'查看任务详情：'+content.heading} onclick={open}>
@@ -66,12 +81,13 @@
     <footer>
       <div class="hint" title="自动收起或稍后处理都不会标记任务已查看">
         {#if error}<span class="error" role="alert">{error}</span>
-        {:else if noticeState.pending}<span class="pending">还有 {noticeState.pending} 条提醒</span>
+        {:else if noticeState.pending}<button class="pending" disabled={busy} onclick={next} title="切换下一条，当前提醒仍保留">下一条 · 还有 {noticeState.pending} 条</button>
+        {:else if noticeTimeout(noticeState.current)===null}<span>等待处理，不会自动收起</span>
         {:else}<span>{hovered?'鼠标移开后自动收起':Math.ceil(remaining/1000)+' 秒后收起'}</span>{/if}
       </div>
-      <div class="actions"><button class="later" title="收起提醒，保持未查看" disabled={busy} onclick={dismiss}>稍后处理</button><button class="primary" disabled={busy} onclick={open}>查看详情<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
+      <div class="actions"><button class="later" title="收起提醒，保持未查看" disabled={busy} onclick={()=>void dismiss()}>稍后处理</button><button class="primary" disabled={busy} onclick={open}>查看详情<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
     </footer>
-    <div class="progress-track" aria-hidden="true"><div class="progress" style:width={(remaining/15000*100)+'%'}></div></div>
+    {#if noticeTimeout(noticeState.current)!==null}<div class="progress-track" aria-hidden="true"><div class="progress" style:width={(remaining/(noticeTimeout(noticeState.current) ?? 15000)*100)+'%'}></div></div>{/if}
   {:else if error}
     <p class="empty-error" role="alert">{error}</p>
   {/if}
