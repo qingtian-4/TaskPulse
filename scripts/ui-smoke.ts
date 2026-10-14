@@ -10,7 +10,8 @@ if(!target) throw Error('No CDP page');
 const socket=new WebSocket(target.webSocketDebuggerUrl);
 await new Promise<void>((ok,fail)=>{socket.onopen=()=>ok();socket.onerror=()=>fail(Error('CDP connection failed'));});
 let seq=0;const pending=new Map<number,{ok:(v:any)=>void;fail:(e:unknown)=>void}>();
-socket.onmessage=e=>{const msg=JSON.parse(String(e.data));if(msg.id){const p=pending.get(msg.id);pending.delete(msg.id);msg.error?p?.fail(msg.error):p?.ok(msg.result);}};
+const runtimeErrors:string[]=[];
+socket.onmessage=e=>{const msg=JSON.parse(String(e.data));if(msg.method==='Runtime.exceptionThrown')runtimeErrors.push(msg.params.exceptionDetails.exception?.description ?? msg.params.exceptionDetails.text);if(msg.id){const p=pending.get(msg.id);pending.delete(msg.id);msg.error?p?.fail(msg.error):p?.ok(msg.result);}};
 const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((ok,fail)=>{const id=++seq;pending.set(id,{ok,fail});socket.send(JSON.stringify({id,method,params}));setTimeout(()=>{if(pending.delete(id))fail(Error('CDP timeout '+method));},30000);});
 const evaluate=async(expression:string)=>{const result=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(result.exceptionDetails)throw Error(JSON.stringify(result.exceptionDetails));return result.result.value;};
 const waitFor=async(expression:string)=>{for(let n=0;n<80;n++){if(await evaluate(expression))return;await Bun.sleep(100);}throw Error('UI assertion timeout: '+expression);};
@@ -24,6 +25,7 @@ const callbacks=new Map();const listeners=[];let cb=0;globalThis.__smokeCalls=[]
 globalThis.__TAURI_INTERNALS__={metadata:{currentWindow:{label:location.pathname.startsWith('/manage')?'management':'popup'},currentWebview:{label:'popup'}},transformCallback(fn){callbacks.set(++cb,fn);return cb;},unregisterCallback(id){callbacks.delete(id);},async invoke(cmd,args={}){globalThis.__smokeCalls.push({cmd,args});
 if(cmd==='get_agents')return tasks;if(cmd==='get_pending_task_prompts')return tasks.filter(t=>t.waiting_reason==='approval');if(cmd==='reopen_task_prompt')return {current:null,pending:0};if(cmd==='get_archived_attention')return [];if(cmd==='request_refresh')return Date.now();if(cmd==='get_providers')return settings.sources.filter(s=>s.enabled).map(s=>({provider:s.id,status:'connected',last_success:Date.now(),last_attempt:Date.now()}));if(cmd==='get_monitoring_settings')return settings;if(cmd==='get_selected_task'||cmd==='get_notification_error')return null;if(cmd==='get_codex_quota')return {quota:null,observed_at:null,stale:true,error:null,refreshing:false};if(cmd==='discover_sources')return settings.sources.map(s=>({id:s.id,available:true,detail:'Read-only test fixture'}));
 if(cmd==='save_monitoring_settings'){settings=structuredClone(args.settings);return settings;}if(cmd==='list_discovered_sessions')return {total:1,items:[{task:tasks[1],reason:'历史会话，尚未加入关注'}]};if(cmd==='update_task_attention'){if(args.action==='viewed'||args.action==='hide'||args.action==='ignore')tasks=tasks.filter(t=>t.id!==args.id);return tasks;}if(cmd==='open_task')return 'details';
+if(cmd==='get_notification_log')return [];
 if(cmd==='plugin:event|listen'){listeners.push({id:listeners.length+1,...args});return listeners.length;}return null;}};
 globalThis.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
 globalThis.__smokeEmit=(event,payload)=>listeners.filter(l=>l.event===event).forEach(l=>callbacks.get(l.handler)?.({event,id:l.id,payload}));
@@ -31,6 +33,7 @@ globalThis.__smokeStartProject=()=>{tasks=[...tasks,{...tasks[2],id:'test-new-pr
 })();`;
 try {
   await send('Page.enable');
+  await send('Runtime.enable');
   await send('Page.addScriptToEvaluateOnNewDocument',{source:fixture});
   await send('Emulation.setDeviceMetricsOverride',{width:440,height:900,deviceScaleFactor:1,mobile:false,screenWidth:1440,screenHeight:900});
   await send('Page.navigate',{url:'http://127.0.0.1:5189/'});
@@ -72,6 +75,8 @@ try {
   await waitFor(`document.querySelector('.session')?.textContent.includes('验收：已结束')`);
   await evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='通知与显示').click()`);
   await waitFor(`document.body.textContent.includes('同一事件只提醒一次')`);
+  await Bun.sleep(200);
+  if(runtimeErrors.length)throw Error('Frontend runtime exceptions: '+runtimeErrors.join(';'));
   await Bun.write(out+'/management.png',Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   const result={passed:true,layout,checks:['28 tasks, scroll, bounded popup','new project starts under an existing filter','global running counter clears restrictive filters','ended task viewed action','management open IPC','source toggle + save','discovered sessions','notification preferences'],data:'isolated mocked IPC; not native live acceptance'};
   await Bun.write(out+'/result.json',JSON.stringify(result,null,2));

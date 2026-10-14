@@ -590,6 +590,9 @@ bun run test:ui-model
   fmt/clippy -D warnings、内嵌前端可执行文件构建通过。Svelte 0 errors/warnings，
   UI 模型 19 通过，发布模型/工作流结构 4 通过，前端生产构建通过。
 - PowerShell installer-smoke 脚本语法检查通过；不是实际安装验收。
+- 收尾修正隔离 UI fixture 的通知日志数组类型并捕获 Runtime.exceptionThrown，
+  避免只凭页面文字存在漏检运行时错误。Vite 忽略 Rust target/build/dist 产物，
+  避免构建或临时浏览器资料触发无关页面刷新；严格烟测重跑通过。
 - 隔离 Edge＋模拟 IPC UI smoke：28 条任务滚动、全局入口清除旧筛选、新项目执行、
   请求回查/手动重开不调用已查看、管理窗口通过；不当作真实 Agent 验收。
 - 真实内嵌 WebView2 inbox smoke：IPC、分组顺序、回查空状态、440×720 上限与
