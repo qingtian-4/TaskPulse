@@ -1,6 +1,6 @@
 # Windows Alpha 发布流程
 
-版本为 `0.2.0-alpha.5`，标签为 `v0.2.0-alpha.5`。版本与包名不沿用上游稳定发布
+版本为 `0.2.0-alpha.6`，标签为 `v0.2.0-alpha.6`。版本与包名不沿用上游稳定发布
 语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
 
 ## 发布前
@@ -14,8 +14,8 @@
 4. 确认远端 main 包含对应提交后，对明确的 main SHA 创建不可变标签：
 
 ```bash
-git tag -a v0.2.0-alpha.5 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.5"
-git push origin refs/tags/v0.2.0-alpha.5
+git tag -a v0.2.0-alpha.6 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.6"
+git push origin refs/tags/v0.2.0-alpha.6
 ```
 
 不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
@@ -24,7 +24,7 @@ git push origin refs/tags/v0.2.0-alpha.5
 
 ## 工作流交付
 
-`preflight → Windows 完整质量门禁/MSVC 构建 → 独立 runner 安装验收 → 草稿预发布`。
+`preflight → Windows 完整质量门禁/MSVC 构建 → 每种安装格式独立 runner 验收 → 草稿预发布`。
 普通 build jobs 仅有 contents:read；只有最后草稿 job 有 contents:write。
 版本/标签/SHA 不一致、缺失/重复安装包、校验失败、安装验收失败都阻止草稿生成。
 
@@ -40,6 +40,12 @@ git push origin refs/tags/v0.2.0-alpha.5
 一致；不降级运行时、不改产品 CSP/安全策略、不在用户电脑安装 gsudo。
 失败时上传分阶段结果、应用 stdout/stderr、最后一次端口查询与页面信息；即使
 首个检查失败，result.json 也必须存在。安装器和启动等待都有时限。
+
+NSIS 和 MSI 使用 fail-fast=false 的独立 runner 矩阵，各自从干净配置开始，证据
+分别为 windows-installer-evidence-nsis/msi。Tauri 安装器会保留目录偏好，MSI 可
+从注册表复用上次 NSIS 路径；在同一环境先装 NSIS 再装 MSI 是跨格式迁移测试，
+不能冒充两个独立的首次安装。不要为测试删除用户偏好。两种格式全部通过才允许
+草稿；跨格式目录/状态迁移和自定义目录优先级仍需单独验收。
 
 安装器和版本命令统一由持有原生 Process 句柄的 `installer-process.ps1` 等待并
 读取真实退出码；不能把 Start-Process 快速退出后返回的 null ExitCode 当成失败
@@ -71,6 +77,7 @@ Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Ap
 - [ ] CI：两个真实安装器安装、版本、内嵌 UI/IPC、重启、同版本重装、卸载通过。
 - [ ] 干净 Windows 10/11 VM：无开发工具，检查 WebView2 有/无与网络受限场景。
 - [ ] 上一可安装版本升级：来源、白名单、未读、固定、去重状态保留。
+- [ ] EXE/MSI 格式迁移：卸载后目录偏好、显式自定义目录优先级、用户状态保留。
 - [ ] 真 Agent 新任务：开始、思考、明确结束、失败、重命名、真实批准与解除。
 - [ ] 多任务与失联：不漏掉范围内新执行、不把源错误/内部 Guardian 当完成。
 - [ ] 长运行、多个提醒、重启恢复回查；记录事件到 UI/通知的 P50/P95 与样本数量。

@@ -2,7 +2,17 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
-## 0.2.0-alpha.5 — Unreleased
+## 0.2.0-alpha.6 — Unreleased
+
+### Fixed
+
+- Isolate NSIS and MSI acceptance in separate fresh Windows runners, with both
+  required and distinct evidence. Alpha.5's NSIS lifecycle passed, but its later
+  MSI reused NSIS's retained directory preference; sequential formats were not
+  independent fresh installs. Preserve preferences and keep format migration a
+  separate, unverified acceptance item.
+
+## 0.2.0-alpha.5 — NSIS passed; mixed-format harness failed, not released
 
 ### Fixed
 

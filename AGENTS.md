@@ -135,6 +135,10 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
   runner and creates a **draft pre-release only**. Read docs/RELEASING.md before
   tagging/publishing; no stable release or automatic version override is enabled.
 - Linux/macOS remain opt-in experimental artifact builds, independent of Windows.
+- NSIS/MSI acceptance runs on separate fresh Windows matrix runners with distinct
+  evidence artifacts, and both must pass. Retained install-directory preferences
+  make sequential formats a migration test; never delete user preferences to pass
+  a fresh-install test. Cross-format migration remains a separate manual gate.
 - Installer smoke is CI-only. Installers keep normal install permissions; the
   installed app/IPC/restart helper runs at medium integrity through gsudo. WebView2
   150+ ignores environment debug switches in elevated processes. Never weaken the

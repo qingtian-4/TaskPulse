@@ -1,6 +1,6 @@
 # TaskPulse 功能改进与实施交接文档
 
-更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.5`（未发布；alpha.1 打包失败、alpha.2–4 安装验收环境/脚本失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
+更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.6`（未发布；alpha.1 打包失败、alpha.2–5 安装验收环境/脚本失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
 
 本文面向接手实施的 Agent。第 2–10 节保留历史审查、问题和原始验收清单；未勾选不能直接当作当前未修复证据。第 11–13 节记录后续实际实施，**当前状态以本节摘要和最新执行记录为准**。原有 `REVIEW_HANDOFF.md` 不作修改。
 
@@ -750,3 +750,27 @@ Alpha.4 证据还显示 WinPS 异步 Connect/Send 的辅助返回值污染了函
 审批恢复后，Alpha.5 本机完整 verify -Frontend 已通过：Rust 333 通过/7 个
 opt-in 跳过，UI 19、发布/真实进程回归 7、Svelte 0 错误/警告、fmt/clippy、
 前端与内嵌原生构建均通过。完整发行验收仍等待新的标签流水线。
+
+## 19. Alpha.6：安装格式的测试环境隔离
+
+[PR #6](https://github.com/qingtian-4/TaskPulse/pull/6) 经准确 HEAD Windows quality
+`38689520869` 完整通过后合入 main `7f834eae0bd2d2c4cfde5c46e8db60cd42767b89`，
+新标签 v0.2.0-alpha.5 指向该提交。发行
+[38690260098](https://github.com/qingtian-4/TaskPulse/actions/runs/38690260098)
+两个安装器构建通过。证据 artifact `11952671007` 已实际下载核对：NSIS 的
+安装、真实版本、普通用户 UI/IPC、重启、重装、卸载全部通过；签名 NotSigned。
+
+随后 MSI 成功返回 0，但详细日志明确把 INSTALLDIR 从测试指定的 msi 子目录改回
+先前 nsis 子目录，并在那里复制了 agent-tray.exe。原因是 Tauri 保留的 InstallDir
+注册表偏好；不是安装包缺少程序，也不能称 MSI 的完整生命周期已验收通过。
+同一环境顺序安装两个格式是迁移场景，之前将其当成独立首次安装属于测试隔离错误。
+
+修复为 fail-fast=false 的 NSIS/MSI 独立新 runner 矩阵，各验证一个格式，产出不同
+命名的证据；两者都通过才允许草稿。参数由 ValidateSet 限定，不删除或改写用户
+目录偏好来强行通过检查。跨格式迁移/自定义目录优先级新增明确人工验收项。
+应用/标签版本 `0.2.0-alpha.6`，MSI `0.2.0.1006`，仍须真实重新验收。
+
+Alpha.6 本地完整 `scripts/verify.ps1 -Frontend` 已通过：Rust 333 通过、7 个
+opt-in 跳过；UI 模型 19 项；发布/真实进程回归 7 项、65 个断言；Svelte 0 错误/
+警告，fmt、clippy、前端生产构建和内嵌原生构建通过。该结果不替代新 runner
+上的两个安装格式验收；未更改正常运行的托盘、用户来源、代理或 Hook 配置。
