@@ -7,6 +7,7 @@ $ErrorActionPreference = 'Stop'
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Disposable CI runner only' }
 $principal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
 if ($principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Run application acceptance at medium integrity, not elevated' }
+. (Join-Path $PSScriptRoot 'installer-process.ps1')
 $Exe = (Resolve-Path -LiteralPath $Exe).Path
 $Evidence = (Resolve-Path -LiteralPath $Evidence).Path
 $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
@@ -18,21 +19,34 @@ $failure = $null
 $ipc = $null
 $lastPages = @()
 $lastProbeError = $null
+$observedExe = $null
 
 function Stop-OwnedApp {
     if ($script:process -and -not $script:process.HasExited) {
         $live = Get-Process -Id $script:process.Id -ErrorAction Stop
-        if ([IO.Path]::GetFullPath($live.Path) -ne $Exe) { throw 'Refusing to stop an unrelated executable' }
+        $script:observedExe = $live.Path
+        if (-not (Test-InstallerSameExecutable $live.Path $Exe)) { throw "Refusing to stop an unrelated executable: expected $Exe; observed $($live.Path)" }
         Stop-Process -Id $live.Id
         if (-not $script:process.WaitForExit(10000)) { throw 'Installed app did not stop' }
     }
     $script:process = $null
+    # The browser child can outlive its host briefly; never attach the next
+    # launch to a previous CDP target during restart acceptance.
+    $closed = $false
+    $closeClock = [Diagnostics.Stopwatch]::StartNew()
+    while ($closeClock.Elapsed.TotalSeconds -lt 20) {
+        try { $null = Invoke-RestMethod 'http://127.0.0.1:19347/json' -TimeoutSec 1 }
+        catch { $closed = $true; break }
+        Start-Sleep -Milliseconds 100
+    }
+    if (-not $closed) { throw 'Previous native CDP endpoint is still active after app stop' }
 }
 function Get-AppPage {
     $clock = [Diagnostics.Stopwatch]::StartNew()
     while ($clock.Elapsed.TotalSeconds -lt 45) {
         try {
             $pages = Invoke-RestMethod 'http://127.0.0.1:19347/json' -TimeoutSec 1
+            $script:lastProbeError = $null
             $script:lastPages = @($pages | Select-Object type,url)
             $page = $pages | Where-Object { $_.url -match '^https?://tauri\.localhost(?:/|$)' -and $_.url -notmatch '/(notice|manage)' } | Select-Object -First 1
             if ($page) { return $page }
@@ -46,12 +60,12 @@ function Test-NativeIPC([string]$Url) {
     $socket = New-Object System.Net.WebSockets.ClientWebSocket
     $timeout = New-Object System.Threading.CancellationTokenSource(15000)
     try {
-        $socket.ConnectAsync([Uri]$Url,$timeout.Token).GetAwaiter().GetResult()
+        [void]$socket.ConnectAsync([Uri]$Url,$timeout.Token).GetAwaiter().GetResult()
         $expression = '(async()=>{for(let i=0;i<100;i++){if(document.querySelector(".dashboard")&&globalThis.__TAURI_INTERNALS__)break;await new Promise(r=>setTimeout(r,100));}const invoke=globalThis.__TAURI_INTERNALS__.invoke;const s=await invoke("get_monitoring_settings");const tasks=await invoke("get_agents");const prompts=await invoke("get_pending_task_prompts");return {embedded:!!document.querySelector(".dashboard"),onboarding:s.onboarding_complete,tasks:tasks.length,prompts:prompts.length};})()'
         $request = @{id=1;method='Runtime.evaluate';params=@{expression=$expression;awaitPromise=$true;returnByValue=$true}} | ConvertTo-Json -Depth 10 -Compress
         $bytes = [Text.Encoding]::UTF8.GetBytes($request)
         $segment = New-Object 'System.ArraySegment[byte]' -ArgumentList (,$bytes)
-        $socket.SendAsync($segment,[Net.WebSockets.WebSocketMessageType]::Text,$true,$timeout.Token).GetAwaiter().GetResult()
+        [void]$socket.SendAsync($segment,[Net.WebSockets.WebSocketMessageType]::Text,$true,$timeout.Token).GetAwaiter().GetResult()
         while ($true) {
             $buffer = New-Object byte[] 65536
             $incoming = New-Object 'System.ArraySegment[byte]' -ArgumentList (,$buffer)
@@ -87,6 +101,6 @@ try {
 } finally {
     try { Stop-OwnedApp } finally {
         # Fresh CI profile only; no task prompts/commands or credential material.
-        @{kind=$Kind;integrity='medium';phase=$phase;error=$failure;native_ipc=$ipc;restart=($phase -eq 'passed');pages=@($lastPages);last_probe_error=$lastProbeError} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Evidence "$Kind-native.json") -Encoding UTF8
+        @{kind=$Kind;integrity='medium';phase=$phase;error=$failure;native_ipc=$ipc;restart=($phase -eq 'passed');pages=@($lastPages);last_probe_error=$lastProbeError;expected_exe=$Exe;observed_exe=$observedExe} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $Evidence "$Kind-native.json") -Encoding UTF8
     }
 }

@@ -74,6 +74,7 @@ try {
         if ($LASTEXITCODE -ne 0) { throw "Medium-integrity native acceptance failed for $kind" }
         $native = Get-Content -Raw -Encoding UTF8 (Join-Path $evidence "$kind-native.json") | ConvertFrom-Json
         if ($native.phase -ne 'passed' -or $native.integrity -ne 'medium') { throw 'Missing native acceptance evidence' }
+        if ($native.native_ipc -is [Array] -or $native.native_ipc.embedded -ne $true -or $native.native_ipc.onboarding -ne $false -or $native.native_ipc.tasks -ne 0 -or $native.native_ipc.prompts -ne 0) { throw 'Native acceptance evidence must be a single validated IPC result' }
         $phase = "$kind-reinstall"
         Write-Host "[$kind] reinstall"
         Invoke-Installer $installer $arguments

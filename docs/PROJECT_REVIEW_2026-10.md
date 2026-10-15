@@ -1,6 +1,6 @@
 # TaskPulse 功能改进与实施交接文档
 
-更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.4`（未发布；alpha.1 打包失败、alpha.2/3 安装验收环境/脚本失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
+更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.5`（未发布；alpha.1 打包失败、alpha.2–4 安装验收环境/脚本失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
 
 本文面向接手实施的 Agent。第 2–10 节保留历史审查、问题和原始验收清单；未勾选不能直接当作当前未修复证据。第 11–13 节记录后续实际实施，**当前状态以本节摘要和最新执行记录为准**。原有 `REVIEW_HANDOFF.md` 不作修改。
 
@@ -717,3 +717,36 @@ Alpha.4 本机完整 verify -Frontend 通过：Rust 333/7 opt-in、UI 19、发�
 测试 7、Svelte 0 错误/警告、fmt/clippy、前端与内嵌原生构建全部通过。对同一
 工作区程序 --version 使用新等待实现，实际取得 ExitCode 0 与正确版本输出；
 只使用单个验证进程的执行策略参数，没有修改系统执行策略或用户 Agent 设置。
+
+### Alpha.4 合并和真实安装结果
+
+[PR #5](https://github.com/qingtian-4/TaskPulse/pull/5) 经准确 HEAD Windows quality
+`38684415101` 通过后合入 main `11b2b708eea2a91597c31fdc3c2a9cf35778648c`，
+推送新标签 v0.2.0-alpha.4；未改写历史标签。
+[发行 38685012588](https://github.com/qingtian-4/TaskPulse/actions/runs/38685012588)
+再次构建两个安装器成功；安装烟测 `116260971947` 版本检查已通过，随后普通
+用户首次启动成功，实际 native IPC 证据为 embedded=true、onboarding=false、
+tasks=0、prompts=0。清理进程时旧 GetFullPath 字串比较拒绝了路径不同的自有
+可执行文件，未执行重启/MSI 全流程，草稿被跳过。证据 artifact `11950415731`
+已实际下载检查；没有把首次启动通过写成整个安装验收通过。
+
+## 18. Alpha.5：可执行文件身份与 IPC 证据契约
+
+Windows 最终文件路径使用 GetFinalPathNameByHandleW 的原生文件句柄解析；
+自有进程超时清理与原生应用停止使用同一比较器，接受长短名称/最终路径相同
+的文件，仍拒绝其他文件，不降级为按进程名停止。原始 expected/observed 路径
+保存在 CI 证据。本机真实临时用户目录回归确认 spelling differs=True 而最终
+身份相同；不同系统可执行文件的比较仍为 false。见
+[Microsoft 最终路径 API](https://learn.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-getfinalpathnamebyhandlew)。
+
+Alpha.4 证据还显示 WinPS 异步 Connect/Send 的辅助返回值污染了函数输出。
+现在显式抑制辅助值，并要求 native_ipc 是单一、已验证的对象，不能用数组通过
+断言。重启前限时等待旧 CDP 端点关闭，避免连接旧实例；成功探测清除旧错误。
+上述均是验收工具约束，未改产品监控状态、用户配置或 CSP。
+
+应用版本 `0.2.0-alpha.5` / MSI `0.2.0.1005`，继续经新 PR/标签真实验证，
+不更改 Alpha.4 标签，也不把工具修复代替完整安装结果。
+
+审批恢复后，Alpha.5 本机完整 verify -Frontend 已通过：Rust 333 通过/7 个
+opt-in 跳过，UI 19、发布/真实进程回归 7、Svelte 0 错误/警告、fmt/clippy、
+前端与内嵌原生构建均通过。完整发行验收仍等待新的标签流水线。

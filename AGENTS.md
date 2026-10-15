@@ -142,6 +142,9 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - `installer-process.test.ps1` is a non-installing Windows process regression.
   Keep process handles/real exit codes and bounded waits; null ExitCode from a
   fast Start-Process child is not evidence of installer or version failure.
+- CI-owned process paths must be compared by final file-handle paths, including
+  Windows 8.3 aliases; never weaken ownership to a basename match. Native IPC
+  evidence is one result object, not an array of .NET async return values.
 - Bounded ephemeral popup queues do not replace durable attention. The bell inbox
   restores unresolved prompts without replaying lifecycle notifications. Manual
   reopening requires fresh matching source health and explicit pending state;

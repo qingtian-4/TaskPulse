@@ -2,7 +2,16 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
-## 0.2.0-alpha.4 — Unreleased
+## 0.2.0-alpha.5 — Unreleased
+
+### Fixed
+
+- Compare final file-handle paths for owned CI processes, accepting Windows 8.3
+  aliases without allowing unrelated executables. Add real temp-profile alias tests.
+- Suppress auxiliary .NET async outputs so native acceptance evidence is one IPC
+  result, and wait for the old CDP endpoint to close before restart acceptance.
+
+## 0.2.0-alpha.4 — Installed native UI/IPC passed; cleanup harness failed, not released
 
 ### Fixed
 
