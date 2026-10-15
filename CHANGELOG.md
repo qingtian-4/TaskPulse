@@ -2,7 +2,17 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
-## 0.2.0-alpha.2 — Unreleased
+## 0.2.0-alpha.3 — Unreleased
+
+### Fixed
+
+- Separate privileged installation from ordinary-user native app acceptance.
+  New WebView2 versions ignore environment debug flags in elevated CI hosts;
+  a CI-only medium-integrity helper now runs mandatory UI/IPC/restart checks.
+- Bound installer/startup waits and retain phase, error, stdout/stderr and probe
+  evidence even if the first launch fails. No product security policy is weakened.
+
+## 0.2.0-alpha.2 — Installers built, native acceptance failed; not released
 
 ### Fixed
 

@@ -135,6 +135,10 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
   runner and creates a **draft pre-release only**. Read docs/RELEASING.md before
   tagging/publishing; no stable release or automatic version override is enabled.
 - Linux/macOS remain opt-in experimental artifact builds, independent of Windows.
+- Installer smoke is CI-only. Installers keep normal install permissions; the
+  installed app/IPC/restart helper runs at medium integrity through gsudo. WebView2
+  150+ ignores environment debug switches in elevated processes. Never weaken the
+  product CSP or skip native checks to fix this; retain phase/error/startup evidence.
 - Bounded ephemeral popup queues do not replace durable attention. The bell inbox
   restores unresolved prompts without replaying lifecycle notifications. Manual
   reopening requires fresh matching source health and explicit pending state;

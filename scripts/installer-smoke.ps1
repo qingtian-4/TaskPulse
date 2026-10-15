@@ -1,6 +1,7 @@
 param(
     [Parameter(Mandatory=$true)][string]$Assets,
-    [Parameter(Mandatory=$true)][string]$Version
+    [Parameter(Mandatory=$true)][string]$Version,
+    [Parameter(Mandatory=$true)][string]$Gsudo
 )
 $ErrorActionPreference = 'Stop'
 # This installs/uninstalls software. Never run it against a developer's real profile.
@@ -16,62 +17,15 @@ New-Item -ItemType Directory -Path $workspace | Out-Null
 $marker = Join-Path $stateRoot 'installer-smoke-marker.txt'
 New-Item -ItemType Directory -Path $stateRoot | Out-Null
 Set-Content -LiteralPath $marker -Value 'preserve-user-data' -Encoding UTF8
-$initialPath = $env:PATH
-$initialWebViewArgs = $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS
-$process = $null
 $results = @()
+$phase = 'prepare'
+$failure = $null
+$Gsudo = (Resolve-Path -LiteralPath $Gsudo).Path
 
 function Invoke-Installer([string]$File, [string]$Arguments) {
-    $child = Start-Process -FilePath $File -ArgumentList $Arguments -WindowStyle Hidden -Wait -PassThru
+    $child = Start-Process -FilePath $File -ArgumentList $Arguments -WindowStyle Hidden -PassThru
+    if (-not $child.WaitForExit(120000)) { throw "Installer timed out: $File" }
     if ($child.ExitCode -notin @(0,3010)) { throw "Installer exit $($child.ExitCode): $File" }
-}
-function Stop-OwnedApp([string]$Exe) {
-    if ($null -ne $script:process -and -not $script:process.HasExited) {
-        $live = Get-Process -Id $script:process.Id -ErrorAction Stop
-        if ([IO.Path]::GetFullPath($live.Path) -ne [IO.Path]::GetFullPath($Exe)) { throw 'Refusing to stop a process with a different executable path' }
-        Stop-Process -Id $live.Id
-        $script:process.WaitForExit(10000) | Out-Null
-    }
-    $script:process = $null
-}
-function Get-AppPage {
-    for ($attempt=0; $attempt -lt 100; $attempt++) {
-        try {
-            $pages = Invoke-RestMethod 'http://127.0.0.1:19347/json' -TimeoutSec 2
-            $page = $pages | Where-Object { $_.url -match 'tauri.localhost' -and $_.url -notmatch '/(notice|manage)' } | Select-Object -First 1
-            if ($page) { return $page }
-        } catch { }
-        if ($script:process.HasExited) { throw 'Installed app exited before its native WebView was ready' }
-        Start-Sleep -Milliseconds 200
-    }
-    throw 'Installed app did not expose its embedded frontend'
-}
-function Test-NativeIPC([string]$Url) {
-    $socket = New-Object System.Net.WebSockets.ClientWebSocket
-    $timeout = New-Object System.Threading.CancellationTokenSource(15000)
-    try {
-        $socket.ConnectAsync([Uri]$Url,$timeout.Token).GetAwaiter().GetResult()
-        $expression = '(async()=>{for(let i=0;i<100;i++){if(document.querySelector(".dashboard")&&globalThis.__TAURI_INTERNALS__)break;await new Promise(r=>setTimeout(r,100));}const invoke=globalThis.__TAURI_INTERNALS__.invoke;const s=await invoke("get_monitoring_settings");const tasks=await invoke("get_agents");const prompts=await invoke("get_pending_task_prompts");return {embedded:!!document.querySelector(".dashboard"),onboarding:s.onboarding_complete,tasks:tasks.length,prompts:prompts.length};})()'
-        $request = @{id=1;method='Runtime.evaluate';params=@{expression=$expression;awaitPromise=$true;returnByValue=$true}} | ConvertTo-Json -Depth 10 -Compress
-        $bytes = [Text.Encoding]::UTF8.GetBytes($request)
-        $segment = New-Object 'System.ArraySegment[byte]' -ArgumentList (,$bytes)
-        $socket.SendAsync($segment,[Net.WebSockets.WebSocketMessageType]::Text,$true,$timeout.Token).GetAwaiter().GetResult()
-        while ($true) {
-            $buffer = New-Object byte[] 65536
-            $incoming = New-Object 'System.ArraySegment[byte]' -ArgumentList (,$buffer)
-            $message = New-Object Text.StringBuilder
-            do {
-                $received = $socket.ReceiveAsync($incoming,$timeout.Token).GetAwaiter().GetResult()
-                [void]$message.Append([Text.Encoding]::UTF8.GetString($buffer,0,$received.Count))
-            } while (-not $received.EndOfMessage)
-            $reply = $message.ToString() | ConvertFrom-Json
-            if ($reply.id -ne 1) { continue }
-            if ($reply.error -or $reply.result.exceptionDetails) { throw 'Native WebView IPC failed' }
-            $value = $reply.result.result.value
-            if (-not $value.embedded -or $value.onboarding -or $value.tasks -ne 0 -or $value.prompts -ne 0) { throw 'First launch imported history, enabled monitoring, or failed to render onboarding' }
-            return $value
-        }
-    } finally { $socket.Dispose(); $timeout.Dispose() }
 }
 
 try {
@@ -93,6 +47,8 @@ try {
         if ((Get-FileHash -LiteralPath (Join-Path $assetRoot $Matches[2]) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1]) { throw 'Installer checksum mismatch' }
     }
     foreach ($kind in @('nsis','msi')) {
+        $phase = "$kind-install"
+        Write-Host "[$kind] install"
         $installDir = Join-Path $workspace $kind
         New-Item -ItemType Directory -Path $installDir | Out-Null
         $exe = Join-Path $installDir 'agent-tray.exe'
@@ -104,22 +60,26 @@ try {
         foreach ($resource in @('agent-tray-hook.ps1','install-hooks.ps1')) {
             if (-not (Test-Path -LiteralPath (Join-Path $installDir "scripts\hooks\$resource"))) { throw "Missing packaged Hook resource: $resource" }
         }
-        # Child runtime cannot find Rust, Bun, Node or repository build tools.
-        $env:PATH = "$env:SystemRoot\System32;$env:SystemRoot"
-        $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = '--remote-debugging-port=19347'
+        $phase = "$kind-version"
         $versionOutput = Join-Path $evidence "$kind-version.txt"
-        $versionProcess = Start-Process -FilePath $exe -ArgumentList '--version' -WindowStyle Hidden -Wait -PassThru -RedirectStandardOutput $versionOutput
+        $versionProcess = Start-Process -FilePath $exe -ArgumentList '--version' -WindowStyle Hidden -PassThru -RedirectStandardOutput $versionOutput
+        if (-not $versionProcess.WaitForExit(15000)) { throw 'Installed version command timed out' }
         if ($versionProcess.ExitCode -ne 0 -or (Get-Content -Raw $versionOutput).Trim() -ne "TaskPulse $Version") { throw 'Installed executable version differs from release' }
-        $process = Start-Process -FilePath $exe -ArgumentList '--show' -WindowStyle Hidden -PassThru
-        $ipc = Test-NativeIPC (Get-AppPage).webSocketDebuggerUrl
-        Stop-OwnedApp $exe
-        # Restart must retain onboarding/data. Reinstall is NOT a cross-version upgrade test.
-        $process = Start-Process -FilePath $exe -ArgumentList '--show' -WindowStyle Hidden -PassThru
-        $null = Test-NativeIPC (Get-AppPage).webSocketDebuggerUrl
-        Stop-OwnedApp $exe
+        $phase = "$kind-native"
+        # WebView2 >=150 ignores environment debug switches in elevated hosts.
+        # Install with normal installer permissions, but drive the app as a user.
+        $appSmoke = Join-Path $PSScriptRoot 'installer-app-smoke.ps1'
+        & $Gsudo --integrity Medium --direct powershell.exe -NoProfile -ExecutionPolicy Bypass -File $appSmoke -Exe $exe -Evidence $evidence -Kind $kind
+        if ($LASTEXITCODE -ne 0) { throw "Medium-integrity native acceptance failed for $kind" }
+        $native = Get-Content -Raw -Encoding UTF8 (Join-Path $evidence "$kind-native.json") | ConvertFrom-Json
+        if ($native.phase -ne 'passed' -or $native.integrity -ne 'medium') { throw 'Missing native acceptance evidence' }
+        $phase = "$kind-reinstall"
+        Write-Host "[$kind] reinstall"
         Invoke-Installer $installer $arguments
         if (-not (Test-Path -LiteralPath $marker)) { throw 'Reinstall removed user data' }
         $signature = (Get-AuthenticodeSignature -FilePath $package).Status.ToString()
+        $phase = "$kind-uninstall"
+        Write-Host "[$kind] uninstall"
         if ($kind -eq 'nsis') {
             $uninstaller = (Resolve-Path -LiteralPath (Join-Path $installDir 'uninstall.exe')).Path
             if (-not $uninstaller.StartsWith($workspace+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)) { throw 'Uninstaller escaped smoke workspace' }
@@ -130,11 +90,12 @@ try {
         for($n=0;$n -lt 50 -and (Test-Path -LiteralPath $exe);$n++){Start-Sleep -Milliseconds 200}
         if (Test-Path -LiteralPath $exe) { throw 'Uninstall left the application executable installed' }
         if (-not (Test-Path -LiteralPath $marker)) { throw 'Uninstall removed user state without permission' }
-        $results += @{kind=$kind;version=$Version;signature=$signature;native_ipc=$ipc;restart=$true;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';focus='not_verified'}
+        $results += @{kind=$kind;version=$Version;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';focus='not_verified'}
     }
+    $phase = 'passed'
+} catch {
+    $failure = $_.Exception.Message
+    throw
 } finally {
-    if ($process -and -not $process.HasExited) { Stop-OwnedApp $process.Path }
-    $env:PATH = $initialPath
-    $env:WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS = $initialWebViewArgs
-    $results | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence 'result.json') -Encoding UTF8
+    @{version=$Version;phase=$phase;error=$failure;results=@($results)} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence 'result.json') -Encoding UTF8
 }

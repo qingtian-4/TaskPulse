@@ -1,6 +1,6 @@
 # Windows Alpha 发布流程
 
-版本为 `0.2.0-alpha.2`，标签为 `v0.2.0-alpha.2`。版本与包名不沿用上游稳定发布
+版本为 `0.2.0-alpha.3`，标签为 `v0.2.0-alpha.3`。版本与包名不沿用上游稳定发布
 语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
 
 ## 发布前
@@ -14,8 +14,8 @@
 4. 确认远端 main 包含对应提交后，对明确的 main SHA 创建不可变标签：
 
 ```bash
-git tag -a v0.2.0-alpha.2 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.2"
-git push origin refs/tags/v0.2.0-alpha.2
+git tag -a v0.2.0-alpha.3 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.3"
+git push origin refs/tags/v0.2.0-alpha.3
 ```
 
 不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
@@ -32,6 +32,14 @@ git push origin refs/tags/v0.2.0-alpha.2
 `TaskPulse_<版本>_windows_x64.msi`，附平铺 `SHA256SUMS.txt` 和源 SHA manifest。
 没有验证 Portable，不发布改名的 Debug EXE。代码签名与 SHA256 是不同保证；
 当前没有配置签名证书，发布说明必须诚实说明未知发布者提示。
+
+安装器以正常安装权限运行；原生应用的启动、IPC 和重启验收通过 CI 专用 gsudo
+子进程降到普通用户权限。WebView2 150+ 在提权进程中忽略环境调试参数，不能把
+调试端口连接超时直接断言为应用故障，也不能因此跳过 UI/IPC 门禁。此做法与
+[Tauri 官方验收](https://github.com/tauri-apps/tauri/blob/dev/.github/workflows/test-api-e2e.yml)
+一致；不降级运行时、不改产品 CSP/安全策略、不在用户电脑安装 gsudo。
+失败时上传分阶段结果、应用 stdout/stderr、最后一次端口查询与页面信息；即使
+首个检查失败，result.json 也必须存在。安装器和启动等待都有时限。
 
 ### MSI 数字元信息
 
