@@ -23,6 +23,24 @@ export function projectVersions(root: string): string[] {
     JSON.parse(readFileSync(join(root, 'src-tauri/tauri.conf.json'), 'utf8')).version];
 }
 
+// Windows Installer cannot use SemVer's alpha.N identifier directly. Keep the
+// public/application version intact and validate a separate numeric Wix version.
+export function msiVersionFor(version:string):string {
+  const match=ALPHA_VERSION.exec(version);
+  if(!match)throw new Error('Invalid pre-release version');
+  const [,major,minor,patch,channel,sequence]=match;
+  if(Number(major)>255 || Number(minor)>255 || Number(patch)>65535 || Number(sequence)>=1000) {
+    throw new Error('Version exceeds Windows Installer numeric limits');
+  }
+  const build={alpha:1000,beta:2000,rc:3000}[channel as 'alpha'|'beta'|'rc']+Number(sequence);
+  return `${major}.${minor}.${patch}.${build}`;
+}
+
+export function validateMsiVersion(root:string,version:string):void {
+  const config=JSON.parse(readFileSync(join(root,'src-tauri/tauri.conf.json'),'utf8'));
+  if(config.bundle?.windows?.wix?.version!==msiVersionFor(version))throw new Error('Wix numeric product version must match the application pre-release version mapping');
+}
+
 export function installerNames(version: string) {
   if (!ALPHA_VERSION.test(version)) throw new Error('Invalid pre-release version');
   return [`TaskPulse_${version}_windows_x64_setup.exe`, `TaskPulse_${version}_windows_x64.msi`];
@@ -62,7 +80,7 @@ export function stageInstallers(bundleRoot: string, out: string, version: string
   mkdirSync(out, {recursive:true});
   sources.forEach((file, index) => copyFileSync(file, join(out, names[index])));
   writeFileSync(join(out, 'SHA256SUMS.txt'), names.map(name => `${sha256(readFileSync(join(out, name)))}  ${name}\n`).join(''));
-  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:`v${version}`, commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
+  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:`v${version}`, msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
   verifyChecksums(out, version);
 }
 
@@ -84,10 +102,12 @@ if (import.meta.main) {
     if (command === 'check') {
       const versions = projectVersions(root);
       const version = validateRelease(`v${versions[0]}`, versions);
+      validateMsiVersion(root,version);
       console.log(`Release versions consistent: ${version}`);
     } else if (command === 'preflight') {
       const tag = argument('--tag');
       const version = validateRelease(tag, projectVersions(root));
+      validateMsiVersion(root,version);
       if (!existsSync(join(root, `docs/releases/${version}.md`))) throw new Error('Missing version-specific release notes');
       const commit = git(root, ['rev-parse', 'HEAD']);
       const tagged = git(root, ['rev-parse', '--verify', `${tag}^{commit}`]);

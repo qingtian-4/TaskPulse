@@ -1,6 +1,6 @@
 # Windows Alpha 发布流程
 
-版本为 `0.2.0-alpha.1`，标签为 `v0.2.0-alpha.1`。版本与包名不沿用上游稳定发布
+版本为 `0.2.0-alpha.2`，标签为 `v0.2.0-alpha.2`。版本与包名不沿用上游稳定发布
 语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
 
 ## 发布前
@@ -14,8 +14,8 @@
 4. 确认远端 main 包含对应提交后，对明确的 main SHA 创建不可变标签：
 
 ```bash
-git tag -a v0.2.0-alpha.1 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.1"
-git push origin refs/tags/v0.2.0-alpha.1
+git tag -a v0.2.0-alpha.2 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.2"
+git push origin refs/tags/v0.2.0-alpha.2
 ```
 
 不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
@@ -32,6 +32,18 @@ git push origin refs/tags/v0.2.0-alpha.1
 `TaskPulse_<版本>_windows_x64.msi`，附平铺 `SHA256SUMS.txt` 和源 SHA manifest。
 没有验证 Portable，不发布改名的 Debug EXE。代码签名与 SHA256 是不同保证；
 当前没有配置签名证书，发布说明必须诚实说明未知发布者提示。
+
+### MSI 数字元信息
+
+MSI 不接受 `alpha.N`。应用、标签与四文件仍保持同一 SemVer；WiX 单独使用
+`major.minor.patch.build`，build=alpha 1000/beta 2000/rc 3000 + 序号（0–999），
+例如 alpha.2 为 `0.2.0.1002`。release:check/preflight 校验映射，manifest 记录
+msi_product_version；安装器验收读 MSI Property 和应用 --version，两者不混为一谈。
+
+Windows Installer 的升级比较忽略第四字段；这个映射不是跨预发布升级顺序的保证。
+必须实际验收同核心版本升级/重装以及稳定版本迁移，不能因为 build 数字递增就
+勾选升级通过。参见 [Tauri WiX 配置](https://v2.tauri.app/reference/config/#wixconfig)
+与 [Microsoft ProductVersion](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)。
 
 Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Apple 证书，
 不阻断 Windows；这些构建不等于安装/签名/公证或稳定支持验收。
