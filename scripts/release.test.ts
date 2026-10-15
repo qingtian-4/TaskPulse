@@ -37,6 +37,9 @@ test('installer acceptance de-elevates only the app, keeps native checks mandato
   const root=join(import.meta.dir,'..');
   const workflow=Bun.YAML.parse(readFileSync(join(root,'.github/workflows/release.yml'),'utf8')) as any;
   const smoke=workflow.jobs['installer-smoke'];
+  expect(smoke.strategy.matrix.installer).toEqual(['nsis','msi']);
+  expect(smoke.strategy['fail-fast']).toBe(false);
+  expect(smoke.steps.find((s:any)=>s.uses?.startsWith('actions/upload-artifact')).with.name).toContain('matrix.installer');
   expect(smoke.steps.some((s:any)=>s.run?.includes('gerardog.gsudo'))).toBe(true);
   expect(smoke.steps.some((s:any)=>s.run?.includes('-Gsudo "$env:GSUDO_EXE"'))).toBe(true);
   const parent=readFileSync(join(root,'scripts/installer-smoke.ps1'),'utf8');
@@ -54,6 +57,8 @@ test('installer acceptance de-elevates only the app, keeps native checks mandato
   expect(helper).toContain('[void]$socket.ConnectAsync');
   expect(helper).toContain('[void]$socket.SendAsync');
   expect(parent).toContain('$native.native_ipc -is [Array]');
+  expect(parent).toContain("[ValidateSet('nsis','msi')]");
+  expect(parent).toContain('foreach ($kind in @($InstallerKind))');
   for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1','installer-process.ps1','installer-process.test.ps1'] : []) {
     const script=join(root,'scripts',name).replaceAll("'","''");
     const result=Bun.spawnSync(['powershell.exe','-NoProfile','-Command',`$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$parseErrors);if($parseErrors){$parseErrors|Out-String|Write-Error;exit 1}`]);

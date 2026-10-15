@@ -1,7 +1,8 @@
 param(
     [Parameter(Mandatory=$true)][string]$Assets,
     [Parameter(Mandatory=$true)][string]$Version,
-    [Parameter(Mandatory=$true)][string]$Gsudo
+    [Parameter(Mandatory=$true)][string]$Gsudo,
+    [Parameter(Mandatory=$true)][ValidateSet('nsis','msi')][string]$InstallerKind
 )
 $ErrorActionPreference = 'Stop'
 # This installs/uninstalls software. Never run it against a developer's real profile.
@@ -46,7 +47,9 @@ try {
         if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9_.-]+)$') { throw 'Invalid checksum path' }
         if ((Get-FileHash -LiteralPath (Join-Path $assetRoot $Matches[2]) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1]) { throw 'Installer checksum mismatch' }
     }
-    foreach ($kind in @('nsis','msi')) {
+    # One format per fresh runner: installer directory preferences survive uninstall.
+    # Testing NSIS then MSI in one profile is a migration test, not a fresh install.
+    foreach ($kind in @($InstallerKind)) {
         $phase = "$kind-install"
         Write-Host "[$kind] install"
         $installDir = Join-Path $workspace $kind
@@ -92,12 +95,12 @@ try {
         for($n=0;$n -lt 50 -and (Test-Path -LiteralPath $exe);$n++){Start-Sleep -Milliseconds 200}
         if (Test-Path -LiteralPath $exe) { throw 'Uninstall left the application executable installed' }
         if (-not (Test-Path -LiteralPath $marker)) { throw 'Uninstall removed user state without permission' }
-        $results += @{kind=$kind;version=$Version;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';focus='not_verified'}
+        $results += @{kind=$kind;version=$Version;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';format_migration='not_verified';focus='not_verified'}
     }
     $phase = 'passed'
 } catch {
     $failure = $_.Exception.Message
     throw
 } finally {
-    @{version=$Version;phase=$phase;error=$failure;results=@($results)} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence 'result.json') -Encoding UTF8
+    @{version=$Version;installer=$InstallerKind;phase=$phase;error=$failure;results=@($results)} | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath (Join-Path $evidence 'result.json') -Encoding UTF8
 }

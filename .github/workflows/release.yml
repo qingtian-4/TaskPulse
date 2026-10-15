@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.5'
+        default: 'v0.2.0-alpha.6'
 
 permissions:
   contents: read
@@ -91,10 +91,14 @@ jobs:
           if-no-files-found: error
 
   installer-smoke:
-    name: Install, launch, reinstall and uninstall on a separate Windows runner
+    name: Verify ${{ matrix.installer }} on a fresh Windows runner
     needs: [preflight, windows]
     runs-on: windows-latest
     timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        installer: [nsis, msi]
     steps:
       - uses: actions/checkout@v6
         with:
@@ -118,14 +122,15 @@ jobs:
           $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
           icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
           if ($LASTEXITCODE -ne 0) { throw 'Could not grant the runner account access to acceptance evidence' }
-      - name: Exercise both real installers (not the build-tree executable)
+      - name: Exercise the real installer (not the build-tree executable)
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE"
+          INSTALLER_KIND: ${{ matrix.installer }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: windows-installer-evidence
+          name: windows-installer-evidence-${{ matrix.installer }}
           path: dist/installer-smoke/
           if-no-files-found: warn
 
