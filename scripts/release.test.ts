@@ -33,6 +33,29 @@ test('MSI numeric metadata is separate from SemVer but derived and bounded',()=>
   expect(msiVersionFor('0.2.0-rc.2')).toBe('0.2.0.3002');
   for(const v of ['256.2.0-alpha.1','0.256.0-alpha.1','0.2.65536-alpha.1','0.2.0-alpha.1000'])expect(()=>msiVersionFor(v)).toThrow();
 });
+test('installer acceptance de-elevates only the app, keeps native checks mandatory and saves failures',()=>{
+  const root=join(import.meta.dir,'..');
+  const workflow=Bun.YAML.parse(readFileSync(join(root,'.github/workflows/release.yml'),'utf8')) as any;
+  const smoke=workflow.jobs['installer-smoke'];
+  expect(smoke.steps.some((s:any)=>s.run?.includes('gerardog.gsudo'))).toBe(true);
+  expect(smoke.steps.some((s:any)=>s.run?.includes('-Gsudo "$env:GSUDO_EXE"'))).toBe(true);
+  const parent=readFileSync(join(root,'scripts/installer-smoke.ps1'),'utf8');
+  const helper=readFileSync(join(root,'scripts/installer-app-smoke.ps1'),'utf8');
+  expect(parent).toContain('--integrity Medium --direct');
+  expect(parent).toContain('Medium-integrity native acceptance failed');
+  expect(parent).toContain('results=@($results)');
+  expect(helper).toContain('WindowsBuiltInRole]::Administrator');
+  expect(helper).toContain('WaitForExit(10000)');
+  expect(helper).toContain("@('first-launch','restart')");
+  expect(helper).toContain('get_pending_task_prompts');
+  expect(helper).toContain('last_probe_error=$lastProbeError');
+  expect(helper).toContain('-RedirectStandardError');
+  for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1'] : []) {
+    const script=join(root,'scripts',name).replaceAll("'","''");
+    const result=Bun.spawnSync(['powershell.exe','-NoProfile','-Command',`$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$parseErrors);if($parseErrors){$parseErrors|Out-String|Write-Error;exit 1}`]);
+    expect(result.exitCode, result.stderr.toString()).toBe(0);
+  }
+},15000);
 test('release tag, app versions and lockfile must agree; stable publication is disabled',()=>{
   expect(validateRelease(`v${version}`,Array(4).fill(version))).toBe(version);
   for (const tag of ['main','app-v'+version,'v0.2.0','v0.2.0-alpha.01','v0.2.0-alpha.1\nattack','v$(whoami)']) {

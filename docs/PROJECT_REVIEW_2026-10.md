@@ -1,6 +1,6 @@
 # TaskPulse 功能改进与实施交接文档
 
-更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.2`（未发布；alpha.1 打包失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
+更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.3`（未发布；alpha.1 打包失败、alpha.2 原生安装验收失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
 
 本文面向接手实施的 Agent。第 2–10 节保留历史审查、问题和原始验收清单；未勾选不能直接当作当前未修复证据。第 11–13 节记录后续实际实施，**当前状态以本节摘要和最新执行记录为准**。原有 `REVIEW_HANDOFF.md` 不作修改。
 
@@ -631,7 +631,7 @@ Alpha.2 使用新提交、新 PR、新标签，不覆盖已推送的历史。
 通过；Svelte 0 errors/warnings、UI 19、发布模型 5、生产构建与安装脚本语法通过。
 新的 MSVC MSI/安装/草稿结果必须等待实际流水线；干净机器等人工门禁继续保留。
 
-### 本次停止点：GitHub 审批连接不可用
+### 前次停止点：GitHub 审批连接不可用
 
 Alpha.2 修复 `2db67f2` 已推送至 codex/desktop-discovery-visibility；远端 main 为
 `a9e879c`（已合并 PR #2）。alpha.1 标签保留；尚未创建 alpha.2 标签或发布。
@@ -642,3 +642,44 @@ Alpha.2 修复 `2db67f2` 已推送至 codex/desktop-discovery-visibility；远�
 Hook 配置不变。待连接恢复，先只读核对有无同分支新 PR，避免重复创建；然后
 完成修复 PR 的 CI/合并、验证 main 树、推送新标签、实际安装烟测与草稿交付。
 当前没有可宣称完成验收的安装包，也没有公开稳定 Release。
+
+## 15. 审批恢复后的 Alpha.2 合并与发行验收
+
+2026-10-15 恢复后先读取同分支的开放 PR 列表，确认没有重复创建，再推送交接
+提交 `ffb2fb0`，创建 [PR #3](https://github.com/qingtian-4/TaskPulse/pull/3)。
+[Windows quality 38669975058](https://github.com/qingtian-4/TaskPulse/actions/runs/38669975058)
+对该准确 HEAD 完整通过后，以 merge 保留历史合入 main：
+`8e36cfe45bb948d099c9380f59d8345ecaf9320c`。合并树与已验证分支无差异。
+
+新标签 `v0.2.0-alpha.2` 已推送且指向上述 main SHA；没有移动 Alpha.1 标签。
+[Alpha.2 发行流水线 38670333565](https://github.com/qingtian-4/TaskPulse/actions/runs/38670333565)
+已通过 preflight、Windows 完整门禁、EXE/MSI 打包、资产归一和上传。期间连接
+间歇中断，恢复后读取实际结果：安装烟测 `116215509942` 失败，草稿被跳过。
+日志明确失败于已安装应用的 WebView2 调试页面连接；不是 MSI 版本错误再次发生。
+本地复核 release:check、5 项发布模型测试通过；正常托盘进程仍为工作区内的
+Alpha.2 内嵌构建且响应正常。未更改用户来源、代理或 Hook 配置。
+
+保留两个历史标签，没有把编译成功等同于安装验收，也没有公开发布稳定版。
+第 13 节未验收项仍然有效。
+
+## 16. Alpha.3：安装权限与应用验收权限分离
+
+Alpha.2 安装日志显示 NSIS 安装、安装资源与真实程序 --version 已检查完成；
+原生页面探测超时。上游已记录 WebView2 150+ 在提权进程中忽略环境调试参数，
+GitHub Windows runner 默认提权，症状吻合。参考
+[Wry #1782](https://github.com/tauri-apps/wry/issues/1782) 和
+[Tauri 官方 Windows E2E](https://github.com/tauri-apps/tauri/blob/dev/.github/workflows/test-api-e2e.yml)。
+这属于有证据的环境诊断，仍须新的真实安装验收确认修复有效。
+
+改为保持安装器正常权限，仅通过临时 CI runner 的 gsudo 将应用/IPC/重启子进程
+降到普通用户权限；测试 helper 主动拒绝提权运行，产品不增加调试入口或更改 CSP。
+应用 PATH 仍不包含开发工具，真实 onboarding/空任务/空提醒与重启断言均保留。
+增加安装器/启动等待上限、stdout/stderr、端口/页面探测和结构化失败结果；首项
+失败也会保存 result.json。不在用户电脑安装 gsudo 或修改注册表安全策略。
+
+应用四文件版本为 `0.2.0-alpha.3`，WiX `0.2.0.1003`；通过新的 PR/标签验收，
+不移动 Alpha.2，不把环境原因当作可以跳过原生门禁的理由。
+
+本地回归：Rust 333 通过/7 opt-in 跳过，Svelte 0 错误/警告，UI 模型 19、
+发布模型 6（含两份 PowerShell 脚本的 Windows 语法检查）通过；fmt/clippy 和
+前端生产构建通过。原生安装验收仍须等待新的云端结果，不能由脚本语法代替。

@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.2'
+        default: 'v0.2.0-alpha.3'
 
 permissions:
   contents: read
@@ -104,10 +104,24 @@ jobs:
         with:
           name: windows-installers
           path: dist/release
+      - name: Prepare ordinary-user WebView2 acceptance on the disposable runner
+        shell: pwsh
+        run: |
+          $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
+          if ($gsudo) { $gsudoPath = $gsudo.Source } else {
+            winget install --id gerardog.gsudo --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install CI de-elevation helper' }
+            $gsudoPath = Join-Path $env:ProgramFiles 'gsudo\Current\gsudo.exe'
+          }
+          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing CI de-elevation helper' }
+          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
+          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not grant the runner account access to acceptance evidence' }
       - name: Exercise both real installers (not the build-tree executable)
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
