@@ -50,6 +50,10 @@ test('installer acceptance de-elevates only the app, keeps native checks mandato
   expect(helper).toContain('get_pending_task_prompts');
   expect(helper).toContain('last_probe_error=$lastProbeError');
   expect(helper).toContain('-RedirectStandardError');
+  expect(helper).toContain('Test-InstallerSameExecutable $live.Path $Exe');
+  expect(helper).toContain('[void]$socket.ConnectAsync');
+  expect(helper).toContain('[void]$socket.SendAsync');
+  expect(parent).toContain('$native.native_ipc -is [Array]');
   for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1','installer-process.ps1','installer-process.test.ps1'] : []) {
     const script=join(root,'scripts',name).replaceAll("'","''");
     const result=Bun.spawnSync(['powershell.exe','-NoProfile','-Command',`$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$parseErrors);if($parseErrors){$parseErrors|Out-String|Write-Error;exit 1}`]);
