@@ -2,7 +2,16 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
-## 0.2.0-alpha.3 — Unreleased
+## 0.2.0-alpha.4 — Unreleased
+
+### Fixed
+
+- Retain the native process handle for installer/version exit codes and bounded
+  waits. Alpha.3 installed the correct version, but its test misread a fast child's
+  null ExitCode as failure. Add real fast-zero/nonzero/output/timeout regressions;
+  keep the actual semantic-version assertion and record exit/output evidence.
+
+## 0.2.0-alpha.3 — Installers built, version-check harness failed; not released
 
 ### Fixed
 

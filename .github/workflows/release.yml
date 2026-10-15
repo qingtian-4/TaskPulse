@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.3'
+        default: 'v0.2.0-alpha.4'
 
 permissions:
   contents: read

@@ -1,6 +1,6 @@
 # TaskPulse 功能改进与实施交接文档
 
-更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.3`（未发布；alpha.1 打包失败、alpha.2 原生安装验收失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
+更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.4`（未发布；alpha.1 打包失败、alpha.2/3 安装验收环境/脚本失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
 
 本文面向接手实施的 Agent。第 2–10 节保留历史审查、问题和原始验收清单；未勾选不能直接当作当前未修复证据。第 11–13 节记录后续实际实施，**当前状态以本节摘要和最新执行记录为准**。原有 `REVIEW_HANDOFF.md` 不作修改。
 
@@ -683,3 +683,37 @@ GitHub Windows runner 默认提权，症状吻合。参考
 本地回归：Rust 333 通过/7 opt-in 跳过，Svelte 0 错误/警告，UI 模型 19、
 发布模型 6（含两份 PowerShell 脚本的 Windows 语法检查）通过；fmt/clippy 和
 前端生产构建通过。原生安装验收仍须等待新的云端结果，不能由脚本语法代替。
+
+### Alpha.3 合并和发行跟踪
+
+修复提交 `8d93317` 经 [PR #4](https://github.com/qingtian-4/TaskPulse/pull/4) 合入
+main `ca37e33daee24612501b4e3501d8904493c67603`。准确 HEAD 的
+[Windows quality 38673434536](https://github.com/qingtian-4/TaskPulse/actions/runs/38673434536)
+完整通过；合并树与本地已验证树一致。不可变新标签 `v0.2.0-alpha.3` 已推送，
+指向该 main SHA；原 Alpha.1/2 标签未改变。
+
+[Alpha.3 发行 38673800337](https://github.com/qingtian-4/TaskPulse/actions/runs/38673800337)
+已通过 preflight、前端/Rust 检查、两个安装包构建和上传。独立安装烟测
+`116226816968` 在 nsis-version 阶段失败，草稿被跳过；没有把 PR CI 或成功
+打包等同于发行验收。
+
+## 17. Alpha.4：统一子进程事实采集，修复验收假失败
+
+实际下载并检查 Alpha.3 证据 artifact `11946035360`：nsis-version.txt 内容为
+正确的 `TaskPulse 0.2.0-alpha.3`，不是安装了旧包。本机只调用已有程序 --version
+连续 5 次复现：Start-Process -PassThru + WaitForExit 后子进程已退出且输出正确，
+但 ExitCode 为 null，旧断言因此误判。没有启动新托盘或 Agent 任务。
+
+根因修复是统一的 `installer-process.ps1`：从 Start 持有真实 Process 句柄，
+并发读取 stdout/stderr、限时等待并保存真实退出码；超时只终止自己创建且已核对
+可执行路径的子进程。安装器和 --version 使用同一实现；版本字串断言没有放宽，
+证据同时记录实际输出/退出码。新增不执行安装器的真实 Windows 进程回归，检查
+快速成功输出、非零退出和超时；发布测试 7 项通过，含四份 PS 脚本语法检查。
+
+四版本文件为 `0.2.0-alpha.4`，MSI `0.2.0.1004`。继续使用新 PR/新标签，不移动
+历史标签。普通用户 UI/IPC/重启与两个安装器的完整烟测仍须等待下一轮真实结果。
+
+Alpha.4 本机完整 verify -Frontend 通过：Rust 333/7 opt-in、UI 19、发布/进程
+测试 7、Svelte 0 错误/警告、fmt/clippy、前端与内嵌原生构建全部通过。对同一
+工作区程序 --version 使用新等待实现，实际取得 ExitCode 0 与正确版本输出；
+只使用单个验证进程的执行策略参数，没有修改系统执行策略或用户 Agent 设置。

@@ -21,10 +21,10 @@ $results = @()
 $phase = 'prepare'
 $failure = $null
 $Gsudo = (Resolve-Path -LiteralPath $Gsudo).Path
+. (Join-Path $PSScriptRoot 'installer-process.ps1')
 
 function Invoke-Installer([string]$File, [string]$Arguments) {
-    $child = Start-Process -FilePath $File -ArgumentList $Arguments -WindowStyle Hidden -PassThru
-    if (-not $child.WaitForExit(120000)) { throw "Installer timed out: $File" }
+    $child = Invoke-InstallerProcess -FilePath $File -Arguments $Arguments
     if ($child.ExitCode -notin @(0,3010)) { throw "Installer exit $($child.ExitCode): $File" }
 }
 
@@ -62,9 +62,10 @@ try {
         }
         $phase = "$kind-version"
         $versionOutput = Join-Path $evidence "$kind-version.txt"
-        $versionProcess = Start-Process -FilePath $exe -ArgumentList '--version' -WindowStyle Hidden -PassThru -RedirectStandardOutput $versionOutput
-        if (-not $versionProcess.WaitForExit(15000)) { throw 'Installed version command timed out' }
-        if ($versionProcess.ExitCode -ne 0 -or (Get-Content -Raw $versionOutput).Trim() -ne "TaskPulse $Version") { throw 'Installed executable version differs from release' }
+        $versionProcess = Invoke-InstallerProcess -FilePath $exe -Arguments '--version' -TimeoutMilliseconds 15000
+        $versionProcess.StdOut | Set-Content -LiteralPath $versionOutput -Encoding UTF8
+        $versionProcess | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "$kind-version-process.json") -Encoding UTF8
+        if ($versionProcess.ExitCode -ne 0 -or $versionProcess.StdOut.Trim() -ne "TaskPulse $Version") { throw "Installed version check failed (exit $($versionProcess.ExitCode)): $($versionProcess.StdOut.Trim())" }
         $phase = "$kind-native"
         # WebView2 >=150 ignores environment debug switches in elevated hosts.
         # Install with normal installer permissions, but drive the app as a user.

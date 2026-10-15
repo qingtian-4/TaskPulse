@@ -1,6 +1,6 @@
 # Windows Alpha 发布流程
 
-版本为 `0.2.0-alpha.3`，标签为 `v0.2.0-alpha.3`。版本与包名不沿用上游稳定发布
+版本为 `0.2.0-alpha.4`，标签为 `v0.2.0-alpha.4`。版本与包名不沿用上游稳定发布
 语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
 
 ## 发布前
@@ -14,8 +14,8 @@
 4. 确认远端 main 包含对应提交后，对明确的 main SHA 创建不可变标签：
 
 ```bash
-git tag -a v0.2.0-alpha.3 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.3"
-git push origin refs/tags/v0.2.0-alpha.3
+git tag -a v0.2.0-alpha.4 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.4"
+git push origin refs/tags/v0.2.0-alpha.4
 ```
 
 不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
@@ -40,6 +40,11 @@ git push origin refs/tags/v0.2.0-alpha.3
 一致；不降级运行时、不改产品 CSP/安全策略、不在用户电脑安装 gsudo。
 失败时上传分阶段结果、应用 stdout/stderr、最后一次端口查询与页面信息；即使
 首个检查失败，result.json 也必须存在。安装器和启动等待都有时限。
+
+安装器和版本命令统一由持有原生 Process 句柄的 `installer-process.ps1` 等待并
+读取真实退出码；不能把 Start-Process 快速退出后返回的 null ExitCode 当成失败
+或成功。`installer-process.test.ps1` 在 Windows CI/本机检查快速零/非零退出、
+输出和超时，不执行任何安装器。版本输出和退出码均保存在证据中。
 
 ### MSI 数字元信息
 

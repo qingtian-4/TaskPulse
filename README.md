@@ -4,7 +4,7 @@
 
 [English](README.en.md) · [开发与贡献](CONTRIBUTING.md) · [架构](docs/ARCHITECTURE.md) · [现状审查与改进方案](docs/PROJECT_REVIEW_2026-10.md)
 
-TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的独立托盘应用，不是 VS Code 插件。目前准备 **0.2.0-alpha.3 · Windows x64**，不宣称稳定版或支持任意 Agent。
+TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的独立托盘应用，不是 VS Code 插件。目前准备 **0.2.0-alpha.4 · Windows x64**，不宣称稳定版或支持任意 Agent。
 
 ![TaskPulse 产品界面示意，非真实采集数据](assets/taskpulse-overview.svg)
 
