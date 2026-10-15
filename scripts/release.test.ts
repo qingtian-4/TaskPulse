@@ -50,11 +50,18 @@ test('installer acceptance de-elevates only the app, keeps native checks mandato
   expect(helper).toContain('get_pending_task_prompts');
   expect(helper).toContain('last_probe_error=$lastProbeError');
   expect(helper).toContain('-RedirectStandardError');
-  for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1'] : []) {
+  for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1','installer-process.ps1','installer-process.test.ps1'] : []) {
     const script=join(root,'scripts',name).replaceAll("'","''");
     const result=Bun.spawnSync(['powershell.exe','-NoProfile','-Command',`$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$parseErrors);if($parseErrors){$parseErrors|Out-String|Write-Error;exit 1}`]);
     expect(result.exitCode, result.stderr.toString()).toBe(0);
   }
+},15000);
+test('Windows process acceptance retains real fast exit codes/output and enforces timeout without installing software',()=>{
+  if(process.platform!=='win32')return;
+  const fixture=join(import.meta.dir,'installer-process.test.ps1');
+  const result=Bun.spawnSync(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',fixture]);
+  expect(result.exitCode,result.stderr.toString()).toBe(0);
+  expect(result.stdout.toString()).toContain('Fast zero/nonzero exits');
 },15000);
 test('release tag, app versions and lockfile must agree; stable publication is disabled',()=>{
   expect(validateRelease(`v${version}`,Array(4).fill(version))).toBe(version);
