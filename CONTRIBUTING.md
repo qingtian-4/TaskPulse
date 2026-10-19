@@ -13,7 +13,7 @@ Install Rust, Bun, [Tauri prerequisites](https://v2.tauri.app/start/prerequisite
 and Windows WebView2:
 
 ```powershell
-bun install
+bun install --frozen-lockfile
 bun run tauri dev
 ```
 
@@ -28,6 +28,7 @@ While the Windows tray is running:
 ```powershell
 powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
 bun run test:ui-model
+bun run audit:frontend
 ```
 
 The isolated target avoids linking over the live executable. Elsewhere, run Cargo
@@ -39,6 +40,12 @@ Provider changes need real-source validation when available. Opt-in tests
 unattended CI tests. UI changes need real Tauri/WebView2 acceptance:
 `scripts/native-ui-smoke.ts` and `scripts/native-notice-smoke.ts`. Disable temporary
 CDP after testing; do not mark user tasks viewed or send real Agent prompts for tests.
+
+Run `bun audit` to review all frontend advisories. `audit:frontend` fails at
+moderate severity and above; passing it does not mean zero advisories. Record
+lower-severity findings and Rust advisory checks in the
+[publication checklist](docs/OPEN_SOURCE_CHECKLIST.md). Do not force a major
+framework upgrade or hide an advisory to make a release pass.
 
 ## Adding an Agent adapter
 

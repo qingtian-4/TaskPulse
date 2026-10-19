@@ -29,6 +29,8 @@ jobs:
           workspaces: src-tauri
       - name: Install locked frontend dependencies
         run: bun install --frozen-lockfile
+      - name: Audit frontend dependencies (moderate and above)
+        run: bun run audit:frontend
       # Separate native-command steps: PowerShell must not let a later success
       # mask an earlier failed fmt/lint/test exit code.
       - name: Check frontend types

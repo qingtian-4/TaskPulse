@@ -63,6 +63,8 @@ jobs:
           cache-on-failure: true
       - name: Install locked frontend dependencies
         run: bun install --frozen-lockfile
+      - name: Audit frontend dependencies (moderate and above)
+        run: bun run audit:frontend
       # Each native command has its own step; a later success cannot hide failure.
       - name: Check frontend
         run: bun run check

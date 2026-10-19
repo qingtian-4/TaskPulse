@@ -21,6 +21,8 @@ try {
     if ($Frontend) {
         $bun = Join-Path $env:LOCALAPPDATA 'hermes\node\bun.cmd'
         if (-not (Test-Path -LiteralPath $bun)) { $bun = 'bun.cmd' }
+        & $bun run audit:frontend
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run check
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run test:ui-model

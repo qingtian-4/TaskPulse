@@ -11,6 +11,7 @@
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:ui-model": "bun test scripts/dashboard.test.ts scripts/notice.test.ts",
     "test:release": "bun test scripts/release.test.ts",
+    "audit:frontend": "bun audit --audit-level=moderate",
     "release:check": "bun scripts/release.ts check",
     "tauri": "tauri"
   },
@@ -23,14 +24,14 @@
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.50.2",
+    "@sveltejs/kit": "^2.70.2",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tailwindcss/vite": "^4.2.1",
     "@tauri-apps/cli": "^2.11.4",
-    "svelte": "^5.51.0",
+    "svelte": "^5.55.7",
     "svelte-check": "^4.4.2",
     "tailwindcss": "^4.2.1",
     "typescript": "^6.0.2",
-    "vite": "^8.0.0"
+    "vite": "^8.0.16"
   }
 }

@@ -122,6 +122,9 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 
 - Run focused tests while iterating, then the full Rust test target.
 - Run `cargo clippy ... -- -D warnings`, `bun run check`, and `bun run build` before handoff.
+- Run `bun audit` for the full frontend advisory report; `bun run audit:frontend`
+  gates moderate and above in verify/quality/release. Record lower findings and
+  Rust advisory coverage separately; never claim a threshold pass means zero risk.
 - For provider changes, validate against the real local data source when available; do not rely only on fixtures.
 - For remote-provider changes, run the ignored live snapshot test and confirm the expected server/project/task in its output.
 - For wrapper changes, run `bun scripts/run-wrapper-smoke.ts` on Windows and `python3 scripts/run-wrapper-smoke.py` inside an already-running opted-in WSL/Linux environment. These use isolated target directories, never real watched state paths. `tp-run` requires Python 3; direct foreground child exit does not prove a detached/container/Slurm job ended.
