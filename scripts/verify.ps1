@@ -31,6 +31,8 @@ try {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run test:release
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:security
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run build
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }

@@ -1,7 +1,7 @@
 {
   "name": "agent-tray",
   "private": true,
-  "version": "0.2.0-alpha.6",
+  "version": "0.2.0-alpha.7",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -12,6 +12,9 @@
     "test:ui-model": "bun test scripts/dashboard.test.ts scripts/notice.test.ts",
     "test:release": "bun test scripts/release.test.ts",
     "audit:frontend": "bun audit --audit-level=moderate",
+    "audit:rust": "bun scripts/security.ts rust",
+    "audit:secrets": "bun scripts/security.ts secrets",
+    "test:security": "bun test scripts/security.test.ts",
     "release:check": "bun scripts/release.ts check",
     "tauri": "tauri"
   },

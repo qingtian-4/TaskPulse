@@ -41,6 +41,8 @@ jobs:
         run: bun run release:check
       - name: Test release validation
         run: bun run test:release
+      - name: Test security report validation
+        run: bun run test:security
       - name: Build frontend
         run: bun run build
       - name: Check Rust format

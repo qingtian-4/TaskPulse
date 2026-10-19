@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.6'
+        default: 'v0.2.0-alpha.7'
 
 permissions:
   contents: read
@@ -42,9 +42,15 @@ jobs:
       - name: Test release validation and asset handling
         run: bun test scripts/release.test.ts
 
+  security:
+    needs: preflight
+    uses: ./.github/workflows/security.yml
+    with:
+      ref: ${{ needs.preflight.outputs.commit }}
+
   windows:
     name: Build Windows x64 MSVC installers
-    needs: preflight
+    needs: [preflight, security]
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
