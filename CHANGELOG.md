@@ -2,7 +2,7 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
-## Unreleased — not included in the Alpha.6 draft
+## 0.2.0-alpha.7 — Candidate; not released
 
 ### Security and maintenance
 
@@ -12,6 +12,11 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
   verification, Windows quality CI and release builds. The remaining low-severity
   SvelteKit 2 cookie dependency is documented, not silently claimed fixed.
 - Consolidate public-release evidence and remaining acceptance/security gates.
+- Upgrade notification/XML dependencies and compatible lockfile entries to remove
+  the matched quick-xml vulnerabilities, fixed anyhow/event-listener/rand warnings
+  and the yanked fastrand version. Remaining maintenance/unsound warnings stay visible.
+- Add checksum-pinned, local-only Rust/Git security tools, fail-closed report
+  validation, redacted full-history scans and reusable read-only CI release gates.
 
 ## 0.2.0-alpha.6 — Installer acceptance passed; draft only
 

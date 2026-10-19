@@ -1,11 +1,11 @@
 # Windows Alpha 发布流程
 
-版本为 `0.2.0-alpha.6`，标签为 `v0.2.0-alpha.6`。版本与包名不沿用上游稳定发布
+当前候选为 `0.2.0-alpha.7`，拟用标签为 `v0.2.0-alpha.7`（尚未创建）。版本与包名不沿用上游稳定发布
 语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
 
 ## 发布前
 
-1. 在 codex/* 分支完成修改、验收、提交，经 PR 和 Windows quality CI 合入 main。
+1. 在 codex/* 分支完成修改、验收、提交，经 PR、Windows quality 和 Security checks 合入 main。
    保留上游版权和提交历史，不直接覆盖默认分支或强推。
 2. 同步 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与
    `src-tauri/tauri.conf.json`；更新 `docs/releases/<版本>.md` 和 CHANGELOG。
@@ -14,8 +14,8 @@
 4. 确认远端 main 包含对应提交后，对明确的 main SHA 创建不可变标签：
 
 ```bash
-git tag -a v0.2.0-alpha.6 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.6"
-git push origin refs/tags/v0.2.0-alpha.6
+git tag -a v0.2.0-alpha.7 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.7"
+git push origin refs/tags/v0.2.0-alpha.7
 ```
 
 不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
@@ -24,7 +24,7 @@ git push origin refs/tags/v0.2.0-alpha.6
 
 ## 工作流交付
 
-`preflight → Windows 完整质量门禁/MSVC 构建 → 每种安装格式独立 runner 验收 → 草稿预发布`。
+`preflight → Rust/Git 安全检查 → Windows 完整质量门禁/MSVC 构建 → 每种安装格式独立 runner 验收 → 草稿预发布`。
 普通 build jobs 仅有 contents:read；只有最后草稿 job 有 contents:write。
 版本/标签/SHA 不一致、缺失/重复安装包、校验失败、安装验收失败都阻止草稿生成。
 
@@ -78,7 +78,9 @@ Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Ap
   [发行 38694054589](https://github.com/qingtian-4/TaskPulse/actions/runs/38694054589)，
   SHA `7a1929a`。仅适用于原标签；后续依赖修复须新标签重新构建和验收。
 - [ ] 发布候选依赖审计：执行 `bun audit` 并记录全部告警，`bun run audit:frontend`
-  阻止中等及以上告警；Rust advisories 另行审计。不能把阈值通过称为零告警。
+  阻止中等及以上告警；`bun run audit:rust` 和 `bun run audit:secrets` 另行门控。
+  本地 Alpha.7 检查记录见 [安全审查](SECURITY_AUDIT_2026-10.md)。不能把阈值通过称为零告警。
+- [ ] Alpha.7 准确候选提交的远端质量/安全检查及两种安装器验收通过。
 - [ ] 干净 Windows 10/11 VM：无开发工具，检查 WebView2 有/无与网络受限场景。
 - [ ] 上一可安装版本升级：来源、白名单、未读、固定、去重状态保留。
 - [ ] EXE/MSI 格式迁移：卸载后目录偏好、显式自定义目录优先级、用户状态保留。
@@ -91,6 +93,6 @@ Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Ap
 自动化同版本重装不是跨版本升级，GUI 渲染不是焦点验证，单元测试不是实机事件。
 任何未完成项要记录原因和范围；不自动发布稳定版，也不把缺少证据写成通过。
 
-2026-10-19：旧草稿包含本次审计发现的旧依赖。当前分支的安全修复不回写旧标签/
-安装包；下一候选使用新版本与标签重新验收。在完成
+2026-10-19：旧草稿包含本次审计发现的旧依赖。Alpha.7 分支的安全修复不回写旧标签/
+安装包；新候选必须使用新标签重新验收。在完成
 [开源交付清单](OPEN_SOURCE_CHECKLIST.md) 前，不公开旧草稿来冒充修复后的版本。

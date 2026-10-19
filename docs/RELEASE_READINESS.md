@@ -1,6 +1,6 @@
 # TaskPulse 版本审查与开源准备
 
-最新更新：2026-10-19。Alpha.6 的 Windows 构建、NSIS/MSI 独立完整验收和草稿生成已通过，尚未公开。后续开源检查发现前端依赖安全告警，当前分支正在修复，旧草稿不包含修复；不推荐公开旧资产。定位：Windows-first Alpha，不声称所有 Agent 或所有版本均已稳定支持。当前交付顺序见 [开源清单](OPEN_SOURCE_CHECKLIST.md)。后文保留历史记录，其测试数量和验证边界属于当时版本。
+最新更新：2026-10-19。Alpha.7 候选已包含前后端依赖修复、完整历史泄密扫描及安全门禁，本地完整验证和真实 WebView2 提醒验收通过；远端 CI 与新的 NSIS/MSI 安装器仍需验收。Alpha.6 的旧草稿验收通过但不包含修复，不推荐公开旧资产。仍有前端 1 low、Rust 10 项维护/2 项 unsound 警告，见 [安全记录](SECURITY_AUDIT_2026-10.md)。定位：Windows-first Alpha，不声称所有 Agent 或所有版本均已稳定支持。当前交付顺序见 [开源清单](OPEN_SOURCE_CHECKLIST.md)。后文保留历史记录，其测试数量和验证边界属于当时版本。
 
 ## 当前发布门禁
 

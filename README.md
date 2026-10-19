@@ -4,7 +4,7 @@
 
 [English](README.en.md) · [开发与贡献](CONTRIBUTING.md) · [架构](docs/ARCHITECTURE.md) · [现状审查与改进方案](docs/PROJECT_REVIEW_2026-10.md)
 
-TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的独立托盘应用，不是 VS Code 插件。目前准备 **0.2.0-alpha.6 · Windows x64**，不宣称稳定版或支持任意 Agent。
+TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的独立托盘应用，不是 VS Code 插件。目前准备 **0.2.0-alpha.7 · Windows x64**，不宣称稳定版或支持任意 Agent。
 
 ![TaskPulse 产品界面示意，非真实采集数据](assets/taskpulse-overview.svg)
 
@@ -16,7 +16,7 @@ TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的�
 2. 确认监控来源并保存：新来源可以关注所有项目的新执行，也可以选择项目。WSL 和 SSH 独立配置。
 3. 发送一次“测试提醒”，在启用范围内开始任务。托盘或 `Ctrl+Shift+A` 打开面板，完成/失败结果保留到你标记已查看。
 
-**Alpha.6 的 Windows CI 和两个独立安装器验收已通过，草稿已生成，但尚未公开。** 开源检查又发现了依赖安全告警；当前分支正在修复，旧草稿不包含这些修复，暂不作为推荐下载。干净系统、真实 Agent 长期运行等仍待验收。若 Release 没有对应资产，请使用[源码运行](#从源码运行)。`Source code.zip` 不是安装器；未验收的 Portable、Linux/macOS 不作为当前下载承诺。进度见[开源交付清单](docs/OPEN_SOURCE_CHECKLIST.md)，详细边界见[发布门禁](docs/RELEASING.md)。
+**Alpha.7 是包含依赖安全修复的新候选，尚未公开。** Alpha.6 的 Windows CI 和安装验收曾通过，但旧草稿不包含这些修复，不作为推荐下载。新候选仍需远端 CI、独立安装器及干净系统/真实 Agent 长期验收。若 Release 没有对应资产，请使用[源码运行](#从源码运行)。`Source code.zip` 不是安装器；未验收的 Portable、Linux/macOS 不作为当前下载承诺。进度见[开源交付清单](docs/OPEN_SOURCE_CHECKLIST.md)，残余风险见[安全记录](docs/SECURITY_AUDIT_2026-10.md)。
 
 项目当前展示名为 TaskPulse；包名和可执行文件为 `agent-tray`。
 
