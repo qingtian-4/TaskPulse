@@ -875,7 +875,7 @@ Rust 初次匹配 quick-xml 两个旧版本共 4 条漏洞记录；升级 Window
 
 版本四文件已同步为 `0.2.0-alpha.7`，WiX `0.2.0.1007`，发行说明与输入一致；
 未创建新标签或修改旧标签。完整本机 verify -Frontend 通过：Rust 333/7 opt-in、
-UI 19、发布 8（75 断言）、安全 6（44 断言），Svelte 0 错误/警告，fmt/clippy、
+UI 19、发布 8（75 断言）、安全 6（45 断言），Svelte 0 错误/警告，fmt/clippy、
 前端及 Alpha.7 内嵌原生构建通过。版本命令真实输出 Alpha.7。
 
 升级后的 Windows 系统通知 API 接受测试调用。首次原生弹窗测试发现已有真实
@@ -889,3 +889,10 @@ UI 19、发布 8（75 断言）、安全 6（44 断言），Svelte 0 错误/警�
 这不是新的 NSIS/MSI 安装验收，也不是肉眼系统横幅、外部编辑器焦点、真实 Agent
 新事件或长期 P95 验收。远端质量/安全和新候选安装器仍需准确提交的 CI 结果；
 GitHub 连接器最后一次只读检查仍为 transport error，不据此宣称 PR/发布成功。
+
+首轮开发分支推送 `0b217f5` 已触发远端检查：
+[Security checks 39222794274](https://github.com/qingtian-4/TaskPulse/actions/runs/39222794274)
+的两个 Linux job 通过，Windows quality `39222795331` 当时在执行 Rust 测试。
+PR 创建调用出现 transport error，网页复核该 head 没有开放 PR；未合并 main 或
+创建 Alpha.7 标签。随后补了“不带 error: 前缀的 registry 查询失败也不能放行”
+回归并再次完成全量本地验证；推送后必须以新 HEAD 的检查为准，不借用旧结果。

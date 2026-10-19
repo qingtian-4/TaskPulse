@@ -58,7 +58,7 @@ Svelte 5.57.2、Vite 8.3.4，及修复后的 devalue、PostCSS、nanoid、source
 ### 本次本地回归（不是新安装器验收）
 
 完整 `scripts/verify.ps1 -Frontend` 通过：审计阈值通过（剩 1 low），Svelte 0 错误/
-警告，UI 模型 19，发布模型 8（75 断言），安全模型 6（44 断言），Rust 333 通过/
+警告，UI 模型 19，发布模型 8（75 断言），安全模型 6（45 断言），Rust 333 通过/
 7 opt-in 跳过，fmt/clippy、前端生产构建和 Alpha.7 内嵌原生构建通过。
 隔离 Edge + mocked IPC 的 28 任务 UI 冒烟通过，实测 440×720、可滚动、无横向
 溢出，筛选、新项目、已查看和管理页交互正常；截图位于忽略提交的 target 目录。

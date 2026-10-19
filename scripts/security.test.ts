@@ -21,6 +21,7 @@ test('Rust reports cannot hide a failed process, registry error or inconsistent 
   expect(incomplete.passed).toBe(false);
   expect(incomplete.registryCheckIncomplete).toBe(true);
   expect(incomplete.diagnosticError).toBe(true);
+  expect(summarizeRust(JSON.stringify(cleanRust), 0, "couldn't check if the package is yanked").passed).toBe(false);
   expect(summarizeRust(JSON.stringify(cleanRust), 0).registryCheckIncomplete).toBe(false);
   expect(() => summarizeRust('{}', 0)).toThrow();
   expect(() => summarizeRust(JSON.stringify({ vulnerabilities: { found: false, count: 1, list: [] } }), 0)).toThrow();

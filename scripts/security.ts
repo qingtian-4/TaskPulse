@@ -47,7 +47,7 @@ export function summarizeRust(raw: string, status: number | null, stderr = '') {
   const diagnosticError = /\berror:/i.test(stderr);
   const registryCheckIncomplete = /couldn't check if the package is yanked/i.test(stderr);
   return {
-    passed: status === 0 && !diagnosticError && vulnerabilities.count === 0 && !warnings.yanked?.length,
+    passed: status === 0 && !diagnosticError && !registryCheckIncomplete && vulnerabilities.count === 0 && !warnings.yanked?.length,
     exitCode: status, diagnosticError, registryCheckIncomplete,
     database: { commit: data.database['last-commit'], updatedAt: data.database['last-updated'], advisoryCount: data.database['advisory-count'] },
     vulnerabilities: vulnerabilities.list.map((item: any) => ({ id: item.advisory?.id, package: item.package?.name, version: item.package?.version, patched: item.versions?.patched })),
