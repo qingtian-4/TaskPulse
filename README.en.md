@@ -18,7 +18,7 @@ named `agent-tray`.
 2. Confirm your sources and project scopes. New sources can watch all projects' new executions; WSL and SSH are separate opt-in sources.
 3. Send a labelled test reminder, start a task, and open the dashboard from the tray or `Ctrl+Shift+A`.
 
-**0.2.0-alpha.6 installers are pending CI and clean-system acceptance.** Drafts are not public. If no matching installer asset is available, [run from source](#run-from-source). Source archives are not installers. Portable and experimental Linux/macOS bundles are not supported release promises. This is a standalone desktop companion, not a VS Code extension. See [release gates](docs/RELEASING.md).
+**Alpha.6 passed Windows CI and both independent installer acceptance jobs; its draft is not public.** A later dependency audit found security advisories. This branch is addressing them; the old draft does not contain those fixes and is not a recommended download. Clean-system and sustained real-Agent acceptance remain open. If no matching installer asset is available, [run from source](#run-from-source). Source archives are not installers. Portable and experimental Linux/macOS bundles are not supported release promises. This is a standalone desktop companion, not a VS Code extension. See the [open-source checklist](docs/OPEN_SOURCE_CHECKLIST.md) and [release gates](docs/RELEASING.md).
 
 ## Features
 

@@ -2,7 +2,18 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
-## 0.2.0-alpha.6 — Unreleased
+## Unreleased — not included in the Alpha.6 draft
+
+### Security and maintenance
+
+- Raise the SvelteKit 2, Svelte 5 and Vite 8 dependency floors to patched versions
+  and refresh vulnerable transitive dependencies without crossing major versions.
+- Audit locked frontend dependencies at moderate severity and above in local
+  verification, Windows quality CI and release builds. The remaining low-severity
+  SvelteKit 2 cookie dependency is documented, not silently claimed fixed.
+- Consolidate public-release evidence and remaining acceptance/security gates.
+
+## 0.2.0-alpha.6 — Installer acceptance passed; draft only
 
 ### Fixed
 

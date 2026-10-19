@@ -16,7 +16,7 @@ TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的�
 2. 确认监控来源并保存：新来源可以关注所有项目的新执行，也可以选择项目。WSL 和 SSH 独立配置。
 3. 发送一次“测试提醒”，在启用范围内开始任务。托盘或 `Ctrl+Shift+A` 打开面板，完成/失败结果保留到你标记已查看。
 
-**安装包尚待 CI 与干净系统验收，草稿对普通用户不可见。** 若 Release 没有对应资产，请使用[源码运行](#从源码运行)。`Source code.zip` 不是安装器；未验收的 Portable、Linux/macOS 不作为当前下载承诺。Alpha 的支持范围和剩余验收见[发布门禁](docs/RELEASING.md)。
+**Alpha.6 的 Windows CI 和两个独立安装器验收已通过，草稿已生成，但尚未公开。** 开源检查又发现了依赖安全告警；当前分支正在修复，旧草稿不包含这些修复，暂不作为推荐下载。干净系统、真实 Agent 长期运行等仍待验收。若 Release 没有对应资产，请使用[源码运行](#从源码运行)。`Source code.zip` 不是安装器；未验收的 Portable、Linux/macOS 不作为当前下载承诺。进度见[开源交付清单](docs/OPEN_SOURCE_CHECKLIST.md)，详细边界见[发布门禁](docs/RELEASING.md)。
 
 项目当前展示名为 TaskPulse；包名和可执行文件为 `agent-tray`。
 

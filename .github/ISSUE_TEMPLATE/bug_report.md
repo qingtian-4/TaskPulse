@@ -11,10 +11,11 @@ A clear description of the bug.
 
 ## Environment
 
-- **OS**: [e.g., Ubuntu 24.04, macOS 15, Windows 11]
-- **TaskPulse Version / Commit**: [e.g., 0.1.11 / commit SHA]
+- **OS / Build**: [e.g., Windows 11; Linux/macOS are experimental]
+- **TaskPulse Version / Commit / Install format**: [e.g., 0.2.0-alpha.6 / commit SHA / NSIS, MSI or source]
 - **Agent / Source**: [e.g., Windows Codex, WSL Ubuntu Codex, SSH Codex]
-- **Desktop Environment**: [e.g., GNOME 47, KDE Plasma 6]
+- **Agent version and host**: [native Desktop, CLI, VS Code; include WSL distro/SSH OS if applicable]
+- **Source health / last successful collection**: [from TaskPulse; do not include server credentials]
 
 ## Steps to Reproduce
 
@@ -28,15 +29,20 @@ A clear description of the bug.
 
 ## Actual Behavior
 
+For a state/notification bug, include observed timestamps, the state shown in
+the Agent versus TaskPulse, and whether you cleared filters/refreshed. Distinguish
+thinking, tool execution, explicit approval/question, turn end and source outage.
+No private task content or full session logs are required.
 
 
 ## Logs
 
 <details>
-<summary>Relevant log output (run with RUST_LOG=debug cargo tauri dev)</summary>
+<summary>Sanitized task information and source health (no debug build required)</summary>
 
 ```
-paste sanitized logs here; remove credentials and private prompts / commands
+paste sanitized copied task information or minimal logs here; remove credentials,
+private prompts / commands, usernames, addresses and session paths
 ```
 
 </details>
