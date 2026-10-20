@@ -1,0 +1,119 @@
+{
+  "manifest_version": 1,
+  "adapter_version": "1.0.0",
+  "systems": [
+    "windows"
+  ],
+  "supported_versions": [],
+  "adapter_id": "kimi-code-cli",
+  "agent_id": "kimi-code-cli",
+  "display_name": "Kimi Code CLI（受限接入）",
+  "product_form": "cli",
+  "official_sources": [
+    "https://www.kimi.com/code/docs/kimi-code-cli/customization/hooks.html"
+  ],
+  "fields": {
+    "event": "/hook_event_name",
+    "session": "/session_id",
+    "turn": "/turn_id",
+    "call": "/tool_call_id",
+    "request": "/request_id",
+    "title": "/session_title",
+    "project_path": "/cwd",
+    "model": "/model"
+  },
+  "events": {
+    "SessionStart": "session.discovered",
+    "UserPromptSubmit": "turn.submitted",
+    "TurnStarted": "turn.started",
+    "PreToolUse": "tool.started",
+    "PostToolUse": "tool.finished",
+    "PostToolUseFailure": "tool.finished",
+    "PermissionRequest": "input.requested",
+    "PermissionResult": "input.resolved",
+    "Stop": "turn.stop_requested",
+    "StopFailure": "turn.failed",
+    "Interrupt": "turn.interrupted",
+    "SessionEnd": "session.closed",
+    "SessionHeartbeat": "heartbeat"
+  },
+  "capabilities": {
+    "session_discovery": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "title": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "project": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "turn_start": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "新文档 TurnStarted/turn_id；旧 kimi-cli 目录/版本不可等同。"
+    },
+    "phase": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "工具阶段来自匹配调用；思考阶段仅表示执行工具以外仍在运行，不证明模型内部状态。"
+    },
+    "final_end": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "Stop 可阻断后继续；未找到最终本轮结束事件，禁止完成提醒。"
+    },
+    "failure": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "approval_request": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "approval_resolution": {
+      "support": "inferred",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "仅消费实际出现且可唯一关联的 request_id/tool_call_id；文档未完整保证这些字段，缺失不解除。"
+    },
+    "question": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "focus": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    }
+  }
+}

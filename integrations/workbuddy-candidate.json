@@ -1,0 +1,101 @@
+{
+  "manifest_version": 1,
+  "adapter_version": "1.0.0",
+  "systems": [
+    "windows"
+  ],
+  "supported_versions": [],
+  "adapter_id": "workbuddy-candidate",
+  "agent_id": "workbuddy",
+  "display_name": "WorkBuddy（待核验，不提供安装）",
+  "product_form": "desktop",
+  "official_sources": [
+    "https://www.codebuddy.cn/docs/workbuddy/Plugins"
+  ],
+  "fields": {
+    "event": "/hook_event_name",
+    "session": "/session_id",
+    "project_path": "/cwd",
+    "call": "/tool_use_id"
+  },
+  "events": {},
+  "capabilities": {
+    "session_discovery": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "仅确认支持 Hook 插件类型；配置格式、载荷、关联键、版本均待核验。不可借用 CodeBuddy CLI 能力。"
+    },
+    "title": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "project": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "turn_start": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "phase": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "final_end": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "failure": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "approval_request": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "approval_resolution": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "question": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "focus": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    }
+  }
+}

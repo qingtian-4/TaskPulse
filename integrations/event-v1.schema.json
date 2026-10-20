@@ -1,0 +1,269 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/qingtian-4/TaskPulse/integrations/event-v1.schema.json",
+  "title": "TaskPulse producer event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "agent_id",
+    "session_id",
+    "event_id",
+    "kind"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "agent_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "session_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 512
+    },
+    "kind": {
+      "enum": [
+        "session.discovered",
+        "session.renamed",
+        "turn.submitted",
+        "turn.started",
+        "phase.changed",
+        "tool.started",
+        "tool.finished",
+        "input.requested",
+        "input.resolved",
+        "turn.stop_requested",
+        "turn.completed",
+        "turn.failed",
+        "turn.interrupted",
+        "session.closed",
+        "heartbeat",
+        "connection.test"
+      ]
+    },
+    "turn_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "request_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "call_id": {
+      "anyOf": [
+        {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 512
+        },
+        {
+          "type": "null"
+        }
+      ]
+    },
+    "occurred_at": {
+      "type": [
+        "integer",
+        "null"
+      ],
+      "minimum": 0,
+      "maximum": 253402300799000
+    },
+    "payload": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "title": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "project": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "project_path": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "model": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "phase": {
+          "enum": [
+            null,
+            "thinking",
+            "tool",
+            "responding",
+            "awaiting_model",
+            "awaiting_tool"
+          ]
+        },
+        "activity": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "maxLength": 2048
+        },
+        "request_kind": {
+          "enum": [
+            null,
+            "approval",
+            "question",
+            "turn_ended",
+            "unknown"
+          ]
+        }
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "turn.started",
+              "phase.changed",
+              "tool.started",
+              "tool.finished",
+              "input.requested",
+              "input.resolved",
+              "turn.stop_requested",
+              "turn.completed",
+              "turn.failed",
+              "turn.interrupted"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "turn_id"
+        ],
+        "properties": {
+          "turn_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "input.requested",
+              "input.resolved"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "request_id"
+        ],
+        "properties": {
+          "request_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "tool.started",
+              "tool.finished"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "call_id"
+        ],
+        "properties": {
+          "call_id": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 512
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "input.requested"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "payload"
+        ],
+        "properties": {
+          "payload": {
+            "required": [
+              "request_kind"
+            ],
+            "properties": {
+              "request_kind": {
+                "enum": [
+                  "approval",
+                  "question"
+                ]
+              }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

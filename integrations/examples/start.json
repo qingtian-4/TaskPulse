@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "agent_id": "custom-agent",
+  "session_id": "synthetic-session",
+  "turn_id": "synthetic-turn",
+  "event_id": "synthetic-start",
+  "kind": "turn.started",
+  "payload": {
+    "title": "合成示例：新增项目任务",
+    "project": "fixture-project",
+    "project_path": "D:\\fixture-project"
+  }
+}

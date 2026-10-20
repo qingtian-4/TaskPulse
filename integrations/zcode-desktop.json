@@ -1,0 +1,109 @@
+{
+  "manifest_version": 1,
+  "adapter_version": "1.0.0",
+  "systems": [
+    "windows"
+  ],
+  "supported_versions": [],
+  "adapter_id": "zcode-desktop",
+  "agent_id": "zcode",
+  "display_name": "ZCode（部分接入）",
+  "product_form": "desktop",
+  "official_sources": [
+    "https://zcode.z.ai/cn/docs/hooks"
+  ],
+  "fields": {
+    "event": "/hook_event_name",
+    "session": "/session_id",
+    "project_path": "/cwd",
+    "call": "/tool_use_id"
+  },
+  "events": {
+    "SessionStart": "session.discovered",
+    "UserPromptSubmit": "turn.submitted",
+    "PreToolUse": "tool.started",
+    "PermissionRequest": "input.requested",
+    "PostToolUse": "tool.finished",
+    "PostToolUseFailure": "tool.finished",
+    "Stop": "turn.stop_requested"
+  },
+  "capabilities": {
+    "session_discovery": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "title": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "宿主未保证原生标题字段，当前显示未命名会话短 ID。"
+    },
+    "project": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "turn_start": {
+      "support": "inferred",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "提交可能被拒绝，只在后续工具证据出现时派生轮次；纯思考未支持。"
+    },
+    "phase": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "final_end": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "Stop 可要求继续，不能作为最终结束。"
+    },
+    "failure": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "approval_request": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "approval_resolution": {
+      "support": "inferred",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "PermissionRequest 缺少调用 ID 时仅唯一 tool/input 摘要关联；歧义不解除。"
+    },
+    "question": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "focus": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    }
+  }
+}

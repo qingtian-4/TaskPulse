@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "agent_id": "custom-agent",
+  "session_id": "synthetic-session",
+  "turn_id": "synthetic-turn",
+  "event_id": "synthetic-request",
+  "kind": "input.requested",
+  "request_id": "synthetic-request-a",
+  "call_id": "synthetic-call-a",
+  "payload": {
+    "request_kind": "approval"
+  }
+}
