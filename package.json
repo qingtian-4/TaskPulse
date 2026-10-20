@@ -15,6 +15,7 @@
     "audit:rust": "bun scripts/security.ts rust",
     "audit:secrets": "bun scripts/security.ts secrets",
     "test:security": "bun test scripts/security.test.ts",
+    "test:integration-contract": "bun test scripts/integration-contract.test.ts",
     "release:check": "bun scripts/release.ts check",
     "tauri": "tauri"
   },

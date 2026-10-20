@@ -3,6 +3,11 @@ import { test, expect } from 'bun:test';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('explicit interruption is a viewable result, never advertised as success',()=>{
+  const interrupted={...base,source:'generic_event' as const,status:'waiting_input' as const,waiting_reason:'turn_ended' as const,finished_at:2,outcome:'interrupted'};
+  expect(taskLabel(interrupted)).toBe('已中断');expect(taskSection(interrupted)).toBe('results');expect(isEndedResult(interrupted)).toBe(true);
+});
 test('a failed result can be marked viewed without turning it into success',()=>{
   const failed = {...base,status:'failed' as const};
   expect(isEndedResult(failed)).toBe(true);

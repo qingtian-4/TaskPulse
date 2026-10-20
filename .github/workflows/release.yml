@@ -76,6 +76,8 @@ jobs:
         run: bun run check
       - name: Test frontend models
         run: bun run test:ui-model
+      - name: Test integration contracts
+        run: bun run test:integration-contract
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Lint Rust
@@ -87,6 +89,8 @@ jobs:
         with:
           tauriScript: bun run tauri
           args: --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
+      - name: Test the actual GUI-subsystem release bridge with redirected stdin
+        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
       - name: Normalize asset names and generate flat checksums
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
