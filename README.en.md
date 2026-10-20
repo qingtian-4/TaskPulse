@@ -1,5 +1,7 @@
 # TaskPulse
 
+Other-agent integration: [guide](docs/AGENT_INTEGRATION_GUIDE.md), [v1 protocol](docs/AGENT_INTEGRATION_PROTOCOL.md), [capability matrix](docs/AGENT_COMPATIBILITY.md), [validation](docs/AGENT_INTEGRATION_VALIDATION.md). Windows-local standardized events and restricted declarative manifests are implemented. Kimi Code CLI / TRAE CN IDE / ZCode have **partial, synthetic-tested Hook mappings, no real host version verified**; WorkBuddy Desktop remains a candidate without event mapping or installation. A blockable Stop is never a completion event. Imported manifests cannot install hooks or claim official evidence; real host changes require a fingerprint-bound preview and explicit confirmation.
+
 **Running several coding agents? Stop switching windows to check each one. See their task states at a glance and get notified when a turn ends or explicitly needs your input.**
 
 [中文](README.md) · [Contributing](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Implementation review](docs/PROJECT_REVIEW_2026-10.md)
@@ -41,7 +43,9 @@ capabilities, not a guarantee covering every installed Agent version.
 | Hermes | SQLite and turn leases | No dedicated adapter | No dedicated adapter |
 | DeepSeek Harness | Desktop/CLI adapter | Dedicated adapter | No dedicated adapter |
 | Gemini CLI | Legacy hooks/process scanning | No dedicated adapter | No dedicated adapter |
-| ZCode, Trae, WorkBuddy | No dedicated adapter | No dedicated adapter | No dedicated adapter |
+| Kimi Code CLI / TRAE CN IDE / ZCode | Partial documented Hook mappings; host-native verification pending | Generic transport not implemented | Generic transport not implemented |
+| WorkBuddy Desktop | Candidate only; no event mapping or installer | Not implemented | Not implemented |
+| Custom/community Agent | Local v1 events / restricted manifest import; self-reported evidence | Not implemented | Not implemented |
 
 Seeing an Agent process inside remote tmux does not provide its conversation
 lifecycle or approval events. Native undocumented formats are best-effort.

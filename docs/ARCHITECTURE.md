@@ -1,5 +1,24 @@
 # TaskPulse Architecture
 
+## Versioned local integration lane
+
+`integrations/bridge` accepts bounded stdin before Tauri initialization, applies
+restricted manifest mappings, validates and appends minimal facts under OS lock.
+`GenericEventProvider` atomically checkpoints reducer/cursor/durable outbox.
+`ProviderOutput.ordered` survives worker collection without latest-snapshot
+coalescing. The watcher processes every fact through scope/Store/Attention/
+Transition, flushes durable attention and dedup once per batch, then acknowledges
+per-session outboxes. UI remains a latest-snapshot view. Restore/replay uses
+epoch/sequence watermarks plus stable event and task/turn/request dedup.
+
+One GenericEvent source/task enum carries string brand identities. Existing
+providers and `--claude-event` stay independent. Imported manifests contain no
+execution/installation privileges; built-in host recipes use fingerprint-bound
+preview/confirmation and ownership-only revocation. TASKPULSE_HOME isolates state,
+host sandbox and WebView profiles for native acceptance. See [protocol](AGENT_INTEGRATION_PROTOCOL.md)
+and [capability boundaries](AGENT_COMPATIBILITY.md); no host-native claim follows
+from a synthetic producer or successful TaskPulse IPC test.
+
 当前实际编排顺序为 `Provider → 来源/项目范围过滤与归一化 → TaskStore → AttentionTracker → TransitionEngine → tray/UI/notifications`。关注基线先于通知迁移，才能识别采样间已结束的新 turn，同时禁止历史回灌。来源注册表 `monitoring.rs` 独立管理实例、热更新与已发现目录；`/manage/` 是单独窗口。以下图展示原有采集/Store/迁移核心；完整当前交互见 [PRODUCT_DASHBOARD.md](PRODUCT_DASHBOARD.md)。
 
 ```

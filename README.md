@@ -28,6 +28,7 @@ TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的�
 - **结果待查看**：保留未查看结果与手动固定状态；关闭提醒不等于标记已查看。
 - **远端代码监控**：通过 tmux 进程树观察运行状态，通过 `tp-run` 记录退出码。
 - **故障可见**：采集失败保留上次状态并标注过期，服务器失联不会被当作任务完成。
+- **其他 Agent 接入**：Windows 本机 v1 事件、声明式描述导入、逐项能力、Hook 差异预览/确认/撤销；[接入指南](docs/AGENT_INTEGRATION_GUIDE.md)。不是任意 Agent 自动全面支持。
 
 没有明确进度数据时，不生成完成百分比。Agent 一轮回复结束也不代表整个项目已经完成。
 
@@ -42,7 +43,9 @@ TaskPulse 是基于 [AgentTray](https://github.com/sprklai/agenttray) 开发的�
 | Hermes Agent | 已实现 | 无专用适配 | 无专用适配 | 读取本机 SQLite 与运行租约；租约过期不判结束，缺少原生结束事件时显示不确定 |
 | DeepSeek Harness | 已实现，Desktop/CLI | 已实现，独立来源 | 无专用适配 | 支持旧版与 v4 压缩日志、原生标题投影 |
 | Gemini CLI | 兼容 Hook／进程扫描 | 无专用适配 | 无专用适配 | 不等同于完整原生会话适配 |
-| ZCode、Trae、WorkBuddy 等 | 无专用适配 | 无专用适配 | 无专用适配 | 可评估官方事件、只读记录或通用状态协议 |
+| Kimi Code CLI / TRAE 国内 IDE / ZCode | 部分 Hook 映射，宿主实机待验收 | 通用 transport 未实现 | 通用 transport 未实现 | Stop 不判完成；各款能力/关联限制见[兼容矩阵](docs/AGENT_COMPATIBILITY.md) |
+| WorkBuddy Desktop | 候选入口，尚无事件适配 | 未实现 | 未实现 | 不把 CodeBuddy CLI 当作桌面支持 |
+| 自定义 / 社区 Agent | 标准 v1 事件 / 受限描述导入 | 未实现 | 未实现 | 自报证据，不自动安装 Hook、不执行 manifest 代码 |
 
 在远端 tmux 中看到某个 Agent 的进程，不等于已经支持它的会话标题、批准请求和每轮结束事件。
 
