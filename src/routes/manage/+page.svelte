@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
+  import IntegrationEditor from '$lib/components/IntegrationEditor.svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -33,7 +34,7 @@
   let closing=false;
   let now=$state(Date.now());
   let editor=$derived(settings?.sources.find(s=>s.id===selected) ?? null);
-  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
+  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
   const candidates=$derived(discovery.filter(d=>d.available && d.candidate && !settings?.sources.some(s=>s.id===d.candidate!.id || s.kind===d.candidate!.kind && s.location.toLowerCase()===d.candidate!.location.toLowerCase())));
   function addCandidate(candidate:MonitorSource) {
     if(!settings)return;
@@ -53,6 +54,7 @@
     if(['codex','hooks','scanner'].includes(addKind) && settings.sources.some(s=>s.kind===addKind)){selected=settings.sources.find(s=>s.kind===addKind)!.id;notice='本机来源已存在，请在左侧启用或编辑。';return;}
     const id=candidate && !settings.sources.some(s=>s.id===candidate) ? candidate : addKind+':'+crypto.randomUUID();
     const source:MonitorSource={id,name:kinds.find(k=>k.kind===addKind)?.name ?? addKind,kind:addKind,enabled:true,location:['deepseek_wsl','codex_wsl'].includes(addKind)?'Ubuntu':'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
+    if(addKind==='generic_event')source.integration={agent_id:'custom-agent',adapter_id:'standard-events',transport:'local',accept_since_ms:0};
     settings.sources.push(source);selected=id;dirty=true;
   }
   function remove(id:string){if(!settings)return;settings.sources=settings.sources.filter(s=>s.id!==id);selected=settings.sources[0]?.id ?? '';dirty=true;}
@@ -161,6 +163,7 @@
       </aside><section class="editor">
         {#if editor}
           <h2>{editor.name}</h2>
+          {#if editor.kind==='generic_event'}<IntegrationEditor source={editor} {dirty} changed={changed}/>{/if}
           <label>显示名称<input bind:value={editor.name} oninput={changed}/></label>
           {#if editor.kind==='remote_codex' || editor.kind==='tmux'}<label>SSH 别名<input bind:value={editor.location} oninput={changed} placeholder="例如 dev-server"/></label><p class="help">使用系统 SSH 配置和已有登录方式，不在 TaskPulse 保存密码。</p><label>轮询周期（毫秒）<input type="number" min="500" max="60000" bind:value={editor.poll_interval_ms} oninput={changed}/></label>
           {:else if editor.kind==='claude_code'}<label>Claude 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 CLAUDE_CONFIG_DIR 或本机 .claude"/></label><p class="help">自动观测 VS Code / CLI 原生会话、标题与上报模型；未启用精确事件时，内部格式的状态显示为“推断”。</p><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:true}}>启用精确事件…</button><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:false}}>移除精确事件…</button>

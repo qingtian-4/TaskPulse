@@ -42,6 +42,7 @@ export function needsAction(task: TaskSnapshot): boolean {
   return task.status === 'waiting_input' && (task.waiting_reason === 'approval' || task.waiting_reason === 'question');
 }
 export function taskLabel(task: TaskSnapshot): string {
+  if (task.outcome === 'interrupted' && task.finished_at) return '已中断';
   if (task.stale) return '状态待更新';
   if (needsAction(task)) return task.waiting_reason === 'approval' ? '需要授权' : '需要你确认';
   if (isInferredCommandEnd(task)) return '观察到结束 · 退出码未知';
