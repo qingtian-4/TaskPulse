@@ -700,16 +700,24 @@ pub async fn discover_sources() -> Vec<SourceDiscovery> {
         .unwrap_or_default()
 }
 fn discover_source_rows() -> Vec<SourceDiscovery> {
-    let home = dirs_next::home_dir().unwrap_or_default();
     let settings = get_monitoring_settings();
+    let wsl = crate::providers::codex_wsl::discover_codex_distros().unwrap_or_default();
+    discover_source_rows_with_wsl(&settings, &wsl)
+}
+
+fn discover_source_rows_with_wsl(
+    settings: &DashboardSettings,
+    wsl: &[crate::providers::codex_wsl::WslCodexDiscovery],
+) -> Vec<SourceDiscovery> {
+    let home = dirs_next::home_dir().unwrap_or_default();
     let mut sources = settings.sources.clone();
     for candidate in from_legacy(&TaskPulseConfig::default(), false).sources {
         if !sources.iter().any(|s| s.kind == candidate.kind) {
             sources.push(candidate);
         }
     }
-    let running = crate::providers::codex_wsl::running_distros().unwrap_or_default();
-    for distro in &running {
+    for found in wsl.iter().filter(|found| found.root.is_some()) {
+        let distro = &found.distro;
         if !sources
             .iter()
             .any(|s| s.kind == SourceKind::CodexWsl && s.location.eq_ignore_ascii_case(distro))
@@ -741,15 +749,14 @@ fn discover_source_rows() -> Vec<SourceDiscovery> {
                     home.join(".codex").exists(),
                     home.join(".codex").display().to_string(),
                 ),
-                SourceKind::CodexWsl => (
-                    running
+                SourceKind::CodexWsl => wsl
                         .iter()
-                        .any(|d| d.eq_ignore_ascii_case(&source.location)),
-                    format!(
-                        "本机 WSL {} · 启用后只读验证 Codex 目录；独立于 Windows",
-                        source.location
-                    ),
-                ),
+                        .find(|found| found.distro.eq_ignore_ascii_case(&source.location))
+                        .map(|found| (found.root.is_some(), found.detail.clone()))
+                        .unwrap_or_else(|| (false, format!(
+                            "WSL {} · 未运行或暂无法查询；不会自动唤醒，已保存配置仍保留；独立于 Windows",
+                            source.location
+                        ))),
                 SourceKind::Hermes => {
                     let path = if source.location.is_empty() {
                         crate::providers::hermes::discover_db()
@@ -840,6 +847,71 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wsl_discovery_requires_agent_evidence_and_preserves_saved_sources() {
+        use crate::providers::codex_wsl::WslCodexDiscovery;
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        settings.sources.retain(|s| s.kind != SourceKind::CodexWsl);
+        let discoveries = vec![
+            WslCodexDiscovery {
+                distro: "Ubuntu".into(),
+                root: Some("/home/user/.codex".into()),
+                detail: "已验证 Codex 会话数据".into(),
+            },
+            WslCodexDiscovery {
+                distro: "Debian".into(),
+                root: None,
+                detail: "未发现 Codex 会话数据".into(),
+            },
+            WslCodexDiscovery {
+                distro: "docker-desktop".into(),
+                root: None,
+                detail: "内部运行环境".into(),
+            },
+        ];
+        let rows = discover_source_rows_with_wsl(&settings, &discoveries);
+        let candidates: Vec<_> = rows
+            .iter()
+            .filter(|r| r.available)
+            .filter_map(|r| r.candidate.as_ref())
+            .filter(|s| s.kind == SourceKind::CodexWsl)
+            .collect();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].location, "Ubuntu");
+        assert!(!candidates[0].enabled); // Discovery never opts users in.
+        assert!(!rows.iter().any(|r| r.id.contains("docker-desktop")));
+
+        let mut manual = source("manual-wsl", "My distro", SourceKind::CodexWsl, "UBUNTU");
+        manual.enabled = true;
+        manual.projects = vec!["/home/user/my-project".into()];
+        settings.sources.push(manual.clone());
+        let original = settings.clone();
+        let rows = discover_source_rows_with_wsl(&settings, &discoveries);
+        assert!(rows
+            .iter()
+            .any(|r| r.id == manual.id && r.available && r.candidate.is_none()));
+        assert!(!rows.iter().any(|r| r.id == "codex-wsl:ubuntu"));
+        // Stop/disconnect does not delete, disable or broaden a saved source.
+        let stopped = discover_source_rows_with_wsl(&settings, &[]);
+        let row = stopped.iter().find(|r| r.id == manual.id).unwrap();
+        assert!(!row.available && row.candidate.is_none());
+        assert_eq!(settings, original);
+
+        let mut docker = source(
+            "explicit-docker",
+            "Manual",
+            SourceKind::CodexWsl,
+            "docker-desktop",
+        );
+        docker.enabled = true;
+        settings.sources.push(docker.clone());
+        let rows = discover_source_rows_with_wsl(&settings, &discoveries);
+        assert!(rows
+            .iter()
+            .any(|r| r.id == docker.id && !r.available && r.candidate.is_none()));
+        assert_eq!(settings.sources.last(), Some(&docker));
+    }
+
     #[test]
     fn wsl_sources_are_opt_in_and_distro_scopes_never_alias_windows_or_ssh() {
         let mut settings = from_legacy(&TaskPulseConfig::default(), true);

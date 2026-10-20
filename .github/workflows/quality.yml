@@ -43,6 +43,8 @@ jobs:
         run: bun run test:release
       - name: Test security report validation
         run: bun run test:security
+      - name: Test read-only WSL source detection (offline fixtures)
+        run: python scripts/test-wsl-discovery.py
       - name: Build frontend
         run: bun run build
       - name: Check Rust format

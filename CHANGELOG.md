@@ -4,6 +4,12 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 ## 0.2.0-alpha.7 — Candidate; not released
 
+### Fixed
+
+- Require read-only Codex session evidence before recommending a running WSL
+  distribution. Docker/Rancher internal runtimes are not Agent discoveries;
+  existing saved sources and project scopes remain unchanged.
+
 ### Security and maintenance
 
 - Raise the SvelteKit 2, Svelte 5 and Vite 8 dependency floors to patched versions
