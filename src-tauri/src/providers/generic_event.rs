@@ -97,6 +97,7 @@ pub struct GenericEventProvider {
     next: usize,
     latest: BTreeMap<String, TaskSnapshot>,
     started: u64,
+    received_at: u64,
 }
 impl GenericEventProvider {
     pub fn new(source: crate::monitoring::SourceConfig) -> Self {
@@ -118,6 +119,7 @@ impl GenericEventProvider {
             next: 0,
             latest: BTreeMap::new(),
             started: integrations::now_ms(),
+            received_at: 0,
         }
     }
     fn sample(&mut self) -> Result<ProviderOutput, String> {
@@ -202,6 +204,7 @@ impl GenericEventProvider {
             if let Some(task) = &cp.state.task {
                 self.latest.insert(task.id.clone(), task.clone());
             }
+            self.received_at = self.received_at.max(cp.state.last_received_at);
             for item in cp.outbox.iter().take(budget) {
                 let notify = item.owner == self.owner
                     && item.received_at >= self.started
@@ -224,13 +227,39 @@ impl GenericEventProvider {
             }
             self.next = (index + 1) % count;
         }
-        let tasks: Vec<_> = self.latest.values().cloned().collect();
+        let receive_error = std::fs::read(dir.join("last-error.json"))
+            .ok()
+            .filter(|b| b.len() <= 1024)
+            .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+            .filter(|v| v["at"].as_u64().is_some_and(|at| at >= self.received_at))
+            .and_then(|v| {
+                v["code"].as_str().map(|s| {
+                    s.chars()
+                        .filter(|c| c.is_ascii_alphanumeric() || *c == '_')
+                        .take(96)
+                        .collect::<String>()
+                })
+            });
+        degraded |= receive_error.is_some();
+        let tasks: Vec<_> = self
+            .latest
+            .values()
+            .cloned()
+            .map(|mut t| {
+                t.stale |= receive_error.is_some();
+                t
+            })
+            .collect();
         Ok(ProviderOutput {
             tasks: tasks.clone(),
             catalog: tasks,
             ordered: observations,
             authoritative: !degraded,
-            error: degraded.then(|| "事件积压/日志世代变化/坏行：保留任务，继续有界恢复".into()),
+            error: if let Some(code) = receive_error {
+                Some(format!("接收事件失败：{code}；保留任务，不推断结束"))
+            } else {
+                degraded.then(|| "事件积压/日志世代变化/坏行：保留任务，继续有界恢复".into())
+            },
             ..Default::default()
         })
     }

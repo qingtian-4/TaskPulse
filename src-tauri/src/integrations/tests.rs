@@ -79,6 +79,48 @@ fn latest_snapshot_cannot_bypass_or_consume_an_uncommitted_ordered_end() {
 }
 
 #[test]
+fn receiver_write_failures_degrade_source_without_finishing_a_task() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = source();
+    let mut provider = GenericEventProvider::with_home(src.clone(), dir.path().into());
+    journal::append(
+        dir.path(),
+        &src.id,
+        event(Kind::Started, "a", 1),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let batch = provider.poll(std::time::SystemTime::now());
+    for item in &batch.ordered {
+        acknowledge(dir.path(), &item.receipt).unwrap();
+    }
+    let error = journal::root(dir.path(), &src.id).join("last-error.json");
+    journal::atomic(
+        &error,
+        &json!({"at":super::now_ms()+1,"code":"journal_sync_failed"}),
+    )
+    .unwrap();
+    let failed = provider.poll(std::time::SystemTime::now());
+    assert!(!failed.authoritative);
+    assert!(failed.tasks[0].stale);
+    assert_eq!(failed.tasks[0].status, TaskStatus::Running);
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    journal::append(
+        dir.path(),
+        &src.id,
+        event(Kind::Heartbeat, "a", 2),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let recovered = provider.poll(std::time::SystemTime::now());
+    assert!(recovered.authoritative);
+    assert!(!recovered.tasks[0].stale);
+    assert_eq!(recovered.tasks[0].status, TaskStatus::Running);
+}
+
+#[test]
 fn pending_capacity_does_not_prevent_resolution_or_explicit_end() {
     let mut state = Session::default();
     apply(&mut state, event(Kind::Started, "a", 1), 1);
