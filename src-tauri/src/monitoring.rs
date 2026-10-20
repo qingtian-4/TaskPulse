@@ -23,6 +23,7 @@ pub enum SourceKind {
     Tmux,
     Hooks,
     Scanner,
+    GenericEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +31,8 @@ pub struct SourceConfig {
     pub id: String,
     pub name: String,
     pub kind: SourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration: Option<crate::integrations::IntegrationSource>,
     pub enabled: bool,
     #[serde(default)]
     pub location: String,
@@ -191,6 +194,7 @@ fn source(id: &str, name: &str, kind: SourceKind, location: &str) -> SourceConfi
         id: id.into(),
         name: name.into(),
         kind,
+        integration: None,
         enabled: false,
         location: location.into(),
         projects: all_projects(),
@@ -298,6 +302,19 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
         if source.kind == SourceKind::CodexWsl {
             crate::providers::codex_wsl::validate_distro(&source.location)?;
         }
+        if source.kind == SourceKind::GenericEvent {
+            let integration = source
+                .integration
+                .as_ref()
+                .ok_or("请先选择通用接入适配描述")?;
+            let manifest = crate::integrations::manifest::load(&integration.adapter_id)?;
+            if integration.transport != "local"
+                || integration.agent_id != manifest.agent_id
+                || !source.location.is_empty()
+            {
+                return Err("通用事件只支持本机且 Agent 身份必须匹配描述文件".into());
+            }
+        }
         if matches!(source.kind, SourceKind::RemoteCodex | SourceKind::Tmux)
             && (source.location.trim().is_empty()
                 || source.location.starts_with('-')
@@ -334,7 +351,9 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
                     .to_lowercase()
             })
             .unwrap_or_else(|| source.location.to_lowercase());
-        if !locations.insert((format!("{:?}", source.kind), location)) {
+        if source.kind != SourceKind::GenericEvent
+            && !locations.insert((format!("{:?}", source.kind), location))
+        {
             return Err("相同运行环境只能添加一个同类来源".into());
         }
         if matches!(
@@ -416,8 +435,33 @@ pub fn write_settings(path: &Path, settings: &DashboardSettings) -> Result<(), S
 #[tauri::command]
 pub fn save_monitoring_settings(
     app: AppHandle,
-    settings: DashboardSettings,
+    mut settings: DashboardSettings,
 ) -> Result<DashboardSettings, String> {
+    let previous = get_monitoring_settings();
+    for source in &mut settings.sources {
+        if source.kind == SourceKind::GenericEvent {
+            if let Some(integration) = &mut source.integration {
+                let old = previous.sources.iter().find(|s| s.id == source.id);
+                if let Some(value) = old.and_then(|s| s.integration.as_ref()) {
+                    // Identity/adapter updates are not allowed to reinterpret an
+                    // existing journal. Create a separate source instead.
+                    if value.agent_id != integration.agent_id
+                        || value.adapter_id != integration.adapter_id
+                    {
+                        return Err("改变 Agent/适配器请创建新来源，现有会话身份不会重写".into());
+                    }
+                    integration.accept_since_ms =
+                        if old.is_some_and(|s| !s.enabled) && source.enabled {
+                            crate::integrations::now_ms()
+                        } else {
+                            value.accept_since_ms
+                        };
+                } else {
+                    integration.accept_since_ms = crate::integrations::now_ms();
+                }
+            }
+        }
+    }
     write_settings(&config::config_path(), &settings)?;
     {
         let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
@@ -550,6 +594,11 @@ pub fn observe(tasks: &[TaskSnapshot]) {
 }
 
 fn catalog_observation(previous: Option<&TaskSnapshot>, incoming: &TaskSnapshot) -> TaskSnapshot {
+    if let Some(previous) = previous.filter(|previous| incoming.replays_integration(previous)) {
+        let mut retained = previous.clone();
+        retained.merge_integration_health(incoming);
+        return retained;
+    }
     let mut merged = if incoming.status == crate::domain::TaskStatus::Unknown {
         let mut task = previous.cloned().unwrap_or_else(|| incoming.clone());
         task.name = incoming.name.clone();
@@ -701,6 +750,18 @@ pub async fn discover_sources() -> Vec<SourceDiscovery> {
 }
 fn discover_source_rows() -> Vec<SourceDiscovery> {
     let settings = get_monitoring_settings();
+    if std::env::var_os("TASKPULSE_HOME").is_some() {
+        return settings
+            .sources
+            .iter()
+            .map(|s| SourceDiscovery {
+                id: s.id.clone(),
+                available: s.kind == SourceKind::GenericEvent,
+                detail: "隔离状态目录；未探测真实 Agent 数据".into(),
+                candidate: None,
+            })
+            .collect();
+    }
     let wsl = crate::providers::codex_wsl::discover_codex_distros().unwrap_or_default();
     discover_source_rows_with_wsl(&settings, &wsl)
 }

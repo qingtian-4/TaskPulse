@@ -29,6 +29,13 @@ pub struct LocalFileProvider {
 
 impl LocalFileProvider {
     pub fn new() -> Self {
+        if std::env::var_os("TASKPULSE_HOME").is_some() {
+            let root = crate::providers::remote_tmux::config::config_dir();
+            return Self {
+                dirs: vec![root.join("legacy-status"), root],
+                last_tasks: vec![],
+            };
+        }
         let home = dirs_next::home_dir();
         let mut dirs = Vec::new();
         if let Some(h) = &home {
@@ -165,6 +172,13 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             });
 
         let mut snapshot = TaskSnapshot {
+            integration_epoch: None,
+            integration_sequence: 0,
+            agent_id: None,
+            agent_name: None,
+            evidence_channel: None,
+            outcome: None,
+            pending_confirmed_at: None,
             source_instance: None,
             model: None,
             internal: false,
@@ -258,6 +272,13 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             None => (status_from_legacy(trimmed), None),
         };
         Some(TaskSnapshot {
+            integration_epoch: None,
+            integration_sequence: 0,
+            agent_id: None,
+            agent_name: None,
+            evidence_channel: None,
+            outcome: None,
+            pending_confirmed_at: None,
             source_instance: None,
             model: None,
             internal: false,

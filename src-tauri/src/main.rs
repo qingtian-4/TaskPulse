@@ -8,6 +8,7 @@ mod focus;
 mod focusers;
 mod heuristics;
 mod history;
+mod integrations;
 mod monitoring;
 mod notification_log;
 mod notifier;
@@ -25,6 +26,9 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if let Some(code) = integrations::bridge::cli(&std::env::args().collect::<Vec<_>>()) {
+        std::process::exit(code);
+    }
     if std::env::args().any(|arg| arg == "--version") {
         println!("TaskPulse {}", env!("CARGO_PKG_VERSION"));
         return;
@@ -58,15 +62,20 @@ fn main() {
         default_hook(info);
     }));
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_notification::init())
-        .plugin(
+        .plugin(tauri_plugin_notification::init());
+    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+        builder
+    } else {
+        builder.plugin(
             tauri_plugin_window_state::Builder::default()
                 .with_state_flags(tauri_plugin_window_state::StateFlags::POSITION)
                 .build(),
         )
+    };
+    builder
         .setup(|app| {
             let handle = app.handle().clone();
             let first_setup = !monitoring::initialize().onboarding_complete;
@@ -161,6 +170,14 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            integrations::api::integration_catalog,
+            integrations::api::integration_environment,
+            integrations::api::integration_import,
+            integrations::api::integration_preview,
+            integrations::api::integration_apply,
+            integrations::api::integration_diagnose,
+            integrations::api::integration_test,
+            integrations::api::integration_export,
             focus::focus_terminal,
             watcher::get_agents,
             watcher::get_archived_attention,

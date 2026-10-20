@@ -250,6 +250,11 @@ fn notification_copy(event: &NotifyEvent) -> (String, String) {
             }
             (
                 match task.waiting_reason {
+                    Some(crate::domain::WaitingReason::TurnEnded)
+                        if task.outcome.as_deref() == Some("interrupted") =>
+                    {
+                        "TaskPulse · 本轮已中断，非成功"
+                    }
                     Some(crate::domain::WaitingReason::TurnEnded) => {
                         "TaskPulse · 本轮结束，等待后续输入"
                     }

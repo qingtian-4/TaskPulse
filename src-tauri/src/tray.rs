@@ -143,7 +143,9 @@ pub fn toggle_popup(app: &AppHandle) {
         if win.is_visible().unwrap_or(false) {
             PINNED.store(false, Ordering::SeqCst);
             let _ = app.emit("pinned-changed", false);
-            let _ = app.save_window_state(StateFlags::POSITION);
+            if std::env::var_os("TASKPULSE_HOME").is_none() {
+                let _ = app.save_window_state(StateFlags::POSITION);
+            }
             let _ = win.hide();
             return;
         }
@@ -186,7 +188,13 @@ fn create_popup(app: &AppHandle) {
         }
         emit_current_state(&ready);
     });
-    match WebviewWindowBuilder::new(app, "popup", WebviewUrl::default())
+    let builder = WebviewWindowBuilder::new(app, "popup", WebviewUrl::default());
+    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+        builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
+    } else {
+        builder
+    };
+    match builder
         .title("TaskPulse")
         .inner_size(440.0, 520.0)
         .decorations(false)
@@ -221,7 +229,13 @@ pub async fn open_management(app: AppHandle) -> Result<(), String> {
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
     }
-    let window = WebviewWindowBuilder::new(&app, "management", WebviewUrl::App("manage/".into()))
+    let builder = WebviewWindowBuilder::new(&app, "management", WebviewUrl::App("manage/".into()));
+    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+        builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
+    } else {
+        builder
+    };
+    let window = builder
         .title("TaskPulse · 管理监控来源")
         .inner_size(900.0, 640.0)
         .min_inner_size(720.0, 520.0)
@@ -255,7 +269,9 @@ pub fn hide_popup(app: &AppHandle) {
     PINNED.store(false, Ordering::SeqCst);
     let _ = app.emit("pinned-changed", false);
     if let Some(win) = app.get_webview_window("popup") {
-        let _ = app.save_window_state(StateFlags::POSITION);
+        if std::env::var_os("TASKPULSE_HOME").is_none() {
+            let _ = app.save_window_state(StateFlags::POSITION);
+        }
         let _ = win.hide();
     }
 }

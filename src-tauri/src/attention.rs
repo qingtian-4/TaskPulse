@@ -160,6 +160,16 @@ impl AttentionTracker {
     /// New dormant/history rows are deliberately ignored. Existing records
     /// still receive metadata updates so native renames are synchronized.
     pub fn reconcile(&mut self, observed: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
+        self.reconcile_with_persistence(observed, true)
+    }
+    pub fn reconcile_unflushed(&mut self, observed: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
+        self.reconcile_with_persistence(observed, false)
+    }
+    fn reconcile_with_persistence(
+        &mut self,
+        observed: Vec<TaskSnapshot>,
+        persist: bool,
+    ) -> Vec<TaskSnapshot> {
         let observed_ids: HashSet<String> = observed.iter().map(|task| task.id.clone()).collect();
 
         for mut task in observed {
@@ -175,6 +185,12 @@ impl AttentionTracker {
                 && millis(task.updated_at) > *baseline;
 
             if let Some(record) = self.records.get_mut(&id) {
+                // Durable observation replay must not undo a user's later
+                // viewed/pin action or renew execution activity after a crash.
+                if task.replays_integration(&record.task) {
+                    record.task.merge_integration_health(&task);
+                    continue;
+                }
                 let changed_turn = turn_key.is_some()
                     && turn_key != record.last_turn_key
                     && (task.status == TaskStatus::Running
@@ -258,7 +274,9 @@ impl AttentionTracker {
             }
         }
 
-        self.save_best_effort();
+        if persist {
+            self.save_best_effort();
+        }
         self.display()
     }
 
@@ -473,9 +491,14 @@ impl AttentionTracker {
         let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
         temporary.write_all(&payload)?;
         temporary.flush()?;
+        temporary.as_file().sync_all()?;
         temporary.persist(&self.path).map_err(|error| error.error)?;
         self.last_payload = Some(payload);
         Ok(())
+    }
+
+    pub fn flush(&mut self) -> std::io::Result<()> {
+        self.save_if_changed()
     }
 }
 
