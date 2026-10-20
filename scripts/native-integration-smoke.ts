@@ -133,6 +133,9 @@ try{
       checks.push('20 synthetic processes / 10000 events with actual WebView IPC and animation-frame responsiveness');
     }finally{for(const w of workers)if(w.exitCode===null)w.kill();}
   }
+  // Reattach after long load to the currently active management target; a
+  // background WebView may have suspended/replaced its prior CDP session.
+  management.close();management=undefined;await openManagement();
   const layout=await management.evaluate(`({overflow:document.documentElement.scrollWidth>innerWidth,errors:document.querySelectorAll('[role=alert]').length})`);assert.equal(layout.overflow,false);assert.equal(layout.errors,0);
   await Bun.write(join(owned,'management.png'),Buffer.from((await management.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   // Remove only registered sandbox Hook entries, retaining the user's changes.

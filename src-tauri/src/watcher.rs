@@ -1379,12 +1379,24 @@ pub fn watch(app: AppHandle) {
                         _ => true,
                     });
                     crate::notifier::handle_events(&app, &ordered_events, &tracked);
+                    let mut acknowledged_sources = HashSet::new();
                     for receipt in receipts.values() {
                         if let Err(code) = crate::providers::generic_event::acknowledge(
                             &crate::integrations::home(),
                             receipt,
                         ) {
                             log::warn!("integration acknowledgment deferred: {code}");
+                        } else {
+                            acknowledged_sources.insert(receipt.source.as_str());
+                        }
+                    }
+                    // Ack is the backpressure boundary: wake only successfully
+                    // committed sources to drain the next bounded batch, rather
+                    // than waiting a full polling interval for every 128 facts.
+                    // An empty poll has no receipts and cannot self-spin.
+                    for (id, _, worker) in &providers.workers {
+                        if acknowledged_sources.contains(id.as_str()) {
+                            worker.request_refresh();
                         }
                     }
                 } else {
