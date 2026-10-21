@@ -11,3 +11,10 @@
 - 兼容/回滚：新增 optional checkpoint 字段及独立 gaps 文件；无状态清空。回滚旧程序会失去事实缺口隔离能力，不应将此作为生产恢复方案；保留文件升级回来继续读取。
 
 后续任务数据和最终全量验证将在各任务完成后补充到本文件，不以旧报告代替新验收。
+
+## F02：一致的检查点预算与旧文件恢复
+
+- 根因：读端 16 MiB 上限与写端无界状态不对称；call 标签和最长 512 字节去重身份重复存储，outbox 也没有字节预算。
+- 修改：integrations/reducer.rs、journal.rs、providers/generic_event.rs。去重集合采用稳定 SHA-256（不清空旧集合），并发新 call 上限 128，标签限 256 字符，保留匹配结束/解除通道；reducer 状态 10 MiB、outbox 4 MiB、完整原子检查点 16 MiB。outbox 在事件边界暂停，ack 后继续，不提前提交游标。
+- 正式回归：f02_6800_maximum_field_events_do_not_create_an_unreadable_checkpoint；f02_legacy_oversized_checkpoint_keeps_evidence_and_pending_and_can_end；f02_bounded_writer_preserves_previous_bytes_on_overflow；f02_large_pending_outbox_pauses_at_fact_boundary_and_drains_after_restart，四项通过。6800 条极限事件先复现旧版失败：20,951,308 字节；修复后 51,732 字节（128 call 接纳、6671 条超额新 call 明确拒绝）。含 6800 旧 call 和 pending 的超限文件：20,951,534→2,673,216 字节，调用身份、pending、unread、pin 保留，随后显式结束成功。
+- 兼容：原始超限文件先保存 .oversized.bak，旧身份编码迁移先保存 .pre-budget.bak；不修改 journal。旧读取恢复窗口单独限 128 MiB，并非放宽正常写入上限；更大文件保留原状并返回 legacy_checkpoint_export_required，需要离线导出迁移。无法缩入预算的旧状态同样保留证据、不清空；未知身份编码拒绝解释。不要降级到不理解哈希编码的旧程序。

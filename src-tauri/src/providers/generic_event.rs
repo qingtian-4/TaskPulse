@@ -55,6 +55,12 @@ struct Checkpoint {
     recovered_gaps: std::collections::BTreeSet<String>,
 }
 
+fn save_checkpoint(path: &Path, cp: &Checkpoint) -> Result<(), String> {
+    journal::serialized_size(&cp.state, 10 * 1024 * 1024)?;
+    journal::serialized_size(&cp.outbox, journal::OUTBOX_LIMIT)?;
+    journal::atomic_bounded(path, cp, journal::CHECKPOINT_LIMIT)
+}
+
 #[derive(Serialize, Deserialize)]
 struct RejectedRecord {
     epoch: String,
@@ -78,7 +84,7 @@ impl Checkpoint {
             .event
             .turn_id
             .as_ref()
-            .filter(|turn| self.state.turns.contains(*turn))
+            .filter(|turn| self.state.has_turn(turn))
         {
             self.uncertain_turns.insert(turn.clone());
         }
@@ -89,25 +95,43 @@ impl Checkpoint {
 
 fn read_checkpoint(path: &Path) -> Result<Checkpoint, String> {
     match std::fs::metadata(path) {
-        Ok(meta) if meta.len() > 16 * 1024 * 1024 => Err("checkpoint_too_large".into()),
-        Ok(_) => match serde_json::from_slice(
-            &std::fs::read(path).map_err(|_| "checkpoint_read_failed")?,
-        ) {
-            Ok(cp) => Ok(cp),
-            Err(_) => {
-                // Preserve the damaged bytes before rebuilding from the
-                // append-only journal. Never silently overwrite evidence.
-                let backup = path.with_extension("corrupt.bak");
-                if !backup.exists() {
-                    std::fs::copy(path, backup).map_err(|_| "checkpoint_backup_failed")?;
-                }
-                Ok(Checkpoint {
-                    rebuilding: true,
-                    owner: "checkpoint-recovery".into(),
-                    ..Default::default()
-                })
+        // Legacy recovery is separate from the normal writer budget. Preserve
+        // exact old bytes first; stream-deserialize rather than allocating a
+        // second complete file. New writes remain capped at the original16MiB.
+        Ok(meta) if meta.len() > 128 * 1024 * 1024 => {
+            Err("legacy_checkpoint_export_required".into())
+        }
+        Ok(meta) => {
+            if meta.len() > journal::CHECKPOINT_LIMIT as u64 {
+                journal::backup(path, "oversized.bak")?;
             }
-        },
+            match serde_json::from_reader::<_, Checkpoint>(std::io::BufReader::new(
+                std::fs::File::open(path).map_err(|_| "checkpoint_read_failed")?,
+            )) {
+                Ok(mut cp) => {
+                    if !cp.state.supported_encoding() {
+                        return Err("unsupported_checkpoint_encoding".into());
+                    }
+                    if cp.state.normalize_identities() {
+                        journal::backup(path, "pre-budget.bak")?;
+                    }
+                    Ok(cp)
+                }
+                Err(_) => {
+                    // Preserve the damaged bytes before rebuilding from the
+                    // append-only journal. Never silently overwrite evidence.
+                    let backup = path.with_extension("corrupt.bak");
+                    if !backup.exists() {
+                        std::fs::copy(path, backup).map_err(|_| "checkpoint_backup_failed")?;
+                    }
+                    Ok(Checkpoint {
+                        rebuilding: true,
+                        owner: "checkpoint-recovery".into(),
+                        ..Default::default()
+                    })
+                }
+            }
+        }
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Checkpoint::default()),
         Err(_) => Err("checkpoint_read_failed".into()),
     }
@@ -127,7 +151,7 @@ pub fn acknowledge(home: &Path, receipt: &Receipt) -> Result<(), String> {
     let mut cp = read_checkpoint(&path)?;
     cp.outbox
         .retain(|e| e.epoch != receipt.epoch || e.sequence > receipt.sequence);
-    journal::atomic(&path, &cp)
+    save_checkpoint(&path, &cp)
 }
 
 pub struct GenericEventProvider {
@@ -212,11 +236,24 @@ impl GenericEventProvider {
                 // consumer has persisted attention + notification dedup and acked.
                 if cp.outbox.is_empty() {
                     let batch = journal::read_batch(path, &cp.cursor)?;
+                    let mut outbox_bytes = 2usize;
+                    let mut paused = false;
                     degraded |= batch.corrupt > 0
                         || batch.backlog
                         || batch.generation_changed
                         || batch.partial;
-                    for envelope in &batch.events {
+                    for (event_index, envelope) in batch.events.iter().enumerate() {
+                        // Reserve for the largest legal snapshot before
+                        // mutating the reducer. Pause exactly at this fact's
+                        // boundary; never advance past an undelivered end.
+                        if !cp.outbox.is_empty()
+                            && outbox_bytes + 256 * 1024 > journal::OUTBOX_LIMIT
+                        {
+                            cp.cursor = batch.event_cursors[event_index - 1].clone();
+                            paused = true;
+                            degraded = true;
+                            break;
+                        }
                         let valid = if envelope.source_instance_id != self.source.id
                             || integrations::key(&envelope.event.session_id) != stem
                         {
@@ -267,7 +304,7 @@ impl GenericEventProvider {
                             task.stale |= gaps.iter().any(|g| !cp.recovered_gaps.contains(&g.id));
                             task.native_unread =
                                 (recovered && task.finished_at.is_some()).then_some(true);
-                            cp.outbox.push(DurableObservation {
+                            let observation = DurableObservation {
                                 task,
                                 epoch: envelope.journal_epoch.clone(),
                                 sequence: envelope.sequence,
@@ -277,13 +314,17 @@ impl GenericEventProvider {
                                 } else {
                                     self.owner.clone()
                                 },
-                            });
+                            };
+                            outbox_bytes += journal::serialized_size(&observation, 256 * 1024)? + 1;
+                            cp.outbox.push(observation);
                         }
                     }
-                    cp.cursor = batch.cursor;
+                    if !paused {
+                        cp.cursor = batch.cursor;
+                    }
                     cp.rebuilding &= batch.backlog;
                     cp.owner = self.owner.clone();
-                    journal::atomic(&state_path, &cp)?;
+                    save_checkpoint(&state_path, &cp)?;
                 }
                 let has_gap = gaps.iter().any(|g| !cp.recovered_gaps.contains(&g.id));
                 degraded |= !cp.uncertain_turns.is_empty() || has_gap;
@@ -428,5 +469,210 @@ impl Provider for GenericEventProvider {
                 error,
             )
         })
+    }
+}
+
+#[cfg(test)]
+mod budget_tests {
+    use super::*;
+    use integrations::schema::{Envelope, Event, Kind, Payload};
+    #[test]
+    fn f02_6800_maximum_field_events_do_not_create_an_unreadable_checkpoint() {
+        let mut cp = Checkpoint::default();
+        let mut rejected = 0;
+        for n in 0..6800 {
+            let e = Event {
+                schema_version: 1,
+                agent_id: "a".into(),
+                session_id: "s".into(),
+                event_id: format!("{n:08}{}", "x".repeat(504)),
+                turn_id: Some("turn".into()),
+                call_id: (n > 0).then(|| format!("{n:08}{}", "c".repeat(504))),
+                request_id: None,
+                occurred_at: None,
+                kind: if n == 0 {
+                    Kind::Started
+                } else {
+                    Kind::ToolStarted
+                },
+                payload: Payload {
+                    activity: Some("a".repeat(2048)),
+                    ..Default::default()
+                },
+            };
+            e.validate("a").unwrap();
+            let env = Envelope {
+                version: 1,
+                source_instance_id: "source".into(),
+                sequence: n + 1,
+                journal_epoch: "epoch".into(),
+                received_at: n + 1,
+                adapter_version: "1".into(),
+                evidence: "self_reported".into(),
+                event: e,
+                context: None,
+            };
+            rejected += usize::from(cp.state.apply(&env, "Agent").is_err());
+        }
+        assert_eq!(cp.state.calls.len(), 128);
+        assert_eq!(rejected, 6671);
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("state.json");
+        journal::atomic(&path, &cp).unwrap();
+        let size = std::fs::metadata(&path).unwrap().len();
+        eprintln!("6800 maximum records checkpoint bytes={size}");
+        assert!(size <= 16 * 1024 * 1024);
+        assert!(read_checkpoint(&path).is_ok());
+    }
+
+    #[test]
+    fn f02_legacy_oversized_checkpoint_keeps_evidence_and_pending_and_can_end() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("legacy.json");
+        let mut old = serde_json::to_value(Checkpoint::default()).unwrap();
+        old["state"]
+            .as_object_mut()
+            .unwrap()
+            .remove("identity_encoding");
+        old["state"]["seen"] = serde_json::json!((0..6800)
+            .map(|n| format!("{n:08}{}", "x".repeat(504)))
+            .collect::<Vec<_>>());
+        old["state"]["turns"] = serde_json::json!(["turn"]);
+        let mut task = TaskSnapshot::new(
+            "legacy",
+            "Legacy",
+            crate::domain::TaskSource::GenericEvent,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Inferred,
+            SystemTime::now(),
+        );
+        task.turn_key = Some("turn".into());
+        task.unread = true;
+        task.pinned = true;
+        old["state"]["task"] = serde_json::to_value(task).unwrap();
+        let pending_key = serde_json::to_string(&("turn", "request")).unwrap();
+        old["state"]["pending"] = serde_json::json!({pending_key:{"turn":"turn","request":"request","call":null,"reason":"approval","confirmed_at":1}});
+        old["state"]["calls"] = serde_json::json!((0..6800)
+            .map(|n| (format!("{n:08}{}", "c".repeat(504)), "a".repeat(2048)))
+            .collect::<BTreeMap<_, _>>());
+        journal::atomic(&path, &old).unwrap();
+        let before = std::fs::read(&path).unwrap();
+        assert!(before.len() > journal::CHECKPOINT_LIMIT);
+        let cp = read_checkpoint(&path).unwrap();
+        assert_eq!(cp.state.seen.len(), 6800);
+        assert_eq!(cp.state.calls.len(), 6800);
+        assert_eq!(cp.state.pending.len(), 1);
+        assert!(cp.state.task.as_ref().unwrap().unread);
+        assert!(cp.state.task.as_ref().unwrap().pinned);
+        assert_eq!(
+            std::fs::read(path.with_extension("oversized.bak")).unwrap(),
+            before
+        );
+        save_checkpoint(&path, &cp).unwrap();
+        let after = std::fs::metadata(&path).unwrap().len();
+        assert!(after < journal::CHECKPOINT_LIMIT as u64);
+        let mut cp = read_checkpoint(&path).unwrap();
+        assert_eq!(cp.state.seen.len(), 6800);
+        assert!(cp.state.has_turn("turn"));
+        assert_eq!(cp.state.calls.len(), 6800);
+        let end:Envelope=serde_json::from_value(serde_json::json!({"version":1,"source_instance_id":"source","sequence":6801,"journal_epoch":"epoch","received_at":6801,"adapter_version":"1","evidence":"self_reported","event":{"schema_version":1,"agent_id":"a","session_id":"s","event_id":"end","turn_id":"turn","kind":"turn.completed","payload":{}}})).unwrap();
+        assert!(cp
+            .state
+            .apply(&end, "Agent")
+            .unwrap()
+            .unwrap()
+            .finished_at
+            .is_some());
+        assert!(cp.state.pending.is_empty());
+        assert!(cp.state.calls.is_empty());
+        save_checkpoint(&path, &cp).unwrap();
+        assert!(read_checkpoint(&path).unwrap().state.task.unwrap().unread);
+        eprintln!("legacy checkpoint before={} after={after}", before.len());
+    }
+
+    #[test]
+    fn f02_bounded_writer_preserves_previous_bytes_on_overflow() {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("state.json");
+        journal::atomic(&path, &serde_json::json!({"keep":true})).unwrap();
+        let old = std::fs::read(&path).unwrap();
+        assert!(journal::atomic_bounded(&path, &"x".repeat(1024), 128).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(), old);
+    }
+
+    #[test]
+    fn f02_large_pending_outbox_pauses_at_fact_boundary_and_drains_after_restart() {
+        let home = tempfile::tempdir().unwrap();
+        let src:crate::monitoring::SourceConfig=serde_json::from_value(serde_json::json!({"id":"source","name":"Fixture","kind":"generic_event","enabled":true,"location":"","projects":["*"],"excluded_projects":[],"tmux_sessions":[],"tmux_panes":[],"poll_interval_ms":1000,"integration":{"agent_id":"a","adapter_id":"standard-events","transport":"local","accept_since_ms":0}})).unwrap();
+        let mut lines = Vec::new();
+        for n in 0..260 {
+            let kind = if n == 0 {
+                Kind::Started
+            } else if n <= 128 {
+                Kind::Requested
+            } else if n == 259 {
+                Kind::Completed
+            } else {
+                Kind::Phase
+            };
+            let e = Event {
+                schema_version: 1,
+                agent_id: "a".into(),
+                session_id: "s".into(),
+                event_id: format!("e-{n}"),
+                turn_id: Some("turn".into()),
+                call_id: None,
+                request_id: (kind == Kind::Requested).then(|| format!("{n:08}{}", "r".repeat(504))),
+                occurred_at: None,
+                kind,
+                payload: Payload {
+                    title: Some("t".repeat(2048)),
+                    project: Some("p".repeat(2048)),
+                    project_path: Some("x".repeat(2048)),
+                    model: Some("m".repeat(2048)),
+                    request_kind: (kind == Kind::Requested)
+                        .then_some(crate::domain::WaitingReason::Approval),
+                    ..Default::default()
+                },
+            };
+            e.validate("a").unwrap();
+            let env = Envelope {
+                version: 1,
+                source_instance_id: "source".into(),
+                sequence: n + 1,
+                journal_epoch: "epoch".into(),
+                received_at: integrations::now_ms(),
+                adapter_version: "1".into(),
+                evidence: "self_reported".into(),
+                event: e,
+                context: None,
+            };
+            serde_json::to_writer(&mut lines, &env).unwrap();
+            lines.push(b'\n');
+        }
+        let dir = journal::root(home.path(), "source").join("events");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join(format!("{}.jsonl", integrations::key("s"))), lines).unwrap();
+        let mut seen = 0;
+        let mut end = false;
+        for _ in 0..30 {
+            let mut p = GenericEventProvider::with_home(src.clone(), home.path().into());
+            let out = p.poll(SystemTime::now());
+            seen += out.ordered.len();
+            end |= out.ordered.iter().any(|o| o.task.finished_at.is_some());
+            if let Some(last) = out.ordered.last() {
+                acknowledge(home.path(), &last.receipt).unwrap();
+            }
+            let path = journal::root(home.path(), "source")
+                .join("state")
+                .join(format!("{}.json", integrations::key("s")));
+            assert!(std::fs::metadata(&path).unwrap().len() <= journal::CHECKPOINT_LIMIT as u64);
+            assert!(read_checkpoint(&path).is_ok());
+            if end {
+                break;
+            }
+        }
+        assert!(end);
+        assert_eq!(seen, 260);
     }
 }

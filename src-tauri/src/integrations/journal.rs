@@ -17,6 +17,54 @@ pub const MAX_READ: usize = 256 * 1024;
 pub const MAX_BATCH: usize = 128;
 pub const SESSION_DISK_LIMIT: u64 = 32 * 1024 * 1024;
 pub const SOURCE_DISK_LIMIT: u64 = 128 * 1024 * 1024;
+pub const CHECKPOINT_LIMIT: usize = 16 * 1024 * 1024;
+pub const OUTBOX_LIMIT: usize = 4 * 1024 * 1024;
+
+pub fn backup(path: &Path, extension: &str) -> Result<(), String> {
+    let target = path.with_extension(extension);
+    if target.exists() {
+        return Ok(());
+    }
+    let parent = path.parent().ok_or("invalid_backup_path")?;
+    let mut temp =
+        tempfile::NamedTempFile::new_in(parent).map_err(|_| "checkpoint_backup_failed")?;
+    let mut input = File::open(path).map_err(|_| "checkpoint_backup_failed")?;
+    std::io::copy(&mut input, temp.as_file_mut()).map_err(|_| "checkpoint_backup_failed")?;
+    temp.as_file()
+        .sync_all()
+        .map_err(|_| "checkpoint_backup_failed")?;
+    temp.persist_noclobber(&target)
+        .map_err(|_| "checkpoint_backup_failed")?;
+    Ok(())
+}
+
+struct LimitedWriter<W> {
+    inner: W,
+    bytes: usize,
+    limit: usize,
+}
+impl<W: Write> Write for LimitedWriter<W> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        if buf.len() > self.limit.saturating_sub(self.bytes) {
+            return Err(std::io::Error::other("state_budget_exceeded"));
+        }
+        self.inner.write_all(buf)?;
+        self.bytes += buf.len();
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
+}
+pub fn serialized_size(value: &impl Serialize, limit: usize) -> Result<usize, String> {
+    let mut writer = LimitedWriter {
+        inner: std::io::sink(),
+        bytes: 0,
+        limit,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(|_| "state_budget_exceeded")?;
+    Ok(writer.bytes)
+}
 
 pub fn root(home: &Path, source: &str) -> PathBuf {
     home.join(key(source))
@@ -50,10 +98,18 @@ pub fn lock(path: &Path, wait: Duration) -> Result<File, String> {
 }
 
 pub fn atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
+    atomic_bounded(path, value, usize::MAX)
+}
+pub fn atomic_bounded(path: &Path, value: &impl Serialize, limit: usize) -> Result<(), String> {
     let parent = path.parent().ok_or("invalid_state_path")?;
     std::fs::create_dir_all(parent).map_err(|_| "create_directory_failed")?;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state_temp_failed")?;
-    serde_json::to_writer(temporary.as_file_mut(), value).map_err(|_| "state_serialize_failed")?;
+    let mut writer = LimitedWriter {
+        inner: temporary.as_file_mut(),
+        bytes: 0,
+        limit,
+    };
+    serde_json::to_writer(&mut writer, value).map_err(|_| "state_serialize_or_budget_failed")?;
     temporary
         .as_file_mut()
         .flush()
@@ -227,6 +283,7 @@ pub struct Batch {
     pub backlog: bool,
     pub generation_changed: bool,
     pub partial: bool,
+    pub event_cursors: Vec<Cursor>,
 }
 
 pub fn read_batch(path: &Path, old: &Cursor) -> Result<Batch, String> {
@@ -268,6 +325,7 @@ pub fn read_batch(path: &Path, old: &Cursor) -> Result<Batch, String> {
     let mut corrupt = 0;
     let mut consumed = 0;
     let mut partial = false;
+    let mut event_cursors = vec![];
     for line in bytes.split_inclusive(|b| *b == b'\n') {
         if events.len() + corrupt >= MAX_BATCH {
             break;
@@ -282,6 +340,7 @@ pub fn read_batch(path: &Path, old: &Cursor) -> Result<Batch, String> {
         if line.len() > MAX_LINE {
             return Err("journal_oversized_line".into());
         }
+        let mut valid_event = false;
         match serde_json::from_slice::<Envelope>(line) {
             Ok(e) if e.version == 1 => {
                 if cursor.epoch.is_empty() {
@@ -292,6 +351,7 @@ pub fn read_batch(path: &Path, old: &Cursor) -> Result<Batch, String> {
                 }
                 cursor.sequence = e.sequence;
                 events.push(e);
+                valid_event = true;
             }
             _ => {
                 corrupt += 1;
@@ -300,6 +360,11 @@ pub fn read_batch(path: &Path, old: &Cursor) -> Result<Batch, String> {
         cursor.anchor_start = cursor.offset + consumed as u64;
         cursor.anchor_hash = key(&String::from_utf8_lossy(line));
         consumed += line.len();
+        if valid_event {
+            let mut next = cursor.clone();
+            next.offset += consumed as u64;
+            event_cursors.push(next);
+        }
     }
     cursor.offset += consumed as u64;
     let backlog =
@@ -311,6 +376,7 @@ pub fn read_batch(path: &Path, old: &Cursor) -> Result<Batch, String> {
         backlog,
         generation_changed,
         partial,
+        event_cursors,
     })
 }
 

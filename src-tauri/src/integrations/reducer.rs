@@ -17,6 +17,8 @@ pub struct Pending {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(default)]
+    identity_encoding: u8,
     pub task: Option<TaskSnapshot>,
     pub seen: BTreeSet<String>,
     pub turns: BTreeSet<String>,
@@ -31,13 +33,51 @@ fn request_key(turn: &str, request: &str) -> String {
 }
 
 impl Session {
+    pub fn supported_encoding(&self) -> bool {
+        self.identity_encoding <= 1
+    }
+    pub fn normalize_identities(&mut self) -> bool {
+        if self.identity_encoding == 0 {
+            self.seen = std::mem::take(&mut self.seen)
+                .into_iter()
+                .map(|id| super::key(&id))
+                .collect();
+            self.turns = std::mem::take(&mut self.turns)
+                .into_iter()
+                .map(|id| super::key(&id))
+                .collect();
+            self.terminal = std::mem::take(&mut self.terminal)
+                .into_iter()
+                .map(|id| super::key(&id))
+                .collect();
+            self.calls = std::mem::take(&mut self.calls)
+                .into_iter()
+                .map(|(id, label)| (super::key(&id), label.chars().take(256).collect()))
+                .collect();
+            self.identity_encoding = 1;
+            return true;
+        }
+        false
+    }
+    pub fn has_turn(&self, id: &str) -> bool {
+        self.turns.contains(&if self.identity_encoding == 0 {
+            id.into()
+        } else {
+            super::key(id)
+        })
+    }
     pub fn apply(
         &mut self,
         envelope: &Envelope,
         display_name: &str,
     ) -> Result<Option<TaskSnapshot>, String> {
         let e = &envelope.event;
-        if self.seen.contains(&e.event_id) {
+        if !self.supported_encoding() {
+            return Err("unsupported_checkpoint_encoding".into());
+        }
+        self.normalize_identities();
+        let event_key = super::key(&e.event_id);
+        if self.seen.contains(&event_key) {
             return Ok(None);
         }
         // Retention must not silently erase dedup or unresolved state.
@@ -52,13 +92,18 @@ impl Session {
         if self.seen.len() >= 100_000 && !recovery
             || e.kind == Kind::Started
                 && self.turns.len() >= 4096
-                && e.turn_id.as_ref().is_none_or(|t| !self.turns.contains(t))
+                && e.turn_id.as_ref().is_none_or(|t| !self.has_turn(t))
             || e.kind == Kind::Requested
                 && self.pending.len() >= 128
                 && !self.pending.contains_key(&request_key(
                     e.turn_id.as_deref().unwrap_or(""),
                     e.request_id.as_deref().unwrap_or(""),
                 ))
+            || e.kind == Kind::ToolStarted
+                && self.calls.len() >= 128
+                && e.call_id
+                    .as_ref()
+                    .is_none_or(|id| !self.calls.contains_key(&super::key(id)))
         {
             return Err("session_state_limit_record_quarantined".into());
         }
@@ -66,7 +111,7 @@ impl Session {
         // terminal-turn set). Never let dedup saturation prevent their cleanup,
         // and never erase the old ledger to make room for new admissions.
         if self.seen.len() < 100_000 {
-            self.seen.insert(e.event_id.clone());
+            self.seen.insert(event_key);
         }
         self.last_received_at = envelope.received_at;
         if e.kind == Kind::Test {
@@ -104,17 +149,17 @@ impl Session {
                     self.pending.remove(&key);
                 }
             } else if matches!(e.kind, Kind::Completed | Kind::Failed | Kind::Interrupted) {
-                if let Some(turn) = e.turn_id.as_ref().filter(|turn| self.turns.contains(*turn)) {
+                if let Some(turn) = e.turn_id.as_ref().filter(|turn| self.has_turn(turn)) {
                     self.pending.retain(|_, p| p.turn != *turn);
-                    self.terminal.insert(turn.clone());
+                    self.terminal.insert(super::key(turn));
                 }
             }
             return Ok(None);
         }
         if !metadata_only
             && e.turn_id.as_ref().is_some_and(|turn| {
-                self.terminal.contains(turn)
-                    || (e.kind == Kind::Started && self.turns.contains(turn))
+                self.terminal.contains(&super::key(turn))
+                    || (e.kind == Kind::Started && self.has_turn(turn))
             })
         {
             return Ok(None);
@@ -208,10 +253,10 @@ impl Session {
         }
         let turn = e.turn_id.as_deref().ok_or("turn_required")?;
         if e.kind == Kind::Started {
-            if self.turns.contains(turn) {
+            if self.turns.contains(&super::key(turn)) {
                 return Ok(None);
             }
-            self.turns.insert(turn.into());
+            self.turns.insert(super::key(turn));
             task.turn_key = Some(turn.into());
             task.status = TaskStatus::Running;
             task.started_at = Some(now);
@@ -226,11 +271,13 @@ impl Session {
             self.calls.clear();
             if let Some(call) = &e.call_id {
                 self.calls.insert(
-                    call.clone(),
+                    super::key(call),
                     task.activity.clone().unwrap_or_else(|| "工具执行".into()),
                 );
             }
-        } else if task.turn_key.as_deref() != Some(turn) || self.terminal.contains(turn) {
+        } else if task.turn_key.as_deref() != Some(turn)
+            || self.terminal.contains(&super::key(turn))
+        {
             // Receipt order is not causal order. Late old-turn events cannot
             // overwrite a new turn or resurrect a terminal turn.
             return Ok(None);
@@ -242,17 +289,18 @@ impl Session {
                 }
                 Kind::ToolStarted => {
                     self.calls.insert(
-                        e.call_id.clone().unwrap(),
+                        super::key(e.call_id.as_ref().unwrap()),
                         e.payload
                             .activity
-                            .clone()
+                            .as_ref()
+                            .map(|s| s.chars().take(256).collect())
                             .unwrap_or_else(|| "工具执行".into()),
                     );
                     task.phase = Some(ExecutionPhase::Tool);
                     task.activity = self.calls.values().next().cloned();
                 }
                 Kind::ToolFinished => {
-                    self.calls.remove(e.call_id.as_ref().unwrap());
+                    self.calls.remove(&super::key(e.call_id.as_ref().unwrap()));
                     task.activity = self.calls.values().next().cloned();
                     task.phase = Some(if self.calls.is_empty() {
                         ExecutionPhase::Thinking
@@ -293,7 +341,7 @@ impl Session {
                             .as_ref()
                             .is_some_and(|p| p.call.is_some() && p.call == e.call_id)
                     {
-                        self.calls.remove(e.call_id.as_ref().unwrap());
+                        self.calls.remove(&super::key(e.call_id.as_ref().unwrap()));
                         task.activity = self.calls.values().next().cloned();
                         task.phase = Some(if self.calls.is_empty() {
                             ExecutionPhase::Thinking
@@ -303,7 +351,7 @@ impl Session {
                     }
                 }
                 Kind::Completed | Kind::Failed | Kind::Interrupted => {
-                    self.terminal.insert(turn.into());
+                    self.terminal.insert(super::key(turn));
                     self.calls.clear();
                     self.pending.retain(|_, p| p.turn != turn);
                     task.status = if e.kind == Kind::Failed {
@@ -363,7 +411,7 @@ impl Session {
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(p.reason);
             task.pending_confirmed_at = Some(p.confirmed_at);
-        } else if !self.terminal.contains(turn) {
+        } else if !self.terminal.contains(&super::key(turn)) {
             task.status = TaskStatus::Running;
             task.waiting_reason = None;
         }
