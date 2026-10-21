@@ -38,6 +38,8 @@ pub struct Receipt {
 }
 #[derive(Default, Serialize, Deserialize)]
 struct Checkpoint {
+    #[serde(skip)]
+    dirty: bool,
     cursor: Cursor,
     state: Session,
     outbox: Vec<DurableObservation>,
@@ -58,7 +60,13 @@ struct Checkpoint {
 fn save_checkpoint(path: &Path, cp: &Checkpoint) -> Result<(), String> {
     journal::serialized_size(&cp.state, 10 * 1024 * 1024)?;
     journal::serialized_size(&cp.outbox, journal::OUTBOX_LIMIT)?;
-    journal::atomic_bounded(path, cp, journal::CHECKPOINT_LIMIT)
+    journal::atomic_bounded(path, cp, journal::CHECKPOINT_LIMIT)?;
+    journal::checkpoint_written(
+        std::fs::metadata(path)
+            .map_err(|_| "checkpoint_stat_failed")?
+            .len(),
+    );
+    Ok(())
 }
 
 #[derive(Serialize, Deserialize)]
@@ -114,6 +122,7 @@ fn read_checkpoint(path: &Path) -> Result<Checkpoint, String> {
                     }
                     if cp.state.normalize_identities() {
                         journal::backup(path, "pre-budget.bak")?;
+                        cp.dirty = true;
                     }
                     Ok(cp)
                 }
@@ -125,6 +134,7 @@ fn read_checkpoint(path: &Path) -> Result<Checkpoint, String> {
                         std::fs::copy(path, backup).map_err(|_| "checkpoint_backup_failed")?;
                     }
                     Ok(Checkpoint {
+                        dirty: true,
                         rebuilding: true,
                         owner: "checkpoint-recovery".into(),
                         ..Default::default()
@@ -132,7 +142,10 @@ fn read_checkpoint(path: &Path) -> Result<Checkpoint, String> {
                 }
             }
         }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Checkpoint::default()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Checkpoint {
+            dirty: true,
+            ..Default::default()
+        }),
         Err(_) => Err("checkpoint_read_failed".into()),
     }
 }
@@ -149,9 +162,13 @@ pub fn acknowledge(home: &Path, receipt: &Receipt) -> Result<(), String> {
     )?;
     let path = dir.join(format!("{}.json", receipt.session_key));
     let mut cp = read_checkpoint(&path)?;
+    let before = cp.outbox.len();
     cp.outbox
         .retain(|e| e.epoch != receipt.epoch || e.sequence > receipt.sequence);
-    save_checkpoint(&path, &cp)
+    if cp.dirty || before != cp.outbox.len() {
+        save_checkpoint(&path, &cp)?;
+    }
+    Ok(())
 }
 
 pub struct GenericEventProvider {
@@ -228,14 +245,17 @@ impl GenericEventProvider {
                 let state_path = state_dir.join(format!("{stem}.json"));
                 let mut cp = read_checkpoint(&state_path)?;
                 let gaps = integrations::health::load(&self.home, &self.source.id, stem)?;
+                let old_gaps = cp.recovered_gaps.len();
                 cp.recovered_gaps
                     .retain(|id| gaps.iter().any(|g| &g.id == id));
+                cp.dirty |= old_gaps != cp.recovered_gaps.len();
                 degraded |= cp.rebuilding;
                 let recovered = !cp.owner.is_empty() && cp.owner != self.owner;
                 // Do not ingest beyond the durable bounded outbox until the UI
                 // consumer has persisted attention + notification dedup and acked.
                 if cp.outbox.is_empty() {
                     let batch = journal::read_batch(path, &cp.cursor)?;
+                    cp.dirty |= batch.cursor != cp.cursor || !batch.events.is_empty();
                     let mut outbox_bytes = 2usize;
                     let mut paused = false;
                     degraded |= batch.corrupt > 0
@@ -322,8 +342,12 @@ impl GenericEventProvider {
                     if !paused {
                         cp.cursor = batch.cursor;
                     }
-                    cp.rebuilding &= batch.backlog;
+                    let rebuilding = cp.rebuilding && batch.backlog;
+                    cp.dirty |= cp.rebuilding != rebuilding || cp.owner != self.owner;
+                    cp.rebuilding = rebuilding;
                     cp.owner = self.owner.clone();
+                }
+                if cp.dirty {
                     save_checkpoint(&state_path, &cp)?;
                 }
                 let has_gap = gaps.iter().any(|g| !cp.recovered_gaps.contains(&g.id));
@@ -448,7 +472,8 @@ pub fn quarantine_summary(home: &Path, source: &str) -> serde_json::Value {
             }
         }
     }
-    serde_json::json!({"rejected_records":rejected,"retained_index_records":indexed,"unresolved_fact_gaps":unresolved_gaps,"bounded_scan_complete":complete,"original_facts_retained_in_journal":true})
+    let (writes, bytes) = journal::checkpoint_stats();
+    serde_json::json!({"rejected_records":rejected,"retained_index_records":indexed,"unresolved_fact_gaps":unresolved_gaps,"bounded_scan_complete":complete,"original_facts_retained_in_journal":true,"process_checkpoint_writes":writes,"process_checkpoint_bytes":bytes})
 }
 
 impl Provider for GenericEventProvider {
@@ -476,6 +501,36 @@ impl Provider for GenericEventProvider {
 mod budget_tests {
     use super::*;
     use integrations::schema::{Envelope, Event, Kind, Payload};
+    #[test]
+    fn f03_one_hundred_idle_polls_write_nothing_and_ack_is_idempotent() {
+        let home = tempfile::tempdir().unwrap();
+        let src: crate::monitoring::SourceConfig = serde_json::from_value(serde_json::json!({"id":"source","name":"Fixture","kind":"generic_event","enabled":true,"integration":{"agent_id":"a","adapter_id":"standard-events","transport":"local","accept_since_ms":0}})).unwrap();
+        let e: Event = serde_json::from_value(serde_json::json!({"schema_version":1,"agent_id":"a","session_id":"s","event_id":"start","turn_id":"turn","kind":"turn.started","payload":{}})).unwrap();
+        journal::append(home.path(), "source", e, "self_reported", "1").unwrap();
+        let mut p = GenericEventProvider::with_home(src.clone(), home.path().into());
+        let first = p.poll(SystemTime::now());
+        let receipt = first.ordered.last().unwrap().receipt.clone();
+        acknowledge(home.path(), &receipt).unwrap();
+        p.poll(SystemTime::now());
+        let before = journal::local_checkpoint_stats();
+        for _ in 0..100 {
+            assert!(p.poll(SystemTime::now()).ordered.is_empty());
+        }
+        acknowledge(home.path(), &receipt).unwrap();
+        let after = journal::local_checkpoint_stats();
+        eprintln!(
+            "idle100+duplicate_ack: writes={}, bytes={}",
+            after.0 - before.0,
+            after.1 - before.1
+        );
+        assert_eq!(after, before);
+        let mut restarted = GenericEventProvider::with_home(src, home.path().into());
+        assert!(restarted.poll(SystemTime::now()).ordered.is_empty());
+        let taken = journal::local_checkpoint_stats();
+        assert_eq!(taken.0, before.0 + 1); // New owner persisted once, no history replay.
+        restarted.poll(SystemTime::now());
+        assert_eq!(journal::local_checkpoint_stats(), taken);
+    }
     #[test]
     fn f02_6800_maximum_field_events_do_not_create_an_unreadable_checkpoint() {
         let mut cp = Checkpoint::default();

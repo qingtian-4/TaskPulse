@@ -20,6 +20,32 @@ pub const SOURCE_DISK_LIMIT: u64 = 128 * 1024 * 1024;
 pub const CHECKPOINT_LIMIT: usize = 16 * 1024 * 1024;
 pub const OUTBOX_LIMIT: usize = 4 * 1024 * 1024;
 
+static CHECKPOINT_WRITES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static CHECKPOINT_BYTES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+thread_local! { static LOCAL_WRITES: std::cell::Cell<(u64,u64)> = const { std::cell::Cell::new((0,0)) }; }
+pub fn checkpoint_stats() -> (u64, u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    (
+        CHECKPOINT_WRITES.load(Relaxed),
+        CHECKPOINT_BYTES.load(Relaxed),
+    )
+}
+pub fn checkpoint_written(bytes: u64) {
+    use std::sync::atomic::Ordering::Relaxed;
+    CHECKPOINT_WRITES.fetch_add(1, Relaxed);
+    CHECKPOINT_BYTES.fetch_add(bytes, Relaxed);
+    #[cfg(test)]
+    LOCAL_WRITES.with(|v| {
+        let (n, b) = v.get();
+        v.set((n + 1, b + bytes));
+    });
+}
+#[cfg(test)]
+pub fn local_checkpoint_stats() -> (u64, u64) {
+    LOCAL_WRITES.with(|v| v.get())
+}
+
 pub fn backup(path: &Path, extension: &str) -> Result<(), String> {
     let target = path.with_extension(extension);
     if target.exists() {
@@ -268,7 +294,7 @@ pub fn append_using(
     Ok(envelope)
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Cursor {
     pub offset: u64,
     pub epoch: String,
