@@ -6,6 +6,7 @@
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { taskContext, taskLabel } from '$lib/dashboard';
+  import { sourceReadState, readTestResult, sourceCapability } from '$lib/source-setup';
   import { deliveryStage } from '$lib/notice';
   import type { DeliveryRecord } from '$lib/types';
   import { formatAgo, type DashboardSettings, type MonitorSource, type SourceDiscovery, type SourceKind, type SessionPage, type ProviderHealth } from '$lib/types';
@@ -34,6 +35,23 @@
   let closePrompt=$state(false);
   let closing=false;
   let now=$state(Date.now());
+  let reading=$state(false), readTest=$state<{id:string;message:string}|null>(null);
+  let notificationTest=$state(false);
+  const testStage=$derived(deliveryRecords.some(r=>r.test && r.stage==='rendered')?'测试界面已渲染（不代表已阅读）':notificationTest?'测试已提交 · 请确认是否看到':'尚未测试');
+  async function testRead(){
+    if(!editor || dirty || reading)return;
+    const id=editor.id;reading=true;readTest=null;error='';
+    try{
+      const since=await invoke<number>('request_refresh');
+      for(let n=0;n<100;n++){
+        await new Promise(r=>setTimeout(r,300));
+        health=await invoke<ProviderHealth[]>('get_providers');
+        const result=readTestResult(id,health,since);
+        if(result!=='pending'){readTest={id,message:result==='passed'?'本次读取正常 · 不等于真实生命周期已验收':'本次读取失败 · 查看高级诊断'};return;}
+      }
+      readTest={id,message:'读取超时 · 保留原状态，不视为任务结束'};
+    }catch(e){error=String(e);}finally{reading=false;}
+  }
   let editor=$derived(settings?.sources.find(s=>s.id===selected) ?? null);
   const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
   const candidates=$derived(discovery.filter(d=>d.available && d.candidate && !settings?.sources.some(s=>s.id===d.candidate!.id || s.kind===d.candidate!.kind && s.location.toLowerCase()===d.candidate!.location.toLowerCase())));
@@ -81,13 +99,7 @@
       notice=(enabled?'已启用：':'已停用：')+source.name+'。开关即时生效；其他编辑仍需保存。';
     }catch(e){source.enabled=previous;error=String(e);}finally{saving=false;}
   }
-  function sourceState(source:MonitorSource){
-    const live=applied?.sources.find(s=>s.id===source.id);
-    if(!live || !applied?.onboarding_complete)return '未保存 / 未开始监控';
-    if(!live.enabled)return '已停用';
-    const h=health.find(h=>h.provider===source.id);
-    return h?.status==='connected' ? '采集正常' : '等待采集 / 检查连接';
-  }
+  function sourceState(source:MonitorSource){return sourceReadState(source,applied,health,now);}
   async function saveAndClose(){await save();if(!dirty && !error){closing=true;await getCurrentWindow().close();}}
   async function discardAndClose(){closing=true;await getCurrentWindow().close();}
   async function reloadSettings(){
@@ -118,7 +130,7 @@
     try {await invoke('update_task_attention',{id,action});notice=action==='follow'?'已加入关注，不补发历史通知':'会话设置已更新';await loadSessions();}
     catch(e){error=String(e);}
   }
-  async function testNotification(){try{await invoke('test_notification');notice='已发送测试提醒，按保存后的提醒方式展示；查看详情会打开 TaskPulse。';}catch(e){error=String(e);}}
+  async function testNotification(){try{await invoke('test_notification');notificationTest=true;await loadDelivery();notice='测试已提交；请确认是否看见提醒。投递成功不代表真实任务生命周期已验收。';}catch(e){error=String(e);}}
   onMount(()=>{
     if(!isTauri()){error='管理配置需要在 TaskPulse 托盘应用中打开。浏览器页面不会写入真实配置。';return;}
     const cleanups:Array<()=>void>=[];let mounted=true;
@@ -142,7 +154,7 @@
         const closeCleanup=await getCurrentWindow().onCloseRequested(e=>{if(dirty && !closing){e.preventDefault();closePrompt=true;}});if(mounted)cleanups.push(closeCleanup);else closeCleanup();
       } catch(e){error=String(e);}
     })();
-    const interval=setInterval(()=>{if(tab==='sessions')void loadSessions();},3000);
+    const interval=setInterval(()=>{if(tab==='sessions')void loadSessions();if(notificationTest)void loadDelivery();},3000);
     const discoveryTimer=setInterval(()=>{if(tab==='sources')void invoke<SourceDiscovery[]>('discover_sources').then(value=>discovery=value).catch(e=>error=String(e));},30000);
     const clock=setInterval(()=>now=Date.now(),1000);
     return()=>{mounted=false;clearInterval(interval);clearInterval(discoveryTimer);clearInterval(clock);cleanups.forEach(fn=>fn());};
@@ -156,33 +168,42 @@
   {#if conflict}<div class="message"><button onclick={reloadSettings}>放弃未保存编辑，加载最新配置</button></div>{/if}
   {#if notice}<div class="message" role="status">{notice}<button onclick={()=>notice=''} aria-label="关闭提示">×</button></div>{/if}
   {#if settings && !settings.onboarding_complete}<div class="welcome">首次设置：已预选发现的本机来源。确认需要的来源后，点击“保存并生效”。远程服务器由你主动添加。</div>{/if}
-  {#each candidates as candidate}<div class="message">发现 {candidate.candidate!.name}<button onclick={()=>addCandidate(candidate.candidate!)}>添加到监控来源</button></div>{/each}
   <main class="glass-scroll">
     {#if settings && tab==='sources'}
-      <div class="source-layout"><aside><div class="add"><select bind:value={addKind} aria-label="新增来源类型">{#each kinds as kind}<option value={kind.kind}>{kind.name}</option>{/each}</select><button onclick={add}>＋ 添加</button></div>
+      <ol class="setup-flow" aria-label="来源接入步骤"><li>1 <span>选择 Agent</span></li><li>2 <span>查看能力与配置范围</span></li><li>3 <span>保存并测试</span></li><li>4 <span>等待真实任务事件</span></li></ol>
+      <div class="source-layout"><aside><h2 class="sidebar-title">已保存与草稿来源 <span>{settings.sources.length}</span></h2><div class="add"><select bind:value={addKind} aria-label="新增来源类型">{#each kinds as kind}<option value={kind.kind}>{kind.name}</option>{/each}</select><button onclick={add}>＋ 添加</button></div>
       {#each settings.sources as source (source.id)}<div class="source-item" class:chosen={selected===source.id}><input type="checkbox" checked={source.enabled} disabled={saving} onchange={e=>void toggleSource(source,e.currentTarget.checked)} aria-label={'启用 '+source.name}/><button onclick={()=>selected=source.id}><strong>{source.name}</strong><span>{sourceState(source)}{#if applied?.sources.find(s=>s.id===source.id)?.enabled && health.find(h=>h.provider===source.id)?.last_success} · {formatAgo(health.find(h=>h.provider===source.id)!.last_success!,now)}{/if}</span></button></div>{/each}
+      <details class="discovered"><summary>已发现 Agent · {candidates.length} 个待选择</summary><p class="help">发现安装痕迹不等于已启用或完整支持；添加后查看能力并保存。</p>{#each candidates as candidate}<div class="candidate"><strong>{candidate.candidate!.name}</strong><button onclick={()=>addCandidate(candidate.candidate!)}>添加到监控来源</button></div>{:else}<p class="help">没有新的自动发现项。可在上方手动选择来源类型。</p>{/each}</details>
       </aside><section class="editor">
         {#if editor}
           <h2>{editor.name}</h2>
+          <div class="setup-status" aria-label="来源接入状态"><span>{sourceState(editor)}</span><span>测试提醒：{testStage}</span><span>真实生命周期：需按宿主版本单独验收</span></div>
+          <p class="capability-note">{sourceCapability(editor.kind)}</p>
           {#if editor.kind==='generic_event'}<IntegrationEditor source={editor} {dirty} changed={changed}/>{/if}
-          <label>显示名称<input bind:value={editor.name} oninput={changed}/></label>
+          <label>显示名称<input aria-label="来源显示名称" bind:value={editor.name} oninput={changed}/></label>
           {#if editor.kind==='remote_codex' || editor.kind==='tmux'}<label>SSH 别名<input bind:value={editor.location} oninput={changed} placeholder="例如 dev-server"/></label><p class="help">使用系统 SSH 配置和已有登录方式，不在 TaskPulse 保存密码。</p><label>轮询周期（毫秒）<input type="number" min="500" max="60000" bind:value={editor.poll_interval_ms} oninput={changed}/></label>
-          {:else if editor.kind==='claude_code'}<label>Claude 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 CLAUDE_CONFIG_DIR 或本机 .claude"/></label><p class="help">自动观测 VS Code / CLI 原生会话、标题与上报模型；未启用精确事件时，内部格式的状态显示为“推断”。</p><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:true}}>启用精确事件…</button><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:false}}>移除精确事件…</button>
+          {:else if editor.kind==='claude_code'}<label>Claude 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 CLAUDE_CONFIG_DIR 或本机 .claude"/></label><p class="help">自动观测 VS Code / CLI 原生会话、标题与上报模型；未启用精确事件时，内部格式的状态显示为“推断”。</p>
           {:else if editor.kind==='deepseek_desktop'}<label>桌面版数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 DSH_HOME 或本机 .dsh"/></label>
           {:else if editor.kind==='deepseek_wsl' || editor.kind==='codex_wsl'}<label>WSL 发行版<input bind:value={editor.location} oninput={changed} placeholder="例如 Ubuntu"/></label>{#if editor.kind==='codex_wsl'}<p class="help">本机 WSL 的 Codex 独立于 Windows 和 SSH 来源。只读当前发行版默认用户的 CODEX_HOME / .codex；不导入空闲历史，不自动唤醒已停止的发行版。</p>{/if}
           {:else if editor.kind==='hermes'}<label>状态数据库<input bind:value={editor.location} oninput={changed} placeholder="留空：自动发现 Hermes state.db"/></label>{/if}
-          {#if discovery.find(d=>d.id===editor!.id)}<p class="path">{discovery.find(d=>d.id===editor!.id)?.detail}</p>{/if}
-          {#if health.find(h=>h.provider===editor!.id)?.message}<p class="message error">{health.find(h=>h.provider===editor!.id)?.message}</p>{/if}
           <h3>项目范围</h3>
           <label class="radio"><input type="radio" name="scope" checked={editor.projects.includes('*')} onchange={()=>{editor!.projects=['*'];changed();}}/>自动关注所有项目的新任务</label>
           <label class="radio"><input type="radio" name="scope" checked={!editor.projects.includes('*')} onchange={()=>{editor!.projects=[];changed();}}/>只关注指定项目</label>
           {#if !editor.projects.includes('*')}<label>项目名称或完整路径（每行一个）<textarea value={editor.projects.join('\n')} oninput={e=>{editor!.projects=list(e.currentTarget.value);changed();}} placeholder="agenttray&#10;D:\Project\my-project&#10;@unassociated"></textarea></label>{/if}
-          <label>排除项目（可选，每行一个）<textarea value={editor.excluded_projects.join('\n')} oninput={e=>{editor!.excluded_projects=list(e.currentTarget.value);changed();}}></textarea></label>
           <p class="help">推荐自动关注所有项目的新任务：只要来源启用，旧项目再次执行也会自动回来。主面板按最近 {settings.recent_days ?? 7} 天的执行活动显示，不复制历史会话。指定项目限制不会自动改写，可在上方取消。排除规则优先。</p>
           {#if !editor.projects.includes('*')}<label class="radio"><input type="checkbox" checked={editor.projects.includes('@unassociated')} onchange={e=>{editor!.projects=e.currentTarget.checked ? [...editor!.projects,'@unassociated'] : editor!.projects.filter(p=>p!=='@unassociated');changed();}}/>也包括未关联项目的会话</label>{/if}
           {#if editor.kind==='tmux'}<label>tmux session（留空表示全部，每行一个）<textarea value={editor.tmux_sessions.join('\n')} oninput={e=>{editor!.tmux_sessions=list(e.currentTarget.value);changed();}}></textarea></label><label>tmux pane（可选，每行一个）<textarea value={editor.tmux_panes.join('\n')} oninput={e=>{editor!.tmux_panes=list(e.currentTarget.value);changed();}}></textarea></label>{/if}
-          <button class="remove" onclick={()=>remove(editor!.id)}>移除此监控来源</button><p class="help">移除只影响 TaskPulse，关注记录保留；宿主 Hook 不会自动删除。保存后仍可在下方“宿主 Hook 登记”预览并确认撤销。</p>
-        {:else}<p class="help">选择一个来源，或添加新的监控来源。</p>{/if}
+          <div class="source-tests"><button class="secondary" disabled={dirty || saving || reading || !editor.enabled} onclick={testRead}>{reading?'正在读取…':'测试读取来源'}</button><button class="secondary" disabled={dirty || saving} onclick={testNotification}>发送测试提醒</button></div>
+          {#if readTest?.id===editor.id}<p class="read-result" role="status">{readTest.message}</p>{/if}
+          <p class="help">保存后，范围内的新执行会自动加入。测试只验证读取 / 提醒通道；请在 Agent 中启动一轮真实任务，核对开始、阶段、结束和提醒。没有真实宿主证据时，仍以能力矩阵的验证等级为准。</p>
+          <details class="advanced"><summary>高级设置 · 排除、诊断与来源移除</summary>
+          <label>排除项目（可选，每行一个）<textarea value={editor.excluded_projects.join('\n')} oninput={e=>{editor!.excluded_projects=list(e.currentTarget.value);changed();}}></textarea></label>
+          {#if discovery.find(d=>d.id===editor!.id)}<p class="path">{discovery.find(d=>d.id===editor!.id)?.detail}</p>{/if}
+          {#if health.find(h=>h.provider===editor!.id)?.message}<p class="message error">{health.find(h=>h.provider===editor!.id)?.message}</p>{/if}
+          {#if editor.kind==='claude_code'}<h3>自愿接入精确事件</h3><p class="help">不会覆盖 statusLine 或其他 Hook；需逐次明确确认，不自动修改审批策略。</p><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:true}}>启用精确事件…</button><button disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:false}}>移除精确事件…</button>{/if}
+          <p class="path">来源 ID：{editor.id} · 类型：{editor.kind}</p>
+          <button class="remove" onclick={()=>remove(editor!.id)}>移除此监控来源</button><p class="help">移除只影响 TaskPulse，关注记录保留；宿主 Hook 不会自动删除。保存后仍可在下方“宿主 Hook 登记”预览并确认撤销。</p></details>
+        {:else}<div class="setup-empty"><h2>先选择你使用的 Agent</h2><p>添加已发现的安装，或手动选择类型。无需预先挑选每个对话：来源启用后，范围内的新执行会自动进入关注列表。</p></div>{/if}
       </section></div>
     {:else if settings && tab==='sessions'}
       <div class="session-filters"><select bind:value={sessionSource} onchange={()=>{offset=0;void loadSessions();}} aria-label="会话来源"><option value="">全部来源</option>{#each settings.sources as source}<option value={source.id}>{source.name}</option>{/each}</select><input bind:value={query} placeholder="搜索任务标题、项目或路径" aria-label="搜索会话" oninput={()=>{offset=0;void loadSessions();}}/><button onclick={()=>loadSessions()} disabled={loadingSessions}>刷新目录</button></div>
@@ -198,7 +219,7 @@
       {#each deliveryRecords.slice(0,25) as row}<div class="delivery-row"><time>{new Date(row.at).toLocaleString()}</time><strong title={row.task_id ?? ''}>{row.test?'测试 · ':''}{row.title}</strong><span>{row.channel} · {deliveryStage(row.stage)}</span></div>{/each}
       {#if !deliveryRecords.length && !deliveryError}<p class="help">尚无投递记录；升级前的弹窗无法追溯补录。</p>{/if}</section>
     {/if}
-    {#if settings && tab==='sources'}<IntegrationHookCleanup revision={applied?.sources.map(s=>s.id).join(',')??''}/>{/if}
+    {#if settings && tab==='sources'}<details class="hook-registry"><summary>高级 · 宿主 Hook 登记与撤销（含已移除来源）</summary><IntegrationHookCleanup revision={applied?.sources.map(s=>s.id).join(',')??''}/></details>{/if}
   </main>
   {#if closePrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="close-title"><h2 id="close-title">还有未保存的配置</h2><p>启用开关已即时生效；项目范围和其他编辑尚未保存。</p><div><button onclick={()=>closePrompt=false}>继续编辑</button><button onclick={discardAndClose}>放弃未保存编辑</button><button class="primary" disabled={saving || conflict} onclick={saveAndClose}>保存并关闭</button></div></dialog></div>{/if}
   {#if eventPrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="events-title"><h2 id="events-title">{eventPrompt.enabled?'启用 Claude 精确事件':'移除 Claude 精确事件'}</h2><p>这会修改所选 Claude 数据目录中的 settings.json，仅添加或移除 TaskPulse Hook。首次修改会备份；已有 Hook、statusLine、代理和模型设置保留。可随时移除。</p><div><button onclick={()=>eventPrompt=null}>取消</button><button class="primary" onclick={confirmEvents}>确认{eventPrompt.enabled?'启用':'移除'}</button></div></dialog></div>{/if}
@@ -207,4 +228,9 @@
   .delivery{margin-top:28px;max-width:640px}.delivery-row{padding:10px 0;border-bottom:1px solid #ffffff10;display:flex;flex-direction:column;gap:5px;font-size:11px;overflow-wrap:anywhere}.delivery-row time,.delivery-row span{color:#899b9f}.delivery-row strong{font-weight:500;color:#c1cccc}
   .modal{position:fixed;inset:0;display:grid;place-items:center;background:#0009;z-index:10}.modal dialog{position:static;margin:0;color:#d9dedb;background:#252b30;border:1px solid #ffffff18;border-radius:12px;padding:24px;max-width:500px}.modal p{font-size:12px;color:#a9b8bc;margin:12px 0 20px}.modal dialog>div{display:flex;gap:10px;justify-content:flex-end}
   .manage{height:100vh;display:flex;flex-direction:column;background:#1b1e22;color:#d9dedb;font-family:inherit}header{padding:24px 28px 18px;display:flex;justify-content:space-between;align-items:center;border-bottom:1px solid #ffffff09}.eyebrow{color:#89a9b4;letter-spacing:.2em;font-size:10px}h1{font-size:21px;font-weight:550;margin:7px 0}header p{color:#929f9d;font-size:12px;margin:0}button{cursor:pointer;background:transparent;color:#b0c5cc;font-size:12px;border:0;border-radius:6px;padding:7px 9px}button:hover{background:#ffffff08}button:disabled{opacity:.4;cursor:default}.primary{background:#7698a1;color:#131e24;font-weight:600;padding:10px 15px}.primary:hover{background:#8dabb3}nav{display:flex;padding:10px 28px 0;gap:24px;border-bottom:1px solid #ffffff0b}nav button{border-radius:0;padding:10px 0 13px;color:#8f9b9e}nav button.active{color:#afccd7;border-bottom:2px solid #88aebf}main{flex:1;min-height:0;overflow:auto;padding:22px 28px}.source-layout{display:grid;grid-template-columns:255px minmax(0,1fr);gap:26px}.add{display:flex;gap:5px;margin-bottom:15px}.add select{min-width:0;flex:1}.source-item{display:flex;align-items:center;gap:9px;padding:7px 9px;border-radius:8px;margin:3px 0}.source-item.chosen{background:#97b9c70d;box-shadow:inset 2px 0 #85a7b6}.source-item button{text-align:left;flex:1;min-width:0;padding:6px 0}.source-item strong{display:block;font-size:12px;font-weight:500;overflow-wrap:anywhere}.source-item span{display:block;font-size:10px;color:#8a999c;margin-top:5px}input,select,textarea{background:#ffffff04;border:1px solid #ffffff13;border-radius:6px;color:#ced7d6;font-size:12px;padding:8px 10px;outline:none;max-width:100%}input:focus,textarea:focus,select:focus{border-color:#789caa}option{background:#24292d}input[type=checkbox],input[type=radio]{accent-color:#91aeb7}label{display:flex;flex-direction:column;gap:7px;font-size:12px;color:#a2afaf;margin:14px 0}.radio{display:flex;flex-direction:row;align-items:center;gap:9px;font-size:12px;margin:12px 0}h2{font-size:16px;font-weight:500;margin:0 0 17px}h3{font-size:13px;color:#b5c5c5;margin:24px 0 12px}textarea{resize:vertical;min-height:60px;font-family:inherit}.help{font-size:11px;line-height:1.8;color:#809195;margin:9px 0}.path{font-size:10px;overflow-wrap:anywhere;color:#81989e}.remove{color:#d5a6a0;margin-top:18px;border:1px solid #d5a6a025}.message,.welcome{padding:10px 28px;font-size:12px;line-height:1.7;color:#a8c7d0;background:#87b5c909;display:flex;align-items:center;gap:10px}.message button{margin-left:auto}.message.error{color:#dda69f;background:#dda69f08}.editor .message{padding:8px 10px}.session-filters{display:flex;gap:10px}.session-filters input{flex:1}.session-filters select{max-width:240px}.session{padding:16px 0;border-bottom:1px solid #ffffff0b;display:flex;gap:15px;justify-content:space-between}.session strong{font-size:13px;font-weight:500}.session p{font-size:11px;color:#96a6a6;margin:6px 0}.session small{font-size:10px;color:#7f9297}.session-actions{display:flex;align-items:center;gap:4px;flex-shrink:0}.session-actions span{font-size:11px;color:#8dad99}.pagination{display:flex;align-items:center;gap:10px;padding-top:17px;font-size:11px;color:#8b9a9d}.pagination span{margin-right:auto}.empty{text-align:center;padding:40px;font-size:12px;color:#8b9ca0}.preferences{max-width:640px}.preferences h2:not(:first-child){margin-top:32px}.secondary{border:1px solid #a3c0cc28;margin-top:10px}@media(max-width:720px){.source-layout{grid-template-columns:200px minmax(0,1fr);gap:15px}header,main{padding-left:18px;padding-right:18px}.session{flex-direction:column}.session-filters{flex-wrap:wrap}}
+
+  .setup-flow{list-style:none;margin:0 0 22px;padding:12px 16px;display:flex;gap:20px;background:#a3cbe607;border:1px solid var(--tp-border);border-radius:9px;color:var(--tp-accent);font-size:12px}.setup-flow li{display:flex;gap:8px;align-items:center}.setup-flow span{color:var(--tp-muted)}.sidebar-title{font-size:11px;color:var(--tp-muted);display:flex;justify-content:space-between;margin-bottom:12px}
+  .setup-status{display:flex;flex-wrap:wrap;gap:6px;margin:-3px 0 12px}.setup-status span{padding:5px 8px;background:#ffffff05;border:1px solid var(--tp-border);border-radius:5px;font-size:10px;line-height:1.5;color:#a7b8c0}.capability-note{color:#b0c0c8;font-size:12px;line-height:1.8;border-left:2px solid #a3cbe655;padding-left:12px}
+  .editor{min-width:0}.editor h2{overflow-wrap:anywhere}.source-tests{display:flex;gap:8px;margin-top:20px}.source-tests .secondary{padding:9px 12px;margin:0}.read-result{font-size:12px;line-height:1.7;color:var(--tp-accent)}.advanced,.discovered,.hook-registry{margin-top:20px;padding:14px;border:1px solid var(--tp-border);border-radius:8px;font-size:12px;color:var(--tp-muted)}summary{cursor:pointer;line-height:1.6}.candidate{padding-top:12px;border-top:1px solid var(--tp-border);margin-top:10px}.candidate strong{display:block;font-size:12px;font-weight:500}.candidate button{padding-left:0;font-size:11px}.setup-empty{padding:25px;border:1px dashed var(--tp-border);border-radius:10px}.setup-empty p{font-size:12px;color:var(--tp-muted);line-height:1.9}
+  .source-item span{font-size:11px;line-height:1.6}.source-item strong{font-size:13px}.source-item{padding:9px}.help{font-size:12px;color:#96a5aa;line-height:1.8}.editor>label{font-size:12px}.message,.welcome{flex:none;max-height:110px;overflow:auto}.hook-registry{margin-top:28px}.setup-flow li{white-space:nowrap}@media(max-width:850px){.setup-flow{gap:12px;flex-wrap:wrap}.source-layout{grid-template-columns:210px minmax(0,1fr);gap:20px}}@media(max-width:560px){.source-layout{grid-template-columns:1fr}.setup-flow{font-size:11px}.source-layout aside{border-bottom:1px solid var(--tp-border);padding-bottom:15px}}
 </style>

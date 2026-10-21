@@ -75,6 +75,7 @@ try{
   const next=await root.invoke('integration_preview',{sourceId:kimi.id,remove:false});
   await assert.rejects(()=>root.invoke('integration_apply',{token:next.token,confirmed:false}));assert.equal(await Bun.file(join(host,'config.toml')).text(),changed);
   // Exercise the actual consent UI, only after asserting sandbox environment.
+  await management.evaluate(`document.querySelector('.integration-advanced').open=true`);
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='预览新增 Hook').click()`);
   await management.wait(`!!document.querySelector('[aria-label="Hook 配置差异"]')`);
   await management.evaluate(`document.querySelector('.confirmation input').click()`);
@@ -104,7 +105,7 @@ try{
   await management.evaluate(`(()=>{const s=document.querySelector('[aria-label="新增来源类型"]');s.value='generic_event';s.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('.add button').click();})()`);
   await management.wait(`document.querySelector('[aria-label="Agent 适配描述"]')?.value==='standard-events' && document.querySelector('[aria-label="Agent 适配描述"]').disabled===false`);
   const custom=await Bun.file('integrations/community-template.json').json();custom.adapter_id='synthetic-editor';custom.agent_id='synthetic-editor';custom.display_name='合成社区 Agent';
-  await management.evaluate(`(()=>{const t=document.querySelector('[aria-label="适配描述 JSON"]');t.closest('details').open=true;t.value=${JSON.stringify(JSON.stringify(custom))};t.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await management.evaluate(`(()=>{document.querySelector('.integration-advanced').open=true;const t=document.querySelector('[aria-label="适配描述 JSON"]');t.closest('details').open=true;t.value=${JSON.stringify(JSON.stringify(custom))};t.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await management.wait(`[...document.querySelectorAll('button')].some(b=>b.textContent==='验证并导入描述'&&!b.disabled)`);
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='验证并导入描述').click()`);
   await management.wait(`document.querySelector('[aria-label="Agent 适配描述"]').value==='synthetic-editor'`);
@@ -157,7 +158,7 @@ try{
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='刷新 Hook 登记').click()`);
   await management.wait(`document.querySelector('[aria-label="已登记 Hook 清理"]').textContent.includes('来源已移除')`);
   // Remove only registered sandbox Hook entries, retaining the user's changes.
-  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='预览撤销已登记 Hook').click()`);
+  await management.evaluate(`document.querySelector('.hook-registry').open=true;[...document.querySelectorAll('button')].find(b=>b.textContent==='预览撤销已登记 Hook').click()`);
   await management.wait(`!!document.querySelector('[aria-label="已移除来源 Hook 撤销差异"]')`);
   await management.evaluate(`document.querySelector('[aria-label="已移除来源 Hook 撤销差异"] input').click()`);
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='确认撤销这次差异').click()`);
