@@ -2,7 +2,7 @@
  * Synthetic producers exercise TaskPulse, NOT actual Agent-host support.
  * No real host settings, accounts, approvals, prompts or sources are changed. */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, copyFile, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, copyFile, readFile, unlink } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { cpus, release, arch } from 'node:os';
@@ -27,7 +27,7 @@ async function connect(tab:Tab){
   let seq=0;const pending=new Map<number,{ok:(v:any)=>void;fail:(e:any)=>void;timer:ReturnType<typeof setTimeout>}>();
   ws.onmessage=e=>{const m=JSON.parse(String(e.data));if(m.method==='Log.entryAdded'&&m.params.entry.level==='error')errors.push(m.params.entry.text);const p=pending.get(m.id);if(!p)return;clearTimeout(p.timer);pending.delete(m.id);m.error?p.fail(Error(JSON.stringify(m.error))):p.ok(m.result);};
   const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((ok,fail)=>{const id=++seq;const timer=setTimeout(()=>{pending.delete(id);fail(Error('CDP timeout: '+method));},20000);pending.set(id,{ok,fail,timer});ws.send(JSON.stringify({id,method,params}));});
-  const evaluate=async(expression:string)=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,userGesture:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description??'native JS failed');return r.result.value;};
+  const evaluate=async(expression:string)=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,userGesture:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description??r.exceptionDetails.exception?.value??r.exceptionDetails.text??'native JS failed');return r.result.value;};
   const invoke=(command:string,args:Record<string,unknown>={})=>evaluate(`__TAURI_INTERNALS__.invoke(${JSON.stringify(command)},${JSON.stringify(args)})`);
   const wait=async(expression:string,ms=20000)=>{const end=Date.now()+ms;while(Date.now()<end){if(await evaluate(expression))return;await Bun.sleep(100);}throw Error('Native assertion timeout: '+expression);};
   await send('Log.enable');return {send,evaluate,invoke,wait,close:()=>ws.close()};
@@ -138,10 +138,28 @@ try{
   management.close();management=undefined;await openManagement();
   const layout=await management.evaluate(`({overflow:document.documentElement.scrollWidth>innerWidth,errors:document.querySelectorAll('[role=alert]').length})`);assert.equal(layout.overflow,false);assert.equal(layout.errors,0);
   await Bun.write(join(owned,'management.png'),Buffer.from((await management.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  // R4: removing a monitored source must NOT make its registered Hook orphaned.
+  const withoutKimi=await root.invoke('get_monitoring_settings');withoutKimi.sources=withoutKimi.sources.filter((s:any)=>s.id!==kimi.id);
+  await root.invoke('save_monitoring_settings',{settings:withoutKimi});
+  assert.equal(await Bun.file(join(host,'config.toml')).text(),installedText,'source removal must not implicitly edit host hooks');
+  let registrations=await root.invoke('integration_installations');assert.ok(registrations.some((r:any)=>r.source_id===kimi.id&&r.orphaned));
+  // Existing pre-index installations are reversible as well. Remove only this
+  // sandbox's new index to simulate the older ownership-only format.
+  const sourceHash=new Bun.CryptoHasher('sha256').update(kimi.id).digest('hex');
+  await unlink(join(home,'integrations',sourceHash,'hook-installation.json'));
+  registrations=await root.invoke('integration_installations');assert.ok(registrations.some((r:any)=>r.source_id===kimi.id&&r.orphaned));
+  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='刷新 Hook 登记').click()`);
+  await management.wait(`document.querySelector('[aria-label="已登记 Hook 清理"]').textContent.includes('来源已移除')`);
   // Remove only registered sandbox Hook entries, retaining the user's changes.
-  const remove=await root.invoke('integration_preview',{sourceId:kimi.id,remove:true});await root.invoke('integration_apply',{token:remove.token,confirmed:true});
+  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='预览撤销已登记 Hook').click()`);
+  await management.wait(`!!document.querySelector('[aria-label="已移除来源 Hook 撤销差异"]')`);
+  await management.evaluate(`document.querySelector('[aria-label="已移除来源 Hook 撤销差异"] input').click()`);
+  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='确认撤销这次差异').click()`);
+  await management.wait(`!document.querySelector('[aria-label="已移除来源 Hook 撤销差异"]')`);
   const removed=await Bun.file(join(host,'config.toml')).text();assert.ok(removed.includes('synthetic-user-hook'));assert.ok(!removed.includes('EncodedCommand'));
-  checks.push('sandbox removal retains foreign settings/hooks');
+  checks.push('R4 removed-source Hook cleanup remains accessible, explicit, and retains foreign settings/hooks');
+  assert.ok(!(await root.invoke('integration_installations')).some((r:any)=>r.source_id===kimi.id));
+  const restoredSettings=await root.invoke('get_monitoring_settings');restoredSettings.sources.push(kimi);await root.invoke('save_monitoring_settings',{settings:restoredSettings});
   deliveryBefore=(await root.invoke('get_notification_log')).length;
   await stop();await start();await Bun.sleep(2500);
   const recovered=await root.invoke('get_agents');assert.ok(recovered.every((t:any)=>t.session_id!=='synthetic-session'||!t.unread));

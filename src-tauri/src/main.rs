@@ -172,6 +172,7 @@ fn main() {
         .invoke_handler(tauri::generate_handler![
             integrations::api::integration_catalog,
             integrations::api::integration_environment,
+            integrations::api::integration_installations,
             integrations::api::integration_import,
             integrations::api::integration_preview,
             integrations::api::integration_apply,

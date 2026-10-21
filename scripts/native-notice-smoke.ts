@@ -136,11 +136,20 @@ try{
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
   await alert.wait(`document.querySelector('footer')?.textContent.includes('秒后收起')`);
+  const timedNotice=await root.invoke('get_task_notice');
+  if(!timedNotice.current?.test)throw Error('Timed test notice was replaced before measurement');
   const start=Date.now();
   phase='automatic timeout';
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>!s.current)`,20000);
-  const autoDismissMs=Date.now()-start;
-  if(autoDismissMs<14000)throw Error('Alert disappeared too early');
+  const pollObservedAutoDismissMs=Date.now()-start;
+  // Measuring only after CDP/DOM setup undercounts the already-running timer.
+  // A manual close is not evidence that auto-dismiss ran too early.
+  const timerEvidence=(await root.invoke('get_notification_log')).filter((r:any)=>r.notice_id===timedNotice.current.id);
+  const visible=timerEvidence.find((r:any)=>r.stage==='window_visible');
+  const automatic=timerEvidence.find((r:any)=>r.stage==='auto_dismissed');
+  if(!visible||!automatic)throw Error('No matching automatic-dismiss evidence (manual close/interference): '+JSON.stringify(timerEvidence.map((r:any)=>({at:r.at,stage:r.stage}))));
+  const autoDismissMs=automatic.at-visible.at;
+  if(autoDismissMs<14000)throw Error('Alert disappeared too early: '+JSON.stringify({autoDismissMs,pollObservedAutoDismissMs}));
   await root.invoke('test_notification',{kind:'long_title'});
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('长标题排版验收（测试）')`);
   await alert.wait(`document.querySelector('.message')?.disabled===false`);

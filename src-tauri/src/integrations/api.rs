@@ -7,6 +7,19 @@ pub fn integration_environment() -> Value {
 }
 
 #[tauri::command]
+pub fn integration_installations() -> Vec<Value> {
+    configuration::installations()
+        .into_iter()
+        .map(|i| {
+            json!({
+                "source_id":i.source_id,"adapter_id":i.adapter_id,
+                "orphaned":bridge::configured_source(&i.source_id).is_err(),
+            })
+        })
+        .collect()
+}
+
+#[tauri::command]
 pub fn integration_catalog() -> Vec<manifest::Manifest> {
     let mut ids = vec![
         "standard-events".to_string(),

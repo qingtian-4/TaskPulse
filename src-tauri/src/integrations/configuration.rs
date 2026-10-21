@@ -1,7 +1,7 @@
 //! Only built-in recipes can edit known host files, after a fingerprint-bound
 //! preview/confirmation. Imported manifests never grant execution/write rights.
 use super::{bridge, journal, key, manifest, now_ms};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -27,6 +27,7 @@ struct Pending {
     path: PathBuf,
     commands: BTreeSet<String>,
     expires: u64,
+    installation: Installation,
 }
 static PREVIEWS: LazyLock<Mutex<BTreeMap<String, Pending>>> =
     LazyLock::new(|| Mutex::new(BTreeMap::new()));
@@ -61,6 +62,118 @@ fn location(adapter: &str) -> Result<PathBuf, String> {
 
 fn owned_path(source: &str) -> PathBuf {
     journal::root(&super::home(), source).join("hook-ownership.json")
+}
+
+/// Independent of the monitored-source registry: deleting a source must not
+/// revoke consent implicitly, nor destroy the information needed to undo it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Installation {
+    pub source_id: String,
+    pub adapter_id: String,
+    pub executable: PathBuf,
+    pub active: bool,
+}
+fn installation_path(source: &str) -> PathBuf {
+    journal::root(&super::home(), source).join("hook-installation.json")
+}
+
+fn generated_identity(command: &str) -> Option<Installation> {
+    use base64::Engine;
+    let encoded = command
+        .strip_prefix("powershell.exe -NoLogo -NoProfile -NonInteractive -EncodedCommand ")?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .ok()?;
+    if bytes.len() % 2 != 0 {
+        return None;
+    }
+    let utf16: Vec<_> = bytes
+        .as_chunks::<2>()
+        .0
+        .iter()
+        .map(|p| u16::from_le_bytes([p[0], p[1]]))
+        .collect();
+    let script = String::from_utf16(&utf16).ok()?;
+    fn take_quoted(text: &str) -> Option<(String, &str)> {
+        let mut chars = text.strip_prefix('\'')?.char_indices().peekable();
+        let mut value = String::new();
+        while let Some((index, c)) = chars.next() {
+            if c == '\'' {
+                if chars.peek().is_some_and(|(_, next)| *next == '\'') {
+                    chars.next();
+                    value.push('\'');
+                } else {
+                    return Some((value, &text[index + 2..]));
+                }
+            } else {
+                value.push(c);
+            }
+        }
+        None
+    }
+    let rest=script.strip_prefix("$tpInput = [Console]::In.ReadToEnd(); $OutputEncoding = [Text.UTF8Encoding]::new($false); $tpInput | & ")?;
+    let (exe, rest) = take_quoted(rest)?;
+    let (source, rest) = take_quoted(rest.strip_prefix(" --integration-host-event --source ")?)?;
+    let (adapter, rest) = take_quoted(rest.strip_prefix(" --adapter ")?)?;
+    if rest != "; exit 0"
+        || !super::schema::identifier(&source)
+        || !["kimi-code-cli", "trae-cn-ide", "zcode-desktop"].contains(&adapter.as_str())
+    {
+        return None;
+    }
+    Some(Installation {
+        source_id: source,
+        adapter_id: adapter,
+        executable: exe.into(),
+        active: true,
+    })
+}
+fn installation(source: &str) -> Result<Installation, String> {
+    if let Some(value) = std::fs::read(installation_path(source))
+        .ok()
+        .filter(|b| b.len() < 64 * 1024)
+        .and_then(|b| serde_json::from_slice::<Installation>(&b).ok())
+    {
+        if value.source_id == source && location(&value.adapter_id).is_ok() {
+            return Ok(value);
+        }
+    }
+    // Compatibility for pre-index installations: parse ONLY our fixed generated
+    // wrapper, never evaluate it or accept an arbitrary host-config path.
+    ownership(source)
+        .iter()
+        .filter_map(|c| generated_identity(c))
+        .find(|i| i.source_id == source)
+        .ok_or_else(|| "hook_installation_not_found".into())
+}
+pub fn installations() -> Vec<Installation> {
+    let mut result = vec![];
+    if let Ok(entries) = std::fs::read_dir(super::home()) {
+        for path in entries.take(256).filter_map(Result::ok).map(|e| e.path()) {
+            let receipt = std::fs::read(path.join("hook-installation.json"))
+                .ok()
+                .filter(|b| b.len() < 64 * 1024)
+                .and_then(|b| serde_json::from_slice::<Installation>(&b).ok());
+            let legacy = || {
+                std::fs::read(path.join("hook-ownership.json"))
+                    .ok()
+                    .filter(|b| b.len() < 64 * 1024)
+                    .and_then(|b| serde_json::from_slice::<BTreeSet<String>>(&b).ok())
+                    .and_then(|set| set.iter().find_map(|c| generated_identity(c)))
+            };
+            if let Some(value) = receipt.or_else(legacy).filter(|i| {
+                i.active
+                    && super::schema::identifier(&i.source_id)
+                    && path
+                        .file_name()
+                        .is_some_and(|s| s == key(&i.source_id).as_str())
+                    && location(&i.adapter_id).is_ok()
+            }) {
+                result.push(value);
+            }
+        }
+    }
+    result
 }
 fn ownership(source: &str) -> BTreeSet<String> {
     std::fs::read(owned_path(source))
@@ -102,7 +215,7 @@ fn own_hook(hook: &Value, commands: &BTreeSet<String>, source: &str, adapter: &s
     hook.get("command")
         .and_then(Value::as_str)
         .is_some_and(|c| commands.contains(c))
-        || hook.get("args")
+        || (hook.get("args")
             == Some(&json!([
                 "--integration-host-event",
                 "--source",
@@ -110,6 +223,15 @@ fn own_hook(hook: &Value, commands: &BTreeSet<String>, source: &str, adapter: &s
                 "--adapter",
                 adapter
             ]))
+            && hook
+                .get("command")
+                .and_then(Value::as_str)
+                .is_some_and(|exe| {
+                    commands
+                        .iter()
+                        .filter_map(|c| generated_identity(c))
+                        .any(|i| i.executable == Path::new(exe))
+                }))
 }
 
 fn merge_json(
@@ -149,8 +271,13 @@ fn merge_json(
     } else {
         hooks
     };
-    for entry in entries {
-        let event = entry["event"].as_str().ok_or("recipe_invalid")?;
+    let mut events: BTreeSet<String> = target.keys().cloned().collect();
+    events.extend(
+        entries
+            .iter()
+            .filter_map(|e| e["event"].as_str().map(str::to_owned)),
+    );
+    for event in &events {
         if !target.contains_key(event) && remove {
             continue;
         }
@@ -159,12 +286,14 @@ fn merge_json(
             .or_insert_with(|| json!([]))
             .as_array_mut()
             .ok_or("host_hook_groups_invalid")?;
+        let mut removed_owned = false;
         groups.retain_mut(|group| {
             if let Some(nested) = group.get_mut("hooks").and_then(Value::as_array_mut) {
                 let owned = nested
                     .iter()
                     .any(|h| own_hook(h, commands, source, adapter));
                 if owned {
+                    removed_owned = true;
                     nested.retain(|h| !own_hook(h, commands, source, adapter));
                     return !nested.is_empty();
                 }
@@ -172,9 +301,11 @@ fn merge_json(
             true
         });
         if !remove {
-            groups.push(entry["group"].clone());
+            if let Some(entry) = entries.iter().find(|e| e["event"].as_str() == Some(event)) {
+                groups.push(entry["group"].clone());
+            }
         }
-        if groups.is_empty() {
+        if groups.is_empty() && removed_owned {
             target.remove(event);
         }
     }
@@ -220,23 +351,82 @@ fn merge_toml(
     }
     Ok(doc.to_string().into_bytes())
 }
+
+fn removal_entries(
+    before: Option<&[u8]>,
+    commands: &BTreeSet<String>,
+    source: &str,
+    adapter: &str,
+) -> Result<Vec<Value>, String> {
+    if adapter == "kimi-code-cli" {
+        let doc: toml::Value = std::str::from_utf8(before.unwrap_or(b""))
+            .map_err(|_| "host_toml_not_utf8")?
+            .parse()
+            .map_err(|_| "host_toml_invalid_no_change")?;
+        return Ok(doc.get("hooks").and_then(toml::Value::as_array).into_iter().flatten()
+            .filter(|h|h.get("command").and_then(toml::Value::as_str).is_some_and(|c|commands.contains(c)))
+            .map(|h|json!({"event":h.get("event").and_then(toml::Value::as_str),"command":h.get("command").and_then(toml::Value::as_str)})).collect());
+    }
+    let doc: Value = serde_json::from_slice(before.unwrap_or(b"{}"))
+        .map_err(|_| "host_json_or_jsonc_unsupported_no_change")?;
+    let events = doc
+        .pointer(if adapter == "zcode-desktop" {
+            "/hooks/events"
+        } else {
+            "/hooks"
+        })
+        .and_then(Value::as_object);
+    let mut entries = vec![];
+    for (event, groups) in events.into_iter().flatten() {
+        for hook in groups.as_array().into_iter().flatten().flat_map(|g| {
+            g.get("hooks")
+                .and_then(Value::as_array)
+                .into_iter()
+                .flatten()
+        }) {
+            if own_hook(hook, commands, source, adapter) {
+                entries.push(json!({"event":event,"hook":{"type":hook.get("type"),"command":hook.get("command"),"args":hook.get("args")}}));
+            }
+        }
+    }
+    Ok(entries)
+}
 pub fn prepare(source_id: &str, remove: bool) -> Result<Preview, String> {
-    let source = bridge::configured_source(source_id)?;
-    let config = source
-        .integration
-        .as_ref()
-        .ok_or("integration_not_configured")?;
-    let m = manifest::load(&config.adapter_id)?;
+    let source = bridge::configured_source(source_id);
+    let existing = installation(source_id).ok();
+    let adapter = if remove {
+        existing.as_ref().map(|i| i.adapter_id.as_str())
+    } else {
+        None
+    }
+    .or_else(|| {
+        source
+            .as_ref()
+            .ok()
+            .and_then(|s| s.integration.as_ref())
+            .map(|i| i.adapter_id.as_str())
+    })
+    .ok_or("source_or_hook_installation_not_found")?;
+    if !remove {
+        source.as_ref().map_err(Clone::clone)?;
+    }
+    let m = manifest::load(adapter)?;
     if manifest::builtin(&m.adapter_id).is_none() {
         return Err("imported_manifest_cannot_install_hooks".into());
     }
-    let exe = std::env::current_exe().map_err(|_| "executable_unavailable")?;
+    let exe = if remove {
+        existing.as_ref().map(|i| i.executable.clone())
+    } else {
+        None
+    }
+    .map(Ok)
+    .unwrap_or_else(|| std::env::current_exe().map_err(|_| "executable_unavailable"))?;
     let temporary = exe.components().any(|part| {
         ["codex-check", "debug", "ci-release", "release"]
             .iter()
             .any(|name| part.as_os_str() == *name)
     });
-    if temporary && std::env::var_os("TASKPULSE_HOME").is_none() {
+    if !remove && temporary && std::env::var_os("TASKPULSE_HOME").is_none() {
         return Err("install_taskpulse_at_persistent_path_before_installing_hooks".into());
     }
     let path = location(&m.adapter_id)?;
@@ -261,7 +451,8 @@ pub fn prepare(source_id: &str, remove: bool) -> Result<Preview, String> {
         )?
     };
     let binding = key(&serde_json::to_string(&json!([
-        source,
+        source.ok(),
+        existing,
         m.adapter_version,
         key(&serde_json::to_string(&m).map_err(|_| "manifest_invalid")?)
     ]))
@@ -273,7 +464,7 @@ pub fn prepare(source_id: &str, remove: bool) -> Result<Preview, String> {
         nonce.path().display(),
         binding
     ));
-    let public=Preview{token:token.clone(),source_id:source_id.into(),path:path.display().to_string(),action:if remove{"remove"}else{"install"}.into(),entries:entries.clone(),decoded_command:decoded,
+    let public=Preview{token:token.clone(),source_id:source_id.into(),path:path.display().to_string(),action:if remove{"remove"}else{"install"}.into(),entries:if remove{removal_entries(before.as_deref(),&commands,source_id,&m.adapter_id)?}else{entries.clone()},decoded_command:decoded,
         notes:vec!["仅显示 TaskPulse 自有条目，不返回完整配置或凭据；确认前不写宿主文件。".into(),"需要宿主重新加载/新建会话。ZCode 全局 hooks.enabled 不会被本工具改动，请在宿主中确认开关。".into(),"能力是文档/合成测试等级，不表示该宿主版本已实测。撤销只移除登记的 TaskPulse 条目。".into()]};
     let mut pending = PREVIEWS.lock().map_err(|_| "preview_lock_failed")?;
     pending.retain(|_, p| p.expires > now_ms());
@@ -290,6 +481,12 @@ pub fn prepare(source_id: &str, remove: bool) -> Result<Preview, String> {
             path,
             commands,
             expires: now_ms() + 300_000,
+            installation: Installation {
+                source_id: source_id.into(),
+                adapter_id: m.adapter_id.clone(),
+                executable: exe,
+                active: true,
+            },
         },
     );
     Ok(public)
@@ -307,22 +504,27 @@ pub fn apply(token: &str, confirmed: bool) -> Result<(), String> {
     if pending.expires < now_ms() {
         return Err("preview_expired".into());
     }
-    let source = bridge::configured_source(&pending.public.source_id)?;
-    let m = manifest::load(
-        &source
-            .integration
-            .as_ref()
-            .ok_or("integration_not_configured")?
-            .adapter_id,
-    )?;
+    let source = bridge::configured_source(&pending.public.source_id);
+    if pending.public.action != "remove" {
+        source.as_ref().map_err(Clone::clone)?;
+    }
+    let m = manifest::load(&pending.installation.adapter_id)?;
     let binding = key(&serde_json::to_string(&json!([
-        source,
+        source.ok(),
+        installation(&pending.public.source_id).ok(),
         m.adapter_version,
         key(&serde_json::to_string(&m).map_err(|_| "manifest_invalid")?)
     ]))
     .map_err(|_| "preview_binding_failed")?);
     if binding != pending.binding || read(&pending.path)? != pending.before {
         return Err("preview_conflict_regenerate_required".into());
+    }
+    if pending.public.action == "remove" && pending.public.entries.is_empty() {
+        // Already absent is an idempotent cleanup, not permission to create an
+        // empty host config or normalize unrelated fields/empty event groups.
+        let mut receipt = pending.installation;
+        receipt.active = false;
+        return journal::atomic(&installation_path(&receipt.source_id), &receipt);
     }
     let parent = pending.path.parent().ok_or("invalid_host_path")?;
     std::fs::create_dir_all(parent).map_err(|_| "host_directory_failed")?;
@@ -354,6 +556,10 @@ pub fn apply(token: &str, confirmed: bool) -> Result<(), String> {
     // Register ownership BEFORE host write. A crash cannot strand unremovable
     // entries; a registry-only crash leaves harmless uninstalled registrations.
     journal::atomic(&owned_path(&pending.public.source_id), &pending.commands)?;
+    journal::atomic(
+        &installation_path(&pending.public.source_id),
+        &pending.installation,
+    )?;
     use std::io::Write;
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|_| "host_temp_failed")?;
     temporary
@@ -366,6 +572,11 @@ pub fn apply(token: &str, confirmed: bool) -> Result<(), String> {
     temporary
         .persist(&pending.path)
         .map_err(|_| "host_replace_failed")?;
+    if pending.public.action == "remove" {
+        let mut receipt = pending.installation;
+        receipt.active = false;
+        journal::atomic(&installation_path(&receipt.source_id), &receipt)?;
+    }
     Ok(())
 }
 
@@ -461,7 +672,7 @@ mod tests {
         let exe = Path::new("C:\\Fixture\\agent-tray.exe");
         let entries = recipes("zcode-desktop", "not-used", exe, "a").unwrap();
         let other = recipes("zcode-desktop", "not-used", exe, "b").unwrap();
-        let owned = BTreeSet::new();
+        let owned = BTreeSet::from([hook_command(exe, "a", "zcode-desktop").0]);
         let initial = json!({"hooks":{"enabled":false,"events":{}},"unknown":"keep"});
         let first = merge_json(
             Some(&serde_json::to_vec(&initial).unwrap()),
@@ -497,5 +708,56 @@ mod tests {
     fn apply_without_confirmation_or_unknown_preview_never_writes() {
         assert!(apply("not-a-token", false).is_err());
         assert!(apply("not-a-token", true).is_err());
+    }
+
+    #[test]
+    fn review_r4_legacy_ownership_recovers_identity_without_executing_a_command() {
+        let exe = Path::new("C:\\中文 & team's App\\agent-tray.exe");
+        let (command, _) = hook_command(exe, "source-'中文", "kimi-code-cli");
+        let record = generated_identity(&command).unwrap();
+        assert_eq!(record.executable, exe);
+        assert_eq!(record.source_id, "source-'中文");
+        assert_eq!(record.adapter_id, "kimi-code-cli");
+        assert!(generated_identity("arbitrary-command --source x").is_none());
+        assert!(generated_identity(&format!("{command} --untrusted-extra")).is_none());
+    }
+
+    #[test]
+    fn review_r4_removal_covers_retired_event_names_but_not_foreign_commands() {
+        let exe = Path::new("C:\\Fixture\\agent-tray.exe");
+        let (command, _) = hook_command(exe, "source", "trae-cn-ide");
+        let owned = BTreeSet::from([command.clone()]);
+        let original = json!({"version":1,"hooks":{"ForeignEmptyEvent":[],"RetiredEvent":[{"hooks":[{"command":command},{"command":"user-later-hook"}]}]},"model":"preserve"});
+        let bytes = serde_json::to_vec(&original).unwrap();
+        let shown = removal_entries(Some(&bytes), &owned, "source", "trae-cn-ide").unwrap();
+        assert_eq!(shown.len(), 1);
+        assert_eq!(shown[0]["event"], "RetiredEvent");
+        let removed = merge_json(Some(&bytes), &[], &owned, "source", "trae-cn-ide", true).unwrap();
+        let result: Value = serde_json::from_slice(&removed).unwrap();
+        assert_eq!(
+            result["hooks"]["RetiredEvent"][0]["hooks"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(result["model"], "preserve");
+        assert_eq!(result["hooks"]["ForeignEmptyEvent"], json!([]));
+        let empty = BTreeSet::new();
+        let foreign = json!({"hooks":{"enabled":false,"events":{"Stop":[{"hooks":[{"type":"process","command":"not-taskpulse.exe","args":["--integration-host-event","--source","source","--adapter","zcode-desktop"]}]}]}}});
+        let entries = recipes("zcode-desktop", "", exe, "source").unwrap();
+        let untouched = merge_json(
+            Some(&serde_json::to_vec(&foreign).unwrap()),
+            &entries,
+            &empty,
+            "source",
+            "zcode-desktop",
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&untouched).unwrap(),
+            foreign
+        );
     }
 }

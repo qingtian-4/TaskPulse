@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import IntegrationEditor from '$lib/components/IntegrationEditor.svelte';
+  import IntegrationHookCleanup from '$lib/components/IntegrationHookCleanup.svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -180,7 +181,7 @@
           <p class="help">推荐自动关注所有项目的新任务：只要来源启用，旧项目再次执行也会自动回来。主面板按最近 {settings.recent_days ?? 7} 天的执行活动显示，不复制历史会话。指定项目限制不会自动改写，可在上方取消。排除规则优先。</p>
           {#if !editor.projects.includes('*')}<label class="radio"><input type="checkbox" checked={editor.projects.includes('@unassociated')} onchange={e=>{editor!.projects=e.currentTarget.checked ? [...editor!.projects,'@unassociated'] : editor!.projects.filter(p=>p!=='@unassociated');changed();}}/>也包括未关联项目的会话</label>{/if}
           {#if editor.kind==='tmux'}<label>tmux session（留空表示全部，每行一个）<textarea value={editor.tmux_sessions.join('\n')} oninput={e=>{editor!.tmux_sessions=list(e.currentTarget.value);changed();}}></textarea></label><label>tmux pane（可选，每行一个）<textarea value={editor.tmux_panes.join('\n')} oninput={e=>{editor!.tmux_panes=list(e.currentTarget.value);changed();}}></textarea></label>{/if}
-          <button class="remove" onclick={()=>remove(editor!.id)}>移除此监控来源</button><p class="help">移除只影响 TaskPulse，关注记录保留；恢复同一来源后继续使用。</p>
+          <button class="remove" onclick={()=>remove(editor!.id)}>移除此监控来源</button><p class="help">移除只影响 TaskPulse，关注记录保留；宿主 Hook 不会自动删除。保存后仍可在下方“宿主 Hook 登记”预览并确认撤销。</p>
         {:else}<p class="help">选择一个来源，或添加新的监控来源。</p>{/if}
       </section></div>
     {:else if settings && tab==='sessions'}
@@ -197,6 +198,7 @@
       {#each deliveryRecords.slice(0,25) as row}<div class="delivery-row"><time>{new Date(row.at).toLocaleString()}</time><strong title={row.task_id ?? ''}>{row.test?'测试 · ':''}{row.title}</strong><span>{row.channel} · {deliveryStage(row.stage)}</span></div>{/each}
       {#if !deliveryRecords.length && !deliveryError}<p class="help">尚无投递记录；升级前的弹窗无法追溯补录。</p>{/if}</section>
     {/if}
+    {#if settings && tab==='sources'}<IntegrationHookCleanup revision={applied?.sources.map(s=>s.id).join(',')??''}/>{/if}
   </main>
   {#if closePrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="close-title"><h2 id="close-title">还有未保存的配置</h2><p>启用开关已即时生效；项目范围和其他编辑尚未保存。</p><div><button onclick={()=>closePrompt=false}>继续编辑</button><button onclick={discardAndClose}>放弃未保存编辑</button><button class="primary" disabled={saving || conflict} onclick={saveAndClose}>保存并关闭</button></div></dialog></div>{/if}
   {#if eventPrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="events-title"><h2 id="events-title">{eventPrompt.enabled?'启用 Claude 精确事件':'移除 Claude 精确事件'}</h2><p>这会修改所选 Claude 数据目录中的 settings.json，仅添加或移除 TaskPulse Hook。首次修改会备份；已有 Hook、statusLine、代理和模型设置保留。可随时移除。</p><div><button onclick={()=>eventPrompt=null}>取消</button><button class="primary" onclick={confirmEvents}>确认{eventPrompt.enabled?'启用':'移除'}</button></div></dialog></div>{/if}
