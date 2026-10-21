@@ -41,6 +41,8 @@ pub struct ClaudeCodeProvider {
     events: PathBuf,
     transcripts: HashMap<PathBuf, Transcript>,
     hook_logs: HashMap<PathBuf, HookLog>,
+    cache_policy: super::parser_cache::Policy,
+    hook_policy: super::parser_cache::Policy,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -53,6 +55,8 @@ impl ClaudeCodeProvider {
                 .join(".taskpulse/claude-events"),
             transcripts: HashMap::new(),
             hook_logs: HashMap::new(),
+            cache_policy: Default::default(),
+            hook_policy: Default::default(),
             last_tasks: vec![],
         }
     }
@@ -101,9 +105,18 @@ impl ClaudeCodeProvider {
                     let recent = file.metadata()?.modified().ok().is_some_and(|at| {
                         now.duration_since(at).unwrap_or_default() < Duration::from_secs(7 * 86400)
                     });
-                    if recent
-                        || live.contains_key(&id)
-                        || self.transcripts.contains_key(&file.path())
+                    let protected = live.contains_key(&id)
+                        || self
+                            .transcripts
+                            .get(&file.path())
+                            .and_then(|t| t.task.as_ref())
+                            .is_some_and(parser_protected);
+                    if (recent || protected)
+                        && self.cache_policy.eligible(
+                            &file.path(),
+                            protected,
+                            self.transcripts.contains_key(&file.path()),
+                        )
                     {
                         logs.push(file.path());
                     }
@@ -302,7 +315,31 @@ impl ClaudeCodeProvider {
                 }
             }
         }
+        for previous in &self.last_tasks {
+            if !tasks.iter().any(|t| t.id == previous.id) && !parser_protected(previous) {
+                tasks.push(previous.clone());
+            }
+        }
         self.transcripts.retain(|p, _| logs.contains(p));
+        let keep = self.cache_policy.keep(
+            self.transcripts
+                .iter()
+                .map(|(p, c)| {
+                    let protected =
+                        !c.tail.trusted() || c.task.as_ref().is_some_and(parser_protected);
+                    let bytes = c.tail.retained_bytes()
+                        + c.resolved_tools.iter().map(String::len).sum::<usize>()
+                        + c.active_tools
+                            .iter()
+                            .map(|(k, v)| k.len() + v.len())
+                            .sum::<usize>()
+                        + 2048;
+                    (p.clone(), protected, bytes)
+                })
+                .collect(),
+            now,
+        );
+        self.transcripts.retain(|p, _| keep.contains(p));
         self.last_tasks = tasks.clone();
         let catalog = tasks.clone();
         Ok(ProviderOutput {
@@ -329,6 +366,16 @@ impl ClaudeCodeProvider {
                 continue;
             }
             if extension == Some("json") && path.with_extension("jsonl").exists() {
+                continue;
+            }
+            let protected = self
+                .hook_logs
+                .get(&path)
+                .is_some_and(|c| !c.trusted || c.task.as_ref().is_some_and(parser_protected));
+            if !self
+                .hook_policy
+                .eligible(&path, protected, self.hook_logs.contains_key(&path))
+            {
                 continue;
             }
             let id = path
@@ -387,6 +434,21 @@ impl ClaudeCodeProvider {
                 }
             }
         }
+        let keep = self.hook_policy.keep(
+            self.hook_logs
+                .iter()
+                .map(|(p, c)| {
+                    let protected = !c.trusted || c.task.as_ref().is_some_and(parser_protected);
+                    (
+                        p.clone(),
+                        protected,
+                        c.tail.retained_bytes() + c.latest.to_string().len() + 2048,
+                    )
+                })
+                .collect(),
+            now,
+        );
+        self.hook_logs.retain(|p, _| keep.contains(p));
         Ok(output)
     }
 }
@@ -412,6 +474,13 @@ impl Provider for ClaudeCodeProvider {
     }
 }
 
+fn parser_protected(task: &TaskSnapshot) -> bool {
+    task.status == TaskStatus::Running
+        || matches!(
+            task.waiting_reason,
+            Some(WaitingReason::Approval | WaitingReason::Question)
+        )
+}
 fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime) {
     if value.get("isSidechain").and_then(Value::as_bool) == Some(true) {
         return;
@@ -896,6 +965,31 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn f04_claude_cold_parser_eviction_keeps_business_result_without_replay() {
+        let root = tempfile::tempdir().unwrap();
+        let project = root.path().join("projects/project");
+        std::fs::create_dir_all(&project).unwrap();
+        let path = project.join("session.jsonl");
+        std::fs::write(
+            &path,
+            concat!("{\"type\":\"user\",\"uuid\":\"turn\",\"message\":{\"content\":\"title\"}}\n",
+            "{\"type\":\"assistant\",\"message\":{\"stop_reason\":\"end_turn\",\"content\":[]}}\n"),
+        )
+        .unwrap();
+        let mut p = ClaudeCodeProvider::new(root.path().into());
+        p.events = root.path().join("events");
+        let now = SystemTime::now();
+        let first = p.poll(now);
+        assert_eq!(first.tasks[0].status, TaskStatus::WaitingInput);
+        let old = p.poll(now + Duration::from_secs(8 * 86400));
+        assert!(p.transcripts.is_empty());
+        assert_eq!(old.tasks[0].turn_key, first.tasks[0].turn_key);
+        assert_eq!(old.tasks[0].status, TaskStatus::WaitingInput);
+        let mut engine = crate::transition::TransitionEngine::new();
+        assert!(engine.apply(&first.tasks, &[], now).is_empty());
+        assert!(engine.apply(&old.tasks, &[], now).is_empty());
+    }
     #[test]
     fn native_thinking_does_not_clear_a_hook_permission_but_matching_result_does() {
         let dir = tempfile::tempdir().unwrap();

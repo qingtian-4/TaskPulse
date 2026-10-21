@@ -32,3 +32,10 @@
 - Codex/Claude 在追赶、半行或坏行期间保留上次观测为 stale、source 非权威；不把日志中间的旧结束/请求当成当前最终事实。超长/坏行继续有界消费后续记录，但保留 gap，不能以静默丢行宣称可信。当前 gap 需要完整新文件基线/替换来清除；没有用计时猜结束。
 - 三个正式 f04_ 回归通过；Codex 39 通过/1 实机忽略，Claude 10 通过/1 实机忽略。8×8 MiB 用例先失败：Vec 驻留 67,108,864 字节、单批 8,388,608；修复后 **0 字节 / 262,144 字节**。这两项是容器容量/批量，不是进程内存。
 - 回归覆盖跨块 Unicode、完整无换行末行、超长/坏行继续追赶、替换恢复，以及日志中间旧终态后还有新 turn 不误报。单行超限的不可解析事实明确降级，不宣称支持无界输入。
+
+## F04b：缓存退出候选集与分层保留
+
+- 根因：Codex cache.contains_key / seen、Claude transcripts.contains_key 使旧已完成文件不断选择自己，超过发现窗口也无法释放。修改 codex.rs、claude_code.rs，新增共享 parser_cache.rs：不活跃解析缓存最多 128 项、估算 16 MiB、7 天；运行中、明确未解除请求及未追赶完成状态不强制驱逐（安全优先，不宣称活跃状态硬内存上限）。
+- 淘汰的冷文件通过单个时间水位避免每轮重新全量读取；正常 native append 或新文件 replacement 更新 modified/created 后重新发现。进程重启允许重建一次，日志身份/turn 不改变；未读、固定、通知账本不迁移、不删除。已完成的轻量任务观测与解析缓冲分开保留，Codex 仍同步 metadata 名称。
+- f04_cold_cache_expires_without_replaying_or_losing_reactivation 先失败后通过；共享 budgets_preserve_active_and_do_not_reparse_evicted_unchanged_files（140 文件，128 冷缓存+2 活跃）、f04_claude_cold_parser_eviction_keeps_business_result_without_replay 通过。provider 全组 167 通过/8 opt-in 忽略（新增 Claude 回归另通过）。
+- 边界：16 MiB 是解析状态估算预算，不等于进程 RSS；活跃/未知必要状态可超过软预算并应诊断。冷文件由宿主保留 modified 和 created 时间原地改写的非标准操作，不能保证立即重发现；重启会重建。没有引入数据库、自动日志归档或 compaction，也没有删除宿主日志。
