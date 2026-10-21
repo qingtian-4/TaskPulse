@@ -103,6 +103,9 @@ pub struct DeepSeekHarnessProvider {
     last_metadata: std::collections::HashMap<String, SessionMetadata>,
     shard_cache: std::collections::HashMap<PathBuf, (SystemTime, u64, SessionMetadata)>,
     last_tasks: Vec<TaskSnapshot>,
+    decode_attempts: u64,
+    compressed_bytes_read: u64,
+    decoded_bytes_read: u64,
 }
 
 impl DeepSeekHarnessProvider {
@@ -116,6 +119,9 @@ impl DeepSeekHarnessProvider {
             last_metadata: Default::default(),
             shard_cache: Default::default(),
             last_tasks: Vec::new(),
+            decode_attempts: 0,
+            compressed_bytes_read: 0,
+            decoded_bytes_read: 0,
         }
     }
 
@@ -745,21 +751,31 @@ impl Provider for DeepSeekHarnessProvider {
             let cached = self.cache.get(&path).cloned();
             let (mut state, stale) = match cached {
                 Some(cached) if cached.mtime == mtime => (cached, false),
-                previous => match self.parse_session(&path) {
-                    Some(mut parsed) => {
-                        parsed.mtime = mtime;
-                        self.cache.insert(path.clone(), parsed.clone());
-                        (parsed, false)
+                previous => {
+                    self.decode_attempts += 1;
+                    match self.parse_session(&path) {
+                        Some(mut parsed) => {
+                            self.compressed_bytes_read = self
+                                .compressed_bytes_read
+                                .saturating_add(parsed.compressed_bytes);
+                            self.decoded_bytes_read = self
+                                .decoded_bytes_read
+                                .saturating_add(parsed.decoded_bytes as u64);
+                            parsed.mtime = mtime;
+                            self.cache.insert(path.clone(), parsed.clone());
+                            (parsed, false)
+                        }
+                        None => {
+                            metadata_error.get_or_insert_with(|| {
+                                "会话日志暂不可读或压缩帧尚未写完".to_string()
+                            });
+                            let Some(previous) = previous else {
+                                continue;
+                            };
+                            (previous, true)
+                        }
                     }
-                    None => {
-                        metadata_error
-                            .get_or_insert_with(|| "会话日志暂不可读或压缩帧尚未写完".to_string());
-                        let Some(previous) = previous else {
-                            continue;
-                        };
-                        (previous, true)
-                    }
-                },
+                }
             };
             let session_id = session_id_from_path(&path);
             let mut waiting_reason = None;
@@ -824,6 +840,15 @@ impl Provider for DeepSeekHarnessProvider {
         }
         self.cache.retain(|path, _| live_paths.contains(path));
         self.last_tasks = tasks.clone();
+        let identity = self
+            .native_root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(format!("wsl:{}", self.distro)));
+        super::resources::record(
+            "dsh",
+            &identity,
+            serde_json::json!({"entries":self.cache.len(),"metadata_shards":self.shard_cache.len(),"decode_attempts":self.decode_attempts,"successful_compressed_bytes":self.compressed_bytes_read,"successful_decoded_bytes":self.decoded_bytes_read,"compressed_budget":COMPRESSED_BUDGET,"decoded_budget":DECODED_BUDGET}),
+        );
         if let Some(error) = metadata_error {
             return ProviderOutput::degraded(tasks, format!("会话数据暂不可用: {error}"));
         }
@@ -1001,6 +1026,12 @@ mod tests {
         let mut provider = DeepSeekHarnessProvider::with_native_root(root.path().to_path_buf());
         let first = provider.poll(SystemTime::now());
         assert!(first.authoritative);
+        let attempts = provider.decode_attempts;
+        provider.poll(SystemTime::now());
+        assert_eq!(
+            provider.decode_attempts, attempts,
+            "unchanged logs must not decode again"
+        );
         assert_eq!(first.tasks.len(), 1);
         let task = &first.tasks[0];
         assert_eq!(task.name, "Native title");

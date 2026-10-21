@@ -25,7 +25,6 @@ pub struct TailBatch {
     pub body: String,
     pub caught_up: bool,
     pub gap: bool,
-    #[cfg(test)]
     pub bytes_read: usize,
 }
 
@@ -49,7 +48,6 @@ impl JsonlTail {
                 body: String::new(),
                 caught_up: self.pending.is_empty() && !self.discarding,
                 gap: self.gap,
-                #[cfg(test)]
                 bytes_read: 0,
             });
         }
@@ -132,7 +130,6 @@ impl JsonlTail {
             body,
             caught_up: self.offset == signature.1 && self.pending.is_empty() && !self.discarding,
             gap: self.gap,
-            #[cfg(test)]
             bytes_read,
         })
     }

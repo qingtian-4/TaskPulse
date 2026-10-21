@@ -48,3 +48,24 @@
 - **Windows 隔离进程测量**（同一测试、同一 66,977,850 字节 JSONL / 6,226 字节压缩输入，5ms 采样，进程句柄保留，退出码均 0）：整块解压 550ms、采样 private 峰值 71,163,904 字节、peak working set 77,668,352；流式 489ms、private 3,117,056、working set 9,433,088。为合成高度可压缩数据的单次测量，不等于实际 GUI 或长期平均。
 - 实机只读通过：本机 Desktop 11 个现有会话、projection 11 项，采样 643ms；已经运行的 Ubuntu 三份旧版日志经实际 WSL 二进制管道/解压通过（compressed/decoded：1,306,858/2,653,769；1,884,745/4,806,395；16,158/49,432 字节）。未触发真实任务或写宿主配置，不把历史只读采样冒称实时 Hook 验收。
 - CPU 边界：相同 mtime 的缓存继续复用；变更文件仍从头流式解压。减少了峰值内存和副本，**没有消除变更日志重复解压的 CPU 成本**。
+
+## F06：磁盘预览与最小资源诊断
+
+- 新增 scripts/disk-report.ps1、clean-build-cache.ps1、cache-common.ps1、cache-tools.test.ps1。只读报告将 Rust debug/optimized/隔离 target、node_modules、前端构建、Git 历史、安装包与其他内容分别计量，不重复计算；用户状态单独列出。默认清理命令仅 dry-run。显式删除只接受白名单可重建子目录，拒绝链接/junction、越界、不可读树、编译器或目标内正在运行的进程；不终止进程，不删除 .git、安装包、用户配置或状态。
+- Windows 隔离测试通过：默认预览不改文件、字节计量、非白名单拒绝、junction 拒绝、**仅临时 fixture** 的显式删除及历史保留。真实工作区没有执行 Delete。verify.ps1 -Frontend 纳入该测试，继续复用原有 TargetDir 构建机制。
+- 当前机器实际只读统计（4218ms）：总计 **3,268,405,882 字节**，Rust debug 3,108,178,332；node_modules 136,274,842；.git 13,701,946；前端构建 982,071；用户 .taskpulse 234,180。不是历史提到的 60GB，不能将两次不同环境/时间的差额归因于本轮优化。预览默认可重建缓存约 1.39GB，未删除。
+- 新增 providers/resources.rs：IPC get_resource_diagnostics 与 --diagnose 的 resources 字段报告当前进程的 parser 项数/保留缓冲/读取字节、DSH 解压次数/成功读取字节、checkpoint 写入次数/字节、有界 journal/state 目录统计、90% journal 配额压力、Windows private/working-set/peak-working-set。Windows 数据不包括 WebView2 子进程；Linux/macOS 明确标为不可用。路径使用 source/root 哈希，不含命令/提示词/凭证。资源统计不持久化、不触发 watcher。
+- diagnostics_do_not_expose_paths_or_payloads_and_disk_usage_is_read_only 与 Clippy 通过；新增未变 mtime 不重复解压断言。诊断目录统计最多 10,000 项，配额扫描最多 64 source × 1024 journal，达到边界明确 complete=false，不伪装精确总数。
+
+### 使用
+
+```powershell
+# 只读定位磁盘，-Json 可用于保存本机诊断（含本地文件路径，勿未经检查公开）
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/disk-report.ps1
+# 默认预览，不删除；本轮未在真实目录使用 -Delete
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/clean-build-cache.ps1
+# 构建验证（选择未运行的原有 target，不替换用户正在运行的托盘）
+powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend -TargetDir src-tauri/target
+```
+
+--diagnose 的原有输出包含真实任务标题/项目，仅本地排查，不应原样公开。get_resource_diagnostics 可从已有 WebView2 原生 IPC 调用，只读且异步扫描；本轮不扩展主界面。

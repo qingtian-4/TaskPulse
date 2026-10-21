@@ -129,6 +129,7 @@ pub struct CodexProvider {
     /// state; changed files read new complete lines, with reset on replacement.
     cache: std::collections::HashMap<PathBuf, RolloutCache>,
     cache_policy: super::parser_cache::Policy,
+    read_bytes: u64,
     native_metadata: HashMap<String, AppThreadMeta>,
     title_index: super::jsonl_tail::JsonlTail,
     indexed_titles: HashMap<String, String>,
@@ -247,6 +248,7 @@ impl CodexProvider {
             seen: Default::default(),
             cache: Default::default(),
             cache_policy: Default::default(),
+            read_bytes: 0,
             native_metadata: Default::default(),
             title_index: Default::default(),
             indexed_titles: Default::default(),
@@ -405,6 +407,7 @@ impl CodexProvider {
     fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
         let cache = self.cache.entry(path.to_path_buf()).or_default();
         let batch = cache.tail.read(path).ok()?;
+        self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
         if batch.reset {
             cache.state = None;
         }
@@ -1860,6 +1863,11 @@ impl Provider for CodexProvider {
                 .sum::<usize>()
         );
         self.last_tasks = tasks.clone();
+        super::resources::record(
+            "codex",
+            &self.sessions_root,
+            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(|s|s.status==TaskStatus::Running || !s.confirmed_approvals.is_empty())).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES}),
+        );
         let catalog = metadata
             .values()
             .map(|meta| {

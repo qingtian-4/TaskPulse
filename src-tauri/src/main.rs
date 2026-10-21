@@ -185,6 +185,7 @@ fn main() {
             watcher::get_hosts,
             watcher::get_providers,
             providers::codex::get_codex_quota,
+            providers::resources::get_resource_diagnostics,
             watcher::request_refresh,
             watcher::get_status_dir,
             watcher::update_task_attention,

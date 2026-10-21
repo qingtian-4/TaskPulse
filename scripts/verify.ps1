@@ -25,6 +25,8 @@ try {
     # Build frontend before Rust embeds it; compiling Rust first can validate an
     # old UI while the subsequent frontend step succeeds on different assets.
     if ($Frontend) {
+        & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cache-tools.test.ps1
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $bun = Join-Path $env:LOCALAPPDATA 'hermes\node\bun.cmd'
         if (-not (Test-Path -LiteralPath $bun)) { $bun = 'bun.cmd' }
         & $bun run audit:frontend

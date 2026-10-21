@@ -12,6 +12,7 @@ pub mod jsonl_tail;
 pub mod local_file;
 mod parser_cache;
 pub mod remote_tmux;
+pub mod resources;
 pub mod worker;
 
 use std::time::SystemTime;

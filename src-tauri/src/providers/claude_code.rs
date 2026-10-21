@@ -43,6 +43,7 @@ pub struct ClaudeCodeProvider {
     hook_logs: HashMap<PathBuf, HookLog>,
     cache_policy: super::parser_cache::Policy,
     hook_policy: super::parser_cache::Policy,
+    read_bytes: u64,
     last_tasks: Vec<TaskSnapshot>,
 }
 
@@ -57,6 +58,7 @@ impl ClaudeCodeProvider {
             hook_logs: HashMap::new(),
             cache_policy: Default::default(),
             hook_policy: Default::default(),
+            read_bytes: 0,
             last_tasks: vec![],
         }
     }
@@ -134,6 +136,7 @@ impl ClaudeCodeProvider {
             let transcript = self.transcripts.entry(path.clone()).or_default();
             match transcript.tail.read(path) {
                 Ok(batch) => {
+                    self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
                     if batch.reset {
                         transcript.task = None;
                         transcript.manual_title = None;
@@ -341,6 +344,11 @@ impl ClaudeCodeProvider {
         );
         self.transcripts.retain(|p, _| keep.contains(p));
         self.last_tasks = tasks.clone();
+        super::resources::record(
+            "claude",
+            &self.root,
+            serde_json::json!({"transcripts":self.transcripts.len(),"hook_logs":self.hook_logs.len(),"protected_entries":self.transcripts.values().filter(|c|!c.tail.trusted() || c.task.as_ref().is_some_and(parser_protected)).count(),"tail_capacity_bytes":self.transcripts.values().map(|c|c.tail.retained_bytes()).chain(self.hook_logs.values().map(|c|c.tail.retained_bytes())).sum::<usize>(),"cumulative_jsonl_bytes_read":self.read_bytes,"inactive_entry_budget_per_cache":super::parser_cache::INACTIVE_ENTRIES}),
+        );
         let catalog = tasks.clone();
         Ok(ProviderOutput {
             tasks,
@@ -386,6 +394,7 @@ impl ClaudeCodeProvider {
             let cache = self.hook_logs.entry(path.clone()).or_default();
             let records = if extension == Some("jsonl") {
                 let batch = cache.tail.read(&path)?;
+                self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
                 cache.trusted = batch.caught_up && !batch.gap;
                 if batch.reset {
                     cache.task = None;

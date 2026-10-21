@@ -1591,6 +1591,7 @@ pub fn diagnose() {
             "providers": providers.health, "tasks": tasks, "transition_count": event_count,
             "codex_account_quota": crate::providers::codex::get_codex_quota(),
             "quota_observations": quota_observations, "requested_quota_refresh": requested_quota_refresh,
+            "resources": crate::providers::resources::snapshot(),
         })
     );
 }
