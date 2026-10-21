@@ -12,6 +12,18 @@ export function sourceReadState(source:MonitorSource, applied:DashboardSettings|
   return '来源读取正常';
 }
 
+export function sourceReadTone(source:MonitorSource, applied:DashboardSettings|null, health:ProviderHealth[], now:number):'neutral'|'stale'|'success' {
+  const saved=applied?.sources.find(s=>s.id===source.id);
+  if(!saved || !applied?.onboarding_complete || !saved.enabled)return 'neutral';
+  const h=health.find(h=>h.provider===source.id);
+  return h?.status==='connected' && !!h.last_attempt && !!h.last_success && now-h.last_success<=Math.max(30000,saved.poll_interval_ms*3)?'success':'stale';
+}
+
+// A visual hint only. Reaching step 4 is NOT host lifecycle certification.
+export function sourceSetupStep(hasSource:boolean,draft:boolean,readTestPassed:boolean):number {
+  return !hasSource?1:draft?2:readTestPassed?4:3;
+}
+
 export function readTestResult(id:string, health:ProviderHealth[], since:number):'pending'|'passed'|'failed' {
   const h=health.find(h=>h.provider===id);
   if(!h?.last_attempt || h.last_attempt<since)return 'pending';
