@@ -29,6 +29,28 @@ pub struct TailBatch {
 }
 
 impl JsonlTail {
+    /// More than one bounded buffer can be folded on the independent worker.
+    /// This is a resource budget, never a lifecycle or approval timeout.
+    pub fn drain(
+        &mut self,
+        path: &Path,
+        mut fold: impl FnMut(&TailBatch),
+    ) -> std::io::Result<bool> {
+        let began = std::time::Instant::now();
+        let mut bytes = 0usize;
+        loop {
+            let batch = self.read(path)?;
+            bytes += batch.bytes_read;
+            fold(&batch);
+            if batch.caught_up
+                || batch.bytes_read == 0
+                || bytes >= 16 * 1024 * 1024
+                || began.elapsed() >= std::time::Duration::from_millis(500)
+            {
+                return Ok(batch.caught_up && !batch.gap);
+            }
+        }
+    }
     pub fn trusted(&self) -> bool {
         !self.gap
             && !self.discarding

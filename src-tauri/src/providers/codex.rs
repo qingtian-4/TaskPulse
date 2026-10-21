@@ -406,20 +406,20 @@ impl CodexProvider {
 
     fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
         let cache = self.cache.entry(path.to_path_buf()).or_default();
-        let batch = cache.tail.read(path).ok()?;
-        self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
-        if batch.reset {
-            cache.state = None;
-        }
-        if !batch.body.trim().is_empty() {
-            let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
-        }
-        // Fold bounded chunks internally. A terminal in the middle of an old
-        // transcript is not the current task until the entire tail catches up.
-        (batch.caught_up && !batch.gap)
-            .then(|| cache.state.clone())
-            .flatten()
+        let trusted = cache
+            .tail
+            .drain(path, |batch| {
+                self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
+                if batch.reset {
+                    cache.state = None;
+                }
+                if !batch.body.trim().is_empty() {
+                    let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
+                }
+            })
+            .ok()?;
+        trusted.then(|| cache.state.clone()).flatten()
     }
 
     fn session_to_task(
@@ -3044,16 +3044,20 @@ for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread
         let at = recent_rfc3339(1);
         let mut body = header("/tmp/project");
         body.push_str(&format!("{{\"timestamp\":\"{at}\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"old\"}}}}\n"));
-        body.push_str(&format!("{{\"ignored\":\"{}\"}}\n", "x".repeat(700_000)));
+        body.push_str(&format!("{{\"ignored\":\"{}\"}}\n", "x".repeat(1009)).repeat(18 * 1024));
         body.push_str(&format!("{{\"timestamp\":\"{at}\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"current\"}}}}\n"));
         std::fs::write(&path, body).unwrap();
         let mut provider = CodexProvider::with_root(root.path().into());
-        for _ in 0..2 {
-            let out = provider.poll(SystemTime::now());
-            assert!(!out.authoritative);
-            assert!(out.tasks.is_empty());
+        let first = provider.poll(SystemTime::now());
+        assert!(!first.authoritative);
+        assert!(first.tasks.is_empty());
+        let mut out = first;
+        for _ in 0..10 {
+            out = provider.poll(SystemTime::now());
+            if out.authoritative {
+                break;
+            }
         }
-        let out = provider.poll(SystemTime::now());
         assert!(out.authoritative, "{:?}", out.error);
         assert_eq!(out.tasks[0].status, TaskStatus::Running);
         assert_eq!(out.tasks[0].turn_key.as_deref(), Some("current"));

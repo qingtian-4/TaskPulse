@@ -449,7 +449,17 @@ mod tests {
             format!("codex-wsl:{}", distro.to_lowercase()),
         );
         let started = std::time::Instant::now();
-        let output = provider.poll(SystemTime::now());
+        let mut output = provider.poll(SystemTime::now());
+        let first_ms = started.elapsed().as_millis();
+        while !output.authoritative
+            && started.elapsed() < Duration::from_secs(30)
+            && output.error.as_deref().is_some_and(|e| e.contains("追赶"))
+        {
+            // Large real logs legitimately need multiple bounded worker turns.
+            // Keep the normal worker cadence; failures/gaps still fail below.
+            std::thread::sleep(Duration::from_secs(1));
+            output = provider.poll(SystemTime::now());
+        }
         assert!(output.authoritative, "{:?}", output.error);
         assert!(!output.catalog.is_empty());
         for task in &output.catalog {
@@ -459,7 +469,7 @@ mod tests {
         }
         println!(
             "{}",
-            serde_json::json!({"distro":distro,"first_ms":started.elapsed().as_millis(),"catalog":output.catalog.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"project":t.project,"path":t.project_path})).collect::<Vec<_>>(),"tasks":output.tasks.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"status":t.status,"phase":t.phase})).collect::<Vec<_>>()})
+            serde_json::json!({"distro":distro,"first_poll_ms":first_ms,"caught_up_ms":started.elapsed().as_millis(),"catalog":output.catalog.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"project":t.project,"path":t.project_path})).collect::<Vec<_>>(),"tasks":output.tasks.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"status":t.status,"phase":t.phase})).collect::<Vec<_>>()})
         );
         let started = std::time::Instant::now();
         let next = provider.poll(SystemTime::now());

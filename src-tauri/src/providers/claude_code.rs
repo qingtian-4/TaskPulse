@@ -35,6 +35,33 @@ struct HookLog {
     sequence: u64,
     trusted: bool,
 }
+impl HookLog {
+    fn fold(&mut self, event: Value, id: &str, root: &Path, now: SystemTime) {
+        if text(&event, "session_id") != Some(id) || !event_belongs_to_root(&event, root) {
+            return;
+        }
+        if let Some(sequence) = event.get("sequence").and_then(Value::as_u64) {
+            if sequence <= self.sequence {
+                return;
+            }
+            self.sequence = sequence;
+        }
+        let task = self.task.get_or_insert_with(|| {
+            let mut t = TaskSnapshot::new(
+                format!("claude:{id}"),
+                format!("未命名任务 · {}", id.chars().take(8).collect::<String>()),
+                TaskSource::ClaudeCode,
+                TaskStatus::Unknown,
+                DetectionConfidence::Hook,
+                now,
+            );
+            t.session_id = Some(id.into());
+            t
+        });
+        apply_hook(task, &event);
+        self.latest = event;
+    }
+}
 
 pub struct ClaudeCodeProvider {
     root: PathBuf,
@@ -134,28 +161,27 @@ impl ClaudeCodeProvider {
                 .to_string_lossy()
                 .into_owned();
             let transcript = self.transcripts.entry(path.clone()).or_default();
-            match transcript.tail.read(path) {
-                Ok(batch) => {
-                    self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
-                    if batch.reset {
-                        transcript.task = None;
-                        transcript.manual_title = None;
-                        transcript.native_title = None;
-                        transcript.first_prompt = None;
-                        transcript.active_tools.clear();
-                        transcript.resolved_tools.clear();
-                        transcript.explicit_end = false;
-                    }
-                    for line in batch.body.lines() {
-                        if let Ok(value) = serde_json::from_str::<Value>(line) {
-                            apply_record(transcript, &value, &id, now);
-                        }
-                    }
-                    if transcript.task.is_none() && path.metadata()?.len() > 0 {
-                        failed = true;
+            let mut tail = std::mem::take(&mut transcript.tail);
+            let drained = tail.drain(path, |batch| {
+                self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
+                if batch.reset {
+                    transcript.task = None;
+                    transcript.manual_title = None;
+                    transcript.native_title = None;
+                    transcript.first_prompt = None;
+                    transcript.active_tools.clear();
+                    transcript.resolved_tools.clear();
+                    transcript.explicit_end = false;
+                }
+                for line in batch.body.lines() {
+                    if let Ok(value) = serde_json::from_str::<Value>(line) {
+                        apply_record(transcript, &value, &id, now);
                     }
                 }
-                Err(_) => failed = true,
+            });
+            transcript.tail = tail;
+            if drained.is_err() || transcript.task.is_none() && path.metadata()?.len() > 0 {
+                failed = true;
             }
             if !transcript.tail.trusted() {
                 failed = true;
@@ -392,50 +418,25 @@ impl ClaudeCodeProvider {
                 .to_string_lossy()
                 .into_owned();
             let cache = self.hook_logs.entry(path.clone()).or_default();
-            let records = if extension == Some("jsonl") {
-                let batch = cache.tail.read(&path)?;
-                self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
-                cache.trusted = batch.caught_up && !batch.gap;
-                if batch.reset {
-                    cache.task = None;
-                    cache.sequence = 0;
-                }
-                batch
-                    .body
-                    .lines()
-                    .map(serde_json::from_str::<Value>)
-                    .collect::<Result<Vec<_>, _>>()
-                    .map_err(std::io::Error::other)?
+            if extension == Some("jsonl") {
+                let mut tail = std::mem::take(&mut cache.tail);
+                let result = tail.drain(&path, |batch| {
+                    self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
+                    if batch.reset {
+                        cache.task = None;
+                        cache.sequence = 0;
+                    }
+                    for line in batch.body.lines() {
+                        if let Ok(event) = serde_json::from_str(line) {
+                            cache.fold(event, &id, &self.root, now);
+                        }
+                    }
+                });
+                cache.tail = tail;
+                cache.trusted = result?;
             } else {
                 cache.trusted = true;
-                vec![read_json(&path)?]
-            };
-            for event in records {
-                if text(&event, "session_id") != Some(&id)
-                    || !event_belongs_to_root(&event, &self.root)
-                {
-                    continue;
-                }
-                if let Some(sequence) = event.get("sequence").and_then(Value::as_u64) {
-                    if sequence <= cache.sequence {
-                        continue;
-                    }
-                    cache.sequence = sequence;
-                }
-                let task = cache.task.get_or_insert_with(|| {
-                    let mut t = TaskSnapshot::new(
-                        format!("claude:{id}"),
-                        format!("未命名任务 · {}", id.chars().take(8).collect::<String>()),
-                        TaskSource::ClaudeCode,
-                        TaskStatus::Unknown,
-                        DetectionConfidence::Hook,
-                        now,
-                    );
-                    t.session_id = Some(id.clone());
-                    t
-                });
-                apply_hook(task, &event);
-                cache.latest = event;
+                cache.fold(read_json(&path)?, &id, &self.root, now);
             }
             if let Some(task) = cache.task.as_ref() {
                 if cache.trusted {
