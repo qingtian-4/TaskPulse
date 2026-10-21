@@ -1,6 +1,6 @@
 # Alpha.7 候选收口状态
 
-核对日期：2026-10-22（Asia/Shanghai）。这是源码与发布门禁记录，不是所有 Agent 或干净 Windows VM 的验收证明。
+核对日期：2026-10-22（Asia/Shanghai）。第 1 项文档合并与第 2 项候选安装包已完成；第 3 项独立实机验收按维护者要求暂缓，不计为通过。Alpha.7 保持 Draft，未公开。
 
 ## 已合并的源码基线
 
@@ -8,30 +8,35 @@
 - 原 PR head：`2cc13b1f11049047fdf6f868ca92b3d5df8aefce`；实际合并 SHA：`ea21c85fc6b81992de72cf45729cfe6abcc1c15f`，已进入默认 `main`。
 - 原 PR 的 [Windows quality（重跑 attempt 2）](https://github.com/qingtian-4/TaskPulse/actions/runs/39617437276/attempts/2) 和 [Security checks](https://github.com/qingtian-4/TaskPulse/actions/runs/39617437161) 成功，针对原 PR head，不冒充 main 检查。
 - 合并后的确切 `ea21c85`：[Windows quality](https://github.com/qingtian-4/TaskPulse/actions/runs/39625854499) 与 [Security checks](https://github.com/qingtian-4/TaskPulse/actions/runs/39625854268) 均成功。此前延迟未生成运行的状态已过时。
+- **PR #9 已合并**：[#9](https://github.com/qingtian-4/TaskPulse/pull/9)，文档修复 head 为 `71ed60bcf89ca9fb5fece29794d35452c5245db8`；实际 main 合并提交和 Alpha.7 唯一源 SHA 为 `b5dc64a760bae916c9d40b147616f9720405887b`。
+- 最终 `b5dc64a` 自身的 [Windows quality](https://github.com/qingtian-4/TaskPulse/actions/runs/39633895368) 与 [Security checks](https://github.com/qingtian-4/TaskPulse/actions/runs/39633895341) 均成功，不是复用旧 PR 或旧 main 的检查结果。
 - 四个版本文件仍一致为 `0.2.0-alpha.7`，MSI 数字版本为 `0.2.0.1007`。没有为了文档修复变更版本或生命周期逻辑。
 
-以上 SHA 和 CI 是已验证的历史基线，不是未来最终候选的占位符。本轮从该 main 创建短期 `codex/alpha7-postmerge-docs` 分支，经新的 PR 修复合并后的 README、安装指南与文档回归。**本轮修复的 PR head 和新 main SHA 必须分别核对自身 CI**，不能复用上述绿色结果。确切 SHA、PR 和最终运行链接记录在对应 PR 中，避免在同一提交中自引用尚未产生的 SHA。
+维护者已明确确认在 `b5dc64a` 创建并推送不可变标签 `v0.2.0-alpha.7`。后续文档核对提交不改变这个安装包源 SHA，不能移动标签把它们算进既有安装器。
 
 ## 当前安装包与证据边界
 
-**安装器与实机验收仍未完成**。核对时未发现 `v0.2.0-alpha.7` 远端标签或 Alpha.7 Release；仅有旧 Alpha.6 Draft pre-release。旧包、源码构建或合成事件均不能替代新候选安装器与真实宿主验收。
+**Alpha.7 安装器 CI 已通过，独立实机验收未完成。** [发布运行 39636404358](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358) 成功生成 [Draft pre-release](https://github.com/qingtian-4/TaskPulse/releases/tag/untagged-c38492295dd893cb1dbc)，ID `419811221`；核对时 `draft=true`、`prerelease=true`，没有公开下载。构建、NSIS 和 MSI 各自独立 runner 上的安装验收均已完成；不是复用 Alpha.6 或 build-tree EXE 的证据。
 
 | 环节 | 本轮记录与限制 |
 |---|---|
 | 源码运行 | 从默认 `main` 克隆；运行 `git rev-parse HEAD` 核对实际版本提交 |
-| 质量 / 安全 CI | 原 PR 与已合并基线通过；每个新的 PR / main SHA 仍需独立确认 |
-| Alpha.7 NSIS / MSI | 尚未生成；需维护者单独确认最终 main SHA 后才能创建标签 |
-| 干净 Windows 验收 | 未完成；需无 Rust/Bun 环境的首次安装、运行、升级、重启与卸载 |
-| 真实 Agent 端到端 | 仍需 Codex 与另一款已安装 Agent 的新任务、工具、明确结束、通知、重启去重与窗口焦点证据 |
-| 公开 Alpha | 未发布；须维护者核对 SHA256、版本、残余风险和真实支持范围后手动决定 |
+| 质量 / 安全 CI | 候选 `b5dc64a` 的实际 main 检查和标签发布门禁通过 |
+| Alpha.7 NSIS / MSI | MSVC 安装包已生成；独立 CI 安装、版本、内嵌 UI/IPC、重启、同版本重装和卸载通过 |
+| 资产核对 | 两种安装器、manifest 和校验文件共四项与 Draft asset digest 一致；签名均为 `NotSigned` |
+| 干净 Windows 验收 | 暂缓，不计为通过；CI Windows Server runner 不是无 Rust/Bun 的 Windows 10/11 VM |
+| 真实 Agent 端到端 | 暂缓，不计为通过；没有新增真实任务、焦点、重启通知去重或 P50/P95 样本 |
+| 跨版本 / 安装格式迁移 | 未验证；同版本重装和状态标记保留不等于完整配置迁移 |
+| 公开 Alpha | 未公开；仍需维护者单独确认，不能因第 3 项暂缓而自动跳过人工门禁 |
+
+完整资产 SHA256、实际 runner 版本、安装验收字段和本机下载路径见[候选安装包验收记录](ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md)。安装包未加入 Git，也未在开发机执行安装或卸载。
 
 既有本机验证包含 Rust 390 通过 / 12 opt-in 忽略、UI Model 28 通过、Check/Build、fmt/clippy 与隔离 EXE bridge smoke；前一轮原生 WebView2 渲染证据见[视觉验收](VISUAL_POLISH_VALIDATION_2026-10-21.md)。这些不等于宿主实测，不能提升 Kimi/TRAE/ZCode/WorkBuddy 的支持等级。已知前端 low 与 Rust 维护/unsound 告警保留在[安全记录](SECURITY_AUDIT_2026-10.md)，审计阈值通过不等于零风险。
 
-## 下一步及确认边界
+## 维护者发布决策边界
 
-1. 本轮只更新合并后文档、测试，经新 PR 合并，并确认实际新 main SHA 的质量与安全 CI；保留无关修改及运行中的 Agent。
-2. **维护者单独确认**最终 main SHA 后，才创建不可变的 `v0.2.0-alpha.7`；[现有发布流程](RELEASING.md) 执行版本预检、安全审计、MSVC 构建及 NSIS/MSI 各自独立 Windows runner 验收。全部通过才生成 **Draft pre-release**，不会公开发布。
-3. 对同一候选安装器补独立 Windows 与真实 Agent 验收，记录宿主/系统版本、实际事件与状态、事件到通知延迟、误报/漏报及未验证项；无意义的付费压测不属于验收。
-4. 核对资产 SHA256、版本、风险、支持矩阵和发布说明后，才由维护者手动决定 Publish pre-release。没有证据的门禁保持未完成。
+1. 候选身份、资产和 CI 已核对，不能因此宣称所有 Agent、干净 Windows、升级或长期可靠性已验收。
+2. 独立实机与真实 Agent 验收暂缓；若恢复，须针对同一安装包记录宿主/系统版本、预期与实际状态、事件到提醒延迟及误报/漏报。无意义的付费压测不属于验收。
+3. [发布流程](RELEASING.md)的未完成门禁保持未完成。当前建议保留 Draft，公开发布仍需维护者单独确认；创建候选草稿的授权不包含 Publish。
 
-本轮不打 Tag、不创建 Release、不公开发布，不安装真实 Hook，不修改 Agent、代理/模型、审批策略或用户持久状态。
+本次仅同步交付文档和回归测试；不移动标签、不修改远端草稿或资产、不公开发布，不安装真实 Hook，不修改 Agent、代理/模型、审批策略或用户持久状态。

@@ -1,7 +1,13 @@
 # Windows Alpha 发布流程
 
-当前候选为 `0.2.0-alpha.7`，拟用标签为 `v0.2.0-alpha.7`（尚未创建）。版本与包名不沿用上游稳定发布
-语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
+当前候选为 `0.2.0-alpha.7`；不可变标签 `v0.2.0-alpha.7` 已指向
+`b5dc64a760bae916c9d40b147616f9720405887b`。main 质量/安全 CI 和
+[发布运行 39636404358](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)
+均通过，生成的 Draft pre-release 仍未公开。资产校验、独立安装器 CI 与限制见
+[候选验收记录](ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md)。第 3 项独立实机验收
+已按维护者要求暂缓，不计为通过；不因此跳过下方人工门禁。
+
+版本与包名不沿用上游稳定发布语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
 
 ## 发布前
 
@@ -11,11 +17,12 @@
    `src-tauri/tauri.conf.json`；更新 `docs/releases/<版本>.md` 和 CHANGELOG。
 3. 执行 `bun run release:check`、`bun run test:release`、完整质量检查和原生验收。
    **不能用版本输入仅修改 Release 标题。**
-4. 确认远端 main 包含对应提交后，对明确的 main SHA 创建不可变标签：
+4. 确认远端 main 包含对应提交并取得维护者明确确认后，对明确的 main SHA 创建不可变标签。
+   以下仅为后续新版本模板；Alpha.7 已有标签，不要重复创建、移动或覆盖它：
 
 ```bash
-git tag -a v0.2.0-alpha.7 <verified-main-sha> -m "TaskPulse 0.2.0-alpha.7"
-git push origin refs/tags/v0.2.0-alpha.7
+git tag -a <next-pre-release-tag> <verified-main-sha> -m "TaskPulse <next-version>"
+git push origin refs/tags/<next-pre-release-tag>
 ```
 
 不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
@@ -74,21 +81,26 @@ Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Ap
 
 ## 从草稿到可下载 Alpha 的人工门禁
 
-- [x] Alpha.6 CI：两个真实安装器安装、版本、内嵌 UI/IPC、重启、同版本重装、卸载通过。
-  [发行 38694054589](https://github.com/qingtian-4/TaskPulse/actions/runs/38694054589)，
-  SHA `7a1929a`。仅适用于原标签；后续依赖修复须新标签重新构建和验收。
-- [ ] 发布候选依赖审计：执行 `bun audit` 并记录全部告警，`bun run audit:frontend`
+- [x] 发布候选依赖审计：执行 `bun audit` 并记录全部告警，`bun run audit:frontend`
   阻止中等及以上告警；`bun run audit:rust` 和 `bun run audit:secrets` 另行门控。
-  本地 Alpha.7 检查记录见 [安全审查](SECURITY_AUDIT_2026-10.md)。不能把阈值通过称为零告警。
-- [ ] Alpha.7 准确候选提交的远端质量/安全检查及两种安装器验收通过。
+  Alpha.7 main 和标签运行通过；仍有前端 1 low、Rust 10 maintenance / 2 unsound 告警，
+  见[安全审查](SECURITY_AUDIT_2026-10.md)。不能把阈值通过称为零风险。
+- [x] Alpha.7 准确候选提交 `b5dc64a` 的 main 质量/安全检查及两种安装器独立 CI 验收通过。
+  见[发布运行](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)和
+  [原始证据索引](ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md)，不复用 Alpha.6 结果。
 - [ ] 干净 Windows 10/11 VM：无开发工具，检查 WebView2 有/无与网络受限场景。
 - [ ] 上一可安装版本升级：来源、白名单、未读、固定、去重状态保留。
 - [ ] EXE/MSI 格式迁移：卸载后目录偏好、显式自定义目录优先级、用户状态保留。
 - [ ] 真 Agent 新任务：开始、思考、明确结束、失败、重命名、真实批准与解除。
 - [ ] 多任务与失联：不漏掉范围内新执行、不把源错误/内部 Guardian 当完成。
 - [ ] 长运行、多个提醒、重启恢复回查；记录事件到 UI/通知的 P50/P95 与样本数量。
-- [ ] 通过签名或明确 unsigned 边界；核对每个资产 SHA、实际版本、发布说明。
+- [x] 明确 unsigned 边界；安装器均为 `NotSigned`，四项资产 SHA/大小与 Draft 一致，
+  应用 `0.2.0-alpha.7` / MSI `0.2.0.1007` 已核对。SHA256 不等于签名或维护者风险接受。
 - [ ] 记录系统/Agent 版本、日期、证据及未验收限制，再手动 Publish pre-release。
+
+上述干净系统、升级/格式迁移与真实 Agent 项目目前暂缓，不计为通过。尚无新的焦点、
+长运行或真实事件延迟样本；测试 fixture 和 CI 初始空状态重启不能补足它们。
+当前决策是保持 Draft，未公开；Publish 需要维护者另行明确确认。
 
 自动化同版本重装不是跨版本升级，GUI 渲染不是焦点验证，单元测试不是实机事件。
 任何未完成项要记录原因和范围；不自动发布稳定版，也不把缺少证据写成通过。

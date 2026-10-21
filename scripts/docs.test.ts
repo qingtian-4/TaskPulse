@@ -1,7 +1,7 @@
 import {test,expect} from 'bun:test';
 import {readFileSync,existsSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
-const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md','docs/UI_UX_VALIDATION_2026-10-21.md','docs/DESIGN_SYSTEM.md','docs/VISUAL_POLISH_VALIDATION_2026-10-21.md','docs/ALPHA7_CANDIDATE_STATUS.md'];
+const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md','docs/UI_UX_VALIDATION_2026-10-21.md','docs/DESIGN_SYSTEM.md','docs/VISUAL_POLISH_VALIDATION_2026-10-21.md','docs/ALPHA7_CANDIDATE_STATUS.md','docs/ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md','docs/RELEASING.md','docs/OPEN_SOURCE_CHECKLIST.md'];
 test('product docs use resolvable local links and images',()=>{
   for(const path of documents){
     const body=readFileSync(path,'utf8');
@@ -54,15 +54,53 @@ test('post-merge source instructions select main instead of the old candidate br
   expect(install).not.toContain('尚未合入 `main`');
 });
 
-test('candidate status records the merged baseline without claiming installers or host acceptance',()=>{
+test('candidate status separates verified alpha7 installers from deferred host acceptance',()=>{
   const status=readFileSync('docs/ALPHA7_CANDIDATE_STATUS.md','utf8');
   expect(status).toContain('PR #8 已合并');
   expect(status).toContain('ea21c85fc6b81992de72cf45729cfe6abcc1c15f');
-  expect(status).toContain('39625854499');
-  expect(status).toContain('39625854268');
+  expect(status).toContain('PR #9 已合并');
+  expect(status).toContain('b5dc64a760bae916c9d40b147616f9720405887b');
+  expect(status).toContain('39633895368');
+  expect(status).toContain('39633895341');
+  expect(status).toContain('39636404358');
+  expect(status).toContain('419811221');
   expect(status).not.toContain('仍 open，未合并');
-  expect(status).toContain('安装器与实机验收仍未完成');
+  expect(status).not.toContain('安装器与实机验收仍未完成');
+  expect(status).not.toContain('尚未生成');
+  expect(status).toContain('暂缓，不计为通过');
   expect(status).toContain('维护者单独确认');
+});
+
+test('release decision documents retain draft status and separate deferred manual gates',()=>{
+  for(const path of ['docs/ALPHA7_CANDIDATE_STATUS.md','docs/RELEASING.md','docs/OPEN_SOURCE_CHECKLIST.md']){
+    const body=readFileSync(path,'utf8');
+    expect(body,path).toContain('ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md');
+    expect(body,path).toContain('39636404358');
+    expect(body,path).toContain('Draft');
+    expect(body,path).toContain('暂缓，不计为通过');
+    expect(body,path).toContain('未公开');
+    expect(body,path).not.toContain('尚未创建');
+    expect(body,path).not.toContain('未发现 `v0.2.0-alpha.7`');
+  }
+  const releasing=readFileSync('docs/RELEASING.md','utf8');
+  expect(releasing).toContain('- [x] Alpha.7 准确候选提交');
+  expect(releasing).toContain('- [ ] 干净 Windows 10/11 VM');
+  expect(releasing).toContain('- [ ] 真 Agent 新任务');
+  expect(releasing).toContain('- [ ] 记录系统/Agent 版本');
+});
+
+test('repository test scripts select exact root files rather than nested worktree filters',()=>{
+  const manifest=JSON.parse(readFileSync('package.json','utf8'));
+  expect(manifest.scripts['test:docs']).toBe('bun test ./scripts/docs.test.ts');
+  for(const name of ['test:docs','test:ui-model','test:release','test:security','test:integration-contract']){
+    const command=manifest.scripts[name] as string;
+    expect(command,name).toStartWith('bun test ');
+    const files=command.slice('bun test '.length).split(/\s+/);
+    for(const file of files){
+      expect(file,name).toMatch(/^\.\/scripts\/[^/]+\.test\.ts$/);
+      expect(existsSync(file),`${name}: ${file}`).toBe(true);
+    }
+  }
 });
 
 test('Windows quality and release actually gate on product documentation regressions',()=>{

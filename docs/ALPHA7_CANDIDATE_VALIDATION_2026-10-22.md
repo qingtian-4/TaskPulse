@@ -66,3 +66,36 @@ df54765e42a4e9aba9748896998d62dab415b094ba8a7c31c90aa1bb80f9db4f  TaskPulse_0.2.
 前端仍有 1 项 low cookie 告警；Rust 仍有 10 项维护和 2 项 unsound 告警，风险与平台/feature 分析见[安全记录](SECURITY_AUDIT_2026-10.md)。四款扩展 Agent 的 fixture/candidate 支持等级不因安装器 CI 成功而升级，见[支持矩阵](AGENT_COMPATIBILITY.md)。
 
 第 2 项已完成不代表第 3、4 项通过。[发布流程](RELEASING.md)中的人工门禁仍有效。当前保持 Draft；只有维护者核对真实支持范围、残余风险、资产和未完成门禁后才能单独决定公开预发布。本轮没有 Publish、自动发稳定版或改写标签。
+
+## 后续文档校对（不改变候选安装包）
+
+2026-10-22 再次通过认证只读查询确认：远端 main 仍为 `b5dc64a`，发布运行
+`39636404358` 为 `completed/success`；Draft `419811221` 保持 `draft=true`、
+`prerelease=true`、`published_at=null`。本机重新校验四项资产的大小与 SHA256，
+`scripts/release.ts verify` 通过，未修改草稿、资产或标签。
+
+将候选状态、发布流程和开源清单中“标签/安装器尚不存在”的过时描述同步为实际结果，
+仍保留干净系统、真实 Agent、迁移、焦点与时延的未验收状态。README 的“无公开安装包”
+依然准确，不改为公开下载承诺；支持矩阵不提升等级。
+
+回归发现 Bun 的无 `./` 路径会作为过滤器，扫描 `target` 下保留的旧 Git worktree，
+把旧测试和当前文档混跑。五个仓库测试入口已统一使用 `./scripts/*.test.ts` 精确路径；
+补了先失败、后通过的回归，没有删除工作树、减少测试或放宽发布断言。
+
+针对当前根工作树的独立测试结果（不重复计算旧 worktree）：
+
+- 文档：8 通过，201 条断言；链接/截图、main 克隆、候选身份、Draft 和未完成门禁均检查。
+- UI Model：28 通过，259 条断言。
+- Release：8 通过，75 条断言；其中 Windows process 回归不执行安装器。
+- Security Model：6 通过，45 条断言；Integration Contract：3 通过，168 条断言。
+- Svelte Check：0 错误 / 0 警告；前端生产 Build 通过。
+- Rust fmt/clippy（`-D warnings`）通过；全量单元测试 390 通过 / 0 失败 / 12 opt-in 忽略。
+- `scripts/verify.ps1 -Frontend` 最终成功；使用 `src-tauri/target/codex-check` 构建，未替换正在运行的托盘。
+- 隔离 EXE bridge 为 `passed=true`、`lockTimeoutVerified=true`、`realHostConfigurationsChanged=false`。
+  本机 GNU debug 的 `guiSubsystem=false`，不冒充发行工作流的 MSVC GUI-subsystem 验收；
+  本次证据在 `src-tauri/target/ui-smoke/evidence/integration-bridge-2026-10-21T19-22-28-274Z/`。
+  测试入口最后调整后，上述五组根工作树命令另行重跑并全部通过。
+- 完整 `bun audit` 仍报告 1 low（预期非零退出）；moderate+ 门禁通过，不描述为零风险。
+
+以上是本地文档和隔离回归，不是第 3 项实机验收。后续文档提交不计入既有
+`v0.2.0-alpha.7` 安装器，不自动推送、创建 PR 或发布。
