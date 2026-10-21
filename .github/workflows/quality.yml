@@ -35,6 +35,8 @@ jobs:
       # mask an earlier failed fmt/lint/test exit code.
       - name: Check frontend types
         run: bun run check
+      - name: Test documentation links and candidate source instructions
+        run: bun run test:docs
       - name: Test frontend models
         run: bun run test:ui-model
       - name: Validate release versions

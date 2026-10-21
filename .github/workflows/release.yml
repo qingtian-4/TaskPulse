@@ -74,6 +74,8 @@ jobs:
       # Each native command has its own step; a later success cannot hide failure.
       - name: Check frontend
         run: bun run check
+      - name: Test documentation links and candidate source instructions
+        run: bun run test:docs
       - name: Test frontend models
         run: bun run test:ui-model
       - name: Test integration contracts

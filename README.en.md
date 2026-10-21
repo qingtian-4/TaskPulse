@@ -41,8 +41,10 @@ Use source builds today: [Releases](https://github.com/qingtian-4/TaskPulse/rele
 
 Prepare Rust 1.89+, Bun and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Standard Windows development includes Microsoft C++ Build Tools and WebView2.
 
+Alpha.7 is still on the candidate branch, not the default `main`. The command below selects it explicitly; a default clone currently checks out an older version. See [candidate SHA and CI status](docs/ALPHA7_CANDIDATE_STATUS.md).
+
 ```powershell
-git clone https://github.com/qingtian-4/TaskPulse.git
+git clone --branch codex/desktop-discovery-visibility --single-branch https://github.com/qingtian-4/TaskPulse.git
 cd TaskPulse
 bun install --frozen-lockfile
 bun run tauri dev

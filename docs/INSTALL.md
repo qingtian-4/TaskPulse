@@ -3,6 +3,9 @@
 当前版本为 **0.2.0-alpha.7，尚无公开可下载的 Alpha.7 安装包**。请先使用
 [源码运行](../README.md#安装与快速开始)。Windows Quality / Security CI 已通过不等于安装包已发布或真实宿主全面验收。
 
+尚未合入 `main` 时，必须按 README 的 `--branch codex/desktop-discovery-visibility` 克隆候选分支；
+用 `git rev-parse HEAD` 核对实际提交。旧提交的 CI 不覆盖新的收口提交，详见[候选状态](ALPHA7_CANDIDATE_STATUS.md)。
+
 未来在 [TaskPulse Releases](https://github.com/qingtian-4/TaskPulse/releases) 发布后，
 Windows 10/11 x64 可选择 `TaskPulse_<版本>_windows_x64_setup.exe`。
 `Source code.zip` 是源码，不是安装器；草稿对普通用户不可见，旧 AgentTray 包不是 TaskPulse。

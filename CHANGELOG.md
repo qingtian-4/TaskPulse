@@ -4,7 +4,21 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 ## 0.2.0-alpha.7 — Candidate; not released
 
+### Added and refined
+
+- Dynamic task attention, native session titles, opt-in Windows/WSL/SSH sources,
+  and separate explicit task reminders; keep source uncertainty distinct from failure.
+- Local declarative event integrations and reversible Hook previews/consent/cleanup.
+  Kimi/TRAE/ZCode remain partial and fixture-tested; WorkBuddy is candidate-only.
+- Bounded incremental parsing, checkpoint/outbox recovery and scoped evidence gaps;
+  no automatic replay of unresolved business actions or guessed turn completion.
+- Product-first bilingual documentation, compact desktop visual system, search and
+  unread filters, source capability/evidence stages, and native synthetic screenshots.
+
 ### Fixed
+
+- Select the unmerged Alpha.7 candidate branch in source-start instructions instead
+  of cloning the older default main; gate documentation regressions in quality/release.
 
 - Require read-only Codex session evidence before recommending a running WSL
   distribution. Docker/Rancher internal runtimes are not Agent discoveries;

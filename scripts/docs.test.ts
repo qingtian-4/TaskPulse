@@ -1,7 +1,7 @@
 import {test,expect} from 'bun:test';
 import {readFileSync,existsSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
-const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md','docs/UI_UX_VALIDATION_2026-10-21.md','docs/DESIGN_SYSTEM.md','docs/VISUAL_POLISH_VALIDATION_2026-10-21.md'];
+const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md','docs/UI_UX_VALIDATION_2026-10-21.md','docs/DESIGN_SYSTEM.md','docs/VISUAL_POLISH_VALIDATION_2026-10-21.md','docs/ALPHA7_CANDIDATE_STATUS.md'];
 test('product docs use resolvable local links and images',()=>{
   for(const path of documents){
     const body=readFileSync(path,'utf8');
@@ -38,4 +38,21 @@ test('current product materials retain dimensions and explicit synthetic native 
   }
   expect(readFileSync('assets/README.md','utf8')).toContain('合成');
   expect(readFileSync('README.en.md','utf8')).toContain('synthetic standard events');
+});
+
+test('unmerged Alpha.7 source instructions select the candidate branch, not the older default main',()=>{
+  // Change this gate together with source instructions after the maintainer merges.
+  for(const file of ['README.md','README.en.md']){
+    const body=readFileSync(file,'utf8');
+    expect(body).toContain('git clone --branch codex/desktop-discovery-visibility --single-branch https://github.com/qingtian-4/TaskPulse.git');
+    expect(body).not.toMatch(/^git clone https:\/\/github\.com\/qingtian-4\/TaskPulse\.git$/m);
+  }
+});
+
+test('Windows quality and release actually gate on product documentation regressions',()=>{
+  for(const [file,job] of [['quality.yml','quality'],['release.yml','windows']]){
+    const workflow=Bun.YAML.parse(readFileSync('.github/workflows/'+file,'utf8')) as any;
+    const step=workflow.jobs[job].steps.find((s:any)=>s.run==='bun run test:docs');
+    expect(step,file).toBeDefined();expect(step?.['continue-on-error']).not.toBe(true);
+  }
 });
