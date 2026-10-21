@@ -1,22 +1,36 @@
 import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
 export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
-export type TaskSignal = 'approval' | 'question' | 'failed';
-export interface DashboardFilters { source: string; project: string; location: string; section: TaskSection | null; signal?: TaskSignal | null }
-export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null,signal:null};
+export type TaskSignal = 'approval' | 'question' | 'failed' | 'action';
+export interface DashboardFilters { source: string; project: string; location: string; section: TaskSection | null; signal?: TaskSignal | null; query?:string; unreadOnly?:boolean }
+export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null,signal:null,query:'',unreadOnly:false};
 export const SECTION_ORDER: TaskSection[] = ['ongoing', 'results', 'uncertain', 'pinned'];
 export const SECTION_NAMES: Record<TaskSection,string> = {ongoing:'进行中',results:'结果待查看',uncertain:'状态待更新',pinned:'固定与已查看'};
 export function sectionRank(task: TaskSnapshot): number { return SECTION_ORDER.indexOf(taskSection(task)); }
 export function matchesSignal(task:TaskSnapshot, signal:TaskSignal):boolean {
-  return signal==='failed' ? task.status==='failed' && isEndedResult(task) : needsAction(task) && task.waiting_reason===signal;
+  if(signal==='failed')return task.status==='failed' && isEndedResult(task);
+  return !task.stale && needsAction(task) && (signal==='action' || task.waiting_reason===signal);
 }
 
 export function filterTasks(tasks: TaskSnapshot[], filters: DashboardFilters, settings?: DashboardSettings | null): TaskSnapshot[] {
+  const terms=(filters.query??'').trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
   return tasks.filter(t => (!filters.source || taskSource(t,settings)?.id === filters.source) &&
     (!filters.project || projectKey(t,settings) === filters.project) &&
     (!filters.location || (t.host ?? '本机') === filters.location) &&
     (filters.section === null || taskSection(t) === filters.section) &&
-    (!filters.signal || matchesSignal(t,filters.signal)));
+    (!filters.signal || matchesSignal(t,filters.signal)) && (!filters.unreadOnly || t.unread===true) &&
+    (!terms.length || terms.every(word=>[t.name,t.project,t.project_path,t.agent_name,SOURCE_LABEL[t.source],taskContext(t,settings),t.host,taskActivity(t)].filter(Boolean).join(' ').toLocaleLowerCase().includes(word))));
+}
+export function compareTasks(a:TaskSnapshot,b:TaskSnapshot):number {
+  return sectionRank(a)-sectionRank(b) || Number(matchesSignal(b,'action'))-Number(matchesSignal(a,'action')) || (b.attention_since??b.updated_at)-(a.attention_since??a.updated_at) || a.id.localeCompare(b.id);
+}
+export function taskAgent(task:TaskSnapshot):string {return task.agent_name ?? SOURCE_LABEL[task.source];}
+export function taskSummary(task:TaskSnapshot):string {
+  if(task.stale)return '上次观测 · 等待来源更新';
+  if(needsAction(task))return task.waiting_reason==='approval'?'等待你在原 Agent 中批准':'等待你在原 Agent 中回答';
+  if(task.status==='running')return taskActivity(task);
+  if(isEndedResult(task))return task.message || (task.status==='failed'?'执行失败 · 结果尚未查看':'本轮结果尚未查看');
+  return task.unread?'尚未查看':'已查看 · 保留关注';
 }
 
 // Global counters mean ALL monitored tasks, not the intersection with a
@@ -35,7 +49,8 @@ export function filterDescription(filters: DashboardFilters, tasks: TaskSnapshot
     filters.project && `项目：${tasks.find(t=>projectKey(t,settings)===filters.project)?.project ?? '已不在当前列表'}`,
     filters.location && `位置：${filters.location}`,
     filters.section !== null && `状态：${SECTION_NAMES[filters.section]}`,
-    filters.signal && `提醒：${{approval:'待批准',question:'待回答',failed:'失败结果'}[filters.signal]}`].filter(Boolean).join(' · ');
+    filters.signal && `提醒：${{approval:'待批准',question:'待回答',failed:'失败结果',action:'需要处理'}[filters.signal]}`,
+    filters.query?.trim() && `搜索：${filters.query.trim()}`,filters.unreadOnly && '仅未查看'].filter(Boolean).join(' · ');
 }
 
 export function needsAction(task: TaskSnapshot): boolean {

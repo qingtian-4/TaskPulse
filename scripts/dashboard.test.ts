@@ -1,8 +1,26 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS } from '../src/lib/dashboard';
+import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+test('search and unread filters compose without mutating attention or hiding the outside-running hint',()=>{
+  const task={...base,name:'修复 Long Title',project:'Atlas',project_path:'D:/Atlas',agent_name:'Coding Agent'};
+  const other={...task,id:'b',unread:false};
+  expect(filterTasks([task,other],{...EMPTY_FILTERS,query:'ATLAS 修复',unreadOnly:true})).toEqual([task]);
+  expect(filterTasks([task],{...EMPTY_FILTERS,query:'Coding Agent'})).toEqual([task]);
+  expect(filterTasks([task],{...EMPTY_FILTERS,query:'missing'})).toEqual([]);
+  expect(runningOutsideView([task],[])).toEqual([task]);expect(task.unread).toBe(true);
+  expect(filterDescription({...EMPTY_FILTERS,unreadOnly:true,query:'Atlas'},[task])).toContain('仅未查看');
+});
+test('fresh explicit blockers sort first within ongoing; stale approval remains uncertain',()=>{
+  const approval={...base,id:'p',status:'waiting_input' as const,waiting_reason:'approval' as const};
+  const stale={...approval,id:'s',stale:true};
+  expect(matchesSignal(approval,'action')).toBe(true);expect(matchesSignal(stale,'action')).toBe(false);
+  expect(matchesSignal(stale,'approval')).toBe(false);expect(taskSection(stale)).toBe('uncertain');
+  expect([stale,base,approval].sort(compareTasks).map(t=>t.id)).toEqual(['p','a','s']);
+  expect(taskSummary(approval)).toContain('原 Agent');expect(taskSummary({...base,stale:true,activity:'old command'})).not.toContain('old command');
+  expect(taskAgent({...base,agent_name:'Community Agent'})).toBe('Community Agent');
+});
 
 test('explicit interruption is a viewable result, never advertised as success',()=>{
   const interrupted={...base,source:'generic_event' as const,status:'waiting_input' as const,waiting_reason:'turn_ended' as const,finished_at:2,outcome:'interrupted'};
