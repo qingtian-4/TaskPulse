@@ -41,10 +41,10 @@ TaskPulse 是 Windows 优先的桌面托盘应用，不是 VS Code 插件。它�
 
 准备 Rust 1.89+、Bun 和 [Tauri 平台依赖](https://v2.tauri.app/start/prerequisites/)；Windows 标准开发环境包括 Microsoft C++ Build Tools 和 WebView2。
 
-Alpha.7 当前仍在候选分支，尚未合入默认 `main`。以下命令显式选择该分支；不要用默认克隆得到的旧版本核对本页功能。候选 SHA 与 CI 记录见[收口状态](docs/ALPHA7_CANDIDATE_STATUS.md)。
+Alpha.7 源码已合入默认 `main`，以下命令从 `main` 运行。源码合并不代表安装包已经发布；提交 SHA、CI 和尚未完成的验收见[候选状态](docs/ALPHA7_CANDIDATE_STATUS.md)。
 
 ```powershell
-git clone --branch codex/desktop-discovery-visibility --single-branch https://github.com/qingtian-4/TaskPulse.git
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
 cd TaskPulse
 bun install --frozen-lockfile
 bun run tauri dev

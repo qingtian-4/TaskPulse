@@ -40,13 +40,29 @@ test('current product materials retain dimensions and explicit synthetic native 
   expect(readFileSync('README.en.md','utf8')).toContain('synthetic standard events');
 });
 
-test('unmerged Alpha.7 source instructions select the candidate branch, not the older default main',()=>{
-  // Change this gate together with source instructions after the maintainer merges.
+test('post-merge source instructions select main instead of the old candidate branch',()=>{
   for(const file of ['README.md','README.en.md']){
     const body=readFileSync(file,'utf8');
-    expect(body).toContain('git clone --branch codex/desktop-discovery-visibility --single-branch https://github.com/qingtian-4/TaskPulse.git');
-    expect(body).not.toMatch(/^git clone https:\/\/github\.com\/qingtian-4\/TaskPulse\.git$/m);
+    const commands=[...body.matchAll(/^git clone .+$/gm)].map(match=>match[0].trim());
+    expect(commands,file).toEqual(['git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git']);
+    expect(body,file).not.toContain('尚未合入默认');
+    expect(body,file).not.toContain('still on the candidate branch');
   }
+  const install=readFileSync('docs/INSTALL.md','utf8');
+  expect(install).toContain('`--branch main`');
+  expect(install).not.toContain('--branch codex/desktop-discovery-visibility');
+  expect(install).not.toContain('尚未合入 `main`');
+});
+
+test('candidate status records the merged baseline without claiming installers or host acceptance',()=>{
+  const status=readFileSync('docs/ALPHA7_CANDIDATE_STATUS.md','utf8');
+  expect(status).toContain('PR #8 已合并');
+  expect(status).toContain('ea21c85fc6b81992de72cf45729cfe6abcc1c15f');
+  expect(status).toContain('39625854499');
+  expect(status).toContain('39625854268');
+  expect(status).not.toContain('仍 open，未合并');
+  expect(status).toContain('安装器与实机验收仍未完成');
+  expect(status).toContain('维护者单独确认');
 });
 
 test('Windows quality and release actually gate on product documentation regressions',()=>{
