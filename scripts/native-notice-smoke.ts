@@ -53,7 +53,7 @@ try{
   const focusPreserved=lockedDesktop ? null : await root.invoke('plugin:window|is_focused',{label:'popup'});
   if(!lockedDesktop && !focusPreserved)throw Error('Focus changed during creation: '+JSON.stringify({noticeFocused:await root.invoke('plugin:window|is_focused',{label:'task-notice'}),popupVisible:await root.invoke('plugin:window|is_visible',{label:'popup'})}));
   const layout=await alert.evaluate(`(()=>{const p=document.querySelector('.notice-window');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,background:getComputedStyle(p).backgroundColor,overflow:document.documentElement.scrollWidth>320||document.documentElement.scrollHeight>132,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)};})()`);
-  if(layout.width!==320||layout.height!==132||layout.background!=='rgb(26, 27, 30)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
+  if(layout.width!==320||layout.height!==132||layout.background!=='rgb(21, 30, 36)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
   const name=await alert.evaluate(`document.querySelector('.heading')?.textContent`);
   if(name!==first.current.context?.task_name)throw Error('Native task title not used as message heading');
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:50,y:90});

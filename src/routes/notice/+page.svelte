@@ -1,6 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Activity, ArrowUpRight, X } from '@lucide/svelte';
+  import { Activity, CircleAlert, CircleCheck, ArrowUpRight, X } from '@lucide/svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
   import type { NoticeState } from '$lib/types';
@@ -62,16 +62,16 @@
   });
 </script>
 
-<div class="notice-window" role="region" aria-label="TaskPulse 任务提醒" onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
-  <button class="close" aria-label="关闭提醒（保持未查看）" title="关闭提醒，任务仍未查看" disabled={busy || !noticeState.current} onclick={()=>void dismiss()}><X size={16} strokeWidth={1.7}/></button>
+<div class="notice-window tp-theme tp-tone" data-tone={content?.tone==='attention'?'action':content?.tone==='info'?'brand':content?.tone ?? 'neutral'} role="region" aria-label="TaskPulse 任务提醒" onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
+  <button class="close tp-icon" aria-label="关闭提醒（保持未查看）" title="关闭提醒，任务仍未查看" disabled={busy || !noticeState.current} onclick={()=>void dismiss()}><X size={16} strokeWidth={1.7}/></button>
   {#if noticeState.current && content}
     {#key noticeState.current.id}
       <button class="message" disabled={busy} aria-label={'查看任务详情：'+content.heading} onclick={open}>
-        <span class="avatar" aria-hidden="true"><Activity size={18} strokeWidth={1.8}/><span class={'status-dot '+content.tone}></span></span>
+        <span class="avatar" aria-hidden="true">{#if content.tone==='success'}<CircleCheck size={17} strokeWidth={1.7}/>{:else if content.tone==='attention' || content.tone==='danger'}<CircleAlert size={17} strokeWidth={1.7}/>{:else}<Activity size={17} strokeWidth={1.7}/>{/if}<span class={'status-dot '+content.tone}></span></span>
         <span class="copy">
           <span class="sender-line">
             <span class="sender" title={content.sender}>{content.sender}</span>
-            {#if noticeState.current.test}<span class="test-badge">测试提醒</span>{/if}
+            {#if noticeState.current.test}<span class="test-badge tp-chip">测试提醒</span>{/if}
           </span>
           <span class="heading" role="heading" aria-level={1} title={content.heading}>{content.heading}</span>
           <span class={'summary '+content.tone} role="status" title={content.summary}>{content.summary}</span>
@@ -85,7 +85,7 @@
         {:else if noticeTimeout(noticeState.current)===null}<span>等待处理，不会自动收起</span>
         {:else}<span>{hovered?'鼠标移开后自动收起':Math.ceil(remaining/1000)+' 秒后收起'}</span>{/if}
       </div>
-      <div class="actions"><button class="later" title="收起提醒，保持未查看" disabled={busy} onclick={()=>void dismiss()}>稍后处理</button><button class="primary" disabled={busy} onclick={open}>查看详情<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
+      <div class="actions"><button class="later tp-btn" data-variant="ghost" title="收起提醒，保持未查看" disabled={busy} onclick={()=>void dismiss()}>稍后处理</button><button class="primary tp-btn" data-variant="ghost" disabled={busy} onclick={open}>查看详情<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
     </footer>
     {#if noticeTimeout(noticeState.current)!==null}<div class="progress-track" aria-hidden="true"><div class="progress" style:width={(remaining/(noticeTimeout(noticeState.current) ?? 15000)*100)+'%'}></div></div>{/if}
   {:else if error}
@@ -94,44 +94,20 @@
 </div>
 
 <style>
-  .notice-window {
-    box-sizing:border-box; height:132px; width:100%; position:relative;
-    display:flex; flex-direction:column; overflow:hidden; background:#1a1b1e;
-    border:1px solid #ffffff14; border-radius:10px; color:#e0e5e9;
-    font-family:'Segoe UI','Microsoft YaHei UI',-apple-system,sans-serif;
-  }
-  button { cursor:pointer; font:inherit; border:0; background:transparent; }
-  button:disabled { cursor:default; opacity:.55; }
-  button:focus-visible { outline:2px solid #8cb5c9; outline-offset:-3px; }
-  .close { position:absolute; top:5px; right:5px; z-index:1; display:grid; place-items:center; width:24px; height:24px; border-radius:5px; color:#909aa6; }
-  .close:hover { background:#ffffff0d; color:#dce4e6; }
-  .message { min-height:0; flex:1; display:flex; align-items:flex-start; gap:10px; padding:11px 12px 9px; text-align:left; color:inherit; animation:arrive .18s ease-out; }
-  .message:hover { background:#ffffff05; }
-  .avatar { position:relative; flex-shrink:0; width:28px; height:28px; display:grid; place-items:center; background:#8cb5c91a; border:1px solid #8cb5c91a; border-radius:8px; color:#8cb5c9; }
-  .status-dot { position:absolute; width:9px; height:9px; bottom:-2px; right:-2px; border:2px solid #1a1b1e; border-radius:50%; background:#8cb5c9; }
-  .status-dot.success { background:#35a475; }
-  .status-dot.attention { background:#dc8b24; }
-  .status-dot.danger { background:#e45b5b; }
-  .copy { flex:1; min-width:0; }
-  .sender-line { display:flex; align-items:center; gap:6px; padding-right:28px; line-height:15px; }
-  .sender { font-size:10.5px; color:#909aa6; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .test-badge { flex-shrink:0; color:#90afca; background:#8cb5c91a; padding:0 4px; border-radius:3px; font-size:9px; white-space:nowrap; }
-  .heading { margin-top:4px; font-size:12.5px; font-weight:550; line-height:18px; overflow-wrap:anywhere; display:-webkit-box; -webkit-line-clamp:2; line-clamp:2; -webkit-box-orient:vertical; overflow:hidden; }
-  .summary { display:block; margin-top:4px; font-size:11px; line-height:16px; color:#a7b0bb; overflow:hidden; white-space:nowrap; text-overflow:ellipsis; }
-  .summary.danger { color:#e5a1a1; }
-  .summary.attention { color:#d9b975; }
-  footer { display:flex; align-items:center; justify-content:space-between; gap:6px; padding:4px 8px 5px 12px; border-top:1px solid #ffffff0a; }
-  .hint { min-width:0; color:#84909d; font-size:9.5px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
-  .pending { color:#a7b0bb; }
-  .actions { display:flex; align-items:center; gap:2px; flex-shrink:0; }
-  .actions button { display:inline-flex; align-items:center; gap:3px; padding:3px 5px; border-radius:4px; font-size:11px; line-height:16px; }
-  .later { color:#99a2ac; }
-  .later:hover { background:#ffffff0a; }
-  .primary { color:#91b5cc; font-weight:500; }
-  .primary:hover { background:#8cb5c91a; }
-  .progress-track { position:absolute; bottom:0; left:0; right:0; height:1px; background:#ffffff08; }
-  .progress { height:100%; background:#8cb5c966; transition:width .2s linear; }
-  .error { color:#e5a1a1; }
-  .empty-error { padding:28px 14px; font-size:11px; color:#e5a1a1; overflow-wrap:anywhere; }
-  @keyframes arrive { from { opacity:0; transform:translateY(4px); } to { opacity:1; transform:translateY(0); } }
+  .notice-window{box-sizing:border-box;height:132px;width:100%;position:relative;display:flex;flex-direction:column;overflow:hidden;background:var(--tp-panel);border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-lg);color:var(--tp-text);box-shadow:var(--tp-shadow-card)}
+  .notice-window::before{content:'';position:absolute;left:0;top:11px;bottom:11px;width:2px;border-radius:2px;background:var(--tone);opacity:.8;pointer-events:none}
+  button{cursor:pointer;font:inherit;border:0;background:transparent}.close{position:absolute;top:5px;right:5px;z-index:1;width:24px;height:24px;color:var(--tp-quiet)}.close:hover{background:var(--tp-hover);color:var(--tp-text)}
+  .message{min-height:0;flex:1;display:flex;align-items:flex-start;gap:10px;padding:11px 12px 9px 13px;text-align:left;color:inherit}.message:hover{background:var(--tp-hover)}
+  .avatar{position:relative;flex-shrink:0;width:28px;height:28px;display:grid;place-items:center;background:var(--tone-soft);border:1px solid var(--tone-line);border-radius:var(--tp-radius-md);color:var(--tone);box-shadow:inset 0 1px 0 #ffffff06}
+  .status-dot{position:absolute;width:8px;height:8px;bottom:-2px;right:-2px;border:2px solid var(--tp-panel);border-radius:50%;background:var(--tone)}
+  .copy{flex:1;min-width:0}.sender-line{display:flex;align-items:center;gap:6px;padding-right:25px;line-height:15px}.sender{font-size:10px;color:var(--tp-muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .test-badge{flex-shrink:0;padding:0 4px;border-radius:3px;font-size:9px;line-height:14px;white-space:nowrap}
+  .heading{margin-top:4px;font-size:12.5px;font-weight:600;line-height:18px;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;letter-spacing:.005em}
+  .summary{display:block;margin-top:4px;font-size:11px;line-height:16px;color:var(--tone);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+  footer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 8px 5px 12px;border-top:1px solid var(--tp-border);background:#10171c55;flex:none}
+  .hint{min-width:0;color:var(--tp-quiet);font-size:9px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .pending{color:var(--tp-muted);padding:2px 0;font-size:9px;line-height:16px}
+  .actions{display:flex;align-items:center;gap:2px;flex-shrink:0}.actions .tp-btn{min-height:24px;gap:3px;padding:3px 5px;border-radius:var(--tp-radius-sm);font-size:10px;line-height:16px}.actions .primary{color:var(--tp-accent);font-weight:550}.actions .primary:hover{background:var(--tp-accent-soft)}
+  .progress-track{position:absolute;bottom:0;left:0;right:0;height:1px;background:var(--tp-border)}.progress{height:100%;background:var(--tone);opacity:.6;transition:width .2s linear}
+  .error{color:var(--tp-danger)}.empty-error{padding:28px 14px;font-size:11px;color:var(--tp-danger);overflow-wrap:anywhere}
 </style>

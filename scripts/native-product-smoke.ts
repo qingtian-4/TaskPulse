@@ -40,7 +40,7 @@ const env={...process.env,TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUME
 type Tab={url:string;webSocketDebuggerUrl:string};
 const tabs=async():Promise<Tab[]>=>fetch('http://127.0.0.1:9337/json').then(r=>r.json());
 assert.equal(await tabs().then(()=>true).catch(()=>false),false,'Refusing occupied CDP port');
-const errors:string[]=[];const checks:string[]=[];
+const errors:string[]=[];const checks:string[]=[];const scaleChecks:unknown[]=[];
 async function connect(tab:Tab){
   const ws=new WebSocket(tab.webSocketDebuggerUrl);await new Promise<void>((ok,fail)=>{ws.onopen=()=>ok();ws.onerror=()=>fail(Error('CDP failed'));});
   let seq=0;const pending=new Map<number,{ok:(v:any)=>void;fail:(e:any)=>void;timer:ReturnType<typeof setTimeout>}>();
@@ -64,6 +64,39 @@ function event(session:string,kind:string,payload:Record<string,string>={},extra
 }
 async function input(client:any,selector:string,value:string){await client.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('input',{bubbles:true}));})()`);}
 async function click(client:any,selector:string){await client.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);}
+// Native WebView2 DPR emulation, not a claim that Windows display settings or
+// mixed-DPI monitor migration were changed/tested. Logical window sizes stay fixed.
+async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:number,height:number){
+  for(const scale of [1,1.5,2]){
+    await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});
+    await Bun.sleep(150);
+    const layout=await client.evaluate(`(()=>{
+      const box=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
+      const buttons=[...document.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),summary')].filter(e=>{
+        const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+        if(!(r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight))return false;
+        // Offscreen descendants of a scrolling list are not occluded controls.
+        // Actual visible controls must still pass the elementFromPoint hit test.
+        for(let p=e.parentElement;p;p=p.parentElement){const s=getComputedStyle(p),b=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(y<b.top||y>=b.bottom))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(x<b.left||x>=b.right))return false;}
+        return true;
+      });
+      const occluded=buttons.filter(e=>{const r=e.getBoundingClientRect();const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return !hit||!(e===hit||e.contains(hit));}).map(e=>e.getAttribute('aria-label')||e.textContent?.trim());
+      const titles=[...document.querySelectorAll('.row-title,.heading')].map(box);
+      const labels=[...document.querySelectorAll('.row-status')].map(box);
+      const overlapping=titles.some(t=>labels.some(s=>s.top<t.bottom&&s.bottom>t.top&&s.left<t.right&&s.right>t.left));
+      const panel=document.querySelector('.dashboard,.notice-window,.manage');
+      return {dpr:devicePixelRatio,bodyWidth:document.documentElement.scrollWidth,horizontal:document.documentElement.scrollWidth>innerWidth,panel:box(panel),occluded,overlapping,scrollbar:getComputedStyle(document.querySelector('.task-scroll')??document.body).overflowY};
+    })()`);
+    assert.equal(layout.dpr,scale);assert.equal(layout.horizontal,false,kind+' '+scale+' horizontal overflow');
+    assert.equal(layout.overlapping,false,kind+' '+scale+' title / state overlap');
+    assert.deepEqual(layout.occluded,[],kind+' '+scale+' inaccessible controls');
+    assert.ok(layout.panel.bottom<=height+1,kind+' '+scale+' panel outside logical window');
+    if(kind==='notice')assert.ok(await client.evaluate(`document.querySelector('.summary').getBoundingClientRect().bottom<=document.querySelector('footer').getBoundingClientRect().top`),'Notice summary overlaps actions');
+    await Bun.write(join(owned,kind+'-'+Math.round(scale*100)+'.png'),Buffer.from((await client.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    scaleChecks.push({kind,scale,logicalSize:[width,height],...layout});
+  }
+  await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+}
 async function screenshot(client:any,name:string,width:number,height:number){
   if(!process.argv.includes('--capture'))return;
   await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
@@ -88,6 +121,10 @@ try{
   const initial=await root.invoke('get_agents');
   const thinking=initial.find((t:any)=>t.session_id==='thinking'),done=initial.find((t:any)=>t.session_id==='done');
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
+  await checkScales(root,'dashboard',440,720);
+  await root.evaluate(`[...document.querySelectorAll('.counts .overview')].find(b=>b.textContent.includes('需处理')).click()`);
+  await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('需要你确认')`);
+  await click(root,'.counts .total');
   await screenshot(root,'dashboard-alpha7',440,720);
   await input(root,'[aria-label="搜索任务"]','UI Sandbox');
   await root.wait(`document.querySelectorAll('.task-row').length===1`);
@@ -100,6 +137,8 @@ try{
   assert.equal(await root.evaluate(`(()=>{const rows=document.querySelectorAll('.task-row');rows[0].focus();rows[0].dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));return document.activeElement===rows[1];})()`),true);
   await click(root,'[data-task-id="'+thinking.id+'"]');
   await root.wait(`document.querySelector('.command')?.textContent.includes('正在思考')`);
+  const focus=await root.evaluate(`(()=>{const input=document.querySelector('[aria-label="搜索任务"]');document.querySelector('.dashboard').dispatchEvent(new KeyboardEvent('keydown',{key:'/',bubbles:true}));return document.activeElement===input&&getComputedStyle(input.closest('.search')).borderColor!=='rgba(0, 0, 0, 0)';})()`);
+  assert.equal(focus,true,'Search keyboard shortcut remains usable');
   assert.equal((await root.invoke('get_agents')).find((t:any)=>t.id===thinking.id).unread,thinking.unread);
   await input(root,'[aria-label="搜索任务"]','评审');
   await root.wait(`document.querySelectorAll('.task-row').length===1`);
@@ -132,16 +171,19 @@ try{
   await management.wait(`[...document.querySelectorAll('.source-tests button')].some(b=>b.textContent==='测试读取来源'&&!b.disabled)`);
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='测试读取来源').click()`);
   await management.wait(`document.querySelector('.read-result')?.textContent.includes('本次读取正常')`);
+  await management.wait(`document.querySelector('.setup-flow [aria-current="step"]')?.textContent.includes('等待真实任务事件')`);
   const count=(await root.invoke('get_agents')).length;
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='测试事件接收（不创建任务）').click()`);
   await management.wait(`document.body.textContent.includes('尚未验证真实 Agent')`);
   assert.equal((await root.invoke('get_agents')).length,count);
+  await checkScales(management,'sources',1040,900);
   await screenshot(management,'sources-alpha7',1040,900);
   checks.push('native source workflow/save/read test/event channel test; advanced Hook controls folded and no lifecycle overclaim');
   // Separate test notice is real renderer delivery, never a monitored Agent completion.
   const config=await root.invoke('get_monitoring_settings');config.notifications=true;await root.invoke('save_monitoring_settings',{settings:config});
   await root.invoke('test_notification');notice=await page('/notice');
   await notice.wait(`document.body.innerText.includes('测试')`);
+  await checkScales(notice,'notice',320,132);
   await screenshot(notice,'notice-alpha7',320,132);
   await root.wait(`__TAURI_INTERNALS__.invoke('get_notification_log').then(r=>r.some(r=>r.test&&r.stage==='rendered'))`);
   assert.equal((await root.invoke('get_agents')).length,count);
@@ -151,7 +193,7 @@ try{
     await mkdir('assets/screenshots',{recursive:true});
     for(const name of ['dashboard-alpha7','sources-alpha7','notice-alpha7'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
   }
-  const report={passed:true,checks,layout,screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance'],evidence:owned};
+  const report={passed:true,checks,layout,scaleChecks,scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:owned};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){const ui=await management?.evaluate(`({read:document.querySelector('.read-result')?.textContent,buttons:[...document.querySelectorAll('.source-tests button')].map(b=>({text:b.textContent,disabled:b.disabled})),errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)})`).catch(()=>null);const providers=await root?.invoke('get_providers').catch(()=>null);await Bun.write(join(owned,'failure.json'),JSON.stringify({error:String(error),stderr,errors,ui,providers},null,2));console.error('Evidence: '+owned);throw error;}
 finally{
