@@ -12,7 +12,7 @@
 | [sources-alpha7.png](screenshots/sources-alpha7.png) | 1040 × 900 来源管理 | 独立 TASKPULSE_HOME，合成来源；未安装真实 Hook，实机版本仍为无 |
 | [notice-alpha7.png](screenshots/notice-alpha7.png) | 320 × 132 独立提醒 | 真正的 test_notification → 原生窗口 → rendered 投递记录；不创建监控任务 |
 
-这些 PNG 直接由原生 WebView2 CDP 输出，不拼接、重绘或后期替换文字。输入标题、项目与活动标签都是公开示例，不含私人会话、命令、账号或服务器；图片不是四款 Agent 宿主验收证据。运行环境和完整复现见 [UI 验证报告](../docs/UI_UX_VALIDATION_2026-10-21.md)。
+这些 PNG 直接由原生 WebView2 CDP 输出，不拼接、重绘或后期替换文字。输入标题、项目与活动标签都是公开示例，不含私人会话、命令、账号或服务器；图片不是四款 Agent 宿主验收证据。运行环境和完整复现见 [当前视觉验收报告](../docs/VISUAL_POLISH_VALIDATION_2026-10-21.md)。
 
 三个页面均补测 WebView2 CDP DPR 1 / 1.5 / 2（100% / 150% / 200%）：固定逻辑窗口下检查重叠、横向溢出与可见控件命中，倍图留在忽略提交的测试证据目录。该模拟不等同 Windows 真正切换显示比例或跨混合 DPI 显示器实测。
 

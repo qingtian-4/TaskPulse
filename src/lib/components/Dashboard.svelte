@@ -186,7 +186,7 @@
   });
 </script>
 
-<div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="glass-panel glass-noise dashboard tp-theme" style:max-height={maxHeight+'px'} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
+<div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="glass-panel glass-noise dashboard tp-theme" style:max-height={'min('+maxHeight+'px, 100dvh)'} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><span class="brand-mark" aria-hidden="true"><Activity size={17}/></span>TaskPulse</span>
     <div class="header-actions">
@@ -294,4 +294,11 @@
   .prompt-inbox{position:absolute;z-index:4;top:49px;right:8px;left:8px;max-height:min(340px,70%);overflow:auto;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-lg);box-shadow:var(--tp-shadow-window)}
   .prompt-inbox h2{padding:12px 14px}.prompt-item{padding:10px 14px;border-top:1px solid var(--tp-border);font-size:11px}.prompt-item .link{white-space:normal;text-align:left;font-size:11px}.prompt-item p,.prompt-item>span{font-size:10px;color:var(--tp-muted);margin:4px 0;display:block}
   @media(max-width:350px){.counts{gap:4px;padding:10px 8px 6px}.overview{padding:7px 5px}.overview b{font-size:18px}.search-bar{padding:0 8px 8px}.detail-heading{flex-wrap:wrap}}
+  @media(max-height:560px){
+    header{padding-top:6px;padding-bottom:6px}.counts{padding:8px 10px 6px}.overview{padding:5px 7px}.overview b{font-size:18px;margin-top:2px}.signals{padding-bottom:2px}
+    .view-bar{padding-top:3px;padding-bottom:3px}.search-bar{padding-bottom:6px}.task-scroll{min-height:50px}.detail{max-height:25dvh;padding:7px 10px;margin-bottom:5px}
+    .notice{max-height:44px;overflow:auto;padding-top:4px;padding-bottom:4px}.filter-note{max-height:40px;overflow:auto;padding-bottom:4px}
+    .filters{position:absolute;z-index:3;left:8px;right:8px;top:175px;max-height:35dvh;overflow:auto;background:var(--tp-raised);padding:10px;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-md);box-shadow:var(--tp-shadow-window)}
+    footer,.quota{padding-top:5px;padding-bottom:5px}
+  }
 </style>

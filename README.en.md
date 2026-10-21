@@ -23,7 +23,7 @@ The product uses a compact dark dashboard, an independent source manager and nar
 
 </details>
 
-Actual Windows Tauri / WebView2 rendering with isolated, public **synthetic standard events**; the reminder is explicitly a test. These are not browser mocks, real Agent conversations or proof of host compatibility. The current UI is Chinese. [Reproduction and validation](docs/UI_UX_VALIDATION_2026-10-21.md)
+Actual Windows Tauri / WebView2 rendering with isolated, public **synthetic standard events**; the reminder is explicitly a test. These are not browser mocks, real Agent conversations or proof of host compatibility. The current UI is Chinese. [Reproduction and validation](docs/VISUAL_POLISH_VALIDATION_2026-10-21.md)
 
 ## Keep your attention on the work
 

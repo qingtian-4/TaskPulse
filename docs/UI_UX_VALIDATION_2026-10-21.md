@@ -1,5 +1,7 @@
 # 第二轮 README 与 UI/UX 交付验证
 
+> 本文件保留第二轮 `602d74a` 阶段证据。后续视觉升级与当前截图见[第三轮验收](VISUAL_POLISH_VALIDATION_2026-10-21.md)；不要把下文旧 EXE hash 当作当前构建。
+
 日期：2026-10-21。版本 `0.2.0-alpha.7`，分支 `codex/desktop-discovery-visibility`，基线 `c0f5f2f`。本轮只改产品文档、前端与验收脚本，没有改 Provider、生命周期、通知账本、Checkpoint 或缓存算法。
 
 ## 已交付

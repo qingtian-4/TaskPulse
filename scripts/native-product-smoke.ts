@@ -126,6 +126,16 @@ try{
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('需要你确认')`);
   await click(root,'.counts .total');
   await screenshot(root,'dashboard-alpha7',440,720);
+  event('failed','turn.started',{title:'示例：失败结果展示回归',project:'State Demo'});
+  event('failed','turn.failed');
+  await root.wait(`document.querySelectorAll('.task-row').length===5&&!!document.querySelector('.task-item[data-tone="danger"] .status-label')`);
+  assert.equal(await root.evaluate(`getComputedStyle(document.querySelector('.task-item[data-tone="danger"] .status-label')).color`),'rgb(240, 155, 167)');
+  await click(root,'.signals [data-tone="danger"]');
+  await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.status-label').textContent==='失败'`);
+  await click(root,'[aria-label="标记已查看：示例：失败结果展示回归"]');
+  await click(root,'.counts .total');
+  await root.wait(`document.querySelectorAll('.task-row').length===4`);
+  checks.push('explicit failed-result chip/filter/viewed action remain separate from running and uncertainty');
   await input(root,'[aria-label="搜索任务"]','UI Sandbox');
   await root.wait(`document.querySelectorAll('.task-row').length===1`);
   assert.ok(await root.evaluate(`!!document.querySelector('.outside-running')`));
@@ -145,6 +155,11 @@ try{
   const compact=await root.evaluate(`({list:document.querySelector('.task-scroll').clientHeight,footer:document.querySelector('footer').getBoundingClientRect().bottom,height:innerHeight})`);
   assert.ok(compact.list>=80 && compact.footer<=compact.height,'Search + details must retain a usable list and visible footer: '+JSON.stringify(compact));
   await click(root,'[aria-label="清除搜索"]');
+  await root.send('Emulation.setDeviceMetricsOverride',{width:440,height:480,deviceScaleFactor:2,mobile:false});
+  await Bun.sleep(150);
+  const shortWindow=await root.evaluate(`({panel:document.querySelector('.dashboard').getBoundingClientRect().height,list:document.querySelector('.task-scroll').clientHeight,footer:document.querySelector('footer').getBoundingClientRect().bottom})`);
+  assert.ok(shortWindow.panel<=480&&shortWindow.list>=45&&shortWindow.footer<=480,'Compact logical-height window must retain visible tasks/footer: '+JSON.stringify(shortWindow));
+  await root.send('Emulation.setDeviceMetricsOverride',{width:440,height:720,deviceScaleFactor:1,mobile:false});
   checks.push('native search, global reset, blockers first, thinking phase and selection never acknowledges');
   await click(root,'[aria-label="关闭详情"]');
   await click(root,'.unread-filter');
@@ -177,6 +192,10 @@ try{
   await management.wait(`document.body.textContent.includes('尚未验证真实 Agent')`);
   assert.equal((await root.invoke('get_agents')).length,count);
   await checkScales(management,'sources',1040,900);
+  await management.send('Emulation.setDeviceMetricsOverride',{width:640,height:600,deviceScaleFactor:2,mobile:false});
+  await Bun.sleep(150);
+  assert.ok(await management.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.querySelector('main').scrollHeight>document.querySelector('main').clientHeight`),'Compact source manager must scroll without horizontal overflow');
+  checks.push('compact logical windows at DPR 2 retain usable Dashboard and source manager');
   await screenshot(management,'sources-alpha7',1040,900);
   checks.push('native source workflow/save/read test/event channel test; advanced Hook controls folded and no lifecycle overclaim');
   // Separate test notice is real renderer delivery, never a monitored Agent completion.

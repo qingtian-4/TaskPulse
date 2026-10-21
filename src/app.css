@@ -68,6 +68,7 @@ button, input, select, textarea, summary { font: inherit; }
   transition: background .12s, border-color .12s;
 }
 .tp-btn:hover:not(:disabled) { background: var(--tp-raised); border-color: #ffffff38; }
+.tp-btn:disabled { cursor: default; opacity: .45; }
 .tp-btn[data-variant=primary] { background: var(--tp-accent); border-color: var(--tp-accent); color: var(--tp-on-accent); font-weight: 600; }
 .tp-btn[data-variant=primary]:hover:not(:disabled) { background: #92e1d2; border-color: #92e1d2; color: var(--tp-on-accent); }
 .tp-btn[data-variant=ghost] { background: transparent; border-color: transparent; color: var(--tp-muted); }

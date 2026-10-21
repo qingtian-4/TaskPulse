@@ -23,7 +23,7 @@ TaskPulse 是 Windows 优先的桌面托盘应用，不是 VS Code 插件。它�
 
 </details>
 
-截图为 Windows 原生 Tauri / WebView2 实际渲染，输入为隔离的公开**合成标准事件**，通知图为明确标记的测试提醒。不是浏览器 mock、真实 Agent 对话或四款宿主实机支持证明。当前 UI 为中文。[复现与验证记录](docs/UI_UX_VALIDATION_2026-10-21.md)
+截图为 Windows 原生 Tauri / WebView2 实际渲染，输入为隔离的公开**合成标准事件**，通知图为明确标记的测试提醒。不是浏览器 mock、真实 Agent 对话或四款宿主实机支持证明。当前 UI 为中文。[复现与验证记录](docs/VISUAL_POLISH_VALIDATION_2026-10-21.md)
 
 ## 把注意力留给工作
 

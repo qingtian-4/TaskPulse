@@ -1,7 +1,7 @@
 import {test,expect} from 'bun:test';
 import {readFileSync,existsSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
-const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md','docs/UI_UX_VALIDATION_2026-10-21.md'];
+const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md','docs/UI_UX_VALIDATION_2026-10-21.md','docs/DESIGN_SYSTEM.md','docs/VISUAL_POLISH_VALIDATION_2026-10-21.md'];
 test('product docs use resolvable local links and images',()=>{
   for(const path of documents){
     const body=readFileSync(path,'utf8');
