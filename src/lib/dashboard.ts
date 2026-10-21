@@ -25,6 +25,15 @@ export function compareTasks(a:TaskSnapshot,b:TaskSnapshot):number {
   return sectionRank(a)-sectionRank(b) || Number(matchesSignal(b,'action'))-Number(matchesSignal(a,'action')) || (b.attention_since??b.updated_at)-(a.attention_since??a.updated_at) || a.id.localeCompare(b.id);
 }
 export function taskAgent(task:TaskSnapshot):string {return task.agent_name ?? SOURCE_LABEL[task.source];}
+// Visual semantics only: never derive an end, approval or read acknowledgement.
+export function taskTone(task:TaskSnapshot):'running'|'action'|'danger'|'unread'|'stale'|'neutral' {
+  if(task.stale || task.status==='unknown' || task.status==='disconnected')return 'stale';
+  if(needsAction(task) || task.outcome==='interrupted' && task.finished_at)return 'action';
+  if(task.status==='failed')return 'danger';
+  if(task.status==='running')return 'running';
+  if(isEndedResult(task))return 'unread';
+  return 'neutral';
+}
 export function taskSummary(task:TaskSnapshot):string {
   if(task.stale)return '上次观测 · 等待来源更新';
   if(needsAction(task))return task.waiting_reason==='approval'?'等待你在原 Agent 中批准':'等待你在原 Agent 中回答';

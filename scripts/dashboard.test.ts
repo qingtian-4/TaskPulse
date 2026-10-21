@@ -2,7 +2,20 @@
 import { test, expect } from 'bun:test';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
+import {taskTone} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('visual tones prioritize uncertainty without inventing completion or human blockers',()=>{
+  expect(taskTone({...base,phase:'thinking'})).toBe('running');
+  expect(taskTone({...base,phase:'awaiting_model'})).toBe('running');
+  expect(taskTone({...base,status:'waiting_input',waiting_reason:'approval'})).toBe('action');
+  expect(taskTone({...base,status:'failed',stale:true})).toBe('stale');
+  expect(taskTone({...base,status:'waiting_input',waiting_reason:'approval',stale:true})).toBe('stale');
+  expect(taskTone({...base,status:'failed'})).toBe('danger');
+  expect(taskTone({...base,status:'waiting_input',waiting_reason:'turn_ended'})).toBe('unread');
+  expect(taskTone({...base,status:'waiting_input',waiting_reason:'unknown'})).toBe('neutral');
+  expect(taskTone({...base,status:'idle'})).toBe('neutral');
+});
 test('search and unread filters compose without mutating attention or hiding the outside-running hint',()=>{
   const task={...base,name:'修复 Long Title',project:'Atlas',project_path:'D:/Atlas',agent_name:'Coding Agent'};
   const other={...task,id:'b',unread:false};
