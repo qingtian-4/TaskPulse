@@ -41,7 +41,15 @@ impl Session {
             return Ok(None);
         }
         // Retention must not silently erase dedup or unresolved state.
-        if self.seen.len() >= 100_000
+        let recovery = matches!(
+            e.kind,
+            Kind::Resolved
+                | Kind::ToolFinished
+                | Kind::Completed
+                | Kind::Failed
+                | Kind::Interrupted
+        );
+        if self.seen.len() >= 100_000 && !recovery
             || e.kind == Kind::Started
                 && self.turns.len() >= 4096
                 && e.turn_id.as_ref().is_none_or(|t| !self.turns.contains(t))
@@ -52,16 +60,26 @@ impl Session {
                     e.request_id.as_deref().unwrap_or(""),
                 ))
         {
-            return Err("session_state_limit_export_before_reset".into());
+            return Err("session_state_limit_record_quarantined".into());
         }
-        self.seen.insert(e.event_id.clone());
+        // Recovery facts are naturally idempotent (matching pending/call IDs,
+        // terminal-turn set). Never let dedup saturation prevent their cleanup,
+        // and never erase the old ledger to make room for new admissions.
+        if self.seen.len() < 100_000 {
+            self.seen.insert(e.event_id.clone());
+        }
         self.last_received_at = envelope.received_at;
         if e.kind == Kind::Test {
             return Ok(None);
         }
         let metadata_only = matches!(
             e.kind,
-            Kind::Discovered | Kind::Renamed | Kind::Heartbeat | Kind::Closed | Kind::Submitted
+            Kind::Discovered
+                | Kind::Renamed
+                | Kind::Heartbeat
+                | Kind::Closed
+                | Kind::Submitted
+                | Kind::Unassociated
         );
         if !metadata_only
             && e.kind != Kind::Started
@@ -70,6 +88,27 @@ impl Session {
                 .as_ref()
                 .is_none_or(|t| t.turn_key.as_deref() != e.turn_id.as_deref())
         {
+            // Old-turn cleanup is causally associated by explicit turn/request
+            // IDs. Release its retained resources without changing the current
+            // task or notifying a completion for the current turn.
+            if e.kind == Kind::Resolved {
+                let key = request_key(
+                    e.turn_id.as_deref().unwrap_or(""),
+                    e.request_id.as_deref().unwrap_or(""),
+                );
+                if self
+                    .pending
+                    .get(&key)
+                    .is_some_and(|p| p.call.is_none() || e.call_id.is_none() || p.call == e.call_id)
+                {
+                    self.pending.remove(&key);
+                }
+            } else if matches!(e.kind, Kind::Completed | Kind::Failed | Kind::Interrupted) {
+                if let Some(turn) = e.turn_id.as_ref().filter(|turn| self.turns.contains(*turn)) {
+                    self.pending.retain(|_, p| p.turn != *turn);
+                    self.terminal.insert(turn.clone());
+                }
+            }
             return Ok(None);
         }
         if !metadata_only
@@ -123,9 +162,10 @@ impl Session {
         // Current native envelopes may carry a renamed sidebar title on a
         // heartbeat. Metadata does not renew execution activity. Old-turn facts
         // are rejected above before they can roll the title/project backwards.
-        if e.turn_id.is_none()
-            || e.kind == Kind::Started
-            || task.turn_key.as_deref() == e.turn_id.as_deref()
+        if e.kind != Kind::Unassociated
+            && (e.turn_id.is_none()
+                || e.kind == Kind::Started
+                || task.turn_key.as_deref() == e.turn_id.as_deref())
         {
             if let Some(value) = &e.payload.title {
                 task.name = value.clone();
@@ -151,8 +191,17 @@ impl Session {
         task.new_execution = false;
         if matches!(
             e.kind,
-            Kind::Discovered | Kind::Renamed | Kind::Heartbeat | Kind::Closed | Kind::Submitted
+            Kind::Discovered
+                | Kind::Renamed
+                | Kind::Heartbeat
+                | Kind::Closed
+                | Kind::Submitted
+                | Kind::Unassociated
         ) {
+            if e.kind == Kind::Unassociated {
+                task.message =
+                    Some("宿主事件缺少可靠轮次/调用关联；保留原状态，不推断结束或授权".into());
+            }
             task.integration_epoch = Some(envelope.journal_epoch.clone());
             task.integration_sequence = envelope.sequence;
             return Ok(Some(task.clone()));

@@ -9,6 +9,264 @@ use crate::{
 };
 use serde_json::json;
 
+#[test]
+fn review_r1_mixed_pipeline_replay_is_silent_only_for_its_own_fact() {
+    use crate::{
+        attention::AttentionTracker,
+        domain::{DetectionConfidence, TaskSnapshot, TaskSource},
+        providers::HostHealth,
+        store::TaskStore,
+        transition::TaskEvent,
+    };
+    let dir = tempfile::tempdir().unwrap();
+    let now = std::time::SystemTime::now();
+    let path = dir.path().join("notifications.json");
+    let mut engine = TransitionEngine::open(path.clone());
+    let mut store = TaskStore::default();
+    let mut attention = AttentionTracker::open(dir.path().join("attention.json"));
+    let mut codex = TaskSnapshot::new(
+        "native-codex",
+        "Native",
+        TaskSource::Codex,
+        TaskStatus::Running,
+        DetectionConfidence::Exact,
+        now,
+    );
+    codex.turn_key = Some("native-turn".into());
+    codex.new_execution = true;
+    let a_source = source();
+    let mut b_source = source();
+    b_source.id = "fresh-source".into();
+    let mut old = GenericEventProvider::with_home(a_source.clone(), dir.path().into());
+    let mut fresh_provider = GenericEventProvider::with_home(b_source.clone(), dir.path().into());
+    journal::append(
+        dir.path(),
+        &a_source.id,
+        event(Kind::Started, "a", 1),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    journal::append(
+        dir.path(),
+        &b_source.id,
+        event(Kind::Started, "b", 1),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let a_batch = old.poll(now);
+    let b_batch = fresh_provider.poll(now);
+    let a_start = a_batch.tasks[0].clone();
+    let b_start = b_batch.tasks[0].clone();
+    for item in a_batch.ordered.iter().chain(&b_batch.ordered) {
+        acknowledge(dir.path(), &item.receipt).unwrap();
+    }
+    attention.reconcile(store.merge(vec![codex.clone(), a_start, b_start], now));
+    engine.apply(
+        &attention.known(),
+        &[HostHealth::connected("fixture-host", now)],
+        now,
+    );
+    codex.status = TaskStatus::WaitingInput;
+    codex.waiting_reason = Some(WaitingReason::TurnEnded);
+    codex.finished_at = Some(now);
+    journal::append(
+        dir.path(),
+        &a_source.id,
+        event(Kind::Completed, "a", 2),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let unacked = old.poll(now);
+    assert_eq!(unacked.ordered.len(), 1);
+    let mut recovered = GenericEventProvider::with_home(a_source, dir.path().into());
+    let observation = recovered.poll(now).ordered.remove(0);
+    assert!(!observation.notify);
+    journal::append(
+        dir.path(),
+        &b_source.id,
+        event(Kind::Completed, "b", 2),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let fresh = fresh_provider.poll(now).ordered.remove(0);
+    assert!(fresh.notify);
+    let b_end = fresh.task.clone();
+    // Full attention can already hold another generic source's future latest
+    // snapshot. It must wait for its own ordered observation, not A's replay.
+    attention.reconcile(store.merge(vec![codex.clone(), b_end.clone()], now));
+    attention.reconcile_unflushed(store.merge(vec![observation.task.clone()], now));
+    let hosts = [HostHealth::disconnected("fixture-host", Some(now))];
+    let first = crate::watcher::ordered_transition_events(
+        &mut engine,
+        &attention.known(),
+        &hosts,
+        &observation,
+        now,
+    );
+    assert!(
+        first
+            .iter()
+            .any(|e| matches!(e,TaskEvent::WaitingInput{task,..} if task.id==codex.id)),
+        "native end was consumed by silent replay"
+    );
+    assert!(
+        first
+            .iter()
+            .any(|e| matches!(e, TaskEvent::HostDisconnected { .. })),
+        "host event was consumed by silent replay"
+    );
+    assert_eq!(first.len(), 2, "another generic source bypassed its outbox");
+    assert!(attention.flush().is_ok());
+    assert!(engine.flush());
+    let mut engine = TransitionEngine::open(path);
+    let events = crate::watcher::ordered_transition_events(
+        &mut engine,
+        &attention.known(),
+        &hosts,
+        &fresh,
+        now,
+    );
+    assert_eq!(events.len(), 1);
+    assert!(matches!(&events[0],TaskEvent::WaitingInput{task,..} if task.id==b_end.id));
+    assert!(crate::watcher::ordered_transition_events(
+        &mut engine,
+        &attention.known(),
+        &hosts,
+        &fresh,
+        now
+    )
+    .is_empty());
+    assert!(engine
+        .apply_snapshots(&attention.known(), &hosts, now)
+        .is_empty());
+    for receipt in [&observation.receipt, &fresh.receipt] {
+        acknowledge(dir.path(), receipt).unwrap();
+    }
+    assert!(recovered.poll(now).ordered.is_empty());
+    assert!(fresh_provider.poll(now).ordered.is_empty());
+}
+
+#[test]
+fn review_r2_late_trae_idle_cannot_end_b() {
+    let m = manifest::load("trae-cn-ide").unwrap();
+    let mut previous = None;
+    let mut state = Session::default();
+    for (i,raw) in [
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"s"}),
+        json!({"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"call-a"}),
+        json!({"hook_event_name":"PostToolUse","session_id":"s","tool_use_id":"call-a"}),
+        json!({"hook_event_name":"Stop","session_id":"s"}),
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"s"}),
+        json!({"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"call-b"}),
+        json!({"hook_event_name":"Notification","session_id":"s","notification_type":"idle_prompt"}),
+    ].into_iter().enumerate(){
+        let n=i as u64+1;let (e,ctx)=manifest::map(&raw,&m,previous.as_ref(),n,"epoch").unwrap();let mut env=envelope(e,n);env.context=ctx;state.apply(&env,"TRAE").unwrap();previous=Some(env);
+    }
+    let task = state.task.unwrap();
+    assert_eq!(task.status, TaskStatus::Running);
+    assert!(task.finished_at.is_none());
+    assert_eq!(task.phase, Some(ExecutionPhase::Tool));
+}
+
+#[test]
+fn review_r3_overflow_does_not_poison_later_resolve_end_or_other_session() {
+    let dir = tempfile::tempdir().unwrap();
+    let src = source();
+    let mut provider = GenericEventProvider::with_home(src.clone(), dir.path().into());
+    journal::append(
+        dir.path(),
+        &src.id,
+        event(Kind::Started, "a", 1),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    for n in 2..=130 {
+        let mut e = event(Kind::Requested, "a", n);
+        e.request_id = Some(format!("request-{n}"));
+        e.payload.request_kind = Some(WaitingReason::Approval);
+        journal::append(dir.path(), &src.id, e, "self_reported", "v1").unwrap();
+    }
+    let mut e = event(Kind::Resolved, "a", 131);
+    e.request_id = Some("request-2".into());
+    journal::append(dir.path(), &src.id, e, "self_reported", "v1").unwrap();
+    journal::append(
+        dir.path(),
+        &src.id,
+        event(Kind::Completed, "a", 132),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    for (n, kind) in [(1, Kind::Started), (2, Kind::Completed)] {
+        let mut e = event(kind, "peer", n);
+        e.session_id = "healthy-peer".into();
+        journal::append(dir.path(), &src.id, e, "self_reported", "v1").unwrap();
+    }
+    let mut ends = std::collections::BTreeSet::new();
+    for _ in 0..8 {
+        let batch = provider.poll(std::time::SystemTime::now());
+        for item in &batch.ordered {
+            if item.task.finished_at.is_some() {
+                ends.insert(item.task.session_id.clone().unwrap());
+            }
+            acknowledge(dir.path(), &item.receipt).unwrap();
+        }
+    }
+    assert_eq!(
+        ends.len(),
+        2,
+        "accepted over-limit event blocked recovery or its peer"
+    );
+    let mut restarted = GenericEventProvider::with_home(src, dir.path().into());
+    let batch = restarted.poll(std::time::SystemTime::now());
+    assert!(batch.ordered.is_empty());
+    assert_eq!(
+        batch
+            .tasks
+            .iter()
+            .filter(|t| t.finished_at.is_some())
+            .count(),
+        2
+    );
+    let quarantine = crate::providers::generic_event::quarantine_summary(dir.path(), &source().id);
+    assert_eq!(quarantine["rejected_records"], 1);
+    assert_eq!(quarantine["retained_index_records"], 1);
+    assert!(batch.tasks.iter().all(|t| !t.stale));
+}
+
+#[test]
+fn review_r3_dedup_capacity_still_allows_idempotent_recovery() {
+    let mut state = Session::default();
+    apply(&mut state, event(Kind::Started, "a", 1), 1);
+    let mut request = event(Kind::Requested, "a", 2);
+    request.request_id = Some("pending".into());
+    request.payload.request_kind = Some(WaitingReason::Approval);
+    apply(&mut state, request, 2);
+    for n in 0..100_000 {
+        state.seen.insert(format!("capacity-{n}"));
+    }
+    let mut resolved = event(Kind::Resolved, "a", 3);
+    resolved.request_id = Some("pending".into());
+    assert!(apply(&mut state, resolved, 3).input_request_ids.is_empty());
+    assert!(apply(&mut state, event(Kind::Completed, "a", 4), 4)
+        .finished_at
+        .is_some());
+    assert!(state
+        .apply(&envelope(event(Kind::Completed, "a", 4), 4), "Fixture")
+        .unwrap()
+        .is_none());
+    assert_eq!(
+        state.seen.len(),
+        100_002,
+        "recovery must not grow a saturated dedup ledger"
+    );
+}
+
 fn event(kind: Kind, turn: &str, n: u64) -> Event {
     Event {
         schema_version: 1,
@@ -159,7 +417,9 @@ fn ambiguous_native_tool_signature_cannot_resolve_an_unlinked_request() {
         let mut envelope=envelope(event,n as u64+1);envelope.context=context;
         state.apply(&envelope,"Synthetic ZCode").unwrap();previous=Some(envelope);
     }
-    assert_eq!(state.task.unwrap().input_request_ids.len(), 1);
+    // An asynchronous request without a unique invocation is not associated
+    // with the latest derived turn in the first place.
+    assert!(state.task.unwrap().input_request_ids.is_empty());
 }
 
 #[test]
@@ -372,7 +632,7 @@ fn native_kimi_start_stop_and_explicit_failure_are_not_claude_semantics() {
     assert_eq!(stop.kind, Kind::StopRequested);
     assert_eq!(stop.turn_id.as_deref(), Some("turn-a"));
     let (failure, _) = manifest::map(
-        &json!({"hook_event_name":"StopFailure","session_id":"s"}),
+        &json!({"hook_event_name":"StopFailure","session_id":"s","turn_id":"turn-a"}),
         &m,
         Some(&previous),
         3,
@@ -771,9 +1031,9 @@ fn corrupt_checkpoint_replays_journal_without_replaying_notifications() {
 }
 
 #[test]
-fn trae_structured_idle_is_end_only_after_execution_and_stop_is_not_end() {
+fn trae_structured_idle_remains_unassociated_even_after_execution() {
     let m = manifest::load("trae-cn-ide").unwrap();
-    assert!(manifest::map(&json!({"hook_event_name":"Notification","notification_type":"idle_prompt","session_id":"s"}),&m,None,1,"epoch").is_err());
+    assert_eq!(manifest::map(&json!({"hook_event_name":"Notification","notification_type":"idle_prompt","session_id":"s"}),&m,None,1,"epoch").unwrap().0.kind,Kind::Unassociated);
     let (submitted, ctx) = manifest::map(
         &json!({"hook_event_name":"UserPromptSubmit","session_id":"s"}),
         &m,
@@ -799,6 +1059,151 @@ fn trae_structured_idle_is_end_only_after_execution_and_stop_is_not_end() {
     .unwrap();
     assert_eq!(stop.kind, Kind::StopRequested);
     let (end,_)=manifest::map(&json!({"hook_event_name":"Notification","notification_type":"idle_prompt","session_id":"s"}),&m,Some(&previous),4,"epoch").unwrap();
-    assert_eq!(end.kind, Kind::Completed);
+    assert_eq!(end.kind, Kind::Unassociated);
+    assert!(end.turn_id.is_none());
     assert!(manifest::map(&json!({"hook_event_name":"Notification","notification_type":"arbitrary text","session_id":"s"}),&m,Some(&previous),5,"epoch").is_err());
+}
+
+#[test]
+fn review_r3_receiver_rejects_new_overflow_but_admits_recovery() {
+    use super::bridge::append_received;
+    let home = tempfile::tempdir().unwrap();
+    let src = source();
+    append_received(home.path(), &src.id, event(Kind::Started, "a", 1), "v1").unwrap();
+    for n in 2..130 {
+        let mut e = event(Kind::Requested, "a", n);
+        e.request_id = Some(format!("r-{n}"));
+        e.payload.request_kind = Some(WaitingReason::Approval);
+        append_received(home.path(), &src.id, e, "v1").unwrap();
+    }
+    let mut overflow = event(Kind::Requested, "a", 130);
+    overflow.request_id = Some("overflow".into());
+    overflow.payload.request_kind = Some(WaitingReason::Approval);
+    assert_eq!(
+        append_received(home.path(), &src.id, overflow, "v1").unwrap_err(),
+        "pending_request_capacity_reject_new_request"
+    );
+    let mut resolved = event(Kind::Resolved, "a", 131);
+    resolved.request_id = Some("r-2".into());
+    append_received(home.path(), &src.id, resolved, "v1").unwrap();
+    append_received(home.path(), &src.id, event(Kind::Completed, "a", 132), "v1").unwrap();
+    let mut p = GenericEventProvider::with_home(src, home.path().into());
+    let mut ended = false;
+    for _ in 0..5 {
+        for o in p.poll(std::time::SystemTime::now()).ordered {
+            ended |= o.task.finished_at.is_some();
+            acknowledge(home.path(), &o.receipt).unwrap();
+        }
+    }
+    assert!(ended);
+}
+
+#[test]
+fn review_r2_old_call_callbacks_do_not_block_or_resolve_b() {
+    for adapter in ["zcode-desktop", "trae-cn-ide"] {
+        let m = manifest::load(adapter).unwrap();
+        let mut previous = None;
+        let mut state = Session::default();
+        for (n,raw) in [
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"s"}),
+            json!({"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"old"}),
+            json!({"hook_event_name":"UserPromptSubmit","session_id":"s"}),
+            json!({"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"current"}),
+            if adapter=="trae-cn-ide" {json!({"hook_event_name":"Notification","notification_type":"permission_prompt","session_id":"s","tool_use_id":"old"})}else{json!({"hook_event_name":"PermissionRequest","session_id":"s","tool_use_id":"old"})},
+            json!({"hook_event_name":"PostToolUse","session_id":"s","tool_use_id":"old"}),
+        ].into_iter().enumerate(){
+            let (e,ctx)=manifest::map(&raw,&m,previous.as_ref(),n as u64+1,"epoch").unwrap();
+            if n>=4{assert_eq!(e.kind,Kind::Unassociated);assert!(e.turn_id.is_none());}
+            let mut env=envelope(e,n as u64+1);env.context=ctx;state.apply(&env,adapter).unwrap();previous=Some(env);
+        }
+        let t = state.task.unwrap();
+        assert_eq!(t.status, TaskStatus::Running);
+        assert_eq!(t.phase, Some(ExecutionPhase::Tool));
+        assert!(t.input_request_ids.is_empty());
+    }
+}
+
+#[test]
+fn review_r2_reused_call_and_signature_are_unassociated_not_latest_turn() {
+    let m = manifest::load("zcode-desktop").unwrap();
+    let mut previous = None;
+    for (n,raw) in [
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"s"}),
+        json!({"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"reused","tool_input":{"same":true}}),
+        json!({"hook_event_name":"PostToolUse","session_id":"s","tool_use_id":"reused"}),
+        json!({"hook_event_name":"UserPromptSubmit","session_id":"s"}),
+        json!({"hook_event_name":"PreToolUse","session_id":"s","tool_use_id":"reused","tool_input":{"same":true}}),
+        json!({"hook_event_name":"PermissionRequest","session_id":"s","tool_use_id":"reused"}),
+        json!({"hook_event_name":"PermissionRequest","session_id":"s","tool_input":{"same":true}}),
+        json!({"hook_event_name":"PostToolUse","session_id":"s","tool_use_id":"reused"}),
+    ].into_iter().enumerate(){let (e,ctx)=manifest::map(&raw,&m,previous.as_ref(),n as u64+1,"epoch").unwrap();if n>=5 {assert_eq!(e.kind,Kind::Unassociated);assert!(e.turn_id.is_none());}let mut env=envelope(e,n as u64+1);env.context=ctx;previous=Some(env);}
+}
+
+#[test]
+fn review_r3_explicit_old_turn_cleanup_does_not_mutate_current_task() {
+    let mut s = Session::default();
+    apply(&mut s, event(Kind::Started, "old", 1), 1);
+    let mut r = event(Kind::Requested, "old", 2);
+    r.request_id = Some("r".into());
+    r.payload.request_kind = Some(WaitingReason::Approval);
+    apply(&mut s, r, 2);
+    let current = apply(&mut s, event(Kind::Started, "new", 3), 3);
+    let mut resolve = event(Kind::Resolved, "old", 4);
+    resolve.request_id = Some("r".into());
+    assert!(s.apply(&envelope(resolve, 4), "Fixture").unwrap().is_none());
+    assert!(s.pending.is_empty());
+    assert_eq!(s.task.unwrap(), current);
+}
+
+#[test]
+fn review_r3_unreadable_session_checkpoint_does_not_abort_healthy_peer() {
+    let home = tempfile::tempdir().unwrap();
+    let src = source();
+    journal::append(
+        home.path(),
+        &src.id,
+        event(Kind::Started, "a", 1),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let state = journal::root(home.path(), &src.id).join("state");
+    std::fs::create_dir_all(state.join(format!("{}.json", super::key("fixture-session")))).unwrap();
+    let mut peer = event(Kind::Started, "peer", 1);
+    peer.session_id = "healthy-peer".into();
+    journal::append(home.path(), &src.id, peer, "self_reported", "v1").unwrap();
+    let mut p = GenericEventProvider::with_home(src, home.path().into());
+    let out = p.poll(std::time::SystemTime::now());
+    assert!(!out.authoritative);
+    assert_eq!(out.ordered.len(), 1);
+    assert_eq!(
+        out.ordered[0].task.session_id.as_deref(),
+        Some("healthy-peer")
+    );
+}
+
+#[test]
+fn review_r2_native_old_request_resolution_releases_only_its_context() {
+    let m = manifest::load("kimi-code-cli").unwrap();
+    let mut previous = None;
+    let mut state = Session::default();
+    for (n,raw) in [
+        json!({"hook_event_name":"TurnStarted","session_id":"s","turn_id":"a"}),
+        json!({"hook_event_name":"PreToolUse","session_id":"s","turn_id":"a","tool_call_id":"ca"}),
+        json!({"hook_event_name":"PermissionRequest","session_id":"s","turn_id":"a","tool_call_id":"ca","request_id":"ra"}),
+        json!({"hook_event_name":"TurnStarted","session_id":"s","turn_id":"b"}),
+        json!({"hook_event_name":"PreToolUse","session_id":"s","turn_id":"b","tool_call_id":"cb"}),
+        json!({"hook_event_name":"PermissionRequest","session_id":"s","turn_id":"b","tool_call_id":"cb","request_id":"rb"}),
+        json!({"hook_event_name":"PermissionResult","session_id":"s","turn_id":"a","tool_call_id":"ca","request_id":"ra"}),
+    ].into_iter().enumerate(){let (e,ctx)=manifest::map(&raw,&m,previous.as_ref(),n as u64+1,"epoch").unwrap();let mut env=envelope(e,n as u64+1);env.context=ctx;state.apply(&env,"Kimi").unwrap();previous=Some(env);}
+    assert_eq!(state.pending.len(), 1);
+    assert_eq!(state.task.as_ref().unwrap().input_request_ids, vec!["rb"]);
+    assert_eq!(state.task.unwrap().turn_key.as_deref(), Some("b"));
+    assert_eq!(
+        previous.unwrap().context.unwrap()["pending"]
+            .as_object()
+            .unwrap()
+            .len(),
+        1
+    );
 }

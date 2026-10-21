@@ -36,6 +36,10 @@ pub enum Kind {
     Heartbeat,
     #[serde(rename = "connection.test")]
     Test,
+    /// A host fact whose originating turn/call cannot be proven. It may be
+    /// recorded, but must never alter lifecycle, pending input or activity age.
+    #[serde(rename = "observation.unassociated")]
+    Unassociated,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -110,6 +114,7 @@ impl Event {
                 | Kind::Heartbeat
                 | Kind::Test
                 | Kind::Submitted
+                | Kind::Unassociated
         ) && self.turn_id.is_none()
         {
             return Err("turn_id_required".into());

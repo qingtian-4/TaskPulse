@@ -68,6 +68,7 @@ pub fn atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
     Ok(())
 }
 
+#[cfg(test)]
 pub fn append(
     home: &Path,
     source: &str,

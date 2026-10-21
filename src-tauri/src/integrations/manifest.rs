@@ -195,6 +195,43 @@ struct Context {
     pending: BTreeMap<String, ContextRequest>,
     #[serde(default)]
     turns: BTreeSet<String>,
+    #[serde(default)]
+    retired_calls: Vec<u64>,
+    #[serde(default)]
+    retired_signatures: Vec<u64>,
+}
+fn retired_contains(bits: &[u64], value: &str) -> bool {
+    let digest = key(value);
+    (0..4).all(|n| {
+        let bit = usize::from_str_radix(&digest[n * 4..n * 4 + 4], 16).unwrap_or(0) % 4096;
+        bits.get(bit / 64)
+            .is_some_and(|word| word & (1u64 << (bit % 64)) != 0)
+    })
+}
+impl Context {
+    fn retire_call(&mut self, call: &str) {
+        if let Some(signature) = self.calls.remove(call) {
+            // Bounded monotonic ambiguity evidence. Bloom collisions only
+            // downgrade an association, never create or resolve a blocker.
+            for (bits, value) in [
+                (&mut self.retired_calls, call),
+                (&mut self.retired_signatures, signature.as_str()),
+            ] {
+                bits.resize(64, 0);
+                let digest = key(value);
+                for n in 0..4 {
+                    let bit =
+                        usize::from_str_radix(&digest[n * 4..n * 4 + 4], 16).unwrap_or(0) % 4096;
+                    bits[bit / 64] |= 1u64 << (bit % 64);
+                }
+            }
+        }
+    }
+    fn retire_calls(&mut self) {
+        for call in self.calls.keys().cloned().collect::<Vec<_>>() {
+            self.retire_call(&call);
+        }
+    }
 }
 #[derive(Debug, Serialize, Deserialize)]
 struct ContextRequest {
@@ -234,6 +271,10 @@ pub fn map(
     let mut request = m.text(input, "request").map(str::to_owned);
     let mut phase = None;
     let mut activity = None;
+    let native_turn = m.text(input, "turn");
+    if matches!(kind, Kind::Completed | Kind::Failed | Kind::Interrupted) && native_turn.is_none() {
+        kind = Kind::Unassociated;
+    }
     if kind == Kind::Submitted {
         ctx.submitted = Some(format!("submission:{event_id}"));
     }
@@ -241,7 +282,50 @@ pub fn map(
         && m.text(input, "turn")
             .is_some_and(|t| ctx.turn.as_deref().is_some_and(|c| c != t))
     {
-        return Err("late_host_turn_ignored".into());
+        // An explicit OLD native turn may release its own retained requests,
+        // but must never clear current calls or overwrite current lifecycle.
+        let turn = native_turn.unwrap();
+        let candidates: Vec<_> = ctx
+            .pending
+            .iter()
+            .filter(|(_, p)| {
+                p.turn.as_deref() == Some(turn)
+                    && request.as_ref().is_none_or(|r| p.request == *r)
+                    && call.as_ref().is_none_or(|c| p.call.as_ref() == Some(c))
+            })
+            .map(|(k, p)| (k.clone(), p.request.clone(), p.call.clone()))
+            .collect();
+        if matches!(kind, Kind::Resolved | Kind::ToolFinished)
+            && (request.is_some() || call.is_some())
+            && candidates.len() == 1
+        {
+            let (key, id, linked) = &candidates[0];
+            ctx.pending.remove(key);
+            request = Some(id.clone());
+            call = linked.clone();
+            kind = Kind::Resolved;
+        } else if matches!(kind, Kind::Completed | Kind::Failed | Kind::Interrupted) {
+            ctx.pending.retain(|_, p| p.turn.as_deref() != Some(turn));
+        } else {
+            return Err("late_host_turn_ignored".into());
+        }
+        let e = Event {
+            schema_version: 1,
+            agent_id: m.agent_id.clone(),
+            session_id: session.into(),
+            event_id,
+            kind,
+            turn_id: Some(turn.into()),
+            request_id: request,
+            call_id: call,
+            occurred_at: None,
+            payload: Payload::default(),
+        };
+        e.validate(&m.agent_id)?;
+        return Ok((
+            e,
+            Some(serde_json::to_value(ctx).map_err(|_| "adapter_context_failed")?),
+        ));
     }
     if kind == Kind::Started {
         let turn = m.text(input, "turn").ok_or("native_turn_id_missing")?;
@@ -249,23 +333,26 @@ pub fn map(
             return Err("host_correlation_limit".into());
         }
         if ctx.turns.insert(turn.into()) {
+            ctx.retire_calls();
             ctx.turn = Some(turn.into());
             ctx.submitted = None;
-            ctx.calls.clear();
         }
+    }
+    if kind == Kind::ToolStarted && call.is_none() {
+        kind = Kind::Unassociated;
     }
     if kind == Kind::ToolStarted {
         if ctx.submitted.is_some() || ctx.turn.is_none() {
             if ctx.turns.len() >= 4096 {
                 return Err("host_correlation_limit".into());
             }
+            ctx.retire_calls();
             ctx.turn = ctx
                 .submitted
                 .take()
                 .or_else(|| Some(format!("execution:{event_id}")));
             kind = Kind::Started;
             ctx.turns.insert(ctx.turn.clone().unwrap());
-            ctx.calls.clear();
         }
         if let Some(call) = &call {
             if ctx.calls.len() >= 128 && !ctx.calls.contains_key(call) {
@@ -283,6 +370,54 @@ pub fn map(
             .get("tool_name")
             .and_then(Value::as_str)
             .map(|s| s.chars().take(80).collect());
+    }
+    // Without a native turn, require an unambiguous current invocation. A
+    // late request/result must not be assigned to whatever turn happens to be
+    // latest. Explicit native turn IDs remain authoritative.
+    if kind == Kind::Requested && native_turn.is_none() {
+        let linked = call
+            .as_ref()
+            .filter(|c| ctx.calls.contains_key(*c))
+            .cloned()
+            .or_else(|| {
+                if call.is_some() {
+                    return None;
+                }
+                let signature =
+                    key(
+                        &serde_json::json!([input.get("tool_name"), input.get("tool_input")])
+                            .to_string(),
+                    );
+                if retired_contains(&ctx.retired_signatures, &signature) {
+                    return None;
+                }
+                let matches: Vec<_> = ctx.calls.iter().filter(|(_, s)| **s == signature).collect();
+                (matches.len() == 1).then(|| matches[0].0.clone())
+            });
+        if linked
+            .as_ref()
+            .is_some_and(|c| !retired_contains(&ctx.retired_calls, c))
+        {
+            call = linked;
+        } else {
+            kind = Kind::Unassociated;
+        }
+    }
+    if matches!(kind, Kind::ToolFinished | Kind::Resolved) && native_turn.is_none() {
+        let known_call = call
+            .as_ref()
+            .is_some_and(|c| ctx.calls.contains_key(c) && !retired_contains(&ctx.retired_calls, c));
+        let known_request = request.as_ref().is_some_and(|r| {
+            ctx.pending.values().any(|p| {
+                p.request == *r && p.turn == ctx.turn && (call.is_none() || p.call == call)
+            }) && ctx.pending.values().filter(|p| p.request == *r).count() == 1
+                && call
+                    .as_ref()
+                    .is_none_or(|c| !retired_contains(&ctx.retired_calls, c))
+        });
+        if !known_call && !known_request {
+            kind = Kind::Unassociated;
+        }
     }
     if kind == Kind::Requested {
         request = Some(request.unwrap_or_else(|| format!("request:{event_id}")));
@@ -347,12 +482,12 @@ pub fn map(
             return Err("ambiguous_permission_resolution".into());
         }
         if let Some(c) = &call {
-            ctx.calls.remove(c);
+            ctx.retire_call(c);
         }
     }
     if matches!(kind, Kind::Completed | Kind::Failed | Kind::Interrupted) {
         ctx.pending.retain(|_, p| p.turn != ctx.turn);
-        ctx.calls.clear();
+        ctx.retire_calls();
     }
     let reason = if kind == Kind::Requested {
         Some(
@@ -371,10 +506,13 @@ pub fn map(
         session_id: session.into(),
         event_id,
         kind,
-        turn_id: m
-            .text(input, "turn")
-            .map(str::to_owned)
-            .or_else(|| ctx.turn.clone()),
+        turn_id: if kind == Kind::Unassociated {
+            None
+        } else {
+            m.text(input, "turn")
+                .map(str::to_owned)
+                .or_else(|| ctx.turn.clone())
+        },
         occurred_at: None,
         request_id: request,
         call_id: call,

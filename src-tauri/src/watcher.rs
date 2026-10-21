@@ -172,6 +172,18 @@ static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     reconcile_attention_with_persistence(tasks, true)
 }
+
+// Kept separate so mixed-source replay tests exercise the production dispatch
+// boundary, not a copy of the watch loop's notification branch.
+pub(crate) fn ordered_transition_events(
+    engine: &mut TransitionEngine,
+    tracked: &[TaskSnapshot],
+    hosts: &[HostHealth],
+    observation: &crate::providers::generic_event::OrderedObservation,
+    now: SystemTime,
+) -> Vec<crate::transition::TaskEvent> {
+    engine.apply_ordered(tracked, hosts, observation, now)
+}
 fn reconcile_attention_with_persistence(
     tasks: Vec<TaskSnapshot>,
     persist: bool,
@@ -1343,10 +1355,13 @@ pub fn watch(app: AppHandle) {
                         current.pinned = pinned;
                     }
                     tracked.retain(|task| crate::monitoring::allows(task) && !is_ignored(&task.id));
-                    let events = engine.apply_unflushed(&tracked, &hosts, SystemTime::now());
-                    if observation.notify {
-                        ordered_events.extend(events);
-                    }
+                    ordered_events.extend(ordered_transition_events(
+                        &mut engine,
+                        &tracked,
+                        &hosts,
+                        &observation,
+                        SystemTime::now(),
+                    ));
                 }
                 receipts.insert(receipt_key, observation.receipt);
             }

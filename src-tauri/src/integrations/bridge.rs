@@ -5,6 +5,80 @@ use super::{
 use serde_json::{json, Value};
 use std::io::Read;
 
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Admission {
+    #[serde(default)]
+    turn: Option<String>,
+    #[serde(default)]
+    pending: Vec<AdmissionRequest>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AdmissionRequest {
+    turn: String,
+    request: String,
+    call: Option<String>,
+}
+
+/// Standard producers use the same bounded request budget as host adapters.
+/// Admission is updated under the journal's session-writer lock, not from a
+/// possibly lagging consumer checkpoint. Legacy already-accepted overflows are
+/// handled by the consumer quarantine; recovery facts never need new slots.
+pub(crate) fn append_received(
+    home: &std::path::Path,
+    source: &str,
+    event: Event,
+    version: &str,
+) -> Result<(), String> {
+    event.validate(&event.agent_id)?;
+    let session = event.session_id.clone();
+    journal::append_using(
+        home,
+        source,
+        &session,
+        "self_reported",
+        version,
+        |previous, _, _| {
+            let mut state: Admission = previous
+                .and_then(|e| e.context.as_ref())
+                .and_then(|v| v.get("admission"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let turn = event.turn_id.as_deref().unwrap_or("");
+            let request = event.request_id.as_deref().unwrap_or("");
+            match event.kind {
+                Kind::Started => state.turn = event.turn_id.clone(),
+                Kind::Requested if state.turn == event.turn_id => {
+                    if !state
+                        .pending
+                        .iter()
+                        .any(|p| p.turn == turn && p.request == request)
+                    {
+                        if state.pending.len() >= 128 {
+                            return Err("pending_request_capacity_reject_new_request".into());
+                        }
+                        state.pending.push(AdmissionRequest {
+                            turn: turn.into(),
+                            request: request.into(),
+                            call: event.call_id.clone(),
+                        });
+                    }
+                }
+                Kind::Resolved => state.pending.retain(|p| {
+                    !(p.turn == turn
+                        && p.request == request
+                        && (p.call.is_none() || event.call_id.is_none() || p.call == event.call_id))
+                }),
+                Kind::Completed | Kind::Failed | Kind::Interrupted => {
+                    state.pending.retain(|p| p.turn != turn)
+                }
+                _ => {}
+            }
+            Ok((event, Some(json!({"admission":state}))))
+        },
+    )?;
+    Ok(())
+}
+
 pub fn configured_source(id: &str) -> Result<crate::monitoring::SourceConfig, String> {
     if !schema::identifier(id) {
         return Err("invalid_source_id".into());
@@ -74,13 +148,7 @@ pub fn receive(source_id: &str, adapter: &str, host: bool, bytes: &[u8]) -> Resu
                 &json!({"test":true,"received_at":super::now_ms(),"accepted":true}),
             );
         }
-        journal::append(
-            &super::home(),
-            source_id,
-            event,
-            "self_reported",
-            &m.adapter_version,
-        )?;
+        append_received(&super::home(), source_id, event, &m.adapter_version)?;
     } else {
         let session = m.text(&input, "session").ok_or("host_session_missing")?;
         if !schema::identifier(session) {
@@ -230,6 +298,7 @@ pub fn diagnose_source(source: &str) -> Result<Value, String> {
             }
         }
     }
+    let quarantine = crate::providers::generic_event::quarantine_summary(&super::home(), source);
     let last_error = std::fs::read(dir.join("last-error.json"))
         .ok()
         .filter(|b| b.len() < 1024)
@@ -239,6 +308,6 @@ pub fn diagnose_source(source: &str) -> Result<Value, String> {
         .filter(|b| b.len() < 1024)
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
     Ok(
-        json!({"ok":true,"source":source,"enabled":config.enabled,"state":if !config.enabled{"disabled"}else if last_error.as_ref().and_then(|e:&Value|e.get("at")).and_then(Value::as_u64).is_some_and(|at|received.is_none_or(|r|at>=r)){"diagnostic"}else if received.is_some(){"connected"}else{"waiting_first_event"},"events":events,"last_received_at":received,"sampled_latest_event_kinds":sampled_kinds,"last_error":last_error,"test":test,"quiet_is_failure":false}),
+        json!({"ok":true,"source":source,"enabled":config.enabled,"state":if !config.enabled{"disabled"}else if last_error.as_ref().and_then(|e:&Value|e.get("at")).and_then(Value::as_u64).is_some_and(|at|received.is_none_or(|r|at>=r)){"diagnostic"}else if received.is_some(){"connected"}else{"waiting_first_event"},"events":events,"last_received_at":received,"sampled_latest_event_kinds":sampled_kinds,"last_error":last_error,"test":test,"quarantine":quarantine,"quiet_is_failure":false}),
     )
 }

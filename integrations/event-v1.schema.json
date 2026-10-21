@@ -47,7 +47,8 @@
         "turn.interrupted",
         "session.closed",
         "heartbeat",
-        "connection.test"
+        "connection.test",
+        "observation.unassociated"
       ]
     },
     "turn_id": {

@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "adapter_version": "1.0.0",
+  "adapter_version": "1.0.1",
   "systems": [
     "windows"
   ],
@@ -85,7 +85,7 @@
       "channel": "documented-hook",
       "validation": "fixture-tested",
       "tested_versions": [],
-      "limitations": "未实机验证；版本未知不表示兼容。"
+      "limitations": "StopFailure 必须携带明确原生 turn_id；无可靠轮次只记未关联观察，不标失败。未实机验证。"
     },
     "approval_request": {
       "support": "explicit",

@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "adapter_version": "1.0.0",
+  "adapter_version": "1.0.1",
   "systems": [
     "windows"
   ],
@@ -78,11 +78,11 @@
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "approval_request": {
-      "support": "explicit",
+      "support": "inferred",
       "channel": "documented-hook",
       "validation": "fixture-tested",
       "tested_versions": [],
-      "limitations": "未实机验证；版本未知不表示兼容。"
+      "limitations": "明确 PermissionRequest 仍须关联唯一当前调用；无 ID、重复历史输入或复用调用无法唯一关联时仅记未关联观察。未实机验证。"
     },
     "approval_resolution": {
       "support": "inferred",

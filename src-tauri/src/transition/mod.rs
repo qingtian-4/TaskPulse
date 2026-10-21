@@ -391,9 +391,52 @@ impl TransitionEngine {
         now: SystemTime,
     ) -> Vec<TaskEvent> {
         let before = self.clone();
+        let events = self.apply_selected(tasks, hosts, now, None);
+        if !self.flush() {
+            *self = before;
+            return vec![];
+        }
+        events
+    }
+
+    /// A replay's notification policy belongs to exactly one durable fact.
+    /// Native tasks and hosts still transition normally; other integrations'
+    /// latest snapshots cannot consume or emit ahead of their own outboxes.
+    pub fn apply_ordered(
+        &mut self,
+        tasks: &[TaskSnapshot],
+        hosts: &[HostHealth],
+        observation: &crate::providers::generic_event::OrderedObservation,
+        now: SystemTime,
+    ) -> Vec<TaskEvent> {
+        self.apply_selected(tasks, hosts, now, Some(&observation.task))
+            .into_iter()
+            .filter(|event| {
+                observation.notify
+                    || match event {
+                        TaskEvent::WaitingInput { task, .. }
+                        | TaskEvent::Succeeded { task }
+                        | TaskEvent::Failed { task }
+                        | TaskEvent::InferredFinished { task } => task.id != observation.task.id,
+                        _ => true,
+                    }
+            })
+            .collect()
+    }
+
+    fn apply_selected(
+        &mut self,
+        tasks: &[TaskSnapshot],
+        hosts: &[HostHealth],
+        now: SystemTime,
+        selected: Option<&TaskSnapshot>,
+    ) -> Vec<TaskEvent> {
         let ids: HashSet<_> = tasks
             .iter()
-            .filter(|t| t.source == crate::domain::TaskSource::GenericEvent)
+            .filter(|t| {
+                t.source == crate::domain::TaskSource::GenericEvent
+                    && selected.is_none_or(|s| s.id != t.id)
+            })
             .map(|t| t.id.clone())
             .collect();
         let prev: Vec<_> = self
@@ -414,19 +457,23 @@ impl TransitionEngine {
             .filter(|(id, _)| ids.contains(*id))
             .map(|(k, v)| (k.clone(), v.clone()))
             .collect();
-        let snapshots: Vec<_> = tasks
+        let mut snapshots: Vec<_> = tasks
             .iter()
             .filter(|t| t.source != crate::domain::TaskSource::GenericEvent)
             .cloned()
             .collect();
+        if let Some(selected) = selected {
+            let mut fact = selected.clone();
+            if let Some(display) = tasks.iter().find(|t| t.id == fact.id) {
+                fact.unread = display.unread;
+                fact.pinned = display.pinned;
+            }
+            snapshots.push(fact);
+        }
         let events = self.apply_unflushed(&snapshots, hosts, now);
         self.prev.extend(prev);
         self.prev_turns.extend(turns);
         self.prev_waits.extend(waits);
-        if !self.flush() {
-            *self = before;
-            return vec![];
-        }
         events
     }
 

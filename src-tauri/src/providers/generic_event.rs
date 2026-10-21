@@ -45,6 +45,44 @@ struct Checkpoint {
     owner: String,
     #[serde(default)]
     rebuilding: bool,
+    #[serde(default)]
+    quarantine: Vec<RejectedRecord>,
+    #[serde(default)]
+    rejected_count: u64,
+    #[serde(default)]
+    uncertain_turns: std::collections::BTreeSet<String>,
+}
+
+#[derive(Serialize, Deserialize)]
+struct RejectedRecord {
+    epoch: String,
+    sequence: u64,
+    event_key: String,
+    code: String,
+}
+impl Checkpoint {
+    fn reject(&mut self, envelope: &integrations::schema::Envelope, code: String) {
+        self.rejected_count = self.rejected_count.saturating_add(1);
+        if self.quarantine.len() >= 64 {
+            self.quarantine.remove(0);
+        }
+        self.quarantine.push(RejectedRecord {
+            epoch: envelope.journal_epoch.clone(),
+            sequence: envelope.sequence,
+            event_key: integrations::key(&envelope.event.event_id),
+            code,
+        });
+        if let Some(turn) = envelope
+            .event
+            .turn_id
+            .as_ref()
+            .filter(|turn| self.state.turns.contains(*turn))
+        {
+            self.uncertain_turns.insert(turn.clone());
+        }
+        // Original facts remain in the append-only journal. The checkpoint
+        // retains a bounded diagnostic index, never raw prompts or credentials.
+    }
 }
 
 fn read_checkpoint(path: &Path) -> Result<Checkpoint, String> {
@@ -151,79 +189,117 @@ impl GenericEventProvider {
             }
             let index = (start + n) % count;
             let path = &paths[index];
-            let stem = path
-                .file_stem()
-                .and_then(|s| s.to_str())
-                .ok_or("invalid_journal_path")?;
-            let state_dir = dir.join("state");
-            let _guard = journal::lock(
-                &state_dir.join(format!("{stem}.lock")),
-                Duration::from_millis(500),
-            )?;
-            let state_path = state_dir.join(format!("{stem}.json"));
-            let mut cp = read_checkpoint(&state_path)?;
-            degraded |= cp.rebuilding;
-            let recovered = !cp.owner.is_empty() && cp.owner != self.owner;
-            // Do not ingest beyond the durable bounded outbox until the UI
-            // consumer has persisted attention + notification dedup and acked.
-            if cp.outbox.is_empty() {
-                let batch = journal::read_batch(path, &cp.cursor)?;
-                degraded |=
-                    batch.corrupt > 0 || batch.backlog || batch.generation_changed || batch.partial;
-                for envelope in &batch.events {
-                    if envelope.source_instance_id != self.source.id
-                        || integrations::key(&envelope.event.session_id) != stem
-                    {
-                        return Err("event_identity_mismatch".into());
+            let result = (|| -> Result<(), String> {
+                let stem = path
+                    .file_stem()
+                    .and_then(|s| s.to_str())
+                    .ok_or("invalid_journal_path")?;
+                let state_dir = dir.join("state");
+                let _guard = journal::lock(
+                    &state_dir.join(format!("{stem}.lock")),
+                    Duration::from_millis(500),
+                )?;
+                let state_path = state_dir.join(format!("{stem}.json"));
+                let mut cp = read_checkpoint(&state_path)?;
+                degraded |= cp.rebuilding;
+                let recovered = !cp.owner.is_empty() && cp.owner != self.owner;
+                // Do not ingest beyond the durable bounded outbox until the UI
+                // consumer has persisted attention + notification dedup and acked.
+                if cp.outbox.is_empty() {
+                    let batch = journal::read_batch(path, &cp.cursor)?;
+                    degraded |= batch.corrupt > 0
+                        || batch.backlog
+                        || batch.generation_changed
+                        || batch.partial;
+                    for envelope in &batch.events {
+                        let valid = if envelope.source_instance_id != self.source.id
+                            || integrations::key(&envelope.event.session_id) != stem
+                        {
+                            Err("event_identity_mismatch".into())
+                        } else {
+                            envelope.event.validate(&integration.agent_id)
+                        };
+                        if let Err(code) = valid {
+                            cp.reject(envelope, code);
+                            degraded = true;
+                            continue;
+                        }
+                        if envelope.received_at < integration.accept_since_ms {
+                            continue;
+                        }
+                        let applied = match cp.state.apply(envelope, &self.source.name) {
+                            Ok(task) => task,
+                            Err(code) => {
+                                cp.reject(envelope, code);
+                                degraded = true;
+                                continue;
+                            }
+                        };
+                        if matches!(
+                            envelope.event.kind,
+                            integrations::schema::Kind::Completed
+                                | integrations::schema::Kind::Failed
+                                | integrations::schema::Kind::Interrupted
+                        ) {
+                            if let Some(turn) = &envelope.event.turn_id {
+                                cp.uncertain_turns.remove(turn);
+                            }
+                        }
+                        if let Some(mut task) = applied {
+                            task.native_unread =
+                                (recovered && task.finished_at.is_some()).then_some(true);
+                            cp.outbox.push(DurableObservation {
+                                task,
+                                epoch: envelope.journal_epoch.clone(),
+                                sequence: envelope.sequence,
+                                received_at: envelope.received_at,
+                                owner: if cp.rebuilding {
+                                    "checkpoint-recovery".into()
+                                } else {
+                                    self.owner.clone()
+                                },
+                            });
+                        }
                     }
-                    envelope.event.validate(&integration.agent_id)?;
-                    if envelope.received_at < integration.accept_since_ms {
-                        continue;
-                    }
-                    if let Some(mut task) = cp.state.apply(envelope, &self.source.name)? {
-                        task.native_unread =
-                            (recovered && task.finished_at.is_some()).then_some(true);
-                        cp.outbox.push(DurableObservation {
-                            task,
-                            epoch: envelope.journal_epoch.clone(),
-                            sequence: envelope.sequence,
-                            received_at: envelope.received_at,
-                            owner: if cp.rebuilding {
-                                "checkpoint-recovery".into()
-                            } else {
-                                self.owner.clone()
-                            },
-                        });
-                    }
+                    cp.cursor = batch.cursor;
+                    cp.rebuilding &= batch.backlog;
+                    cp.owner = self.owner.clone();
+                    journal::atomic(&state_path, &cp)?;
                 }
-                cp.cursor = batch.cursor;
-                cp.rebuilding &= batch.backlog;
-                cp.owner = self.owner.clone();
-                journal::atomic(&state_path, &cp)?;
-            }
-            if let Some(task) = &cp.state.task {
-                self.latest.insert(task.id.clone(), task.clone());
-            }
-            self.received_at = self.received_at.max(cp.state.last_received_at);
-            for item in cp.outbox.iter().take(budget) {
-                let notify = item.owner == self.owner
-                    && item.received_at >= self.started
-                    && integrations::now_ms().saturating_sub(item.received_at) < 5 * 60_000;
-                let mut task = item.task.clone();
-                if !notify && task.finished_at.is_some() {
-                    task.native_unread = Some(true);
+                degraded |= !cp.uncertain_turns.is_empty();
+                if let Some(task) = &cp.state.task {
+                    let mut task = task.clone();
+                    task.stale |= !cp.uncertain_turns.is_empty();
+                    self.latest.insert(task.id.clone(), task);
                 }
-                observations.push(OrderedObservation {
-                    task,
-                    notify,
-                    receipt: Receipt {
-                        source: self.source.id.clone(),
-                        session_key: stem.into(),
-                        epoch: item.epoch.clone(),
-                        sequence: item.sequence,
-                    },
-                });
-                budget -= 1;
+                self.received_at = self.received_at.max(cp.state.last_received_at);
+                for item in cp.outbox.iter().take(budget) {
+                    let notify = item.owner == self.owner
+                        && item.received_at >= self.started
+                        && integrations::now_ms().saturating_sub(item.received_at) < 5 * 60_000;
+                    let mut task = item.task.clone();
+                    if !notify && task.finished_at.is_some() {
+                        task.native_unread = Some(true);
+                    }
+                    observations.push(OrderedObservation {
+                        task,
+                        notify,
+                        receipt: Receipt {
+                            source: self.source.id.clone(),
+                            session_key: stem.into(),
+                            epoch: item.epoch.clone(),
+                            sequence: item.sequence,
+                        },
+                    });
+                    budget -= 1;
+                }
+                Ok(())
+            })();
+            if let Err(code) = result {
+                // A locked/corrupt/unwritable session is not a provider-wide
+                // abort. Its cursor stays retryable; healthy peers still drain.
+                log::warn!("integration session deferred: {code}");
+                degraded = true;
             }
             self.next = (index + 1) % count;
         }
@@ -264,6 +340,46 @@ impl GenericEventProvider {
         })
     }
 }
+/// Bounded, payload-free operator evidence for quarantined accepted records.
+pub fn quarantine_summary(home: &Path, source: &str) -> serde_json::Value {
+    let mut bytes_left = 16 * 1024 * 1024;
+    let mut rejected = 0u64;
+    let mut indexed = 0usize;
+    let mut complete = true;
+    if let Ok(entries) = std::fs::read_dir(journal::root(home, source).join("state")) {
+        let paths: Vec<_> = entries
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "json"))
+            .take(257)
+            .collect();
+        if paths.len() > 256 {
+            complete = false;
+        }
+        for path in paths.into_iter().take(256) {
+            let size = std::fs::metadata(&path)
+                .map(|m| m.len())
+                .unwrap_or(u64::MAX);
+            if size > bytes_left {
+                complete = false;
+                continue;
+            }
+            bytes_left -= size;
+            match std::fs::read(path)
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Checkpoint>(&b).ok())
+            {
+                Some(cp) => {
+                    rejected = rejected.saturating_add(cp.rejected_count);
+                    indexed += cp.quarantine.len();
+                }
+                None => complete = false,
+            }
+        }
+    }
+    serde_json::json!({"rejected_records":rejected,"retained_index_records":indexed,"bounded_scan_complete":complete,"original_facts_retained_in_journal":true})
+}
+
 impl Provider for GenericEventProvider {
     fn name(&self) -> &'static str {
         "generic-events"

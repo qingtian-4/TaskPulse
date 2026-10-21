@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "adapter_version": "1.0.0",
+  "adapter_version": "1.0.1",
   "systems": [
     "windows"
   ],
@@ -42,7 +42,7 @@
       "event": "Notification",
       "field": "/notification_type",
       "equals": "idle_prompt",
-      "kind": "turn.completed"
+      "kind": "observation.unassociated"
     }
   ],
   "capabilities": {
@@ -82,11 +82,11 @@
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "final_end": {
-      "support": "explicit",
+      "support": "unsupported",
       "channel": "documented-hook",
       "validation": "fixture-tested",
       "tested_versions": [],
-      "limitations": "仅官方结构化 Notification/idle_prompt 且已有关联执行；Stop 不结束。"
+      "limitations": "异步 idle_prompt 无可靠 turn ID，记为未关联观察，不结束最新轮次；Stop 也不结束。"
     },
     "failure": {
       "support": "unsupported",
@@ -96,11 +96,11 @@
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "approval_request": {
-      "support": "explicit",
+      "support": "inferred",
       "channel": "documented-hook",
       "validation": "fixture-tested",
       "tested_versions": [],
-      "limitations": "未实机验证；版本未知不表示兼容。"
+      "limitations": "异步通知必须与唯一当前调用关联；缺失/旧轮次/复用调用不附会到最新轮次，仅记未关联观察。未实机验证。"
     },
     "approval_resolution": {
       "support": "inferred",
@@ -110,11 +110,11 @@
       "limitations": "仅 Notification.tool_use_id 与后续同调用 PostToolUse 唯一关联；缺失不猜。"
     },
     "question": {
-      "support": "explicit",
+      "support": "inferred",
       "channel": "documented-hook",
       "validation": "fixture-tested",
       "tested_versions": [],
-      "limitations": "未实机验证；版本未知不表示兼容。"
+      "limitations": "ask_user_question 无原生轮次时仍需可靠调用关联；缺失时不创建阻塞/弹窗。未实机验证。"
     },
     "focus": {
       "support": "unsupported",
