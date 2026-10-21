@@ -55,8 +55,14 @@ async function addSource(adapter:string){
 function send(source:any,event:any,host=false){const r=spawnSync(exe,[host?'--integration-host-event':'--integration-event','--source',source.id,'--adapter',source.integration.adapter_id],{env:{...env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:''},input:JSON.stringify(event),encoding:'utf8',windowsHide:true,timeout:8000});if(r.error)throw r.error;assert.equal(r.status,0);assert.equal(r.stdout,'');}
 let report:any;
 let loadMetrics:any=null;
+let resourceMetrics:any=null;
 try{
   await start();await openManagement();const kimi=await addSource('kimi-code-cli');assert.ok(kimi);
+  resourceMetrics=await root.invoke('get_resource_diagnostics');
+  assert.equal(typeof resourceMetrics.checkpoint_writes,'number');
+  assert.equal(resourceMetrics.process_memory.available,true);
+  assert.equal(resourceMetrics.integration_disk.complete,true);
+  checks.push('native asynchronous resource diagnostics IPC/memory/bounded isolated disk scan');
   assert.ok(await management.evaluate(`document.body.textContent.includes('Stop 不会自动产生完成提醒')`));
   assert.equal(await management.evaluate(`document.querySelectorAll('[aria-label="通用事件传输"] option:disabled').length`),2);
   checks.push('actual source creation/capabilities/disabled transports');
@@ -173,7 +179,9 @@ try{
     checks.push('actual notice rendering/click/timer/sticky-blocker regression (external editor focus NOT verified)');
   }
   assert.equal(errors.length,0,JSON.stringify(errors));
-  report={passed:true,checks,loadMetrics,platform:{os:release(),arch:arch(),cpu:cpus()[0]?.model,logicalCpus:cpus().length},realHostsVerified:[],realHostConfigurationsChanged:false,fixtureProducersOnly:true,notVerified:['actual Kimi/TRAE/ZCode/WorkBuddy hook delivery','external editor focus','long-run real-host latency']};
+  resourceMetrics=await root.invoke('get_resource_diagnostics');
+  assert.ok(resourceMetrics.checkpoint_writes>0);
+  report={passed:true,checks,loadMetrics,resourceMetrics,platform:{os:release(),arch:arch(),cpu:cpus()[0]?.model,logicalCpus:cpus().length},realHostsVerified:[],realHostConfigurationsChanged:false,fixtureProducersOnly:true,notVerified:['actual Kimi/TRAE/ZCode/WorkBuddy hook delivery','external editor focus','long-run real-host latency']};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({...report,evidence:owned}));
 }catch(error){
   const ui=management?await management.evaluate(`({adapter:document.querySelector('[aria-label="Agent 适配描述"]')?.value,disabled:document.querySelector('[aria-label="Agent 适配描述"]')?.disabled,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent),statuses:[...document.querySelectorAll('[role=status]')].map(e=>e.textContent)})`).catch(()=>null):null;

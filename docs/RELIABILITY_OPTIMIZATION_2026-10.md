@@ -31,6 +31,7 @@
 - 修改 jsonl_tail.rs、codex.rs、claude_code.rs。每次最多读 256 KiB，16 KiB 分块，单行上限 4 MiB；只保留未完成行，完整消费即释放 Vec。UTF-8 在行完整后验证，兼容完整末行无换行。截断/替换/anchor 不匹配重置解析，不把不同文件拼成一轮。
 - Codex/Claude 在追赶、半行或坏行期间保留上次观测为 stale、source 非权威；不把日志中间的旧结束/请求当成当前最终事实。超长/坏行继续有界消费后续记录，但保留 gap，不能以静默丢行宣称可信。当前 gap 需要完整新文件基线/替换来清除；没有用计时猜结束。
 - 三个正式 f04_ 回归通过；Codex 39 通过/1 实机忽略，Claude 10 通过/1 实机忽略。8×8 MiB 用例先失败：Vec 驻留 67,108,864 字节、单批 8,388,608；修复后 **0 字节 / 262,144 字节**。这两项是容器容量/批量，不是进程内存。
+- 同一 8×8 MiB 用例修复后的 Windows 独立测试进程（5ms采样、保留句柄、退出0）：private 峰值 **10,149,888** 字节、peak working set **15,876,096** 字节，0.62s。旧版失败运行未保留实际进程内存采样，因此不声称 RSS 也减少了64MiB；前后缓冲容量差与实际进程占用分别报告。
 - 回归覆盖跨块 Unicode、完整无换行末行、超长/坏行继续追赶、替换恢复，以及日志中间旧终态后还有新 turn 不误报。单行超限的不可解析事实明确降级，不宣称支持无界输入。
 
 ## F04b：缓存退出候选集与分层保留
@@ -77,3 +78,57 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend -TargetDir
 f04_partial_catchup_cannot_publish_a_historical_terminal 扩为 18 MiB，保证跨 provider 轮次仍不发布中途旧终态；provider 171 通过/10 opt-in 忽略。真实 WSL 初次 poll 2562ms，完全追赶 13,865ms，后续轮询 651ms，20 个 native catalog 身份/路径隔离通过。实机 smoke 等待有界追赶（30 秒失败截止、保留正常轮询节奏），仍要求 authoritative；坏行不会被重试时间洗成健康。当前大日志冷启动仍有十余秒开销，不宣称瞬时启动。
 
 资源诊断复核又补一项正式红绿回归 quota_scan_never_claims_completeness_after_an_entry_budget_cutoff：含不相关条目的目录不能在扫描被截断后仍声明 complete=true。已将入口扫描预算与有效 source 数分开，读取错误也显式不完整；不通过忽略未知项来夸大配额统计覆盖。
+
+## 最终验证与交付状态
+
+环境：Windows 10 x64 / GNU-MinGW，i7-10700K（16 logical CPU）；使用现有未运行的 src-tauri/target 构建，不替换用户托盘。开发构建保留用户的 debug=0 本地修改；以下不是 MSVC 安装包验收。最终嵌入前端可执行文件 SHA-256：70B2AC353A74CE283998EE86E7798074B087C4DE87835AD2D0D3E2160A5F9C83。
+
+| 验证 | 实际结果 |
+|---|---|
+| Rust fmt / Clippy -D warnings / custom-protocol build | 通过 |
+| 最终 Rust 全量 | **390 通过、0 失败、12 opt-in 忽略**；不是将 ignored 算为通过 |
+| R1 混合真实流水线、R2 旧回调/复用身份、R3 溢出/旧轮清理/健康 peer | 全量中的 review_r* 正式回归通过，未调整生命周期来迁就资源优化 |
+| R4 删除 source 后登记恢复/显式 sandbox 撤销 | 正式回归及原生管理窗口通过，未写真实宿主 |
+| Svelte check / production frontend build | 零错误零警告 / 构建通过 |
+| UI model / release / security-tool unit / integration-contract | 20 / 8 / 6 / 3 项通过 |
+| Windows cache-tools regression | 通过，删除仅限新建临时 fixture |
+| integration-bridge-smoke | 实际 stdin、静默 Hook 模式、锁超时、边界拒绝和特殊字符路径通过 |
+| 原生 WebView2 + 20 进程 / 10000 事件 | 通过；IPC+animation-frame P50 **3.27ms**、P95 **4.36ms**（98 samples），总 52.70s，主进程 peak working set **64,606,208** 字节、累计 CPU 46.69s，不含 WebView 子进程 |
+| 原生弹窗 | 通过：320×132 深色、无溢出、长标题、独立队列、悬停暂停、普通结果 15,078ms 自动收起、审批超过15秒保留、旧回调隔离、详情/关闭不伪造已查看；外部编辑器焦点未验证 |
+| 最后诊断边界修正后的原生复验 | 最终二进制 IPC、受限目录统计、source创建、Stop安全、审批、重启去重、R4管理撤销通过 |
+| 实际 SSH snapshot | 两台配置主机连接成功，Codex/tmux source 均 authoritative；发现 174 native session，约1790ms；没有触发远程任务 |
+| 实际 WSL Codex | 两次只读通过；最终复验首 poll 1986ms、90MB日志全部追赶 11,148ms、后续轮询 612ms；20 catalog 身份/路径隔离 |
+| 实际 DSH Desktop / WSL | Desktop 11 个现有会话 / Ubuntu 3 份现有日志只读通过，见 F05 |
+
+本地证据（均在 ignored target，未提交真实任务内容）：
+
+- src-tauri/target/integration-native-anDSnD/result.json：含压测、原生通知验收；此前 ktVYg5/failure.json 保留一次弹窗展示后被“打开详情/关闭”打断的失败证据，未将该轮计为通过。
+- src-tauri/target/integration-native-FzELFB/result.json：最后诊断修正后的实际二进制复验。
+- src-tauri/target/ui-smoke/native-notice-result.json 及四张弹窗截图：实际 WebView 渲染/交互结果；已目视检查完成提醒截图。
+- src-tauri/target/security-audit/：脱敏安全报告，工具校验和固定。只作为本机证据，不应上传含路径/私有数据的原始日志。
+
+### 安全结果与尚未消除的风险
+
+- bun audit:frontend 的 moderate+ 门槛通过；完整 bun audit **仍有 cookie 0.6.0 的1项 low**（GHSA-pxg6-pf52-xh8x），不是零漏洞。
+- cargo-audit 0.22.2：无阻断漏洞、无 yanked、registry 检查完整；RustSec DB 4b587f00996ebe5c05a73eaef105ef241e876414（1348条）。仍保留 **10 项 unmaintained** 与 **2 项 unsound** 告警；后两项是 glib 0.18.5 / RUSTSEC-2024-0429、rand 0.7.3 / RUSTSEC-2026-0097。没有 baseline/忽略规则，发布前需审查平台影响并跟进依赖栈。
+- Gitleaks 8.30.1 对全部可达分支完整历史扫描通过，0 findings；最后验收提交后重新扫描。该脚本是 Git 历史扫描，不冒称覆盖未跟踪文件。
+- 未新增四款真实宿主 Hook 验收：Kimi/TRAE/ZCode/WorkBuddy 仍保持 **fixture-tested**。本轮只读原生数据不等于新任务实时结束/授权实测；未运行付费 Agent 任务。
+- 尚未验证：Windows MSVC 安装包、跨格式迁移、Linux/macOS GUI、系统通知横幅、外部编辑器焦点、多小时持续真实工作负载。GUI 压测不能代替这些验收。
+- 活跃/未解除状态优先保留，不宣称无限任务下的硬内存上限；异常旧检查点超出离线恢复窗口、冷文件保留所有时间戳原地改写、坏行事实缺口等边界见前文。没有 journal compaction 或清空用户状态。
+
+### Git 与保留项
+
+本轮均为当前 codex/desktop-discovery-visibility 分支的本地逻辑提交：
+
+1. ed9ea9b — F01 会话事实缺口持久化。
+2. 25cd3f6 — F02 预算与旧检查点迁移。
+3. 1215caa — F03 dirty 写盘。
+4. b5ab4fb — F04a JSONL 有界缓冲及追赶保护。
+5. 8903850 — F04b 冷解析缓存淘汰。
+6. 4b790b4 — DSH 流式解压/WSL 二进制管道。
+7. 8861f23 — 安全缓存预览与资源诊断。
+8. b9a1db5 — 实机发现后的共享有界多块追赶。
+9. 6b2587c — 诊断扫描完整性边界。
+10. 最后验收提交（本文件与 native resource IPC smoke），提交名 test: record native reliability and resource acceptance。
+
+保留且不纳入提交：用户 src-tauri/Cargo.toml 的 profile.dev 修改；未跟踪的 AGENT_INTEGRATION_EXECUTION_PLAN.md、AGENT_INTEGRATION_REVIEW_2026-10-21.md、REVIEW_HANDOFF.md。没有 push/PR/tag/release，没有改变真实 Hook/代理/模型/审批策略，没有删除真实缓存或重置持久化账本。测试启动的隔离进程已退出，不留下运行中的测试托盘。
