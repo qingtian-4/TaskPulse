@@ -33,6 +33,7 @@ struct HookLog {
     task: Option<TaskSnapshot>,
     latest: Value,
     sequence: u64,
+    trusted: bool,
 }
 
 pub struct ClaudeCodeProvider {
@@ -110,7 +111,7 @@ impl ClaudeCodeProvider {
             }
         }
         let mut tasks = vec![];
-        let mut failed = false;
+        let mut failed = self.hook_logs.values().any(|c| !c.trusted);
         for path in &logs {
             let id = path
                 .file_stem()
@@ -139,6 +140,10 @@ impl ClaudeCodeProvider {
                     }
                 }
                 Err(_) => failed = true,
+            }
+            if !transcript.tail.trusted() {
+                failed = true;
+                continue;
             }
             let Some(mut task) = transcript.task.clone() else {
                 continue;
@@ -230,7 +235,7 @@ impl ClaudeCodeProvider {
                         task.confidence = DetectionConfidence::Hook;
                         task.updated_at = hook.updated_at;
                         task.hook_event = hook.hook_event.clone();
-                        task.stale = false;
+                        task.stale = hook.stale;
                         if matches!(
                             text(event, "hook_event_name"),
                             Some("PostToolUse" | "PostToolUseFailure")
@@ -334,6 +339,7 @@ impl ClaudeCodeProvider {
             let cache = self.hook_logs.entry(path.clone()).or_default();
             let records = if extension == Some("jsonl") {
                 let batch = cache.tail.read(&path)?;
+                cache.trusted = batch.caught_up && !batch.gap;
                 if batch.reset {
                     cache.task = None;
                     cache.sequence = 0;
@@ -345,6 +351,7 @@ impl ClaudeCodeProvider {
                     .collect::<Result<Vec<_>, _>>()
                     .map_err(std::io::Error::other)?
             } else {
+                cache.trusted = true;
                 vec![read_json(&path)?]
             };
             for event in records {
@@ -375,7 +382,9 @@ impl ClaudeCodeProvider {
                 cache.latest = event;
             }
             if let Some(task) = cache.task.as_ref() {
-                output.insert(id, (task.clone(), cache.latest.clone()));
+                if cache.trusted {
+                    output.insert(id, (task.clone(), cache.latest.clone()));
+                }
             }
         }
         Ok(output)

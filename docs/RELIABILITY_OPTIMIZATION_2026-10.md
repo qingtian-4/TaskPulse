@@ -25,3 +25,10 @@
 - 修改：generic_event.rs、journal.rs，明确跟踪 cursor/state/outbox/owner/recovery dirty；旧编码/损坏恢复标记也参与持久化。重复 ack 无变更不写；新进程只持久化一次 owner 转移，旧 outbox 的原 owner 不改写，不重新发历史通知。
 - 回归 f03_one_hundred_idle_polls_write_nothing_and_ack_is_idempotent 先失败后通过：100 稳定空轮询+重复 ack，从 **101 次 / 141,703 字节** 降至 **0 次 / 0 字节**。新 owner 写入一次、重启无 outbox 重放。integrations:: 38 通过、2 项实机 opt-in 忽略，包含既有 R1–R4、游标、隔离、quarantine、ack 恢复用例。
 - 诊断 quarantine_summary 增加本进程累计 checkpoint 写入数和字节数（非历史全局统计、不包含事件载荷）。维持同目录临时文件、fsync、原子替换；没有引入新的持久化系统。
+
+## F04a：有界 JSONL 与非权威追赶
+
+- 修改 jsonl_tail.rs、codex.rs、claude_code.rs。每次最多读 256 KiB，16 KiB 分块，单行上限 4 MiB；只保留未完成行，完整消费即释放 Vec。UTF-8 在行完整后验证，兼容完整末行无换行。截断/替换/anchor 不匹配重置解析，不把不同文件拼成一轮。
+- Codex/Claude 在追赶、半行或坏行期间保留上次观测为 stale、source 非权威；不把日志中间的旧结束/请求当成当前最终事实。超长/坏行继续有界消费后续记录，但保留 gap，不能以静默丢行宣称可信。当前 gap 需要完整新文件基线/替换来清除；没有用计时猜结束。
+- 三个正式 f04_ 回归通过；Codex 39 通过/1 实机忽略，Claude 10 通过/1 实机忽略。8×8 MiB 用例先失败：Vec 驻留 67,108,864 字节、单批 8,388,608；修复后 **0 字节 / 262,144 字节**。这两项是容器容量/批量，不是进程内存。
+- 回归覆盖跨块 Unicode、完整无换行末行、超长/坏行继续追赶、替换恢复，以及日志中间旧终态后还有新 turn 不误报。单行超限的不可解析事实明确降级，不宣称支持无界输入。

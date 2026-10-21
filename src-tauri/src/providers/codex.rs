@@ -410,7 +410,11 @@ impl CodexProvider {
             let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
             cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
         }
-        cache.state.clone()
+        // Fold bounded chunks internally. A terminal in the middle of an old
+        // transcript is not the current task until the entire tail catches up.
+        (batch.caught_up && !batch.gap)
+            .then(|| cache.state.clone())
+            .flatten()
     }
 
     fn session_to_task(
@@ -1791,6 +1795,24 @@ impl Provider for CodexProvider {
         // terminal snapshot needed (the store's TTL handles the drop). We only
         // track them so a re-appearing session keeps its identity.
         self.seen = live;
+        let incomplete = self.cache.values().any(|cache| !cache.tail.trusted());
+        if incomplete {
+            for previous in &self.last_tasks {
+                if !tasks.iter().any(|t| t.id == previous.id) {
+                    let mut previous = previous.clone();
+                    previous.stale = true;
+                    tasks.push(previous);
+                }
+            }
+        }
+        log::debug!(
+            "codex parser entries={} retained_tail_bytes={}",
+            self.cache.len(),
+            self.cache
+                .values()
+                .map(|c| c.tail.retained_bytes())
+                .sum::<usize>()
+        );
         self.last_tasks = tasks.clone();
         let catalog = metadata
             .values()
@@ -1812,6 +1834,8 @@ impl Provider for CodexProvider {
             .collect();
         ProviderOutput {
             catalog,
+            authoritative: !incomplete,
+            error: incomplete.then(|| "Codex 日志追赶中或存在坏行；不发布中间终态".into()),
             ..ProviderOutput::tasks(tasks)
         }
     }
@@ -2927,6 +2951,28 @@ for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread
 
         let second = provider.poll(SystemTime::now());
         assert_eq!(second.tasks[0].project.as_deref(), Some("cached-project"));
+    }
+
+    #[test]
+    fn f04_partial_catchup_cannot_publish_a_historical_terminal() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout-budget.jsonl");
+        let at = recent_rfc3339(1);
+        let mut body = header("/tmp/project");
+        body.push_str(&format!("{{\"timestamp\":\"{at}\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"old\"}}}}\n"));
+        body.push_str(&format!("{{\"ignored\":\"{}\"}}\n", "x".repeat(700_000)));
+        body.push_str(&format!("{{\"timestamp\":\"{at}\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"current\"}}}}\n"));
+        std::fs::write(&path, body).unwrap();
+        let mut provider = CodexProvider::with_root(root.path().into());
+        for _ in 0..2 {
+            let out = provider.poll(SystemTime::now());
+            assert!(!out.authoritative);
+            assert!(out.tasks.is_empty());
+        }
+        let out = provider.poll(SystemTime::now());
+        assert!(out.authoritative, "{:?}", out.error);
+        assert_eq!(out.tasks[0].status, TaskStatus::Running);
+        assert_eq!(out.tasks[0].turn_key.as_deref(), Some("current"));
     }
 
     #[test]
