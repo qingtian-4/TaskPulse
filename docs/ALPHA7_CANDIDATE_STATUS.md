@@ -1,36 +1,37 @@
 # Alpha.7 候选收口状态
 
-核对日期：2026-10-21（Asia/Shanghai）。对应三个独立任务中的 **任务 1**，不将其作为真实 Agent 或无开发工具 VM 验收。
+核对日期：2026-10-22（Asia/Shanghai）。这是源码与发布门禁记录，不是所有 Agent 或干净 Windows VM 的验收证明。
 
-## 已核对的远端基线
+## 已合并的源码基线
 
-- 仓库：`qingtian-4/TaskPulse`，默认分支 `main`。
-- PR：[#8](https://github.com/qingtian-4/TaskPulse/pull/8)，`codex/desktop-discovery-visibility → main`，仍 open，未合并。
-- 已验 CI 的候选源 SHA：`d991f2e51720afe7a81c72d8542f8fdb068128ed`。
-- main：`7a1929aaf1dfb98f425d2868c251865e184fefd5`，尚不包含本次 Alpha.7 功能与 UI。
-- [Windows quality](https://github.com/qingtian-4/TaskPulse/actions/runs/39608987901) 与 [Security checks](https://github.com/qingtian-4/TaskPulse/actions/runs/39608987889) 的 PR 运行均成功，head_sha 与上述候选一致。另一次同 SHA push quality 运行被取消，不能单独把 cancelled 说成成功；验收依据是已成功的 PR 运行。
-- PR API 快照为 `mergeable=true`、`mergeable_state=unstable`，不是无条件可合并的 clean 状态；不能仅凭没有文本冲突或某个绿色运行绕过最新检查/审阅要求。新候选准备合并时需重新核对。
-- `package.json`、Cargo.toml、Cargo.lock、tauri.conf.json 版本均为 `0.2.0-alpha.7`，MSI 数字版本为 `0.2.0.1007`。
-- 未发现 `v0.2.0-alpha.7` 远端标签或 Alpha.7 Release。连接器读取到的旧 Alpha.6 仍为 draft / prerelease，不替代新候选安装器验收。
+- **PR #8 已合并**：[#8](https://github.com/qingtian-4/TaskPulse/pull/8)，使用 merge commit 保留上游和本项目完整历史。
+- 原 PR head：`2cc13b1f11049047fdf6f868ca92b3d5df8aefce`；实际合并 SHA：`ea21c85fc6b81992de72cf45729cfe6abcc1c15f`，已进入默认 `main`。
+- 原 PR 的 [Windows quality（重跑 attempt 2）](https://github.com/qingtian-4/TaskPulse/actions/runs/39617437276/attempts/2) 和 [Security checks](https://github.com/qingtian-4/TaskPulse/actions/runs/39617437161) 成功，针对原 PR head，不冒充 main 检查。
+- 合并后的确切 `ea21c85`：[Windows quality](https://github.com/qingtian-4/TaskPulse/actions/runs/39625854499) 与 [Security checks](https://github.com/qingtian-4/TaskPulse/actions/runs/39625854268) 均成功。此前延迟未生成运行的状态已过时。
+- 四个版本文件仍一致为 `0.2.0-alpha.7`，MSI 数字版本为 `0.2.0.1007`。没有为了文档修复变更版本或生命周期逻辑。
 
-以上是核对时的快照，不是未来分支状态。收口前 PR 的旧正文仍引用更早的 `7493638` 和历史测试数量，不能拿它替代当前 SHA 的 Actions 结果；本轮授权后将更新正文。
+以上 SHA 和 CI 是已验证的历史基线，不是未来最终候选的占位符。本轮从该 main 创建短期 `codex/alpha7-postmerge-docs` 分支，经新的 PR 修复合并后的 README、安装指南与文档回归。**本轮修复的 PR head 和新 main SHA 必须分别核对自身 CI**，不能复用上述绿色结果。确切 SHA、PR 和最终运行链接记录在对应 PR 中，避免在同一提交中自引用尚未产生的 SHA。
 
-## 本次收口修改
+## 当前安装包与证据边界
 
-- 中英文 README 显式克隆候选分支，避免读者落入旧 main；安装指南同步。
-- 新增回归先复现了默认分支命令与 CI 未运行文档检查的问题，再修复；quality/release 各自以独立步骤运行 `test:docs`。
-- 更新 Alpha.7 CHANGELOG 和 Release notes，包含现有接入、可靠性、UI 的实际交付，同时保留 fixture-tested 和未验收限制。
-- 本次修改会产生新的提交 SHA，**上面的 d991f2e 绿色 CI 不覆盖它**。用 `git rev-parse HEAD` 取得本次提交，在获推送授权后触发 CI，并在 PR 记录准确的新 head 与成功运行链接；此前不能称“最终 CI 已完成”。
+**安装器与实机验收仍未完成**。核对时未发现 `v0.2.0-alpha.7` 远端标签或 Alpha.7 Release；仅有旧 Alpha.6 Draft pre-release。旧包、源码构建或合成事件均不能替代新候选安装器与真实宿主验收。
 
-本机已运行 `scripts/verify.ps1 -Frontend -TargetDir src-tauri/target`，退出码为 0：前端 Check/Build、fmt/clippy、Rust 390 通过 / 12 忽略、UI Model 28 通过、文档 5 通过、Release 8 通过、安全脚本 6 通过、接入契约 3 通过；版本一致性与前端 moderate+ 审计门禁通过，已知 low 告警仍保留。真实 EXE bridge smoke 通过，证据位于 `src-tauri/target/integration-bridge-F7LQcv`，未改宿主配置；这不是实际 Agent 宿主端到端验收。全历史脱敏 secrets 扫描为 0 发现，提交后仍需复跑。正式候选仍要求 [RELEASING.md](RELEASING.md) 的完整质量、安全与原生门禁，不将本机结果代替远端 CI 或安装器验收。
+| 环节 | 本轮记录与限制 |
+|---|---|
+| 源码运行 | 从默认 `main` 克隆；运行 `git rev-parse HEAD` 核对实际版本提交 |
+| 质量 / 安全 CI | 原 PR 与已合并基线通过；每个新的 PR / main SHA 仍需独立确认 |
+| Alpha.7 NSIS / MSI | 尚未生成；需维护者单独确认最终 main SHA 后才能创建标签 |
+| 干净 Windows 验收 | 未完成；需无 Rust/Bun 环境的首次安装、运行、升级、重启与卸载 |
+| 真实 Agent 端到端 | 仍需 Codex 与另一款已安装 Agent 的新任务、工具、明确结束、通知、重启去重与窗口焦点证据 |
+| 公开 Alpha | 未发布；须维护者核对 SHA256、版本、残余风险和真实支持范围后手动决定 |
 
-## 后续动作与确认边界
+既有本机验证包含 Rust 390 通过 / 12 opt-in 忽略、UI Model 28 通过、Check/Build、fmt/clippy 与隔离 EXE bridge smoke；前一轮原生 WebView2 渲染证据见[视觉验收](VISUAL_POLISH_VALIDATION_2026-10-21.md)。这些不等于宿主实测，不能提升 Kimi/TRAE/ZCode/WorkBuddy 的支持等级。已知前端 low 与 Rust 维护/unsound 告警保留在[安全记录](SECURITY_AUDIT_2026-10.md)，审计阈值通过不等于零风险。
 
-1. 获授权后，仅推送当前候选分支、更新 PR #8 说明并等待本次确切 SHA 的质量/安全 CI；不直接修改 main。
-2. 维护者明确确认 PR 和 head SHA 后，使用保留历史的 merge commit 合入 main。重新读取实际 merge SHA，确认 main CI，不能提前猜 merge SHA。
-3. 对维护者确认的 main SHA 创建 `v0.2.0-alpha.7`，不覆盖既有标签；按现有工作流构建 NSIS/MSI，各自独立 runner 验收成功后才生成 **Draft pre-release**。
-4. 不公开发布；真实 Agent、无 Rust/Bun Windows VM、升级/格式迁移与小范围试用仍为独立任务。没有对应证据就保持未验收。
+## 下一步及确认边界
 
-README 候选分支说明和防回归断言只适用于未合并阶段；合并 main 后须作为单独审阅变更更新默认分支说明，不能提前让读者克隆旧 main。
+1. 本轮只更新合并后文档、测试，经新 PR 合并，并确认实际新 main SHA 的质量与安全 CI；保留无关修改及运行中的 Agent。
+2. **维护者单独确认**最终 main SHA 后，才创建不可变的 `v0.2.0-alpha.7`；[现有发布流程](RELEASING.md) 执行版本预检、安全审计、MSVC 构建及 NSIS/MSI 各自独立 Windows runner 验收。全部通过才生成 **Draft pre-release**，不会公开发布。
+3. 对同一候选安装器补独立 Windows 与真实 Agent 验收，记录宿主/系统版本、实际事件与状态、事件到通知延迟、误报/漏报及未验证项；无意义的付费压测不属于验收。
+4. 核对资产 SHA256、版本、风险、支持矩阵和发布说明后，才由维护者手动决定 Publish pre-release。没有证据的门禁保持未完成。
 
-维护者已明确授权本轮候选分支 push 与 PR #8 正文更新，仅用于运行并确认 CI；这不包含 merge、Tag 或 Release。实际远端结果与确切新 SHA 以 PR 记录为准。未修改真实 Hook、Agent、代理/模型、审批策略、用户配置或持久状态。
+本轮不打 Tag、不创建 Release、不公开发布，不安装真实 Hook，不修改 Agent、代理/模型、审批策略或用户持久状态。
