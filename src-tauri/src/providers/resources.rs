@@ -73,54 +73,62 @@ pub fn directory_usage(root: &Path) -> Value {
 fn quota_pressure(root: &Path) -> Value {
     let mut sources = Vec::new();
     let mut complete = true;
-    if let Ok(entries) = std::fs::read_dir(root) {
-        for entry in entries.take(65) {
-            if sources.len() >= 64 {
-                complete = false;
-                break;
-            }
-            let Ok(entry) = entry else {
-                complete = false;
-                continue;
-            };
-            let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
-                complete = false;
-                continue;
-            };
-            if !meta.is_dir() || is_link(&meta) {
-                continue;
-            }
-            let source_name = entry.file_name().to_string_lossy().into_owned();
-            if source_name.len() != 64 || !source_name.bytes().all(|b| b.is_ascii_hexdigit()) {
-                continue;
-            }
-            let mut journal_bytes = 0u64;
-            let mut largest = 0u64;
-            let mut source_complete = true;
-            if let Ok(events) = std::fs::read_dir(entry.path().join("events")) {
-                for (n, event) in events.enumerate() {
-                    if n >= 1024 {
-                        source_complete = false;
-                        break;
-                    }
-                    let Ok(event) = event else {
-                        source_complete = false;
-                        continue;
-                    };
-                    if event.path().extension().is_none_or(|e| e != "jsonl") {
-                        continue;
-                    }
-                    match std::fs::symlink_metadata(event.path()) {
-                        Ok(m) if m.is_file() && !is_link(&m) => {
-                            journal_bytes = journal_bytes.saturating_add(m.len());
-                            largest = largest.max(m.len());
-                        }
-                        _ => source_complete = false,
-                    }
+    match std::fs::read_dir(root) {
+        Ok(entries) => {
+            for (index, entry) in entries.enumerate() {
+                if index >= 64 {
+                    complete = false;
+                    break;
                 }
+                let Ok(entry) = entry else {
+                    complete = false;
+                    continue;
+                };
+                let Ok(meta) = std::fs::symlink_metadata(entry.path()) else {
+                    complete = false;
+                    continue;
+                };
+                if !meta.is_dir() || is_link(&meta) {
+                    continue;
+                }
+                let source_name = entry.file_name().to_string_lossy().into_owned();
+                if source_name.len() != 64 || !source_name.bytes().all(|b| b.is_ascii_hexdigit()) {
+                    continue;
+                }
+                let mut journal_bytes = 0u64;
+                let mut largest = 0u64;
+                let mut source_complete = true;
+                match std::fs::read_dir(entry.path().join("events")) {
+                    Ok(events) => {
+                        for (n, event) in events.enumerate() {
+                            if n >= 1024 {
+                                source_complete = false;
+                                break;
+                            }
+                            let Ok(event) = event else {
+                                source_complete = false;
+                                continue;
+                            };
+                            if event.path().extension().is_none_or(|e| e != "jsonl") {
+                                continue;
+                            }
+                            match std::fs::symlink_metadata(event.path()) {
+                                Ok(m) if m.is_file() && !is_link(&m) => {
+                                    journal_bytes = journal_bytes.saturating_add(m.len());
+                                    largest = largest.max(m.len());
+                                }
+                                _ => source_complete = false,
+                            }
+                        }
+                    }
+                    Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+                    Err(_) => source_complete = false,
+                }
+                sources.push(json!({"source_hash":source_name,"journal_bytes_at_least":journal_bytes,"largest_session_journal":largest,"state":directory_usage(&entry.path().join("state")),"near_quota":journal_bytes>=crate::integrations::journal::SOURCE_DISK_LIMIT*9/10 || largest>=crate::integrations::journal::SESSION_DISK_LIMIT*9/10,"complete":source_complete}));
             }
-            sources.push(json!({"source_hash":source_name,"journal_bytes_at_least":journal_bytes,"largest_session_journal":largest,"state":directory_usage(&entry.path().join("state")),"near_quota":journal_bytes>=crate::integrations::journal::SOURCE_DISK_LIMIT*9/10 || largest>=crate::integrations::journal::SESSION_DISK_LIMIT*9/10,"complete":source_complete}));
         }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(_) => complete = false,
     }
     json!({"sources":sources,"complete":complete})
 }
@@ -191,6 +199,19 @@ pub async fn get_resource_diagnostics() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quota_scan_never_claims_completeness_after_an_entry_budget_cutoff() {
+        let dir = tempfile::tempdir().unwrap();
+        for n in 0..70 {
+            std::fs::create_dir(dir.path().join(format!("{n:064x}"))).unwrap();
+        }
+        assert_eq!(quota_pressure(dir.path())["complete"], false);
+        let dir2 = tempfile::tempdir().unwrap();
+        for n in 0..70 {
+            std::fs::create_dir(dir2.path().join(format!("unrelated-{n}"))).unwrap();
+        }
+        assert_eq!(quota_pressure(dir2.path())["complete"], false);
+    }
     #[test]
     fn diagnostics_do_not_expose_paths_or_payloads_and_disk_usage_is_read_only() {
         let dir = tempfile::tempdir().unwrap();

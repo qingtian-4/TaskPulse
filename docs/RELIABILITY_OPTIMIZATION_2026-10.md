@@ -75,3 +75,5 @@ powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend -TargetDir
 最初单块预算直接等于一轮 provider 预算，真实 Ubuntu 20 份 Codex 日志（总 90,724,462 字节、最大 52,048,572）导致首次 smoke 仍在追赶，未通过。没有放宽可信终态判定：新增共享 JsonlTail::drain，Codex / Claude transcript / Claude Hook 都逐块折叠，每次最多 16 MiB 或 500ms 工作预算，内存仍是单块/单行预算，剩余积压继续非权威。时间只限制后台工作，不判断任务结束或审批。
 
 f04_partial_catchup_cannot_publish_a_historical_terminal 扩为 18 MiB，保证跨 provider 轮次仍不发布中途旧终态；provider 171 通过/10 opt-in 忽略。真实 WSL 初次 poll 2562ms，完全追赶 13,865ms，后续轮询 651ms，20 个 native catalog 身份/路径隔离通过。实机 smoke 等待有界追赶（30 秒失败截止、保留正常轮询节奏），仍要求 authoritative；坏行不会被重试时间洗成健康。当前大日志冷启动仍有十余秒开销，不宣称瞬时启动。
+
+资源诊断复核又补一项正式红绿回归 quota_scan_never_claims_completeness_after_an_entry_budget_cutoff：含不相关条目的目录不能在扫描被截断后仍声明 complete=true。已将入口扫描预算与有效 source 数分开，读取错误也显式不完整；不通过忽略未知项来夸大配额统计覆盖。
