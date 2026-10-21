@@ -48,10 +48,11 @@
 | session.closed | 会话关闭，不单独推导整轮成功 |
 | heartbeat | 更新接收证据/可能携带标题；不延长 execution activity、不续期审批有效性 |
 | connection.test | 写独立测试通道，不入 journal、任务、未读或成功历史 |
+| observation.unassociated | 有宿主事实但无可靠 turn/call 关联；不结束、不创建/解除 pending、不续活跃期，可无 turn_id |
 
 迟到的旧 turn、已终结 turn 的阶段/工具事件不覆盖新轮次；旧 start 的标题也不会倒灌。新 start 将当前展示切到新轮次，但不会用其工具事件解除旧轮次请求。多个 pending 独立保存；无 request/call 唯一关联不猜测“最近一个”。标准 `tool.finished` 不自动解除审批；内置 native 映射只有唯一、明确的关联结果才产生 `input.resolved`。
 
-CPU、静默、进程消失、慢工具、模型等待、普通 idle 文案均不能推断 Agent 结束或需要授权。当前 Kimi/ZCode 的 Stop 不提供最终正常结束能力，不能设置几秒静默补齐它。
+CPU、静默、进程消失、慢工具、模型等待、普通 idle 文案均不能推断 Agent 结束或需要授权。当前 Kimi/TRAE/ZCode 不提供可靠最终正常结束能力。TRAE 异步 idle_prompt 不带可靠轮次 ID，记录为未关联观察，不能把当前 ctx.turn 当成它的来源；不能设置几秒静默补齐它。
 
 ## Journal、恢复与水位
 
@@ -67,6 +68,7 @@ CPU、静默、进程消失、慢工具、模型等待、普通 idle 文案均�
     state/<session-sha256>.json
     state/<session-sha256>.lock
     hook-ownership.json
+    hook-installation.json
     connection-test.json
     last-error.json
 ```
@@ -76,11 +78,16 @@ CPU、静默、进程消失、慢工具、模型等待、普通 idle 文案均�
 - 游标含 epoch、sequence、offset 及最后已消费行的锚点 SHA；截断/替换会重新读取，保留 event ID 去重，不只看 byte offset。
 - 单次读最多 256 KiB/128 行，每来源一次最多 128 个 observation，最多检查 256 个会话文件并轮转让出。消费持久化/确认后唤醒该来源继续排空，空批次不自旋；不为每个积压批次额外等待完整轮询间隔。积压标注来源降级，不变成任务失败。
 - 检查点原子保存 reducer + cursor + durable outbox。损坏检查点先备份到 `.corrupt.bak` 再重放 journal；备份失败拒绝覆盖。outbox 在 Attention/Transition 持久化成功后，按会话批量确认。
+- 已接收的超限/无效 envelope 在同一检查点中保存有界 quarantine 索引和累计数量后，cursor 才前移；原 journal 保留，后续恢复事件继续消费。单会话读写失败不使其他会话回滚/停止。原始坏行仍按既有有界读取逻辑处理，不把它当正常任务事件。
 - 有序消费 `start A → end A → start B`，A 的结束事实不会被 latest B 覆盖。弹窗动作保留 turn 身份，不能误作用于 B。
-- 每会话日志 32 MiB、每来源 128 MiB，seen 事件 100000、轮次 4096、pending 128；达到上限**拒绝新增并诊断**，不自动淘汰未消费/未解决记录。当前不自动轮转/压缩，长期运行需监控磁盘；见[恢复操作](AGENT_INTEGRATION_GUIDE.md#恢复与磁盘上限)。
+- 每会话日志 32 MiB、每来源 128 MiB，seen 事件 100000、轮次 4096、pending 128。pending 接收预算在会话写锁内更新；超限拒绝新请求，但解除/结束不占新槽。seen 饱和不清旧账本，已有明确恢复事件依靠请求/终态集合幂等处理；磁盘/持久化故障仍可能拒绝包括恢复在内的写入。当前不自动轮转/压缩，长期运行需监控磁盘；见[恢复操作](AGENT_INTEGRATION_GUIDE.md#恢复与磁盘上限)。
 - 首次保存来源写 accept_since_ms，只消费确认后的事件。停用时接收入口 fail-open 丢弃并记录 source_disabled，不补录停用期间事件；恢复/热重建旧 outbox 时恢复关注但静默，不回放旧弹窗。
 
 通知沿用 TransitionEngine/notifications.json；通用来源另存稳定 task/turn/status/request 去重账本。关闭提醒不等于已查看。恢复 pending 不代表它仍有效：手动重开弹窗需要 30 秒内匹配请求的明确观察、来源健康和非自报证据，普通心跳不能续期。
+
+每个 observation 的 notify 标志只决定其自身事实是否投递。Transition 在消费该事实时仅选择这一 GenericEvent 候选；其他通用来源的 latest 不能越过 outbox。原生任务和 host 同批仍正常处理并投递，未选中的通用 baseline 保留。不得计算全量事件后按某一个 replay 的 notify 丢弃整批。
+
+Hook 安装登记独立保存于 hook-installation.json（不含宿主模型/代理设置）；source registry 删除后仍可预览、确认撤销。旧 hook-ownership.json 可通过严格解析 TaskPulse 固定包装命令恢复 source/adapter/exe，**不会执行解析内容**。宿主路径始终来自内置 recipe，不由导入 manifest 或事件指定。
 
 持久化去重与操作系统投递不是事务：提交后、实际弹窗前崩溃可能没有弹窗，仍可从持久关注/铃铛找回；不承诺 OS exactly-once。持久化失败保留 outbox、不确认消费；来源故障不当任务失败。
 
