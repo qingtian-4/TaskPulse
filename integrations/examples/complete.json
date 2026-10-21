@@ -1,0 +1,9 @@
+{
+  "schema_version": 1,
+  "agent_id": "custom-agent",
+  "session_id": "synthetic-session",
+  "turn_id": "synthetic-turn",
+  "event_id": "synthetic-end",
+  "kind": "turn.completed",
+  "payload": {}
+}

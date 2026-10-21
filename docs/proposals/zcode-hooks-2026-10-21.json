@@ -1,0 +1,139 @@
+{
+  "hooks": {
+    "events": {
+      "SessionStart": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "D:\\Installed_Apps\\TaskPulse\\agent-tray.exe",
+              "args": [
+                "--integration-host-event",
+                "--source",
+                "generic-event:zcode-acceptance-20261021",
+                "--adapter",
+                "zcode-desktop"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ],
+      "UserPromptSubmit": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "D:\\Installed_Apps\\TaskPulse\\agent-tray.exe",
+              "args": [
+                "--integration-host-event",
+                "--source",
+                "generic-event:zcode-acceptance-20261021",
+                "--adapter",
+                "zcode-desktop"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ],
+      "PreToolUse": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "D:\\Installed_Apps\\TaskPulse\\agent-tray.exe",
+              "args": [
+                "--integration-host-event",
+                "--source",
+                "generic-event:zcode-acceptance-20261021",
+                "--adapter",
+                "zcode-desktop"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ],
+      "PermissionRequest": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "D:\\Installed_Apps\\TaskPulse\\agent-tray.exe",
+              "args": [
+                "--integration-host-event",
+                "--source",
+                "generic-event:zcode-acceptance-20261021",
+                "--adapter",
+                "zcode-desktop"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ],
+      "PostToolUse": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "D:\\Installed_Apps\\TaskPulse\\agent-tray.exe",
+              "args": [
+                "--integration-host-event",
+                "--source",
+                "generic-event:zcode-acceptance-20261021",
+                "--adapter",
+                "zcode-desktop"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ],
+      "PostToolUseFailure": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "D:\\Installed_Apps\\TaskPulse\\agent-tray.exe",
+              "args": [
+                "--integration-host-event",
+                "--source",
+                "generic-event:zcode-acceptance-20261021",
+                "--adapter",
+                "zcode-desktop"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ],
+      "Stop": [
+        {
+          "matcher": "",
+          "hooks": [
+            {
+              "type": "process",
+              "command": "D:\\Installed_Apps\\TaskPulse\\agent-tray.exe",
+              "args": [
+                "--integration-host-event",
+                "--source",
+                "generic-event:zcode-acceptance-20261021",
+                "--adapter",
+                "zcode-desktop"
+              ],
+              "timeoutMs": 10000
+            }
+          ]
+        }
+      ]
+    }
+  }
+}

@@ -66,7 +66,12 @@ impl DeliveryLog {
 static LOG: LazyLock<Mutex<DeliveryLog>> = LazyLock::new(|| {
     Mutex::new(
         dirs_next::home_dir()
-            .map(|h| DeliveryLog::open(h.join(".taskpulse/notification-log.json")))
+            .map(|_| {
+                DeliveryLog::open(
+                    crate::providers::remote_tmux::config::config_dir()
+                        .join("notification-log.json"),
+                )
+            })
             .unwrap_or_default(),
     )
 });

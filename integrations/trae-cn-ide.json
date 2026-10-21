@@ -1,0 +1,127 @@
+{
+  "manifest_version": 1,
+  "adapter_version": "1.0.1",
+  "systems": [
+    "windows"
+  ],
+  "supported_versions": [],
+  "adapter_id": "trae-cn-ide",
+  "agent_id": "trae-cn",
+  "display_name": "TRAE 国内 IDE（部分接入）",
+  "product_form": "ide-cn",
+  "official_sources": [
+    "https://docs.trae.cn/ide_hook-configuration-reference"
+  ],
+  "fields": {
+    "event": "/hook_event_name",
+    "session": "/session_id",
+    "project_path": "/cwd",
+    "call": "/tool_use_id"
+  },
+  "events": {
+    "SessionStart": "session.discovered",
+    "UserPromptSubmit": "turn.submitted",
+    "PreToolUse": "tool.started",
+    "PostToolUse": "tool.finished",
+    "Stop": "turn.stop_requested"
+  },
+  "rules": [
+    {
+      "event": "Notification",
+      "field": "/notification_type",
+      "equals": "permission_prompt",
+      "kind": "input.requested"
+    },
+    {
+      "event": "Notification",
+      "field": "/notification_type",
+      "equals": "ask_user_question",
+      "kind": "input.requested"
+    },
+    {
+      "event": "Notification",
+      "field": "/notification_type",
+      "equals": "idle_prompt",
+      "kind": "observation.unassociated"
+    }
+  ],
+  "capabilities": {
+    "session_discovery": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "title": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "官方载荷未保证侧栏标题，不用目录冒充标题。"
+    },
+    "project": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "turn_start": {
+      "support": "inferred",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "UserPromptSubmit 仅暂存；首个带调用 ID 的工具执行证据派生轮次。纯思考/无工具新轮次暂不能完整发现。"
+    },
+    "phase": {
+      "support": "explicit",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "final_end": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "异步 idle_prompt 无可靠 turn ID，记为未关联观察，不结束最新轮次；Stop 也不结束。"
+    },
+    "failure": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    },
+    "approval_request": {
+      "support": "inferred",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "异步通知必须与唯一当前调用关联；缺失/旧轮次/复用调用不附会到最新轮次，仅记未关联观察。未实机验证。"
+    },
+    "approval_resolution": {
+      "support": "inferred",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "仅 Notification.tool_use_id 与后续同调用 PostToolUse 唯一关联；缺失不猜。"
+    },
+    "question": {
+      "support": "inferred",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "ask_user_question 无原生轮次时仍需可靠调用关联；缺失时不创建阻塞/弹窗。未实机验证。"
+    },
+    "focus": {
+      "support": "unsupported",
+      "channel": "documented-hook",
+      "validation": "fixture-tested",
+      "tested_versions": [],
+      "limitations": "未实机验证；版本未知不表示兼容。"
+    }
+  }
+}

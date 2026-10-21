@@ -15,21 +15,58 @@
 //!
 //! Native Desktop reads `$DSH_HOME` (normally `~/.dsh`) directly, including v4
 //! logs and per-session projection shards. WSL is a separate worker using
-//! `wsl.exe` and base64 transport. Both share parsing and lifecycle rules;
+//! `wsl.exe` and bounded binary pipes. Both share parsing and lifecycle rules;
 //! slow WSL probes cannot delay the desktop feed.
 
+use std::io::{BufRead, BufReader, Read};
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use crate::providers::{Provider, ProviderOutput};
-use base64::Engine;
 
 /// A session with no activity within this window is treated as dormant.
 const WSL_TIMEOUT: Duration = Duration::from_secs(15);
 const WSL_DISTRO: &str = "Ubuntu";
 const NAME_LEN: usize = 56;
+const COMPRESSED_BUDGET: u64 = 64 * 1024 * 1024;
+const DECODED_BUDGET: usize = 128 * 1024 * 1024;
+
+struct BoundedRead<R> {
+    inner: R,
+    remaining: u64,
+}
+impl<R: Read> Read for BoundedRead<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        if buf.is_empty() {
+            return Ok(0);
+        }
+        if self.remaining == 0 {
+            let mut extra = [0u8; 1];
+            return if self.inner.read(&mut extra)? == 0 {
+                Ok(0)
+            } else {
+                Err(std::io::Error::other(
+                    "DSH compressed input budget exceeded",
+                ))
+            };
+        }
+        let size = buf.len().min(self.remaining as usize);
+        let n = self.inner.read(&mut buf[..size])?;
+        self.remaining -= n as u64;
+        Ok(n)
+    }
+}
+struct ProbeChild(std::process::Child);
+impl Drop for ProbeChild {
+    fn drop(&mut self) {
+        if !matches!(self.0.try_wait(), Ok(Some(_))) {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
+}
 
 #[derive(Debug, Clone)]
 struct CachedSession {
@@ -43,6 +80,8 @@ struct CachedSession {
     last_seq: i64,
     started_at: Option<SystemTime>,
     updated_at: Option<SystemTime>,
+    compressed_bytes: u64,
+    decoded_bytes: usize,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -64,6 +103,9 @@ pub struct DeepSeekHarnessProvider {
     last_metadata: std::collections::HashMap<String, SessionMetadata>,
     shard_cache: std::collections::HashMap<PathBuf, (SystemTime, u64, SessionMetadata)>,
     last_tasks: Vec<TaskSnapshot>,
+    decode_attempts: u64,
+    compressed_bytes_read: u64,
+    decoded_bytes_read: u64,
 }
 
 impl DeepSeekHarnessProvider {
@@ -77,6 +119,9 @@ impl DeepSeekHarnessProvider {
             last_metadata: Default::default(),
             shard_cache: Default::default(),
             last_tasks: Vec::new(),
+            decode_attempts: 0,
+            compressed_bytes_read: 0,
+            decoded_bytes_read: 0,
         }
     }
 
@@ -107,6 +152,21 @@ impl DeepSeekHarnessProvider {
 
     /// Run a command inside WSL and capture stdout as raw bytes.
     fn wsl(&self, script: &str) -> std::io::Result<Vec<u8>> {
+        self.wsl_stream(script, |pipe| {
+            let mut bytes = Vec::new();
+            BoundedRead {
+                inner: pipe,
+                remaining: 8 * 1024 * 1024,
+            }
+            .read_to_end(&mut bytes)?;
+            Ok(bytes)
+        })
+    }
+    fn wsl_stream<T: Send + 'static>(
+        &self,
+        script: &str,
+        parse: impl FnOnce(std::process::ChildStdout) -> std::io::Result<T> + Send + 'static,
+    ) -> std::io::Result<T> {
         super::codex_wsl::validate_distro(&self.distro).map_err(std::io::Error::other)?;
         let running = super::codex_wsl::running_distros().map_err(std::io::Error::other)?;
         require_running_distro(&self.distro, &running)?;
@@ -116,41 +176,56 @@ impl DeepSeekHarnessProvider {
             use std::os::windows::process::CommandExt;
             command.creation_flags(0x08000000);
         }
-        let mut child = command
-            .args(["--distribution", &self.distro, "-e", "bash", "-lc", script])
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()?;
-        // Drain both pipes while the child runs, including large compressed logs.
-        let stdout = child.stdout.take();
-        let stderr = child.stderr.take();
-        let (tx, rx) = std::sync::mpsc::channel();
-        for (is_stdout, stream) in [
-            (
-                true,
-                stdout.map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-            ),
-            (
-                false,
-                stderr.map(|pipe| Box::new(pipe) as Box<dyn std::io::Read + Send>),
-            ),
-        ] {
-            let tx = tx.clone();
-            std::thread::spawn(move || {
-                let mut bytes = Vec::new();
-                if let Some(mut stream) = stream {
-                    let _ = stream.read_to_end(&mut bytes);
-                }
-                let _ = tx.send((is_stdout, bytes));
-            });
-        }
+        // Linux timeout owns its command group too: killing only wsl.exe is
+        // insufficient to bound Linux subprocesses that inherited the pipes.
+        let bounded_script = format!(
+            "exec timeout --signal=KILL 14s bash -lc {}",
+            shell_quote(script)
+        );
+        let mut child = ProbeChild(
+            command
+                .args([
+                    "--distribution",
+                    &self.distro,
+                    "-e",
+                    "bash",
+                    "-lc",
+                    &bounded_script,
+                ])
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn()?,
+        );
+        let stdout = child
+            .0
+            .stdout
+            .take()
+            .ok_or_else(|| std::io::Error::other("missing WSL stdout"))?;
+        let stderr = child
+            .0
+            .stderr
+            .take()
+            .ok_or_else(|| std::io::Error::other("missing WSL stderr"))?;
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let stdout_worker = std::thread::spawn(move || {
+            let _ = tx.send(parse(stdout));
+        });
+        let stderr_worker = std::thread::spawn(move || {
+            let mut bytes = Vec::new();
+            BoundedRead {
+                inner: stderr,
+                remaining: 8192,
+            }
+            .read_to_end(&mut bytes)
+            .map(|_| bytes)
+        });
         let deadline = Instant::now() + WSL_TIMEOUT;
         let status = loop {
-            match child.try_wait()? {
+            match child.0.try_wait()? {
                 Some(status) => break status,
                 None if Instant::now() >= deadline => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    let _ = child.0.kill();
+                    let _ = child.0.wait();
                     return Err(std::io::Error::new(
                         std::io::ErrorKind::TimedOut,
                         "WSL probe exceeded 15 seconds",
@@ -159,20 +234,15 @@ impl DeepSeekHarnessProvider {
                 None => std::thread::sleep(Duration::from_millis(20)),
             }
         };
-        let mut out = Vec::new();
-        let mut err = Vec::new();
-        for _ in 0..2 {
-            let (is_stdout, bytes) = rx
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .map_err(|_| {
-                    std::io::Error::new(std::io::ErrorKind::TimedOut, "WSL output pipe timed out")
-                })?;
-            if is_stdout {
-                out = bytes;
-            } else {
-                err = bytes;
-            }
-        }
+        let out = rx
+            .recv_timeout(deadline.saturating_duration_since(Instant::now()))
+            .map_err(|_| {
+                std::io::Error::new(std::io::ErrorKind::TimedOut, "WSL output pipe timed out")
+            })?;
+        let _ = stdout_worker.join();
+        let err = stderr_worker
+            .join()
+            .map_err(|_| std::io::Error::other("WSL stderr worker failed"))??;
         if !status.success() {
             let detail = String::from_utf8_lossy(&err);
             return Err(std::io::Error::other(format!(
@@ -180,7 +250,7 @@ impl DeepSeekHarnessProvider {
                 detail.trim()
             )));
         }
-        Ok(out)
+        out
     }
 
     /// Paths + mtimes of the most recently written session logs. NUL-delimited
@@ -293,25 +363,17 @@ impl DeepSeekHarnessProvider {
 
     /// Read + decompress + parse a session log, returning inferred status.
     fn parse_session(&self, path: &str) -> Option<CachedSession> {
-        // base64 to avoid any binary/CRLF mangling through wsl.exe stdio.
-        let session_path = path;
-        let raw = if self.native_root.is_some() {
-            std::fs::read(session_path).ok()?
+        if self.native_root.is_some() {
+            decode_session(std::fs::File::open(path).ok()?, path)
         } else {
-            let quoted = shell_quote(session_path);
-            let b64 = self
-                .wsl(&format!("base64 -w0 -- {quoted} 2>/dev/null; echo"))
-                .ok()?;
-            let b64: String = String::from_utf8_lossy(&b64)
-                .chars()
-                .filter(|c| !c.is_whitespace())
-                .collect();
-            base64::engine::general_purpose::STANDARD.decode(b64).ok()?
-        };
-        let text = zstd::decode_all(std::io::Cursor::new(raw)).ok()?;
-        let text = String::from_utf8_lossy(&text);
-
-        parse_session_text(&text, session_path)
+            let owned = path.to_string();
+            self.wsl_stream(&format!("exec cat -- {}", shell_quote(path)), move |pipe| {
+                decode_session(pipe, &owned).ok_or_else(|| {
+                    std::io::Error::other("DSH compressed log incomplete or over budget")
+                })
+            })
+            .ok()
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -362,7 +424,32 @@ fn require_running_distro(distro: &str, running: &[String]) -> std::io::Result<(
     }
 }
 
+fn decode_session(input: impl Read, session_path: &str) -> Option<CachedSession> {
+    let mut bounded = BoundedRead {
+        inner: input,
+        remaining: COMPRESSED_BUDGET,
+    };
+    let mut decoder = zstd::stream::read::Decoder::new(&mut bounded).ok()?;
+    decoder.window_log_max(26).ok()?;
+    let started = Instant::now();
+    let mut parsed = parse_session_reader(decoder, session_path)?;
+    parsed.compressed_bytes = COMPRESSED_BUDGET - bounded.remaining;
+    log::debug!(
+        "DSH decoded {} compressed bytes / {} decoded bytes in {} ms",
+        parsed.compressed_bytes,
+        parsed.decoded_bytes,
+        started.elapsed().as_millis()
+    );
+    Some(parsed)
+}
+#[cfg(test)]
 fn parse_session_text(text: &str, session_path: &str) -> Option<CachedSession> {
+    parse_session_reader(text.as_bytes(), session_path)
+}
+fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSession> {
+    let mut reader = BufReader::new(input);
+    let mut line = Vec::new();
+    let mut decoded_bytes = 0usize;
     let mut last_turn_start_seq = -1i64;
     let mut last_turn_end_seq = -1i64;
     let mut cwd: Option<String> = None;
@@ -375,14 +462,28 @@ fn parse_session_text(text: &str, session_path: &str) -> Option<CachedSession> {
     let mut updated_at = None;
     let mut failed = false;
     let mut parsed_event = false;
-    for line in text.lines() {
+    loop {
+        line.clear();
+        let bytes = (&mut reader)
+            .take((super::jsonl_tail::LINE_BUDGET + 1) as u64)
+            .read_until(b'\n', &mut line)
+            .ok()?;
+        if bytes == 0 {
+            break;
+        }
+        decoded_bytes = decoded_bytes.checked_add(bytes)?;
+        if bytes > super::jsonl_tail::LINE_BUDGET || decoded_bytes > DECODED_BUDGET {
+            return None;
+        }
+        let line = std::str::from_utf8(&line).ok()?;
         let line = line.trim_start();
         if !line.starts_with('{') {
-            continue;
+            if line.trim().is_empty() {
+                continue;
+            }
+            return None;
         }
-        let Ok(v) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
+        let v = serde_json::from_str::<serde_json::Value>(line).ok()?;
         let Some(ty) = v.get("type").and_then(|t| t.as_str()) else {
             continue;
         };
@@ -501,6 +602,8 @@ fn parse_session_text(text: &str, session_path: &str) -> Option<CachedSession> {
         last_seq,
         started_at,
         updated_at,
+        compressed_bytes: 0,
+        decoded_bytes,
     })
 }
 
@@ -648,21 +751,31 @@ impl Provider for DeepSeekHarnessProvider {
             let cached = self.cache.get(&path).cloned();
             let (mut state, stale) = match cached {
                 Some(cached) if cached.mtime == mtime => (cached, false),
-                previous => match self.parse_session(&path) {
-                    Some(mut parsed) => {
-                        parsed.mtime = mtime;
-                        self.cache.insert(path.clone(), parsed.clone());
-                        (parsed, false)
+                previous => {
+                    self.decode_attempts += 1;
+                    match self.parse_session(&path) {
+                        Some(mut parsed) => {
+                            self.compressed_bytes_read = self
+                                .compressed_bytes_read
+                                .saturating_add(parsed.compressed_bytes);
+                            self.decoded_bytes_read = self
+                                .decoded_bytes_read
+                                .saturating_add(parsed.decoded_bytes as u64);
+                            parsed.mtime = mtime;
+                            self.cache.insert(path.clone(), parsed.clone());
+                            (parsed, false)
+                        }
+                        None => {
+                            metadata_error.get_or_insert_with(|| {
+                                "会话日志暂不可读或压缩帧尚未写完".to_string()
+                            });
+                            let Some(previous) = previous else {
+                                continue;
+                            };
+                            (previous, true)
+                        }
                     }
-                    None => {
-                        metadata_error
-                            .get_or_insert_with(|| "会话日志暂不可读或压缩帧尚未写完".to_string());
-                        let Some(previous) = previous else {
-                            continue;
-                        };
-                        (previous, true)
-                    }
-                },
+                }
             };
             let session_id = session_id_from_path(&path);
             let mut waiting_reason = None;
@@ -727,6 +840,15 @@ impl Provider for DeepSeekHarnessProvider {
         }
         self.cache.retain(|path, _| live_paths.contains(path));
         self.last_tasks = tasks.clone();
+        let identity = self
+            .native_root
+            .clone()
+            .unwrap_or_else(|| PathBuf::from(format!("wsl:{}", self.distro)));
+        super::resources::record(
+            "dsh",
+            &identity,
+            serde_json::json!({"entries":self.cache.len(),"metadata_shards":self.shard_cache.len(),"decode_attempts":self.decode_attempts,"successful_compressed_bytes":self.compressed_bytes_read,"successful_decoded_bytes":self.decoded_bytes_read,"compressed_budget":COMPRESSED_BUDGET,"decoded_budget":DECODED_BUDGET}),
+        );
         if let Some(error) = metadata_error {
             return ProviderOutput::degraded(tasks, format!("会话数据暂不可用: {error}"));
         }
@@ -904,6 +1026,12 @@ mod tests {
         let mut provider = DeepSeekHarnessProvider::with_native_root(root.path().to_path_buf());
         let first = provider.poll(SystemTime::now());
         assert!(first.authoritative);
+        let attempts = provider.decode_attempts;
+        provider.poll(SystemTime::now());
+        assert_eq!(
+            provider.decode_attempts, attempts,
+            "unchanged logs must not decode again"
+        );
         assert_eq!(first.tasks.len(), 1);
         let task = &first.tasks[0];
         assert_eq!(task.name, "Native title");
@@ -1117,6 +1245,25 @@ mod tests {
             );
         }
     }
+    #[test]
+    #[ignore = "read-only stream of existing logs in an already-running opted-in WSL distro"]
+    fn live_wsl_streaming_snapshot() {
+        let p = DeepSeekHarnessProvider::new();
+        let sessions = p.recent_sessions().unwrap();
+        assert!(!sessions.is_empty(), "No real WSL DSH data available");
+        let mut count = 0;
+        for (path, _) in sessions.into_iter().take(3) {
+            let state = p
+                .parse_session(&path)
+                .expect("real WSL binary pipe + streaming zstd");
+            eprintln!(
+                "WSL read-only sample status={:?} compressed={} decoded={}",
+                state.status, state.compressed_bytes, state.decoded_bytes
+            );
+            count += 1;
+        }
+        assert!(count > 0);
+    }
 
     #[test]
     #[ignore = "read-only inspection of installed desktop session schema"]
@@ -1184,6 +1331,90 @@ mod tests {
                  {\"type\":\"assistant/message\",\"seq\":11,\"data\":{\"message\":{\"content\":[{\"text\":\"done\"}]}}}\n\
                  {\"type\":\"turn/end\",\"seq\":12,\"data\":{\"reason\":{\"kind\":\"completed\"}}}\n";
         assert_eq!(parse_text_status(s), TaskStatus::WaitingInput);
+    }
+    #[test]
+    fn f05_oversized_decoded_record_cannot_publish_a_terminal_after_missing_facts() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl.zstd");
+        let body=format!("{{\"type\":\"turn/start\",\"seq\":1}}\n{{\"type\":\"unknown\",\"data\":\"{}\"}}\n{{\"type\":\"turn/end\",\"seq\":3}}\n","a".repeat(4*1024*1024+1));
+        let bytes = zstd::encode_all(body.as_bytes(), 1).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        let p = DeepSeekHarnessProvider::with_native_root(dir.path().into());
+        assert!(
+            p.parse_session(path.to_str().unwrap()).is_none(),
+            "oversized facts must degrade, not silently publish completion"
+        );
+    }
+    #[test]
+    fn f05_streaming_multiframe_matches_full_decode_and_rejects_partial_or_corrupt() {
+        let parts=["{\"type\":\"session\",\"cwd\":\"/project\",\"title\":\"Native title\"}\n{\"type\":\"turn/start\",\"seq\":10}\n",
+            "{\"type\":\"tool/call\",\"seq\":11,\"data\":{\"name\":\"Bash\",\"arguments\":{\"command\":\"cargo test\"}}}\n",
+            "{\"type\":\"turn/end\",\"seq\":12,\"data\":{\"reason\":{\"kind\":\"completed\"}}}"];
+        let mut frames = Vec::new();
+        for part in parts {
+            frames.extend(zstd::encode_all(part.as_bytes(), 1).unwrap());
+        }
+        let streamed = decode_session(frames.as_slice(), "/session-fixture/log").unwrap();
+        let full = zstd::decode_all(frames.as_slice()).unwrap();
+        let reference =
+            parse_session_text(std::str::from_utf8(&full).unwrap(), "/session-fixture/log")
+                .unwrap();
+        assert_eq!(streamed.status, reference.status);
+        assert_eq!(streamed.status, TaskStatus::WaitingInput);
+        assert_eq!(streamed.name, "Native title");
+        assert_eq!(streamed.turn_key, reference.turn_key);
+        assert_eq!(streamed.activity, reference.activity);
+        assert_eq!(streamed.last_seq, 12);
+        assert_eq!(streamed.decoded_bytes, full.len());
+        assert_eq!(streamed.compressed_bytes, frames.len() as u64);
+        assert!(decode_session(&frames[..frames.len() - 1], "/log").is_none());
+        frames[0] = 0;
+        assert!(decode_session(frames.as_slice(), "/log").is_none());
+        let malformed = zstd::encode_all(b"{broken}\n".as_slice(), 1).unwrap();
+        assert!(decode_session(malformed.as_slice(), "/log").is_none());
+    }
+    #[test]
+    #[ignore = "isolated 64MiB resource comparison; no host sessions"]
+    fn f05_streaming_resource_probe() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("session.jsonl.zstd");
+        let mut encoder = zstd::Encoder::new(std::fs::File::create(&path).unwrap(), 1).unwrap();
+        use std::io::Write;
+        encoder
+            .write_all(b"{\"type\":\"turn/start\",\"seq\":1}\n")
+            .unwrap();
+        let line = format!(
+            "{{\"type\":\"ignored\",\"payload\":\"{}\"}}\n",
+            "a".repeat(990)
+        );
+        for _ in 0..65536 {
+            encoder.write_all(line.as_bytes()).unwrap();
+        }
+        encoder
+            .write_all(b"{\"type\":\"turn/end\",\"seq\":2}\n")
+            .unwrap();
+        encoder.finish().unwrap();
+        let started = Instant::now();
+        if std::env::var_os("TASKPULSE_PROBE_FULL_DECODE").is_some() {
+            let raw = std::fs::read(&path).unwrap();
+            let text = zstd::decode_all(raw.as_slice()).unwrap();
+            let state = parse_session_text(std::str::from_utf8(&text).unwrap(), "/log").unwrap();
+            eprintln!(
+                "full decode decoded_bytes={} elapsed_ms={}",
+                text.len(),
+                started.elapsed().as_millis()
+            );
+            assert_eq!(state.status, TaskStatus::WaitingInput);
+        } else {
+            let state = decode_session(std::fs::File::open(&path).unwrap(), "/log").unwrap();
+            eprintln!(
+                "stream compressed_bytes={} decoded_bytes={} elapsed_ms={}",
+                state.compressed_bytes,
+                state.decoded_bytes,
+                started.elapsed().as_millis()
+            );
+            assert_eq!(state.status, TaskStatus::WaitingInput);
+        }
     }
 
     #[test]

@@ -16,7 +16,9 @@ export type Source =
   | 'remote_tmux'
   | 'local_file'
   | 'claude_code'
-  | 'gemini';
+  | 'gemini'
+  | 'generic_event';
+// Brand identity is data, not a growing Rust/TypeScript brand enum.
 
 export type Confidence = 'exact' | 'hook' | 'inferred';
 
@@ -29,6 +31,7 @@ export interface TerminalInfo {
 }
 
 export interface TaskSnapshot {
+  agent_id?:string; agent_name?:string; evidence_channel?:string; outcome?:string; pending_confirmed_at?:number; integration_epoch?:string; integration_sequence?:number;
   source_instance?: string;
   model?: string;
   internal?: boolean;
@@ -75,10 +78,11 @@ export interface TaskSnapshot {
   hook_matcher?: string;
 }
 
-export type SourceKind = 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner';
+export type SourceKind = 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner' | 'generic_event';
 export interface MonitorSource {
   id: string; name: string; kind: SourceKind; enabled: boolean; location: string;
   projects: string[]; excluded_projects: string[]; tmux_sessions: string[]; tmux_panes: string[]; poll_interval_ms: number;
+  integration?:{agent_id:string;adapter_id:string;transport:string;host_version?:string;accept_since_ms:number};
 }
 export interface DashboardSettings {
   version: number; onboarding_complete: boolean; sources: MonitorSource[];
@@ -88,7 +92,7 @@ export interface DashboardSettings {
 }
 export interface TaskNotice {
   id: number; title: string; body: string; created_at: number; task_id: string | null; test: boolean;
-  context?: { task_name: string; source: Source; project: string | null; host: string | null } | null;
+  context?: { task_name: string; source: Source; agent_name?:string; project: string | null; host: string | null } | null;
   auto_dismiss_ms?: number | null;
 }
 export interface NoticeState { current: TaskNotice | null; pending: number }
@@ -134,6 +138,7 @@ export const STATUS_COLOR: Record<Status, string> = {
 };
 
 export const SOURCE_LABEL: Record<Source, string> = {
+  'generic_event':    '其他 Agent',
   'codex':            'Codex',
   'hermes':           'Hermes',
   'deepseek_harness': 'DeepSeek',
@@ -144,6 +149,7 @@ export const SOURCE_LABEL: Record<Source, string> = {
 };
 
 export const SOURCE_COLOR: Record<Source, string> = {
+  'generic_event':    '#69b7cf',
   'codex':            '#6fbe5a',
   'hermes':           '#d97757',
   'deepseek_harness': '#4a90d9',

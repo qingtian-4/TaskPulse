@@ -159,6 +159,20 @@ impl TaskPulseConfig {
 }
 
 pub fn config_dir() -> PathBuf {
+    if let Some(path) = std::env::var_os("TASKPULSE_HOME") {
+        let path = PathBuf::from(path);
+        // A malformed isolation request must fail closed, never silently write
+        // into a real user home. Primarily used for native acceptance.
+        assert!(
+            path.is_absolute()
+                && path.parent().is_some()
+                && !path
+                    .components()
+                    .any(|c| matches!(c, std::path::Component::ParentDir)),
+            "TASKPULSE_HOME must be an absolute non-root directory"
+        );
+        return path;
+    }
     dirs_next::home_dir()
         .unwrap_or_else(|| PathBuf::from("."))
         .join(".taskpulse")

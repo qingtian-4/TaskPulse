@@ -29,16 +29,26 @@ jobs:
           workspaces: src-tauri
       - name: Install locked frontend dependencies
         run: bun install --frozen-lockfile
+      - name: Audit frontend dependencies (moderate and above)
+        run: bun run audit:frontend
       # Separate native-command steps: PowerShell must not let a later success
       # mask an earlier failed fmt/lint/test exit code.
       - name: Check frontend types
         run: bun run check
+      - name: Test documentation links and candidate source instructions
+        run: bun run test:docs
       - name: Test frontend models
         run: bun run test:ui-model
       - name: Validate release versions
         run: bun run release:check
       - name: Test release validation
         run: bun run test:release
+      - name: Test security report validation
+        run: bun run test:security
+      - name: Test integration contracts
+        run: bun run test:integration-contract
+      - name: Test read-only WSL source detection (offline fixtures)
+        run: python scripts/test-wsl-discovery.py
       - name: Build frontend
         run: bun run build
       - name: Check Rust format
@@ -49,5 +59,7 @@ jobs:
         run: cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray
       - name: Build executable
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --features custom-protocol
+      - name: Test integration bridge in an isolated home
+        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/debug/agent-tray.exe
       # Opt-in live Agent/SSH/WSL and GUI acceptance tests are not unattended CI.
       # No tags, installers, release publication or write-capable token here.

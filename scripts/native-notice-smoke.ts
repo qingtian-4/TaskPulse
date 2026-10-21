@@ -53,7 +53,7 @@ try{
   const focusPreserved=lockedDesktop ? null : await root.invoke('plugin:window|is_focused',{label:'popup'});
   if(!lockedDesktop && !focusPreserved)throw Error('Focus changed during creation: '+JSON.stringify({noticeFocused:await root.invoke('plugin:window|is_focused',{label:'task-notice'}),popupVisible:await root.invoke('plugin:window|is_visible',{label:'popup'})}));
   const layout=await alert.evaluate(`(()=>{const p=document.querySelector('.notice-window');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,background:getComputedStyle(p).backgroundColor,overflow:document.documentElement.scrollWidth>320||document.documentElement.scrollHeight>132,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)};})()`);
-  if(layout.width!==320||layout.height!==132||layout.background!=='rgb(26, 27, 30)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
+  if(layout.width!==320||layout.height!==132||layout.background!=='rgb(21, 30, 36)'||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
   const name=await alert.evaluate(`document.querySelector('.heading')?.textContent`);
   if(name!==first.current.context?.task_name)throw Error('Native task title not used as message heading');
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:50,y:90});
@@ -136,11 +136,20 @@ try{
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
   await alert.wait(`document.querySelector('footer')?.textContent.includes('秒后收起')`);
+  const timedNotice=await root.invoke('get_task_notice');
+  if(!timedNotice.current?.test)throw Error('Timed test notice was replaced before measurement');
   const start=Date.now();
   phase='automatic timeout';
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>!s.current)`,20000);
-  const autoDismissMs=Date.now()-start;
-  if(autoDismissMs<14000)throw Error('Alert disappeared too early');
+  const pollObservedAutoDismissMs=Date.now()-start;
+  // Measuring only after CDP/DOM setup undercounts the already-running timer.
+  // A manual close is not evidence that auto-dismiss ran too early.
+  const timerEvidence=(await root.invoke('get_notification_log')).filter((r:any)=>r.notice_id===timedNotice.current.id);
+  const visible=timerEvidence.find((r:any)=>r.stage==='window_visible');
+  const automatic=timerEvidence.find((r:any)=>r.stage==='auto_dismissed');
+  if(!visible||!automatic)throw Error('No matching automatic-dismiss evidence (manual close/interference): '+JSON.stringify(timerEvidence.map((r:any)=>({at:r.at,stage:r.stage}))));
+  const autoDismissMs=automatic.at-visible.at;
+  if(autoDismissMs<14000)throw Error('Alert disappeared too early: '+JSON.stringify({autoDismissMs,pollObservedAutoDismissMs}));
   await root.invoke('test_notification',{kind:'long_title'});
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('长标题排版验收（测试）')`);
   await alert.wait(`document.querySelector('.message')?.disabled===false`);

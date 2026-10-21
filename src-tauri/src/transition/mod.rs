@@ -51,8 +51,14 @@ enum EventKind {
     HostReconnected,
 }
 
-#[derive(Default, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Default, serde::Serialize, serde::Deserialize)]
 pub struct TransitionEngine {
+    #[serde(default)]
+    integration_delivered: HashSet<String>,
+    #[serde(skip)]
+    integration_ledger_full: bool,
+    #[serde(skip)]
+    deferred: bool,
     prev: HashMap<String, TaskStatus>,
     prev_turns: HashMap<String, Option<String>>,
     #[serde(default)]
@@ -86,10 +92,10 @@ impl TransitionEngine {
         engine
     }
 
-    fn persist(&self) {
+    fn persist(&self) -> bool {
         use std::io::Write;
         let Some(path) = &self.path else {
-            return;
+            return true;
         };
         let result = (|| -> std::io::Result<()> {
             let body = serde_json::to_vec(&serde_json::to_value(self)?)?;
@@ -106,7 +112,13 @@ impl TransitionEngine {
         })();
         if let Err(error) = result {
             log::warn!("notification state not persisted: {error}");
+            return false;
         }
+        !self.integration_ledger_full
+    }
+
+    pub fn flush(&self) -> bool {
+        self.persist()
     }
 
     /// Compare the merged task list + host health against the previous
@@ -323,7 +335,145 @@ impl TransitionEngine {
         }
         // Hosts no longer reported (provider removed them) are dropped.
 
-        self.persist();
+        events.retain(|event| {
+            let task = match event {
+                TaskEvent::WaitingInput { task, .. }
+                | TaskEvent::Succeeded { task }
+                | TaskEvent::Failed { task }
+                | TaskEvent::InferredFinished { task } => task,
+                _ => return true,
+            };
+            if task.source != crate::domain::TaskSource::GenericEvent {
+                return true;
+            }
+            let identity = serde_json::to_string(&(
+                &task.id,
+                &task.turn_key,
+                task.status,
+                task.waiting_reason,
+                &task.input_request_id,
+            ))
+            .unwrap_or_default();
+            if self.integration_delivered.contains(&identity) {
+                return false;
+            }
+            if self.integration_delivered.len() >= 100_000 {
+                self.integration_ledger_full = true;
+                return false;
+            }
+            self.integration_delivered.insert(identity)
+        });
+        if !self.deferred {
+            self.persist();
+        }
+        events
+    }
+
+    pub fn apply_unflushed(
+        &mut self,
+        tasks: &[TaskSnapshot],
+        hosts: &[HostHealth],
+        now: SystemTime,
+    ) -> Vec<TaskEvent> {
+        self.deferred = true;
+        let events = self.apply(tasks, hosts, now);
+        self.deferred = false;
+        events
+    }
+
+    /// Generic integration lifecycle is consumed only through its durable
+    /// ordered outbox. A latest snapshot must not bypass a failed batch commit
+    /// or silently consume A's notification before the outbox is retried.
+    pub fn apply_snapshots(
+        &mut self,
+        tasks: &[TaskSnapshot],
+        hosts: &[HostHealth],
+        now: SystemTime,
+    ) -> Vec<TaskEvent> {
+        let before = self.clone();
+        let events = self.apply_selected(tasks, hosts, now, None);
+        if !self.flush() {
+            *self = before;
+            return vec![];
+        }
+        events
+    }
+
+    /// A replay's notification policy belongs to exactly one durable fact.
+    /// Native tasks and hosts still transition normally; other integrations'
+    /// latest snapshots cannot consume or emit ahead of their own outboxes.
+    pub fn apply_ordered(
+        &mut self,
+        tasks: &[TaskSnapshot],
+        hosts: &[HostHealth],
+        observation: &crate::providers::generic_event::OrderedObservation,
+        now: SystemTime,
+    ) -> Vec<TaskEvent> {
+        self.apply_selected(tasks, hosts, now, Some(&observation.task))
+            .into_iter()
+            .filter(|event| {
+                observation.notify
+                    || match event {
+                        TaskEvent::WaitingInput { task, .. }
+                        | TaskEvent::Succeeded { task }
+                        | TaskEvent::Failed { task }
+                        | TaskEvent::InferredFinished { task } => task.id != observation.task.id,
+                        _ => true,
+                    }
+            })
+            .collect()
+    }
+
+    fn apply_selected(
+        &mut self,
+        tasks: &[TaskSnapshot],
+        hosts: &[HostHealth],
+        now: SystemTime,
+        selected: Option<&TaskSnapshot>,
+    ) -> Vec<TaskEvent> {
+        let ids: HashSet<_> = tasks
+            .iter()
+            .filter(|t| {
+                t.source == crate::domain::TaskSource::GenericEvent
+                    && selected.is_none_or(|s| s.id != t.id)
+            })
+            .map(|t| t.id.clone())
+            .collect();
+        let prev: Vec<_> = self
+            .prev
+            .iter()
+            .filter(|(id, _)| ids.contains(*id))
+            .map(|(k, v)| (k.clone(), *v))
+            .collect();
+        let turns: Vec<_> = self
+            .prev_turns
+            .iter()
+            .filter(|(id, _)| ids.contains(*id))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let waits: Vec<_> = self
+            .prev_waits
+            .iter()
+            .filter(|(id, _)| ids.contains(*id))
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        let mut snapshots: Vec<_> = tasks
+            .iter()
+            .filter(|t| t.source != crate::domain::TaskSource::GenericEvent)
+            .cloned()
+            .collect();
+        if let Some(selected) = selected {
+            let mut fact = selected.clone();
+            if let Some(display) = tasks.iter().find(|t| t.id == fact.id) {
+                fact.unread = display.unread;
+                fact.pinned = display.pinned;
+            }
+            snapshots.push(fact);
+        }
+        let events = self.apply_unflushed(&snapshots, hosts, now);
+        self.prev.extend(prev);
+        self.prev_turns.extend(turns);
+        self.prev_waits.extend(waits);
         events
     }
 

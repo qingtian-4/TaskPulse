@@ -1,6 +1,6 @@
 # TaskPulse 功能改进与实施交接文档
 
-更新日期：2026-10-15（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.6`（未发布；alpha.1 打包失败、alpha.2–5 安装验收环境/脚本失败）。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
+更新日期：2026-10-19（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.7`（候选，未发布；本地安全/原生测试通过，远端 CI 和新安装器待验收）。Alpha.6 的旧草稿安装通过但不包含后续依赖修复；旧标签未改写。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
 
 本文面向接手实施的 Agent。第 2–10 节保留历史审查、问题和原始验收清单；未勾选不能直接当作当前未修复证据。第 11–13 节记录后续实际实施，**当前状态以本节摘要和最新执行记录为准**。原有 `REVIEW_HANDOFF.md` 不作修改。
 
@@ -13,7 +13,7 @@
 | T08 | 配置保留与 DSH WSL 防唤醒已完成 | Claude WSL/SSH、Hermes WSL 未新增 |
 | T09/T10 | 未实施 | 通用外部事件契约／新 Agent、额度独立开关 |
 
-开源准备：Windows Alpha 版本、发布前检查、草稿预发布和安装验收门禁已加入；不等于安装包已发布或干净系统验收通过。见 [发布流程](RELEASING.md) 和 [更新日志](../CHANGELOG.md)。
+开源准备：Alpha.6 的两个独立安装器及草稿已通过；本地后续安全修复与实机门禁仍需完成，不等于安装包已公开或干净系统验收通过。当前行动入口为 [开源交付清单](OPEN_SOURCE_CHECKLIST.md)，流程见 [发布文档](RELEASING.md)。
 
 以下“已实现”指源码中已有入口，不等于已在全部真实环境验收；静态审查发现应先核对最新代码并复现，再修改。执行时以仓库最新 `AGENTS.md` 和用户要求为准。
 
@@ -774,3 +774,125 @@ Alpha.6 本地完整 `scripts/verify.ps1 -Frontend` 已通过：Rust 333 通过�
 opt-in 跳过；UI 模型 19 项；发布/真实进程回归 7 项、65 个断言；Svelte 0 错误/
 警告，fmt、clippy、前端生产构建和内嵌原生构建通过。该结果不替代新 runner
 上的两个安装格式验收；未更改正常运行的托盘、用户来源、代理或 Hook 配置。
+
+### Alpha.6 合并与验收追踪
+
+修复提交 `e2b73e0` 经 [PR #7](https://github.com/qingtian-4/TaskPulse/pull/7)
+合入 main `7a1929aaf1dfb98f425d2868c251865e184fefd5`。准确 HEAD 的
+[Windows quality 38693245422](https://github.com/qingtian-4/TaskPulse/actions/runs/38693245422)
+完整通过，合并树与已验证提交一致。新标签 `v0.2.0-alpha.6` 指向上述 main，
+先前标签未移动。[发行验收 38694054589](https://github.com/qingtian-4/TaskPulse/actions/runs/38694054589)
+已触发；最终结果需以下方实际证据为准，不因 PR 已合并而视为发布完成。
+
+### 本轮停止点：验收结果查询连接中断
+
+最后一次成功读取发行状态：preflight 通过，Windows 完整前端/Rust 检查与测试
+通过，`Build NSIS and MSI installers` 正在执行（job `116286449377`）。随后 GitHub
+连接连续出现 transport error，公开页面的只读核对命令也被审批服务明确拒绝执行：
+`Automatic approval review failed: stream disconnected before completion`。该命令
+没有执行；没有更换认证、关闭安全检查或绕过审批。不能据此判断后台流水线失败。
+
+恢复后先读取上述 run 的最终状态及两个 installer-smoke 矩阵 job；失败则读取其
+日志和证据，不重复触发/打标签。两者通过时再核对草稿确为 draft/prerelease，
+资产含两个安装器、SHA256SUMS.txt 和源 SHA manifest，并实际下载核对分格式
+evidence 的 result.json。未取得结果前不声称 MSI 完整验收通过或草稿已经创建。
+
+本地当前 codex 分支和 main 均位于 `7a1929a`；已推送 Alpha.6 标签，未移动旧标签。
+本节验收追踪尚未提交/推送（审批连接中断）；用户原有未跟踪
+`docs/REVIEW_HANDOFF.md` 保持原样，后续提交不要将其混入。手工发布门禁仍有效。
+
+### 2026-10-15 连接恢复后的最终核验
+
+GitHub 连接与审批执行通道已恢复。本次重新读取
+[发行验收 38694054589](https://github.com/qingtian-4/TaskPulse/actions/runs/38694054589)：
+状态为 `completed / success`，源 SHA 为
+`7a1929aaf1dfb98f425d2868c251865e184fefd5`，与本地 HEAD 和 Alpha.6 标签一致。
+没有重新触发工作流、创建新标签或移动已有标签。
+
+已实际下载并核对独立的 `windows-installer-evidence-msi`（artifact `11953903152`）
+和 `windows-installer-evidence-nsis`（`11953833264`），两份 ZIP 的 SHA256 均与
+GitHub artifact digest 一致。各自的 `result.json` 为 `phase=passed`，版本均为
+`0.2.0-alpha.6`，重启、同版本重装、卸载均为 true。原生 IPC 实际结果为
+`embedded=true`、`onboarding=false`、`tasks=0`、`prompts=0`，首次安装状态为空。
+这证明两个独立 CI runner 的已安装应用验收通过，不等于全部真实 Agent 验收通过。
+
+另已下载 `windows-installers`（artifact `11953483244`），验证其 ZIP digest，
+逐一计算两个安装器、`SHA256SUMS.txt` 和 `release-manifest.json` 的 SHA256，
+与 GitHub 草稿资产公布的 digest 完全一致；两个安装器也通过校验文件的逐项核对。
+manifest 的源 SHA、应用版本、标签及 MSI `0.2.0.1006` 均匹配。
+
+草稿 Release `413503171` 已生成，标签 `v0.2.0-alpha.6`，实际状态为
+`draft=true / prerelease=true / published_at=null`，含 EXE、MSI、SHA256SUMS 和
+源 SHA manifest 四项资产。可在仓库 Releases 中查看草稿；当前仍未公开发布。
+
+剩余人工门禁：无开发工具的 Windows 10/11 与缺少 WebView2/网络受限场景，
+跨版本升级、EXE/MSI 格式迁移和自定义目录，真实 Agent 批准/解除、重命名与
+长时间运行、通知延迟和编辑器焦点。证据明确标记 `cross_version_upgrade`、
+`format_migration`、`focus` 为 `not_verified`，安装器签名为 `NotSigned`。
+继续按 `docs/RELEASING.md` 记录这些门禁后，再决定是否手工公开 Alpha。
+
+本次只补充交接记录，未修改产品代码、用户来源或 Agent 配置。WSL Git 的
+换行差异用一次性的 `core.autocrlf=true` 核对，未改仓库或全局 Git 配置；
+真实工作区改动仍只有本文与原有未跟踪 `docs/REVIEW_HANDOFF.md`。
+
+## 20. 2026-10-19：开源准备复核与依赖安全门禁
+
+GitHub 连接器仍有 transport error，匿名 API 受到限流；公开工作流页面可正常
+读取。重新核对 Alpha.6：Windows 构建、两个安装矩阵 job、草稿生成均成功，
+公开 Releases 页面仍无公开版本。Git ls-remote 确认 main 与标签仍指向 `7a1929a`。
+第 19 节末的 2026-10-15 草稿/资产下载核验原样保留，本次未重新下载私有资产，
+未移动标签、重跑工作流、推送或公开 Release。
+
+新的 `bun audit` 检查在旧锁文件报告 32 条（14 high/16 moderate/2 low）。核对
+上游公告后，在原主版本内升级 Kit 2.70.3、Svelte 5.57.2、Vite 8.3.4 及相关传递
+依赖；再次审计只剩 Kit 2 所需 cookie 0.6.0 的 1 条 low。不是把 SSR/开发服务器
+漏洞一概当作安装版可利用，也不是把静态构建当作可忽略所有告警的理由。残余风险
+和复核时限写入新清单，不强行覆盖父包范围或自动跳到 Kit 3。
+
+新增 audit:frontend（moderate+）到本地 verify、Windows quality 和 release，
+并以测试约束不得吞掉失败。完整本地验证通过：Rust 333/7 opt-in、UI 19、发布
+8（75 断言）、Svelte 0 错误/警告、fmt/clippy、前端与内嵌原生构建。真实 Edge
+浏览器的隔离 mocked IPC 冒烟通过：28 任务、440×720、滚动/筛选/新项目/管理
+交互正常，无运行时异常；不是新的原生安装器或真实 Agent 通知验收。
+
+README、发布状态、贡献说明与 Bug 模板已同步；[开源交付清单](OPEN_SOURCE_CHECKLIST.md)
+将已有证据、剩余安全审查、候选重建、干净系统、实机事件和长期验证分开。常见
+凭据/私钥正则初筛无匹配，但 cargo-audit 与专用历史泄密审查仍未完成。未修改
+产品状态机、真实监控范围或 Agent 配置，测试用进程已按路径核对后关闭。
+
+## 21. Alpha.7：补齐 Rust/历史审查并验证原生提醒
+
+新增 [安全审查记录](SECURITY_AUDIT_2026-10.md) 与可重复的 `audit:rust` /
+`audit:secrets`。工具固定版本、先验 SHA256，只在忽略的 target 目录运行；历史
+扫描完整 refs/合并差异，脱敏且不上传原始上下文。新增只读 Security checks，
+release 在其通过前不能构建候选；未创建 Issue、忽略漏洞或降低失败门槛。
+
+Rust 初次匹配 quick-xml 两个旧版本共 4 条漏洞记录；升级 Windows 通知链与 plist
+后清除。另修复兼容版本的 anyhow/event-listener/rand 告警及已撤回的 fastrand。
+首次审查确有网络超时，随后完整重试返回 0，漏洞/已撤回项均为 0，未使用跳过
+检查或旧数据库开关。仍有 10 项维护、glib/旧 rand 两项 unsound 警告，保留并说明
+实际平台/feature 暴露面，不称“零风险”。前端仍剩 cookie 的 1 low。
+
+版本四文件已同步为 `0.2.0-alpha.7`，WiX `0.2.0.1007`，发行说明与输入一致；
+未创建新标签或修改旧标签。完整本机 verify -Frontend 通过：Rust 333/7 opt-in、
+UI 19、发布 8（75 断言）、安全 6（45 断言），Svelte 0 错误/警告，fmt/clippy、
+前端及 Alpha.7 内嵌原生构建通过。版本命令真实输出 Alpha.7。
+
+升级后的 Windows 系统通知 API 接受测试调用。首次原生弹窗测试发现已有真实
+提醒占用，主动拒绝，没有清空或标记其已读；后续只读 IPC/面板检查正常，原弹窗
+退出展示后才再次运行保护检查。实际 WebView2 提醒验收随后完整通过：320×132
+深色、长标题、约 15094 ms 普通结果自动收起、批准不超时、悬停暂停、队列及旧
+回调安全、点击详情、主开关、投递日志、无假任务/未读修改、无原生控制台/CSP
+错误；主面板焦点保持。临时通知偏好已恢复，测试专属进程已按精确路径核对后
+关闭，9337 调试端口已确认关闭。没有替换平时使用的可执行文件。
+
+这不是新的 NSIS/MSI 安装验收，也不是肉眼系统横幅、外部编辑器焦点、真实 Agent
+新事件或长期 P95 验收。远端质量/安全和新候选安装器仍需准确提交的 CI 结果；
+GitHub 连接器最后一次只读检查仍为 transport error，不据此宣称 PR/发布成功。
+
+首轮开发分支推送 `0b217f5` 已触发远端检查：
+[Security checks 39222794274](https://github.com/qingtian-4/TaskPulse/actions/runs/39222794274)
+的两个 Linux job 通过，Windows quality `39222795331` 当时在执行 Rust 测试。
+PR 创建调用出现 transport error，网页复核该 head 没有开放 PR；未合并 main 或
+创建 Alpha.7 标签。随后补了“不带 error: 前缀的 registry 查询失败也不能放行”
+回归并再次完成全量本地验证；推送后必须以新 HEAD 的检查为准，不借用旧结果。

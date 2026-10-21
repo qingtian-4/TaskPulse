@@ -13,6 +13,8 @@ Windows 的 `~/.codex`、WSL 的 Linux `~/.codex`、SSH 服务器的 Codex 是�
 
 TaskPulse 只检查已运行的发行版，不自动启动停止的 WSL。Python 缺失、目录不存在、SQLite 忙或 WSL 断开会显示来源异常，保留原任务状态并标记待更新，不通知“任务完成”。
 
+自动发现不会把“WSL 正在运行”当作“安装了 Codex”：默认跳过 Docker Desktop / Rancher Desktop 的内部发行版；对其他运行中发行版，在 Linux 内只读验证 Codex thread 表结构、原生会话索引或 rollout 会话元数据后，才显示“发现 Codex”提示。空目录、普通 WSL 环境、验证超时或缺少 Python 不会被推荐。来源可用也不代表有任务正在执行。发现操作不会保存配置、启用来源、导入历史或改动已有项目范围；已手动添加的来源不会被删除。未被自动发现时，仍可手动配置后查看采集状态。
+
 ## 数据与边界
 
 | 信息 | 来源 / 策略 |
@@ -34,6 +36,10 @@ TaskPulse 只检查已运行的发行版，不自动启动停止的 WSL。Python
 ```powershell
 # 普通单元测试不要求 WSL；同一解析器验证启动、重命名、增量完成和身份隔离。
 cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray wsl
+# 离线验证 Python 探测器，只使用临时目录（需要 Python 3，不需要 WSL）。
+python scripts/test-wsl-discovery.py
+# 真实来源发现验证：保留 Ubuntu Codex，排除 Docker 等内部环境（不启动发行版）。
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_wsl_codex_discovery -- --ignored --nocapture
 # 真实只读采集，默认 Ubuntu；可设置 TASKPULSE_WSL_DISTRO。
 cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_wsl_codex_snapshot -- --ignored --nocapture
 ```
@@ -45,3 +51,7 @@ bun scripts/native-wsl-codex-smoke.ts
 ```
 
 脚本验证发现/添加/保存、真实标题和项目、来源健康、隔离身份和不改变其他范围。不发送 Agent 提示词，不更改原生配置，不将历史任务标记已查看。默认恢复 TaskPulse 来源设置；`TASKPULSE_KEEP_WSL_CODEX=1` 仅在全部验收成功时保留新来源启用。可以用 `TASKPULSE_WSL_PROJECT` / `TASKPULSE_WSL_TITLE` 指定验收样本，默认仅检查发现真实会话，不依赖某个用户项目。验收后关闭临时调试进程，正常启动托盘。
+
+### 2026-10-20 自动发现误报回归
+
+在同时运行 Ubuntu 和 docker-desktop 的 Windows 主机上，真实只读发现验证通过：Ubuntu 有 Codex 证据，docker-desktop 无推荐来源，本次耗时 192 ms（单次样本，不是时延保证）。原生 WebView2 IPC 和管理页确认不再出现 Docker 的发现提示，监控设置前后相同。完整验证为 Rust 336 通过 / 8 opt-in 忽略、Python 离线探测 5 项通过，另有 Svelte、Clippy、前端及原生构建通过；这些结果不代替全新 Agent 长期端到端验收。

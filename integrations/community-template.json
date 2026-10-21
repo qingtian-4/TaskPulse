@@ -1,0 +1,46 @@
+{
+  "manifest_version": 1,
+  "adapter_id": "example-editor",
+  "adapter_version": "1.0.0",
+  "agent_id": "example-editor",
+  "display_name": "示例社区 Agent",
+  "product_form": "custom",
+  "systems": [
+    "windows"
+  ],
+  "supported_versions": [],
+  "official_sources": [],
+  "fields": {
+    "event": "/event_name",
+    "session": "/session_id",
+    "turn": "/turn_id",
+    "event_id": "/event_id",
+    "title": "/session_title",
+    "project_path": "/cwd",
+    "request": "/request_id",
+    "call": "/call_id"
+  },
+  "events": {
+    "RunStarted": "turn.started",
+    "RunCompleted": "turn.completed",
+    "NeedsApproval": "input.requested",
+    "ApprovalResolved": "input.resolved",
+    "Stop": "turn.stop_requested"
+  },
+  "capabilities": {
+    "turn_start": {
+      "support": "explicit",
+      "channel": "self-reported",
+      "validation": "documented",
+      "tested_versions": [],
+      "limitations": "示例，不是任何真实宿主验证；修改映射前核对实际事件。"
+    },
+    "final_end": {
+      "support": "explicit",
+      "channel": "self-reported",
+      "validation": "documented",
+      "tested_versions": [],
+      "limitations": "只有来源明确确认最终结束才能发送 RunCompleted，不能映射 Stop。"
+    }
+  }
+}

@@ -24,8 +24,24 @@ test('repository versions and release workflow keep publication draft-only and s
   expect(Object.keys(workflow.jobs)).not.toContain('build-macos');
   const commands=workflow.jobs.windows.steps.filter((s:any)=>s.run).map((s:any)=>s.run);
   expect(commands).toContain('bun install --frozen-lockfile');
+  expect(commands).toContain('bun run audit:frontend');
   expect(commands.some((s:string)=>s.includes('cargo clippy --locked'))).toBe(true);
   expect(commands.every((s:string)=>s.trim().split('\n').length===1)).toBe(true);
+});
+test('quality and release audit the locked frontend graph without swallowing failures',()=>{
+  const root=join(import.meta.dir,'..');
+  const pkg=JSON.parse(readFileSync(join(root,'package.json'),'utf8'));
+  expect(pkg.scripts['audit:frontend']).toBe('bun audit --audit-level=moderate');
+  for(const [file,job] of [['quality.yml','quality'],['release.yml','windows']]) {
+    const workflow=Bun.YAML.parse(readFileSync(join(root,'.github/workflows',file),'utf8')) as any;
+    const steps=workflow.jobs[job].steps;
+    const install=steps.findIndex((s:any)=>s.run==='bun install --frozen-lockfile');
+    const audit=steps.findIndex((s:any)=>s.run==='bun run audit:frontend');
+    expect(install).toBeGreaterThanOrEqual(0);
+    expect(audit).toBeGreaterThan(install);
+    expect(steps[audit]['continue-on-error']).not.toBe(true);
+    expect(workflow.jobs[job]['continue-on-error']).not.toBe(true);
+  }
 });
 test('MSI numeric metadata is separate from SemVer but derived and bounded',()=>{
   expect(msiVersionFor('0.2.0-alpha.2')).toBe('0.2.0.1002');

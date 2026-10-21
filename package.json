@@ -1,7 +1,7 @@
 {
   "name": "agent-tray",
   "private": true,
-  "version": "0.2.0-alpha.6",
+  "version": "0.2.0-alpha.7",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -9,8 +9,14 @@
     "preview": "vite preview",
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
-    "test:ui-model": "bun test scripts/dashboard.test.ts scripts/notice.test.ts",
+    "test:ui-model": "bun test scripts/dashboard.test.ts scripts/notice.test.ts scripts/source-setup.test.ts scripts/visual.test.ts",
+    "test:docs": "bun test scripts/docs.test.ts",
     "test:release": "bun test scripts/release.test.ts",
+    "audit:frontend": "bun audit --audit-level=moderate",
+    "audit:rust": "bun scripts/security.ts rust",
+    "audit:secrets": "bun scripts/security.ts secrets",
+    "test:security": "bun test scripts/security.test.ts",
+    "test:integration-contract": "bun test scripts/integration-contract.test.ts",
     "release:check": "bun scripts/release.ts check",
     "tauri": "tauri"
   },
@@ -23,14 +29,14 @@
   },
   "devDependencies": {
     "@sveltejs/adapter-static": "^3.0.10",
-    "@sveltejs/kit": "^2.50.2",
+    "@sveltejs/kit": "^2.70.2",
     "@sveltejs/vite-plugin-svelte": "^7.0.0",
     "@tailwindcss/vite": "^4.2.1",
     "@tauri-apps/cli": "^2.11.4",
-    "svelte": "^5.51.0",
+    "svelte": "^5.55.7",
     "svelte-check": "^4.4.2",
     "tailwindcss": "^4.2.1",
     "typescript": "^6.0.2",
-    "vite": "^8.0.0"
+    "vite": "^8.0.16"
   }
 }

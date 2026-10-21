@@ -18,6 +18,8 @@ const MAX_QUEUED_NOTICES: usize = 128;
 /// Presentation fields are separate: native task titles may themselves contain ` · `.
 #[derive(Debug, Clone, Serialize)]
 pub struct NoticeContext {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
     pub task_name: String,
     pub source: TaskSource,
     pub project: Option<String>,
@@ -27,6 +29,7 @@ pub struct NoticeContext {
 impl From<&TaskSnapshot> for NoticeContext {
     fn from(task: &TaskSnapshot) -> Self {
         Self {
+            agent_name: task.agent_name.clone(),
             task_name: task.name.clone(),
             source: task.source,
             project: task.project.clone(),
@@ -256,6 +259,11 @@ pub fn get_pending_task_prompts() -> Vec<TaskSnapshot> {
             let provider = source.and_then(|s| health.iter().find(|p| p.provider == s.id));
             let interval = source.map_or(3000, |s| s.poll_interval_ms);
             task.stale |= !prompt_source_fresh(provider, now, interval);
+            if task.source == TaskSource::GenericEvent {
+                task.stale |= task
+                    .pending_confirmed_at
+                    .is_none_or(|at| crate::integrations::now_ms().saturating_sub(at) > 30_000);
+            }
             task
         })
         .collect();
@@ -287,6 +295,10 @@ fn reopenable(task: &TaskSnapshot) -> bool {
         && !task.stale
         && !task.internal
         && task.confidence != crate::domain::DetectionConfidence::Inferred
+        && (task.source != TaskSource::GenericEvent
+            || task
+                .pending_confirmed_at
+                .is_some_and(|at| crate::integrations::now_ms().saturating_sub(at) <= 30_000))
 }
 
 #[tauri::command]
@@ -416,7 +428,12 @@ pub async fn open_task_notice(app: AppHandle, id: u64) -> Result<(), String> {
         .cloned()
         .ok_or("这条提醒已关闭")?;
     if let Some(task) = entry.task.clone() {
-        let current = crate::monitoring::find_session(&task.id).unwrap_or(task);
+        let current = crate::monitoring::find_session(&task.id).unwrap_or_else(|| task.clone());
+        if current.turn_key != task.turn_key {
+            return Err(
+                "这条提醒对应旧轮次；请从任务面板查看当前执行，不会将旧操作作用于新轮次。".into(),
+            );
+        }
         crate::watcher::select_task(&app, current);
     } else {
         crate::tray::show_popup(&app);
@@ -521,23 +538,31 @@ fn publish(app: &AppHandle) {
     }
     let app = app.clone();
     std::thread::spawn(move || {
-        let result =
-            WebviewWindowBuilder::new(&app, "task-notice", WebviewUrl::App("notice/".into()))
-                .title("TaskPulse · 任务提醒")
-                .transparent(true)
-                .background_color(tauri::webview::Color(0, 0, 0, 0))
-                .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
-                .decorations(false)
-                // Native Windows shadows add a white frame to undecorated windows.
-                // Match the dashboard's transparent, CSS-rounded dark surface instead.
-                .shadow(false)
-                .resizable(false)
-                .skip_taskbar(true)
-                .always_on_top(true)
-                .focused(false)
-                .focusable(false)
-                .visible(false)
-                .build();
+        let builder =
+            WebviewWindowBuilder::new(&app, "task-notice", WebviewUrl::App("notice/".into()));
+        let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+            builder.data_directory(
+                crate::providers::remote_tmux::config::config_dir().join("webview2"),
+            )
+        } else {
+            builder
+        };
+        let result = builder
+            .title("TaskPulse · 任务提醒")
+            .transparent(true)
+            .background_color(tauri::webview::Color(0, 0, 0, 0))
+            .inner_size(NOTICE_WIDTH, NOTICE_HEIGHT)
+            .decorations(false)
+            // Native Windows shadows add a white frame to undecorated windows.
+            // Match the dashboard's transparent, CSS-rounded dark surface instead.
+            .shadow(false)
+            .resizable(false)
+            .skip_taskbar(true)
+            .always_on_top(true)
+            .focused(false)
+            .focusable(false)
+            .visible(false)
+            .build();
         match result {
             Ok(win) => {
                 if let Ok(Some(monitor)) = app.primary_monitor() {
@@ -850,5 +875,26 @@ mod tests {
         assert_eq!(context.project.as_deref(), Some("Project · with separator"));
         assert_eq!(context.host.as_deref(), Some("Server1"));
         assert_eq!(context.source, TaskSource::Codex);
+    }
+
+    #[test]
+    fn generic_pending_cannot_be_reopened_by_a_fresh_heartbeat() {
+        let mut task = TaskSnapshot::new(
+            "generic",
+            "synthetic",
+            TaskSource::GenericEvent,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        task.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        task.input_request_id = Some("r".into());
+        task.input_request_ids = vec!["r".into()];
+        task.pending_confirmed_at = Some(crate::integrations::now_ms().saturating_sub(60_000));
+        assert!(!reopenable(&task));
+        task.pending_confirmed_at = Some(crate::integrations::now_ms());
+        assert!(reopenable(&task));
+        task.confidence = crate::domain::DetectionConfidence::Inferred;
+        assert!(!reopenable(&task));
     }
 }

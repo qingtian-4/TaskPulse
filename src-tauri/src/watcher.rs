@@ -86,6 +86,13 @@ impl From<AgentStatus> for TaskSnapshot {
         };
         let now = SystemTime::now();
         TaskSnapshot {
+            integration_epoch: None,
+            integration_sequence: 0,
+            agent_id: None,
+            agent_name: None,
+            evidence_channel: None,
+            outcome: None,
+            pending_confirmed_at: None,
             id: a.id,
             name: a.name,
             source,
@@ -148,6 +155,9 @@ pub fn status_priority_num(status: &str) -> u8 {
 }
 
 pub fn status_dir() -> Option<PathBuf> {
+    if std::env::var_os("TASKPULSE_HOME").is_some() {
+        return Some(config::config_dir().join("legacy-status"));
+    }
     dirs_next::home_dir().map(|h| h.join(".agent-monitor"))
 }
 
@@ -160,6 +170,24 @@ static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
 static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
+    reconcile_attention_with_persistence(tasks, true)
+}
+
+// Kept separate so mixed-source replay tests exercise the production dispatch
+// boundary, not a copy of the watch loop's notification branch.
+pub(crate) fn ordered_transition_events(
+    engine: &mut TransitionEngine,
+    tracked: &[TaskSnapshot],
+    hosts: &[HostHealth],
+    observation: &crate::providers::generic_event::OrderedObservation,
+    now: SystemTime,
+) -> Vec<crate::transition::TaskEvent> {
+    engine.apply_ordered(tracked, hosts, observation, now)
+}
+fn reconcile_attention_with_persistence(
+    tasks: Vec<TaskSnapshot>,
+    persist: bool,
+) -> Vec<TaskSnapshot> {
     let mut tasks = tasks;
     let settings = crate::monitoring::get_monitoring_settings();
     for task in &mut tasks {
@@ -180,7 +208,11 @@ fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     tracker.normalize_source_instances(|task| {
         crate::monitoring::source_for(&settings, task).map(|s| s.id.clone())
     });
-    let mut display = tracker.reconcile(tasks);
+    let mut display = if persist {
+        tracker.reconcile(tasks)
+    } else {
+        tracker.reconcile_unflushed(tasks)
+    };
     display.retain(crate::monitoring::allows);
     display
 }
@@ -606,12 +638,14 @@ fn dedup_claude_over_scan(tasks: &mut Vec<TaskSnapshot>) {
 }
 
 struct LocalBatch {
+    ordered: Vec<crate::providers::generic_event::OrderedObservation>,
     tasks: Vec<TaskSnapshot>,
     authoritative_sources: HashSet<TaskSource>,
     authoritative_instances: HashSet<String>,
 }
 
 struct LocalProviders {
+    ordered: Vec<crate::providers::generic_event::OrderedObservation>,
     file: LocalFileProvider,
     workers: Vec<(String, Vec<TaskSource>, crate::providers::worker::Worker)>,
     latest: std::collections::HashMap<String, ProviderOutput>,
@@ -624,6 +658,7 @@ struct LocalProviders {
 impl LocalProviders {
     fn new(_monitoring: MonitoringConfig) -> Self {
         let mut providers = Self {
+            ordered: vec![],
             file: LocalFileProvider::new(),
             workers: vec![],
             latest: Default::default(),
@@ -669,6 +704,9 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::GenericEvent => Box::new(
+                    crate::providers::generic_event::GenericEventProvider::new(source.clone()),
+                ),
                 SourceKind::ClaudeCode => {
                     Box::new(crate::providers::claude_code::ClaudeCodeProvider::new(
                         if source.location.is_empty() {
@@ -736,7 +774,7 @@ impl LocalProviders {
                     let mut output = provider.poll(SystemTime::now());
                     for task in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
                         task.source_instance = Some(source.id.clone());
-                        if source.kind != SourceKind::CodexWsl
+                        if !matches!(source.kind, SourceKind::CodexWsl | SourceKind::GenericEvent)
                             && !matches!(
                                 source.id.as_str(),
                                 "codex"
@@ -851,7 +889,8 @@ impl LocalProviders {
     fn collect_ready(&mut self) -> bool {
         let mut changed = false;
         for (name, _, worker) in &self.workers {
-            while let Ok(observation) = worker.observations.try_recv() {
+            while let Ok(mut observation) = worker.observations.try_recv() {
+                self.ordered.append(&mut observation.output.ordered);
                 log::debug!("provider {name}: {} ms", observation.duration_ms);
                 update_provider_health(
                     &mut self.health,
@@ -955,6 +994,7 @@ impl LocalProviders {
         crate::monitoring::observe(&tasks);
         tasks.retain(crate::monitoring::allows);
         LocalBatch {
+            ordered: std::mem::take(&mut self.ordered),
             tasks,
             authoritative_sources,
             authoritative_instances,
@@ -1287,6 +1327,109 @@ pub fn watch(app: AppHandle) {
         }
         if providers.collect_ready() || last_scan.elapsed() >= Duration::from_secs(2) {
             let batch = providers.poll(SystemTime::now());
+            let mut receipts = std::collections::BTreeMap::new();
+            let mut ordered_events = vec![];
+            let previous_engine = engine.clone();
+            for observation in batch.ordered {
+                let receipt_key = (
+                    observation.receipt.source.clone(),
+                    observation.receipt.session_key.clone(),
+                    observation.receipt.epoch.clone(),
+                );
+                if crate::monitoring::allows(&observation.task) && !is_ignored(&observation.task.id)
+                {
+                    // Every ordered fact follows scope/store/attention/transition.
+                    crate::monitoring::observe(std::slice::from_ref(&observation.task));
+                    let merged = store.merge(vec![observation.task.clone()], SystemTime::now());
+                    reconcile_attention_with_persistence(merged, false);
+                    let mut tracked = known_sessions();
+                    // Attention may already contain a newer durable observation
+                    // after a crash. Transition still consumes this ordered fact,
+                    // using its turn identity; its own ledger deduplicates it.
+                    if let Some(current) = tracked.iter_mut().find(|t| t.id == observation.task.id)
+                    {
+                        let unread = current.unread;
+                        let pinned = current.pinned;
+                        *current = observation.task.clone();
+                        current.unread = unread;
+                        current.pinned = pinned;
+                    }
+                    tracked.retain(|task| crate::monitoring::allows(task) && !is_ignored(&task.id));
+                    ordered_events.extend(ordered_transition_events(
+                        &mut engine,
+                        &tracked,
+                        &hosts,
+                        &observation,
+                        SystemTime::now(),
+                    ));
+                }
+                receipts.insert(receipt_key, observation.receipt);
+            }
+            if !receipts.is_empty() {
+                let attention_durable = ATTENTION_TRACKER.get().is_some_and(|tracker| {
+                    tracker
+                        .lock()
+                        .unwrap_or_else(|e| e.into_inner())
+                        .flush()
+                        .is_ok()
+                });
+                if attention_durable && engine.flush() {
+                    let tracked = known_sessions();
+                    // Do not show a human blocker that was explicitly resolved
+                    // later in this same ordered batch. End facts remain events.
+                    ordered_events.retain(|event| match event {
+                        crate::transition::TaskEvent::WaitingInput { task, .. }
+                            if task.requires_action() =>
+                        {
+                            tracked.iter().any(|latest| {
+                                latest.id == task.id
+                                    && latest.turn_key == task.turn_key
+                                    && latest.requires_action()
+                                    && task
+                                        .input_request_id
+                                        .as_ref()
+                                        .is_some_and(|id| latest.input_request_ids.contains(id))
+                            })
+                        }
+                        _ => true,
+                    });
+                    crate::notifier::handle_events(&app, &ordered_events, &tracked);
+                    let mut acknowledged_sources = HashSet::new();
+                    for receipt in receipts.values() {
+                        if let Err(code) = crate::providers::generic_event::acknowledge(
+                            &crate::integrations::home(),
+                            receipt,
+                        ) {
+                            log::warn!("integration acknowledgment deferred: {code}");
+                        } else {
+                            acknowledged_sources.insert(receipt.source.as_str());
+                        }
+                    }
+                    // Ack is the backpressure boundary: wake only successfully
+                    // committed sources to drain the next bounded batch, rather
+                    // than waiting a full polling interval for every 128 facts.
+                    // An empty poll has no receipts and cannot self-spin.
+                    for (id, _, worker) in &providers.workers {
+                        if acknowledged_sources.contains(id.as_str()) {
+                            worker.request_refresh();
+                        }
+                    }
+                } else {
+                    engine = previous_engine;
+                    for receipt in receipts.values() {
+                        if let Some(health) = providers
+                            .health
+                            .iter_mut()
+                            .find(|p| p.provider == receipt.source)
+                        {
+                            health.status = ProviderStatus::Degraded;
+                            health.message =
+                                Some("状态持久化失败；待消费事件保留，未确认丢弃".into());
+                        }
+                    }
+                    log::warn!("integration batch persistence failed; durable outboxes retained");
+                }
+            }
             store.retain(crate::monitoring::allows);
             store.merge_instances(
                 batch.tasks,
@@ -1308,7 +1451,7 @@ pub fn watch(app: AppHandle) {
                 .map(|task| task.id.clone())
                 .collect();
             engine.forget(&excluded);
-            let events = engine.apply(&tracked, &hosts, SystemTime::now());
+            let events = engine.apply_snapshots(&tracked, &hosts, SystemTime::now());
             crate::notifier::handle_events(&app, &events, &tracked);
             if let Err(error) = history.save_if_changed(store.recent()) {
                 log::warn!("recent history: {error}");
@@ -1380,6 +1523,7 @@ pub fn diagnose() {
     let mut first_ready = std::collections::HashMap::new();
     let mut durations = std::collections::HashMap::new();
     let mut latest = LocalBatch {
+        ordered: vec![],
         tasks: Vec::new(),
         authoritative_sources: HashSet::new(),
         authoritative_instances: HashSet::new(),
@@ -1447,6 +1591,7 @@ pub fn diagnose() {
             "providers": providers.health, "tasks": tasks, "transition_count": event_count,
             "codex_account_quota": crate::providers::codex::get_codex_quota(),
             "quota_observations": quota_observations, "requested_quota_refresh": requested_quota_refresh,
+            "resources": crate::providers::resources::snapshot(),
         })
     );
 }

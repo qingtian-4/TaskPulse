@@ -68,6 +68,97 @@ pub fn running_distros() -> Result<Vec<String>, String> {
         .collect())
 }
 
+#[derive(Debug, Clone)]
+pub struct WslCodexDiscovery {
+    pub distro: String,
+    pub root: Option<String>,
+    pub detail: String,
+}
+
+fn infrastructure_distro(distro: &str) -> bool {
+    matches!(
+        distro.to_ascii_lowercase().as_str(),
+        "docker-desktop" | "docker-desktop-data" | "rancher-desktop" | "rancher-desktop-data"
+    )
+}
+
+fn discovery_root(body: &[u8]) -> Result<Option<String>, String> {
+    #[derive(Deserialize)]
+    struct Probe {
+        root: String,
+        evidence: Option<String>,
+    }
+    let probe: Probe = serde_json::from_slice(body).map_err(|_| "WSL 发现结果不可读")?;
+    if !probe.root.starts_with('/') || probe.root.split('/').any(|s| s == "..") {
+        return Err("WSL Codex 目录无效".into());
+    }
+    match probe.evidence.as_deref() {
+        None => Ok(None),
+        Some("thread_schema" | "session_index" | "rollout_metadata") => Ok(Some(probe.root)),
+        Some(_) => Err("WSL Codex 证据类型不可识别".into()),
+    }
+}
+
+fn discover_in_running_distros(
+    running: &[String],
+    mut probe: impl FnMut(&str) -> Result<Option<String>, String>,
+) -> Vec<WslCodexDiscovery> {
+    running
+        .iter()
+        .map(|distro| {
+            // A WSL runtime is not an Agent. Do not even enter infrastructure
+            // distros for auto-discovery. Explicit saved sources stay untouched.
+            let result = if infrastructure_distro(distro) {
+                Ok(None)
+            } else {
+                validate_distro(distro).and_then(|_| probe(distro))
+            };
+            let (root, detail) = match result {
+                Ok(Some(root)) => {
+                    let detail = format!(
+                        "WSL {distro} · 已验证 Codex 会话数据：{root}；来源可用不代表任务正在运行"
+                    );
+                    (Some(root), detail)
+                }
+                Ok(None) if infrastructure_distro(distro) => (
+                    None,
+                    format!("WSL {distro} · 内部运行环境，不自动识别为 Codex 来源"),
+                ),
+                Ok(None) => (
+                    None,
+                    format!("WSL {distro} · 未发现 Codex 会话数据；仅有 WSL 环境不算 Agent 来源"),
+                ),
+                Err(_) => (
+                    None,
+                    format!("WSL {distro} · 暂未验证 Codex 数据，请检查 Python 3、权限或连接；可手动配置"),
+                ),
+            };
+            WslCodexDiscovery {
+                distro: distro.clone(),
+                root,
+                detail,
+            }
+        })
+        .collect()
+}
+
+pub fn discover_codex_distros() -> Result<Vec<WslCodexDiscovery>, String> {
+    use base64::Engine;
+    let running = running_distros()?;
+    let program =
+        base64::engine::general_purpose::STANDARD.encode(include_bytes!("codex_wsl_discovery.py"));
+    let script = format!("import base64;exec(base64.b64decode('{program}'))");
+    // Only the running snapshot is probed; never enumerate all installed distros
+    // with --distribution, which would wake stopped environments.
+    Ok(discover_in_running_distros(&running, |distro| {
+        let body = command(
+            &["--distribution", distro, "--exec", "python3", "-c", &script],
+            Duration::from_secs(3),
+        )?;
+        discovery_root(&body)
+    }))
+}
+
 #[cfg(windows)]
 fn command(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
     use std::io::Read;
@@ -237,6 +328,66 @@ impl Provider for WslCodexProvider {
 mod tests {
     use super::*;
     #[test]
+    fn wsl_discovery_probes_only_user_distros_in_the_running_snapshot() {
+        let running: Vec<String> = [
+            "Ubuntu",
+            "DOCKER-DESKTOP",
+            "docker-desktop-data",
+            "rancher-desktop",
+            "rancher-desktop-data",
+            "Debian",
+            "Ubuntu-Docker",
+            "Fedora",
+            "-invalid",
+        ]
+        .into_iter()
+        .map(String::from)
+        .collect();
+        let mut probed = vec![];
+        let found = discover_in_running_distros(&running, |name| {
+            probed.push(name.to_string());
+            match name {
+                "Ubuntu" => Ok(Some("/home/user/.codex".into())),
+                "Fedora" => Err("Python missing or timed out".into()),
+                _ => Ok(None),
+            }
+        });
+        assert_eq!(probed, ["Ubuntu", "Debian", "Ubuntu-Docker", "Fedora"]);
+        assert!(!probed.iter().any(|d| d == "Stopped-Ubuntu"));
+        let available: Vec<_> = found.iter().filter(|f| f.root.is_some()).collect();
+        assert_eq!(available.len(), 1);
+        assert_eq!(available[0].distro, "Ubuntu");
+        assert!(available[0].detail.contains("不代表任务正在运行"));
+        assert!(found[1].detail.contains("内部运行环境"));
+        assert!(found[5].detail.contains("未发现 Codex"));
+        assert!(found[7].detail.contains("暂未验证"));
+    }
+
+    #[test]
+    fn wsl_discovery_requires_recognized_session_evidence_and_a_linux_root() {
+        assert_eq!(
+            discovery_root(br#"{"root":"/home/user/.codex","evidence":null}"#).unwrap(),
+            None
+        );
+        for evidence in ["thread_schema", "session_index", "rollout_metadata"] {
+            let body = serde_json::json!({"root":"/custom/codex", "evidence":evidence});
+            assert_eq!(
+                discovery_root(&serde_json::to_vec(&body).unwrap()).unwrap(),
+                Some("/custom/codex".into())
+            );
+        }
+        for body in [
+            r#"{"root":"/home/user/.codex","evidence":"installed_executable"}"#,
+            r#"{"root":"relative","evidence":"thread_schema"}"#,
+            r#"{"root":"/home/../etc","evidence":"thread_schema"}"#,
+            r#"{"evidence":"thread_schema"}"#,
+            "not JSON",
+        ] {
+            assert!(discovery_root(body.as_bytes()).is_err());
+        }
+    }
+
+    #[test]
     fn distro_is_argument_not_shell_or_unc_path() {
         assert!(validate_distro("Ubuntu").is_ok());
         assert!(validate_distro("Ubuntu Test").is_ok());
@@ -264,6 +415,32 @@ mod tests {
         assert!(output.tasks[0].finished_at.is_none());
     }
     #[test]
+    #[ignore = "read-only WSL discovery smoke; requires a running Codex distro"]
+    fn live_wsl_codex_discovery() {
+        let distro = std::env::var("TASKPULSE_WSL_DISTRO").unwrap_or_else(|_| "Ubuntu".into());
+        let started = std::time::Instant::now();
+        let found = discover_codex_distros().unwrap();
+        let source = found
+            .iter()
+            .find(|source| source.distro.eq_ignore_ascii_case(&distro))
+            .expect("expected distro is not running; smoke never starts it");
+        assert!(source.root.is_some(), "{}", source.detail);
+        assert!(found
+            .iter()
+            .filter(|source| infrastructure_distro(&source.distro))
+            .all(|source| source.root.is_none()));
+        println!(
+            "{}",
+            serde_json::json!({
+                "discovery_ms": started.elapsed().as_millis(),
+                "sources": found.iter().map(|source| serde_json::json!({
+                    "distro":source.distro, "codex_verified":source.root.is_some()
+                })).collect::<Vec<_>>()
+            })
+        );
+    }
+
+    #[test]
     #[ignore = "read-only WSL Codex smoke; requires a running installed distro"]
     fn live_wsl_codex_snapshot() {
         let distro = std::env::var("TASKPULSE_WSL_DISTRO").unwrap_or_else(|_| "Ubuntu".into());
@@ -272,7 +449,17 @@ mod tests {
             format!("codex-wsl:{}", distro.to_lowercase()),
         );
         let started = std::time::Instant::now();
-        let output = provider.poll(SystemTime::now());
+        let mut output = provider.poll(SystemTime::now());
+        let first_ms = started.elapsed().as_millis();
+        while !output.authoritative
+            && started.elapsed() < Duration::from_secs(30)
+            && output.error.as_deref().is_some_and(|e| e.contains("追赶"))
+        {
+            // Large real logs legitimately need multiple bounded worker turns.
+            // Keep the normal worker cadence; failures/gaps still fail below.
+            std::thread::sleep(Duration::from_secs(1));
+            output = provider.poll(SystemTime::now());
+        }
         assert!(output.authoritative, "{:?}", output.error);
         assert!(!output.catalog.is_empty());
         for task in &output.catalog {
@@ -282,7 +469,7 @@ mod tests {
         }
         println!(
             "{}",
-            serde_json::json!({"distro":distro,"first_ms":started.elapsed().as_millis(),"catalog":output.catalog.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"project":t.project,"path":t.project_path})).collect::<Vec<_>>(),"tasks":output.tasks.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"status":t.status,"phase":t.phase})).collect::<Vec<_>>()})
+            serde_json::json!({"distro":distro,"first_poll_ms":first_ms,"caught_up_ms":started.elapsed().as_millis(),"catalog":output.catalog.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"project":t.project,"path":t.project_path})).collect::<Vec<_>>(),"tasks":output.tasks.iter().map(|t|serde_json::json!({"id":t.id,"name":t.name,"status":t.status,"phase":t.phase})).collect::<Vec<_>>()})
         );
         let started = std::time::Instant::now();
         let next = provider.poll(SystemTime::now());

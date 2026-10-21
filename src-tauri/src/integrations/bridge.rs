@@ -1,0 +1,390 @@
+use super::{
+    journal, manifest,
+    schema::{self, Event, Kind},
+};
+use serde_json::{json, Value};
+use std::io::Read;
+
+#[derive(Default, serde::Serialize, serde::Deserialize)]
+struct Admission {
+    #[serde(default)]
+    turn: Option<String>,
+    #[serde(default)]
+    pending: Vec<AdmissionRequest>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+struct AdmissionRequest {
+    turn: String,
+    request: String,
+    call: Option<String>,
+}
+
+/// Standard producers use the same bounded request budget as host adapters.
+/// Admission is updated under the journal's session-writer lock, not from a
+/// possibly lagging consumer checkpoint. Legacy already-accepted overflows are
+/// handled by the consumer quarantine; recovery facts never need new slots.
+pub(crate) fn append_received(
+    home: &std::path::Path,
+    source: &str,
+    event: Event,
+    version: &str,
+) -> Result<(), String> {
+    event.validate(&event.agent_id)?;
+    let session = event.session_id.clone();
+    journal::append_using(
+        home,
+        source,
+        &session,
+        "self_reported",
+        version,
+        |previous, _, _| {
+            let mut state: Admission = previous
+                .and_then(|e| e.context.as_ref())
+                .and_then(|v| v.get("admission"))
+                .and_then(|v| serde_json::from_value(v.clone()).ok())
+                .unwrap_or_default();
+            let turn = event.turn_id.as_deref().unwrap_or("");
+            let request = event.request_id.as_deref().unwrap_or("");
+            match event.kind {
+                Kind::Started => state.turn = event.turn_id.clone(),
+                Kind::Requested if state.turn == event.turn_id => {
+                    if !state
+                        .pending
+                        .iter()
+                        .any(|p| p.turn == turn && p.request == request)
+                    {
+                        if state.pending.len() >= 128 {
+                            return Err("pending_request_capacity_reject_new_request".into());
+                        }
+                        state.pending.push(AdmissionRequest {
+                            turn: turn.into(),
+                            request: request.into(),
+                            call: event.call_id.clone(),
+                        });
+                    }
+                }
+                Kind::Resolved => state.pending.retain(|p| {
+                    !(p.turn == turn
+                        && p.request == request
+                        && (p.call.is_none() || event.call_id.is_none() || p.call == event.call_id))
+                }),
+                Kind::Completed | Kind::Failed | Kind::Interrupted => {
+                    state.pending.retain(|p| p.turn != turn)
+                }
+                _ => {}
+            }
+            Ok((event, Some(json!({"admission":state}))))
+        },
+    )?;
+    Ok(())
+}
+
+pub fn configured_source(id: &str) -> Result<crate::monitoring::SourceConfig, String> {
+    if !schema::identifier(id) {
+        return Err("invalid_source_id".into());
+    }
+    let path = crate::providers::remote_tmux::config::config_path();
+    if std::fs::metadata(&path)
+        .map_err(|_| "config_missing")?
+        .len()
+        > 2 * 1024 * 1024
+    {
+        return Err("config_too_large".into());
+    }
+    let text = std::fs::read_to_string(path).map_err(|_| "config_unreadable")?;
+    let value: toml::Value = toml::from_str(&text).map_err(|_| "config_invalid")?;
+    let settings: crate::monitoring::DashboardSettings = value
+        .get("dashboard")
+        .cloned()
+        .ok_or("source_registry_missing")?
+        .try_into()
+        .map_err(|_| "source_registry_invalid")?;
+    if !settings.onboarding_complete {
+        return Err("source_not_confirmed".into());
+    }
+    settings
+        .sources
+        .into_iter()
+        .find(|s| s.id == id && s.kind == crate::monitoring::SourceKind::GenericEvent)
+        .ok_or_else(|| "source_not_configured".into())
+}
+
+pub fn receive(source_id: &str, adapter: &str, host: bool, bytes: &[u8]) -> Result<(), String> {
+    let result = receive_bound(source_id, adapter, host, bytes);
+    if let Err(code) = &result {
+        let input = serde_json::from_slice::<Value>(bytes).ok();
+        let event = if host {
+            input.as_ref().and_then(|v| {
+                let m = manifest::load(adapter).ok()?;
+                let session = m.text(v, "session").filter(|s| schema::identifier(s))?;
+                Some(Event {
+                    schema_version: 1,
+                    agent_id: m.agent_id.clone(),
+                    session_id: session.into(),
+                    event_id: "receive-failure".into(),
+                    turn_id: m
+                        .text(v, "turn")
+                        .filter(|s| schema::identifier(s))
+                        .map(str::to_owned),
+                    request_id: m
+                        .text(v, "request")
+                        .filter(|s| schema::identifier(s))
+                        .map(str::to_owned),
+                    call_id: m
+                        .text(v, "call")
+                        .filter(|s| schema::identifier(s))
+                        .map(str::to_owned),
+                    kind: m
+                        .text(v, "event")
+                        .and_then(|name| m.events.get(name))
+                        .copied()
+                        .unwrap_or(Kind::Unassociated),
+                    occurred_at: None,
+                    payload: Default::default(),
+                })
+            })
+        } else {
+            input
+                .and_then(|v| serde_json::from_value::<Event>(v).ok())
+                .filter(|e| e.validate(&e.agent_id).is_ok())
+        };
+        if let Err(error) = super::health::record(&super::home(), source_id, code, event.as_ref()) {
+            log::warn!("integration gap persistence failed: {error}");
+            // Record a legacy conservative source gap if precise evidence
+            // cannot be persisted. Do not claim a successful recovery.
+            diagnostic(source_id, "gap_persistence_failed");
+        }
+    }
+    result
+}
+
+fn receive_bound(source_id: &str, adapter: &str, host: bool, bytes: &[u8]) -> Result<(), String> {
+    if bytes.len() > schema::MAX_INPUT {
+        return Err("input_too_large".into());
+    }
+    let source = configured_source(source_id)?;
+    if !source.enabled {
+        return Err("source_disabled".into());
+    }
+    let config = source
+        .integration
+        .as_ref()
+        .ok_or("integration_not_configured")?;
+    if config.adapter_id != adapter || config.transport != "local" {
+        return Err("adapter_or_transport_mismatch".into());
+    }
+    let m = manifest::load(adapter)?;
+    if host
+        && !m.supported_versions.is_empty()
+        && !config
+            .host_version
+            .as_ref()
+            .is_some_and(|v| m.supported_versions.contains(v))
+    {
+        return Err("host_version_not_supported".into());
+    }
+    if m.agent_id != config.agent_id {
+        return Err("agent_binding_mismatch".into());
+    }
+    let input: Value = serde_json::from_slice(bytes).map_err(|_| "invalid_json")?;
+    if !host {
+        let event: Event = serde_json::from_value(input).map_err(|_| "event_schema_error")?;
+        event.validate(&config.agent_id)?;
+        if event.kind == Kind::Test {
+            // Separate diagnostic channel, never a task/journal lifecycle.
+            return journal::atomic(
+                &journal::root(&super::home(), source_id).join("connection-test.json"),
+                &json!({"test":true,"received_at":super::now_ms(),"accepted":true}),
+            );
+        }
+        append_received(&super::home(), source_id, event, &m.adapter_version)?;
+    } else {
+        let session = m.text(&input, "session").ok_or("host_session_missing")?;
+        if !schema::identifier(session) {
+            return Err("invalid_session_id".into());
+        }
+        let evidence = if manifest::builtin(adapter).is_some() {
+            "documented_hook"
+        } else {
+            "self_reported"
+        };
+        journal::append_using(
+            &super::home(),
+            source_id,
+            session,
+            evidence,
+            &m.adapter_version,
+            |previous, seq, epoch| manifest::map(&input, &m, previous, seq, epoch),
+        )?;
+    }
+    Ok(())
+}
+
+/// No raw input, command, token, prompt or tool output is written to diagnostics.
+pub fn diagnostic(source: &str, code: &str) {
+    let result = json!({"at":super::now_ms(),"code":code.chars().filter(|c|c.is_ascii_alphanumeric()||*c=='_').take(96).collect::<String>()});
+    let _ = journal::atomic(
+        &journal::root(&super::home(), source).join("last-error.json"),
+        &result,
+    );
+}
+
+fn channel_diagnostic(source: &str, code: &str) {
+    let result = json!({"at":super::now_ms(),"code":code.chars().filter(|c|c.is_ascii_alphanumeric()||*c=='_').take(96).collect::<String>(),"gap_recorded":true});
+    let _ = journal::atomic(
+        &journal::root(&super::home(), source).join("last-error.json"),
+        &result,
+    );
+}
+
+/// Hook mode: bounded stdin wait, silent fail-open; validation/diagnose modes
+/// have real failure exit codes and machine-readable JSON on stdout.
+pub fn cli(args: &[String]) -> Option<i32> {
+    let hook = args
+        .iter()
+        .any(|a| a == "--integration-event" || a == "--integration-host-event");
+    let validate = args.iter().any(|a| a == "--integration-validate");
+    let diagnose = args.iter().any(|a| a == "--integration-diagnose");
+    if !hook && !validate && !diagnose {
+        return None;
+    }
+    let argument = |name: &str| {
+        args.windows(2)
+            .find(|w| w[0] == name)
+            .map(|w| w[1].as_str())
+    };
+    let source = argument("--source").unwrap_or("unbound");
+    if diagnose {
+        let result = diagnose_source(source);
+        println!(
+            "{}",
+            match &result {
+                Ok(v) => v.clone(),
+                Err(e) => json!({"ok":false,"error":e}),
+            }
+        );
+        return Some(if result.is_ok() { 0 } else { 1 });
+    }
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = vec![];
+        let result = std::io::stdin()
+            .take((schema::MAX_INPUT + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|_| "stdin_read_failed".to_string())
+            .and_then(|_| {
+                if bytes.len() > schema::MAX_INPUT {
+                    Err("input_too_large".into())
+                } else {
+                    Ok(bytes)
+                }
+            });
+        let _ = tx.send(result);
+    });
+    let input = rx
+        .recv_timeout(std::time::Duration::from_secs(2))
+        .unwrap_or_else(|_| Err("stdin_timeout".into()));
+    let stdin_failed = input.is_err();
+    let result = input.and_then(|bytes| {
+        if validate {
+            let event: Event = serde_json::from_slice(&bytes).map_err(|_| "event_schema_error")?;
+            event.validate(&event.agent_id)
+        } else {
+            receive(
+                source,
+                argument("--adapter").ok_or("adapter_argument_required")?,
+                args.iter().any(|a| a == "--integration-host-event"),
+                &bytes,
+            )
+        }
+    });
+    if validate {
+        println!(
+            "{}",
+            match &result {
+                Ok(()) => json!({"valid":true,"source_bound":false}),
+                Err(e) => json!({"valid":false,"error":e}),
+            }
+        );
+        return Some(if result.is_ok() { 0 } else { 1 });
+    }
+    if let Err(code) = result {
+        if stdin_failed && super::health::record(&super::home(), source, &code, None).is_err() {
+            diagnostic(source, "gap_persistence_failed");
+            return Some(0);
+        }
+        // A failed precise gap write already left a conservative legacy error.
+        let gap_failure =
+            std::fs::read(journal::root(&super::home(), source).join("last-error.json"))
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                .is_some_and(|v| v["code"] == "gap_persistence_failed");
+        if !gap_failure {
+            channel_diagnostic(source, &code);
+        }
+    }
+    Some(0)
+}
+
+pub fn diagnose_source(source: &str) -> Result<Value, String> {
+    let config = configured_source(source)?;
+    let dir = journal::root(&super::home(), source);
+    let mut events = 0;
+    let mut received = None;
+    let mut sampled_kinds = std::collections::BTreeSet::new();
+    if let Ok(entries) = std::fs::read_dir(dir.join("events")) {
+        for path in entries
+            .take(4096)
+            .filter_map(Result::ok)
+            .map(|e| e.path())
+            .filter(|p| p.extension().is_some_and(|e| e == "jsonl"))
+        {
+            // Only tail envelopes and counts; never return their payloads.
+            let mut file = std::fs::File::open(path).map_err(|_| "journal_unreadable")?;
+            use std::io::{Seek, SeekFrom};
+            let len = file.metadata().map_err(|_| "journal_unreadable")?.len();
+            file.seek(SeekFrom::Start(
+                len.saturating_sub((journal::MAX_LINE * 2) as u64),
+            ))
+            .map_err(|_| "journal_unreadable")?;
+            let mut bytes = vec![];
+            file.take((journal::MAX_LINE * 2) as u64)
+                .read_to_end(&mut bytes)
+                .map_err(|_| "journal_unreadable")?;
+            if let Some(e) = bytes
+                .split(|b| *b == b'\n')
+                .rev()
+                .find_map(|b| serde_json::from_slice::<schema::Envelope>(b).ok())
+            {
+                events += e.sequence;
+                received = Some(received.unwrap_or(0u64).max(e.received_at));
+                sampled_kinds.insert(
+                    serde_json::to_value(e.event.kind)
+                        .map_err(|_| "diagnostic_serialize_failed")?
+                        .as_str()
+                        .unwrap_or("unknown")
+                        .to_owned(),
+                );
+            }
+        }
+    }
+    let quarantine = crate::providers::generic_event::quarantine_summary(&super::home(), source);
+    let last_error = std::fs::read(dir.join("last-error.json"))
+        .ok()
+        .filter(|b| b.len() < 1024)
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let test = std::fs::read(dir.join("connection-test.json"))
+        .ok()
+        .filter(|b| b.len() < 1024)
+        .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let channel_failed = last_error.as_ref().is_some_and(|v| {
+        v["code"].as_str().is_some_and(super::health::operational)
+            && v["at"]
+                .as_u64()
+                .is_some_and(|at| received.is_none_or(|r| at >= r))
+    });
+    let has_gap = quarantine["unresolved_fact_gaps"].as_u64().unwrap_or(0) > 0;
+    Ok(
+        json!({"ok":true,"source":source,"enabled":config.enabled,"state":if !config.enabled{"disabled"}else if has_gap{"fact_gap"}else if channel_failed{"diagnostic"}else if received.is_some(){"connected"}else{"waiting_first_event"},"receive_channel_recovered":received.is_some()&&!channel_failed,"unresolved_fact_gaps":quarantine["unresolved_fact_gaps"],"events":events,"last_received_at":received,"sampled_latest_event_kinds":sampled_kinds,"last_error":last_error,"test":test,"quarantine":quarantine,"quiet_is_failure":false}),
+    )
+}

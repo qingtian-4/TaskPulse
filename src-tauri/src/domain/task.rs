@@ -106,6 +106,7 @@ pub enum TaskSource {
     LocalFile,
     ClaudeCode,
     Gemini,
+    GenericEvent,
 }
 
 impl TaskSource {
@@ -119,6 +120,7 @@ impl TaskSource {
             TaskSource::LocalFile => "Local",
             TaskSource::ClaudeCode => "Claude Code",
             TaskSource::Gemini => "Gemini",
+            TaskSource::GenericEvent => "其他 Agent",
         }
     }
 }
@@ -228,6 +230,21 @@ pub struct TaskSnapshot {
     pub id: String,
     pub name: String,
     pub source: TaskSource,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_name: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evidence_channel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    /// Refreshed only by an explicit matching pending-request observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pending_confirmed_at: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration_epoch: Option<String>,
+    #[serde(default)]
+    pub integration_sequence: u64,
     pub status: TaskStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_instance: Option<String>,
@@ -343,6 +360,25 @@ pub struct TaskSnapshot {
 }
 
 impl TaskSnapshot {
+    pub fn replays_integration(&self, previous: &Self) -> bool {
+        self.source == TaskSource::GenericEvent
+            && self.integration_epoch.is_some()
+            && self.integration_epoch == previous.integration_epoch
+            && self.integration_sequence <= previous.integration_sequence
+    }
+
+    /// A failed/recovered collector can change uncertainty without a new host
+    /// fact. Permit only the exact current version to update this flag; never
+    /// let an older replay overwrite lifecycle, title or user attention state.
+    pub fn merge_integration_health(&mut self, incoming: &Self) {
+        if incoming.source == TaskSource::GenericEvent
+            && incoming.integration_epoch.is_some()
+            && incoming.integration_epoch == self.integration_epoch
+            && incoming.integration_sequence == self.integration_sequence
+        {
+            self.stale = incoming.stale;
+        }
+    }
     /// A conversation can be thinking on a server while its local process is
     /// idle. Process/CPU guesses must never end a structured agent turn.
     pub fn is_agent_session(&self) -> bool {
@@ -407,6 +443,13 @@ impl TaskSnapshot {
             id: id.into(),
             name: name.into(),
             source,
+            agent_id: None,
+            agent_name: None,
+            evidence_channel: None,
+            outcome: None,
+            pending_confirmed_at: None,
+            integration_epoch: None,
+            integration_sequence: 0,
             status,
             source_instance: None,
             model: None,

@@ -128,6 +128,8 @@ pub struct CodexProvider {
     /// Append-only rollout cursors plus folded state. Unchanged files reuse
     /// state; changed files read new complete lines, with reset on replacement.
     cache: std::collections::HashMap<PathBuf, RolloutCache>,
+    cache_policy: super::parser_cache::Policy,
+    read_bytes: u64,
     native_metadata: HashMap<String, AppThreadMeta>,
     title_index: super::jsonl_tail::JsonlTail,
     indexed_titles: HashMap<String, String>,
@@ -245,6 +247,8 @@ impl CodexProvider {
             native_rx: None,
             seen: Default::default(),
             cache: Default::default(),
+            cache_policy: Default::default(),
+            read_bytes: 0,
             native_metadata: Default::default(),
             title_index: Default::default(),
             indexed_titles: Default::default(),
@@ -402,15 +406,20 @@ impl CodexProvider {
 
     fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
         let cache = self.cache.entry(path.to_path_buf()).or_default();
-        let batch = cache.tail.read(path).ok()?;
-        if batch.reset {
-            cache.state = None;
-        }
-        if !batch.body.trim().is_empty() {
-            let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-            cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
-        }
-        cache.state.clone()
+        let trusted = cache
+            .tail
+            .drain(path, |batch| {
+                self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
+                if batch.reset {
+                    cache.state = None;
+                }
+                if !batch.body.trim().is_empty() {
+                    let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                    cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
+                }
+            })
+            .ok()?;
+        trusted.then(|| cache.state.clone()).flatten()
     }
 
     fn session_to_task(
@@ -1678,7 +1687,10 @@ impl Provider for CodexProvider {
             .values()
             .filter(|meta| {
                 meta.pinned
-                    || self.seen.contains_key(&meta.id)
+                    || self
+                        .last_tasks
+                        .iter()
+                        .any(|t| t.session_id.as_deref() == Some(&meta.id) && parser_protected(t))
                     || crate::watcher::known_sessions().iter().any(|t| {
                         t.id == self.task_id(&meta.id)
                             && (t.unread || t.pinned || t.requires_action())
@@ -1694,14 +1706,21 @@ impl Provider for CodexProvider {
         let files: Vec<PathBuf> = discovered
             .into_iter()
             .filter(|path| {
-                eligible_paths.contains(path)
-                    || self.cache.contains_key(path)
-                    || path
-                        .metadata()
-                        .and_then(|m| m.modified())
-                        .is_ok_and(|modified| {
-                            now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
-                        })
+                let protected = self.cache.get(path).is_some_and(|c| {
+                    c.state.as_ref().is_some_and(|s| {
+                        s.status == TaskStatus::Running || !s.confirmed_approvals.is_empty()
+                    })
+                });
+                self.cache_policy
+                    .eligible(path, protected, self.cache.contains_key(path))
+                    && (eligible_paths.contains(path)
+                        || protected
+                        || path
+                            .metadata()
+                            .and_then(|m| m.modified())
+                            .is_ok_and(|modified| {
+                                now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
+                            }))
             })
             .collect();
         let mut tasks = Vec::new();
@@ -1786,12 +1805,69 @@ impl Provider for CodexProvider {
         }
         let selected: std::collections::HashSet<PathBuf> = files.into_iter().collect();
         self.cache.retain(|path, _| selected.contains(path));
+        let keep = self.cache_policy.keep(
+            self.cache
+                .iter()
+                .map(|(p, c)| {
+                    let protected = !c.tail.trusted()
+                        || c.state.as_ref().is_some_and(|s| {
+                            s.status == TaskStatus::Running || !s.confirmed_approvals.is_empty()
+                        });
+                    let bytes = c.tail.retained_bytes()
+                        + c.state.as_ref().map_or(0, |s| {
+                            s.active_tools
+                                .iter()
+                                .map(|(k, v)| k.len() + v.len())
+                                .sum::<usize>()
+                                + s.first_user_message.as_ref().map_or(0, String::len)
+                                + 2048
+                        });
+                    (p.clone(), protected, bytes)
+                })
+                .collect(),
+            now,
+        );
+        self.cache.retain(|p, _| keep.contains(p));
 
         // Sessions we previously knew but that vanished / went stale → no
         // terminal snapshot needed (the store's TTL handles the drop). We only
         // track them so a re-appearing session keeps its identity.
         self.seen = live;
+        // Compact business observations survive rebuildable buffer eviction.
+        // Attention/pins/dedup remain owned by their existing persistent stores.
+        for previous in &self.last_tasks {
+            if !tasks.iter().any(|t| t.id == previous.id) && !parser_protected(previous) {
+                let mut previous = previous.clone();
+                if let Some(meta) = previous.session_id.as_ref().and_then(|id| metadata.get(id)) {
+                    previous.name = thread_task_name(meta);
+                }
+                tasks.push(previous);
+            }
+        }
+        let incomplete = self.cache.values().any(|cache| !cache.tail.trusted());
+        if incomplete {
+            for previous in &self.last_tasks {
+                if !tasks.iter().any(|t| t.id == previous.id) {
+                    let mut previous = previous.clone();
+                    previous.stale = true;
+                    tasks.push(previous);
+                }
+            }
+        }
+        log::debug!(
+            "codex parser entries={} retained_tail_bytes={}",
+            self.cache.len(),
+            self.cache
+                .values()
+                .map(|c| c.tail.retained_bytes())
+                .sum::<usize>()
+        );
         self.last_tasks = tasks.clone();
+        super::resources::record(
+            "codex",
+            &self.sessions_root,
+            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(|s|s.status==TaskStatus::Running || !s.confirmed_approvals.is_empty())).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES}),
+        );
         let catalog = metadata
             .values()
             .map(|meta| {
@@ -1812,11 +1888,20 @@ impl Provider for CodexProvider {
             .collect();
         ProviderOutput {
             catalog,
+            authoritative: !incomplete,
+            error: incomplete.then(|| "Codex 日志追赶中或存在坏行；不发布中间终态".into()),
             ..ProviderOutput::tasks(tasks)
         }
     }
 }
 
+fn parser_protected(t: &TaskSnapshot) -> bool {
+    t.status == TaskStatus::Running
+        || matches!(
+            t.waiting_reason,
+            Some(crate::domain::WaitingReason::Approval | crate::domain::WaitingReason::Question)
+        )
+}
 fn truncate(s: &str, max: usize) -> String {
     if s.chars().count() <= max {
         s.to_string()
@@ -2927,6 +3012,55 @@ for path in glob.glob(os.path.expanduser('~/.codex/sessions/**/rollout-*'+thread
 
         let second = provider.poll(SystemTime::now());
         assert_eq!(second.tasks[0].project.as_deref(), Some("cached-project"));
+    }
+
+    #[test]
+    fn f04_cold_cache_expires_without_replaying_or_losing_reactivation() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout-cold.jsonl");
+        let body=format!("{}{{\"timestamp\":\"{}\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"old\"}}}}\n",header("/tmp/project"),recent_rfc3339(1));
+        std::fs::write(&path, &body).unwrap();
+        let mut p = CodexProvider::with_root(root.path().into());
+        let now = SystemTime::now();
+        assert!(!p.poll(now).tasks.is_empty());
+        p.poll(now + DISCOVERY_TTL + Duration::from_secs(10));
+        assert!(
+            p.cache.is_empty(),
+            "completed cached files cannot select themselves forever"
+        );
+        // A native writer touching an old project makes it discoverable again.
+        std::fs::OpenOptions::new().append(true).open(&path).unwrap().write_all(format!("{{\"timestamp\":\"{}\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"new\"}}}}\n",recent_rfc3339(0)).as_bytes()).unwrap();
+        let out = p.poll(now);
+        assert!(out
+            .tasks
+            .iter()
+            .any(|t| t.turn_key.as_deref() == Some("new") && t.status == TaskStatus::Running));
+    }
+
+    #[test]
+    fn f04_partial_catchup_cannot_publish_a_historical_terminal() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout-budget.jsonl");
+        let at = recent_rfc3339(1);
+        let mut body = header("/tmp/project");
+        body.push_str(&format!("{{\"timestamp\":\"{at}\",\"payload\":{{\"type\":\"task_complete\",\"turn_id\":\"old\"}}}}\n"));
+        body.push_str(&format!("{{\"ignored\":\"{}\"}}\n", "x".repeat(1009)).repeat(18 * 1024));
+        body.push_str(&format!("{{\"timestamp\":\"{at}\",\"payload\":{{\"type\":\"task_started\",\"turn_id\":\"current\"}}}}\n"));
+        std::fs::write(&path, body).unwrap();
+        let mut provider = CodexProvider::with_root(root.path().into());
+        let first = provider.poll(SystemTime::now());
+        assert!(!first.authoritative);
+        assert!(first.tasks.is_empty());
+        let mut out = first;
+        for _ in 0..10 {
+            out = provider.poll(SystemTime::now());
+            if out.authoritative {
+                break;
+            }
+        }
+        assert!(out.authoritative, "{:?}", out.error);
+        assert_eq!(out.tasks[0].status, TaskStatus::Running);
+        assert_eq!(out.tasks[0].turn_key.as_deref(), Some("current"));
     }
 
     #[test]

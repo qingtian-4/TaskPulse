@@ -23,6 +23,7 @@ pub enum SourceKind {
     Tmux,
     Hooks,
     Scanner,
+    GenericEvent,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -30,6 +31,8 @@ pub struct SourceConfig {
     pub id: String,
     pub name: String,
     pub kind: SourceKind,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub integration: Option<crate::integrations::IntegrationSource>,
     pub enabled: bool,
     #[serde(default)]
     pub location: String,
@@ -191,6 +194,7 @@ fn source(id: &str, name: &str, kind: SourceKind, location: &str) -> SourceConfi
         id: id.into(),
         name: name.into(),
         kind,
+        integration: None,
         enabled: false,
         location: location.into(),
         projects: all_projects(),
@@ -298,6 +302,19 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
         if source.kind == SourceKind::CodexWsl {
             crate::providers::codex_wsl::validate_distro(&source.location)?;
         }
+        if source.kind == SourceKind::GenericEvent {
+            let integration = source
+                .integration
+                .as_ref()
+                .ok_or("请先选择通用接入适配描述")?;
+            let manifest = crate::integrations::manifest::load(&integration.adapter_id)?;
+            if integration.transport != "local"
+                || integration.agent_id != manifest.agent_id
+                || !source.location.is_empty()
+            {
+                return Err("通用事件只支持本机且 Agent 身份必须匹配描述文件".into());
+            }
+        }
         if matches!(source.kind, SourceKind::RemoteCodex | SourceKind::Tmux)
             && (source.location.trim().is_empty()
                 || source.location.starts_with('-')
@@ -334,7 +351,9 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
                     .to_lowercase()
             })
             .unwrap_or_else(|| source.location.to_lowercase());
-        if !locations.insert((format!("{:?}", source.kind), location)) {
+        if source.kind != SourceKind::GenericEvent
+            && !locations.insert((format!("{:?}", source.kind), location))
+        {
             return Err("相同运行环境只能添加一个同类来源".into());
         }
         if matches!(
@@ -416,8 +435,33 @@ pub fn write_settings(path: &Path, settings: &DashboardSettings) -> Result<(), S
 #[tauri::command]
 pub fn save_monitoring_settings(
     app: AppHandle,
-    settings: DashboardSettings,
+    mut settings: DashboardSettings,
 ) -> Result<DashboardSettings, String> {
+    let previous = get_monitoring_settings();
+    for source in &mut settings.sources {
+        if source.kind == SourceKind::GenericEvent {
+            if let Some(integration) = &mut source.integration {
+                let old = previous.sources.iter().find(|s| s.id == source.id);
+                if let Some(value) = old.and_then(|s| s.integration.as_ref()) {
+                    // Identity/adapter updates are not allowed to reinterpret an
+                    // existing journal. Create a separate source instead.
+                    if value.agent_id != integration.agent_id
+                        || value.adapter_id != integration.adapter_id
+                    {
+                        return Err("改变 Agent/适配器请创建新来源，现有会话身份不会重写".into());
+                    }
+                    integration.accept_since_ms =
+                        if old.is_some_and(|s| !s.enabled) && source.enabled {
+                            crate::integrations::now_ms()
+                        } else {
+                            value.accept_since_ms
+                        };
+                } else {
+                    integration.accept_since_ms = crate::integrations::now_ms();
+                }
+            }
+        }
+    }
     write_settings(&config::config_path(), &settings)?;
     {
         let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
@@ -550,6 +594,11 @@ pub fn observe(tasks: &[TaskSnapshot]) {
 }
 
 fn catalog_observation(previous: Option<&TaskSnapshot>, incoming: &TaskSnapshot) -> TaskSnapshot {
+    if let Some(previous) = previous.filter(|previous| incoming.replays_integration(previous)) {
+        let mut retained = previous.clone();
+        retained.merge_integration_health(incoming);
+        return retained;
+    }
     let mut merged = if incoming.status == crate::domain::TaskStatus::Unknown {
         let mut task = previous.cloned().unwrap_or_else(|| incoming.clone());
         task.name = incoming.name.clone();
@@ -700,16 +749,36 @@ pub async fn discover_sources() -> Vec<SourceDiscovery> {
         .unwrap_or_default()
 }
 fn discover_source_rows() -> Vec<SourceDiscovery> {
-    let home = dirs_next::home_dir().unwrap_or_default();
     let settings = get_monitoring_settings();
+    if std::env::var_os("TASKPULSE_HOME").is_some() {
+        return settings
+            .sources
+            .iter()
+            .map(|s| SourceDiscovery {
+                id: s.id.clone(),
+                available: s.kind == SourceKind::GenericEvent,
+                detail: "隔离状态目录；未探测真实 Agent 数据".into(),
+                candidate: None,
+            })
+            .collect();
+    }
+    let wsl = crate::providers::codex_wsl::discover_codex_distros().unwrap_or_default();
+    discover_source_rows_with_wsl(&settings, &wsl)
+}
+
+fn discover_source_rows_with_wsl(
+    settings: &DashboardSettings,
+    wsl: &[crate::providers::codex_wsl::WslCodexDiscovery],
+) -> Vec<SourceDiscovery> {
+    let home = dirs_next::home_dir().unwrap_or_default();
     let mut sources = settings.sources.clone();
     for candidate in from_legacy(&TaskPulseConfig::default(), false).sources {
         if !sources.iter().any(|s| s.kind == candidate.kind) {
             sources.push(candidate);
         }
     }
-    let running = crate::providers::codex_wsl::running_distros().unwrap_or_default();
-    for distro in &running {
+    for found in wsl.iter().filter(|found| found.root.is_some()) {
+        let distro = &found.distro;
         if !sources
             .iter()
             .any(|s| s.kind == SourceKind::CodexWsl && s.location.eq_ignore_ascii_case(distro))
@@ -741,15 +810,14 @@ fn discover_source_rows() -> Vec<SourceDiscovery> {
                     home.join(".codex").exists(),
                     home.join(".codex").display().to_string(),
                 ),
-                SourceKind::CodexWsl => (
-                    running
+                SourceKind::CodexWsl => wsl
                         .iter()
-                        .any(|d| d.eq_ignore_ascii_case(&source.location)),
-                    format!(
-                        "本机 WSL {} · 启用后只读验证 Codex 目录；独立于 Windows",
-                        source.location
-                    ),
-                ),
+                        .find(|found| found.distro.eq_ignore_ascii_case(&source.location))
+                        .map(|found| (found.root.is_some(), found.detail.clone()))
+                        .unwrap_or_else(|| (false, format!(
+                            "WSL {} · 未运行或暂无法查询；不会自动唤醒，已保存配置仍保留；独立于 Windows",
+                            source.location
+                        ))),
                 SourceKind::Hermes => {
                     let path = if source.location.is_empty() {
                         crate::providers::hermes::discover_db()
@@ -840,6 +908,71 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wsl_discovery_requires_agent_evidence_and_preserves_saved_sources() {
+        use crate::providers::codex_wsl::WslCodexDiscovery;
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        settings.sources.retain(|s| s.kind != SourceKind::CodexWsl);
+        let discoveries = vec![
+            WslCodexDiscovery {
+                distro: "Ubuntu".into(),
+                root: Some("/home/user/.codex".into()),
+                detail: "已验证 Codex 会话数据".into(),
+            },
+            WslCodexDiscovery {
+                distro: "Debian".into(),
+                root: None,
+                detail: "未发现 Codex 会话数据".into(),
+            },
+            WslCodexDiscovery {
+                distro: "docker-desktop".into(),
+                root: None,
+                detail: "内部运行环境".into(),
+            },
+        ];
+        let rows = discover_source_rows_with_wsl(&settings, &discoveries);
+        let candidates: Vec<_> = rows
+            .iter()
+            .filter(|r| r.available)
+            .filter_map(|r| r.candidate.as_ref())
+            .filter(|s| s.kind == SourceKind::CodexWsl)
+            .collect();
+        assert_eq!(candidates.len(), 1);
+        assert_eq!(candidates[0].location, "Ubuntu");
+        assert!(!candidates[0].enabled); // Discovery never opts users in.
+        assert!(!rows.iter().any(|r| r.id.contains("docker-desktop")));
+
+        let mut manual = source("manual-wsl", "My distro", SourceKind::CodexWsl, "UBUNTU");
+        manual.enabled = true;
+        manual.projects = vec!["/home/user/my-project".into()];
+        settings.sources.push(manual.clone());
+        let original = settings.clone();
+        let rows = discover_source_rows_with_wsl(&settings, &discoveries);
+        assert!(rows
+            .iter()
+            .any(|r| r.id == manual.id && r.available && r.candidate.is_none()));
+        assert!(!rows.iter().any(|r| r.id == "codex-wsl:ubuntu"));
+        // Stop/disconnect does not delete, disable or broaden a saved source.
+        let stopped = discover_source_rows_with_wsl(&settings, &[]);
+        let row = stopped.iter().find(|r| r.id == manual.id).unwrap();
+        assert!(!row.available && row.candidate.is_none());
+        assert_eq!(settings, original);
+
+        let mut docker = source(
+            "explicit-docker",
+            "Manual",
+            SourceKind::CodexWsl,
+            "docker-desktop",
+        );
+        docker.enabled = true;
+        settings.sources.push(docker.clone());
+        let rows = discover_source_rows_with_wsl(&settings, &discoveries);
+        assert!(rows
+            .iter()
+            .any(|r| r.id == docker.id && !r.available && r.candidate.is_none()));
+        assert_eq!(settings.sources.last(), Some(&docker));
+    }
+
     #[test]
     fn wsl_sources_are_opt_in_and_distro_scopes_never_alias_windows_or_ssh() {
         let mut settings = from_legacy(&TaskPulseConfig::default(), true);

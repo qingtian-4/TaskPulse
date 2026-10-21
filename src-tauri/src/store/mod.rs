@@ -66,6 +66,21 @@ impl TaskStore {
     pub fn merge(&mut self, incoming: Vec<TaskSnapshot>, now: SystemTime) -> Vec<TaskSnapshot> {
         for snap in incoming {
             let id = snap.id.clone();
+            if self
+                .active
+                .get(&id)
+                .or_else(|| self.recent.iter().find(|r| r.id == id))
+                .is_some_and(|previous| snap.replays_integration(previous))
+            {
+                if let Some(previous) = self
+                    .active
+                    .get_mut(&id)
+                    .or_else(|| self.recent.iter_mut().find(|r| r.id == id))
+                {
+                    previous.merge_integration_health(&snap);
+                }
+                continue;
+            }
             if let Some(existing) = self.active.get_mut(&id) {
                 merge_into(existing, snap);
             } else if let Some(pos) = self.recent.iter().position(|r| r.id == id) {

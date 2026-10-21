@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.6'
+        default: 'v0.2.0-alpha.7'
 
 permissions:
   contents: read
@@ -42,9 +42,15 @@ jobs:
       - name: Test release validation and asset handling
         run: bun test scripts/release.test.ts
 
+  security:
+    needs: preflight
+    uses: ./.github/workflows/security.yml
+    with:
+      ref: ${{ needs.preflight.outputs.commit }}
+
   windows:
     name: Build Windows x64 MSVC installers
-    needs: preflight
+    needs: [preflight, security]
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
@@ -63,11 +69,17 @@ jobs:
           cache-on-failure: true
       - name: Install locked frontend dependencies
         run: bun install --frozen-lockfile
+      - name: Audit frontend dependencies (moderate and above)
+        run: bun run audit:frontend
       # Each native command has its own step; a later success cannot hide failure.
       - name: Check frontend
         run: bun run check
+      - name: Test documentation links and candidate source instructions
+        run: bun run test:docs
       - name: Test frontend models
         run: bun run test:ui-model
+      - name: Test integration contracts
+        run: bun run test:integration-contract
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Lint Rust
@@ -79,6 +91,8 @@ jobs:
         with:
           tauriScript: bun run tauri
           args: --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
+      - name: Test the actual GUI-subsystem release bridge with redirected stdin
+        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
       - name: Normalize asset names and generate flat checksums
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}

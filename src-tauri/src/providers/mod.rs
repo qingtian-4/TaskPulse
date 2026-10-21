@@ -6,10 +6,13 @@ pub mod claude_code;
 pub mod codex;
 pub mod codex_wsl;
 pub mod deepseek_harness;
+pub mod generic_event;
 pub mod hermes;
 pub mod jsonl_tail;
 pub mod local_file;
+mod parser_cache;
 pub mod remote_tmux;
+pub mod resources;
 pub mod worker;
 
 use std::time::SystemTime;
@@ -94,6 +97,8 @@ pub struct RemoteSourceHealth {
 
 #[derive(Debug)]
 pub struct ProviderOutput {
+    /// Durable ordered integration facts; never coalesce into latest snapshots.
+    pub ordered: Vec<generic_event::OrderedObservation>,
     pub tasks: Vec<TaskSnapshot>,
     pub catalog: Vec<TaskSnapshot>,
     pub hosts: Vec<HostHealth>,
@@ -108,6 +113,7 @@ pub struct ProviderOutput {
 impl Default for ProviderOutput {
     fn default() -> Self {
         Self {
+            ordered: vec![],
             tasks: Vec::new(),
             catalog: Vec::new(),
             hosts: Vec::new(),
@@ -121,6 +127,7 @@ impl Default for ProviderOutput {
 impl ProviderOutput {
     pub fn tasks(tasks: Vec<TaskSnapshot>) -> Self {
         Self {
+            ordered: vec![],
             tasks,
             catalog: vec![],
             hosts: Vec::new(),
@@ -132,6 +139,7 @@ impl ProviderOutput {
 
     pub fn degraded(tasks: Vec<TaskSnapshot>, error: impl Into<String>) -> Self {
         Self {
+            ordered: vec![],
             tasks,
             catalog: vec![],
             hosts: Vec::new(),

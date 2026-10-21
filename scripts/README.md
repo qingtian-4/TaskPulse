@@ -1,5 +1,35 @@
 # Scripts
 
+## Generic Agent integration acceptance
+
+`bun run test:integration-contract` checks the public schema/manifests; Rust
+`cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray integrations`
+checks reduction, correlation, journal recovery and configuration merging.
+
+After building the embedded frontend/executable:
+
+```powershell
+bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/ci-release/agent-tray.exe --require-gui
+bun scripts/native-integration-smoke.ts --exe src-tauri/target/ci-release/agent-tray.exe --notices
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray integration_concurrent_stress -- --ignored --nocapture
+```
+
+The native script owns an isolated TASKPULSE_HOME, host-sandbox and WebView2
+profile; CDP 9337 must be unused. It refuses to attach to another app. Optional
+`--stress-worker <absolute Rust test executable>` adds 20-process/10000-event
+synthetic load and real IPC/animation-frame latency measurement. Test binaries
+need their build-owned WebView2Loader.dll on PATH in GNU environments.
+`--notices` reuses native-notice acceptance in that owned sandbox; it explicitly
+does not verify focus preservation against an external editor.
+
+These exercise real TaskPulse binaries, **not actual Agent hosts**. No real host
+configuration is modified. For actual host tests, first show the exact diff and
+obtain confirmation. See [integration validation](../docs/AGENT_INTEGRATION_VALIDATION.md).
+
+When a tray is running, `verify.ps1 -TargetDir src-tauri/target/<isolated-target>`
+can select an owned verification target; the script refuses a target containing
+a running executable. Never overwrite the live binary or kill processes by name.
+
 Windows Alpha releases: `bun run release:check`, `bun run test:release` and
 [docs/RELEASING.md](../docs/RELEASING.md). `release.sh` is read-only; no implicit
 commit/tag/push. `installer-smoke.ps1` installs real packages only on disposable
