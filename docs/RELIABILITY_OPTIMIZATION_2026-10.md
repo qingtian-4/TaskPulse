@@ -39,3 +39,12 @@
 - 淘汰的冷文件通过单个时间水位避免每轮重新全量读取；正常 native append 或新文件 replacement 更新 modified/created 后重新发现。进程重启允许重建一次，日志身份/turn 不改变；未读、固定、通知账本不迁移、不删除。已完成的轻量任务观测与解析缓冲分开保留，Codex 仍同步 metadata 名称。
 - f04_cold_cache_expires_without_replaying_or_losing_reactivation 先失败后通过；共享 budgets_preserve_active_and_do_not_reparse_evicted_unchanged_files（140 文件，128 冷缓存+2 活跃）、f04_claude_cold_parser_eviction_keeps_business_result_without_replay 通过。provider 全组 167 通过/8 opt-in 忽略（新增 Claude 回归另通过）。
 - 边界：16 MiB 是解析状态估算预算，不等于进程 RSS；活跃/未知必要状态可超过软预算并应诊断。冷文件由宿主保留 modified 和 created 时间原地改写的非标准操作，不能保证立即重发现；重启会重建。没有引入数据库、自动日志归档或 compaction，也没有删除宿主日志。
+
+## F05：DSH 有界解压与 WSL 二进制流
+
+- 修改 deepseek_harness.rs。原实现同时分配 compressed Vec、decode_all Vec、解压文本；WSL 另有 Base64 字节/String/解码副本。现在原生 File/WSL stdout 直接进入 zstd Decoder 和有界逐行 reducer，不使用不可靠压缩字节偏移。压缩输入 64 MiB、解压 128 MiB、单行 4 MiB、zstd window 最大 64 MiB；发现超限/损坏/半帧时不发布部分终态，保留旧状态为 stale。
+- WSL 小型元数据 stdout 限 8 MiB、stderr 限 8 KiB，日志按管道流式处理；保留 running-distro 前置检查，Linux timeout 管理命令组、Windows 15 秒截止及 child drop kill/wait。不安装组件，不唤醒已停发行版。若 Linux 缺少 timeout，明确探测失败，不绕过安全限制。
+- 正式回归 f05_oversized_decoded_record_cannot_publish_a_terminal_after_missing_facts 先失败后通过；f05_streaming_multiframe_matches_full_decode_and_rejects_partial_or_corrupt 覆盖多帧、无换行末行、半帧、损坏及与整块参考解压状态一致。DSH 模块 23 通过/3 opt-in 忽略，随后新增 WSL opt-in 单独通过。
+- **Windows 隔离进程测量**（同一测试、同一 66,977,850 字节 JSONL / 6,226 字节压缩输入，5ms 采样，进程句柄保留，退出码均 0）：整块解压 550ms、采样 private 峰值 71,163,904 字节、peak working set 77,668,352；流式 489ms、private 3,117,056、working set 9,433,088。为合成高度可压缩数据的单次测量，不等于实际 GUI 或长期平均。
+- 实机只读通过：本机 Desktop 11 个现有会话、projection 11 项，采样 643ms；已经运行的 Ubuntu 三份旧版日志经实际 WSL 二进制管道/解压通过（compressed/decoded：1,306,858/2,653,769；1,884,745/4,806,395；16,158/49,432 字节）。未触发真实任务或写宿主配置，不把历史只读采样冒称实时 Hook 验收。
+- CPU 边界：相同 mtime 的缓存继续复用；变更文件仍从头流式解压。减少了峰值内存和副本，**没有消除变更日志重复解压的 CPU 成本**。
