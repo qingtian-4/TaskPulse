@@ -51,6 +51,8 @@ struct Checkpoint {
     rejected_count: u64,
     #[serde(default)]
     uncertain_turns: std::collections::BTreeSet<String>,
+    #[serde(default)]
+    recovered_gaps: std::collections::BTreeSet<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -201,6 +203,9 @@ impl GenericEventProvider {
                 )?;
                 let state_path = state_dir.join(format!("{stem}.json"));
                 let mut cp = read_checkpoint(&state_path)?;
+                let gaps = integrations::health::load(&self.home, &self.source.id, stem)?;
+                cp.recovered_gaps
+                    .retain(|id| gaps.iter().any(|g| &g.id == id));
                 degraded |= cp.rebuilding;
                 let recovered = !cp.owner.is_empty() && cp.owner != self.owner;
                 // Do not ingest beyond the durable bounded outbox until the UI
@@ -235,6 +240,15 @@ impl GenericEventProvider {
                                 continue;
                             }
                         };
+                        for gap in &gaps {
+                            if integrations::health::recovers(
+                                gap,
+                                envelope,
+                                applied.as_ref().is_some_and(|t| t.new_execution),
+                            ) {
+                                cp.recovered_gaps.insert(gap.id.clone());
+                            }
+                        }
                         if matches!(
                             envelope.event.kind,
                             integrations::schema::Kind::Completed
@@ -245,7 +259,12 @@ impl GenericEventProvider {
                                 cp.uncertain_turns.remove(turn);
                             }
                         }
+                        if applied.as_ref().is_some_and(|t| t.new_execution) {
+                            cp.uncertain_turns
+                                .retain(|turn| Some(turn) == envelope.event.turn_id.as_ref());
+                        }
                         if let Some(mut task) = applied {
+                            task.stale |= gaps.iter().any(|g| !cp.recovered_gaps.contains(&g.id));
                             task.native_unread =
                                 (recovered && task.finished_at.is_some()).then_some(true);
                             cp.outbox.push(DurableObservation {
@@ -266,10 +285,11 @@ impl GenericEventProvider {
                     cp.owner = self.owner.clone();
                     journal::atomic(&state_path, &cp)?;
                 }
-                degraded |= !cp.uncertain_turns.is_empty();
+                let has_gap = gaps.iter().any(|g| !cp.recovered_gaps.contains(&g.id));
+                degraded |= !cp.uncertain_turns.is_empty() || has_gap;
                 if let Some(task) = &cp.state.task {
                     let mut task = task.clone();
-                    task.stale |= !cp.uncertain_turns.is_empty();
+                    task.stale |= !cp.uncertain_turns.is_empty() || has_gap;
                     self.latest.insert(task.id.clone(), task);
                 }
                 self.received_at = self.received_at.max(cp.state.last_received_at);
@@ -316,16 +336,11 @@ impl GenericEventProvider {
                         .collect::<String>()
                 })
             });
+        // Transport health can recover independently. Invalid producer input
+        // is diagnostic only; durable per-session gaps above decide trust.
+        let receive_error = receive_error.filter(|code| integrations::health::operational(code));
         degraded |= receive_error.is_some();
-        let tasks: Vec<_> = self
-            .latest
-            .values()
-            .cloned()
-            .map(|mut t| {
-                t.stale |= receive_error.is_some();
-                t
-            })
-            .collect();
+        let tasks: Vec<_> = self.latest.values().cloned().collect();
         Ok(ProviderOutput {
             tasks: tasks.clone(),
             catalog: tasks,
@@ -346,6 +361,7 @@ pub fn quarantine_summary(home: &Path, source: &str) -> serde_json::Value {
     let mut rejected = 0u64;
     let mut indexed = 0usize;
     let mut complete = true;
+    let mut unresolved_gaps = 0usize;
     if let Ok(entries) = std::fs::read_dir(journal::root(home, source).join("state")) {
         let paths: Vec<_> = entries
             .filter_map(Result::ok)
@@ -365,6 +381,11 @@ pub fn quarantine_summary(home: &Path, source: &str) -> serde_json::Value {
                 continue;
             }
             bytes_left -= size;
+            let session = path
+                .file_stem()
+                .and_then(|s| s.to_str())
+                .unwrap_or("")
+                .to_string();
             match std::fs::read(path)
                 .ok()
                 .and_then(|b| serde_json::from_slice::<Checkpoint>(&b).ok())
@@ -372,12 +393,21 @@ pub fn quarantine_summary(home: &Path, source: &str) -> serde_json::Value {
                 Some(cp) => {
                     rejected = rejected.saturating_add(cp.rejected_count);
                     indexed += cp.quarantine.len();
+                    match integrations::health::load(home, source, &session) {
+                        Ok(gaps) => {
+                            unresolved_gaps += gaps
+                                .iter()
+                                .filter(|g| !cp.recovered_gaps.contains(&g.id))
+                                .count()
+                        }
+                        Err(_) => complete = false,
+                    }
                 }
                 None => complete = false,
             }
         }
     }
-    serde_json::json!({"rejected_records":rejected,"retained_index_records":indexed,"bounded_scan_complete":complete,"original_facts_retained_in_journal":true})
+    serde_json::json!({"rejected_records":rejected,"retained_index_records":indexed,"unresolved_fact_gaps":unresolved_gaps,"bounded_scan_complete":complete,"original_facts_retained_in_journal":true})
 }
 
 impl Provider for GenericEventProvider {

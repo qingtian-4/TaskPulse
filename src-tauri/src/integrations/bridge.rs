@@ -110,6 +110,55 @@ pub fn configured_source(id: &str) -> Result<crate::monitoring::SourceConfig, St
 }
 
 pub fn receive(source_id: &str, adapter: &str, host: bool, bytes: &[u8]) -> Result<(), String> {
+    let result = receive_bound(source_id, adapter, host, bytes);
+    if let Err(code) = &result {
+        let input = serde_json::from_slice::<Value>(bytes).ok();
+        let event = if host {
+            input.as_ref().and_then(|v| {
+                let m = manifest::load(adapter).ok()?;
+                let session = m.text(v, "session").filter(|s| schema::identifier(s))?;
+                Some(Event {
+                    schema_version: 1,
+                    agent_id: m.agent_id.clone(),
+                    session_id: session.into(),
+                    event_id: "receive-failure".into(),
+                    turn_id: m
+                        .text(v, "turn")
+                        .filter(|s| schema::identifier(s))
+                        .map(str::to_owned),
+                    request_id: m
+                        .text(v, "request")
+                        .filter(|s| schema::identifier(s))
+                        .map(str::to_owned),
+                    call_id: m
+                        .text(v, "call")
+                        .filter(|s| schema::identifier(s))
+                        .map(str::to_owned),
+                    kind: m
+                        .text(v, "event")
+                        .and_then(|name| m.events.get(name))
+                        .copied()
+                        .unwrap_or(Kind::Unassociated),
+                    occurred_at: None,
+                    payload: Default::default(),
+                })
+            })
+        } else {
+            input
+                .and_then(|v| serde_json::from_value::<Event>(v).ok())
+                .filter(|e| e.validate(&e.agent_id).is_ok())
+        };
+        if let Err(error) = super::health::record(&super::home(), source_id, code, event.as_ref()) {
+            log::warn!("integration gap persistence failed: {error}");
+            // Record a legacy conservative source gap if precise evidence
+            // cannot be persisted. Do not claim a successful recovery.
+            diagnostic(source_id, "gap_persistence_failed");
+        }
+    }
+    result
+}
+
+fn receive_bound(source_id: &str, adapter: &str, host: bool, bytes: &[u8]) -> Result<(), String> {
     if bytes.len() > schema::MAX_INPUT {
         return Err("input_too_large".into());
     }
@@ -180,6 +229,14 @@ pub fn diagnostic(source: &str, code: &str) {
     );
 }
 
+fn channel_diagnostic(source: &str, code: &str) {
+    let result = json!({"at":super::now_ms(),"code":code.chars().filter(|c|c.is_ascii_alphanumeric()||*c=='_').take(96).collect::<String>(),"gap_recorded":true});
+    let _ = journal::atomic(
+        &journal::root(&super::home(), source).join("last-error.json"),
+        &result,
+    );
+}
+
 /// Hook mode: bounded stdin wait, silent fail-open; validation/diagnose modes
 /// have real failure exit codes and machine-readable JSON on stdout.
 pub fn cli(args: &[String]) -> Option<i32> {
@@ -227,6 +284,7 @@ pub fn cli(args: &[String]) -> Option<i32> {
     let input = rx
         .recv_timeout(std::time::Duration::from_secs(2))
         .unwrap_or_else(|_| Err("stdin_timeout".into()));
+    let stdin_failed = input.is_err();
     let result = input.and_then(|bytes| {
         if validate {
             let event: Event = serde_json::from_slice(&bytes).map_err(|_| "event_schema_error")?;
@@ -251,7 +309,19 @@ pub fn cli(args: &[String]) -> Option<i32> {
         return Some(if result.is_ok() { 0 } else { 1 });
     }
     if let Err(code) = result {
-        diagnostic(source, &code);
+        if stdin_failed && super::health::record(&super::home(), source, &code, None).is_err() {
+            diagnostic(source, "gap_persistence_failed");
+            return Some(0);
+        }
+        // A failed precise gap write already left a conservative legacy error.
+        let gap_failure =
+            std::fs::read(journal::root(&super::home(), source).join("last-error.json"))
+                .ok()
+                .and_then(|b| serde_json::from_slice::<Value>(&b).ok())
+                .is_some_and(|v| v["code"] == "gap_persistence_failed");
+        if !gap_failure {
+            channel_diagnostic(source, &code);
+        }
     }
     Some(0)
 }
@@ -307,7 +377,14 @@ pub fn diagnose_source(source: &str) -> Result<Value, String> {
         .ok()
         .filter(|b| b.len() < 1024)
         .and_then(|b| serde_json::from_slice::<Value>(&b).ok());
+    let channel_failed = last_error.as_ref().is_some_and(|v| {
+        v["code"].as_str().is_some_and(super::health::operational)
+            && v["at"]
+                .as_u64()
+                .is_some_and(|at| received.is_none_or(|r| at >= r))
+    });
+    let has_gap = quarantine["unresolved_fact_gaps"].as_u64().unwrap_or(0) > 0;
     Ok(
-        json!({"ok":true,"source":source,"enabled":config.enabled,"state":if !config.enabled{"disabled"}else if last_error.as_ref().and_then(|e:&Value|e.get("at")).and_then(Value::as_u64).is_some_and(|at|received.is_none_or(|r|at>=r)){"diagnostic"}else if received.is_some(){"connected"}else{"waiting_first_event"},"events":events,"last_received_at":received,"sampled_latest_event_kinds":sampled_kinds,"last_error":last_error,"test":test,"quarantine":quarantine,"quiet_is_failure":false}),
+        json!({"ok":true,"source":source,"enabled":config.enabled,"state":if !config.enabled{"disabled"}else if has_gap{"fact_gap"}else if channel_failed{"diagnostic"}else if received.is_some(){"connected"}else{"waiting_first_event"},"receive_channel_recovered":received.is_some()&&!channel_failed,"unresolved_fact_gaps":quarantine["unresolved_fact_gaps"],"events":events,"last_received_at":received,"sampled_latest_event_kinds":sampled_kinds,"last_error":last_error,"test":test,"quarantine":quarantine,"quiet_is_failure":false}),
     )
 }

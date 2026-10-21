@@ -10,6 +10,157 @@ use crate::{
 use serde_json::json;
 
 #[test]
+fn f01_peer_success_and_heartbeat_cannot_repair_a_lost_resolution() {
+    let home = tempfile::tempdir().unwrap();
+    let src = source();
+    let mut provider = GenericEventProvider::with_home(src.clone(), home.path().into());
+    let start = event(Kind::Started, "a", 1);
+    journal::append(home.path(), &src.id, start.clone(), "self_reported", "v1").unwrap();
+    let mut request = event(Kind::Requested, "a", 2);
+    request.request_id = Some("r".into());
+    request.payload.request_kind = Some(WaitingReason::Approval);
+    journal::append(home.path(), &src.id, request, "self_reported", "v1").unwrap();
+    for o in provider.poll(std::time::SystemTime::now()).ordered {
+        acknowledge(home.path(), &o.receipt).unwrap();
+    }
+    // Legacy operational error has no session association. A newer peer event
+    // must not turn the affected tasks fresh; restart must preserve uncertainty.
+    journal::atomic(
+        &journal::root(home.path(), &src.id).join("last-error.json"),
+        &json!({"at":super::now_ms(),"code":"journal_sync_failed"}),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let mut peer = event(Kind::Started, "b", 3);
+    peer.session_id = "healthy-peer".into();
+    journal::append(home.path(), &src.id, peer, "self_reported", "v1").unwrap();
+    journal::append(
+        home.path(),
+        &src.id,
+        event(Kind::Heartbeat, "a", 4),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let out = provider.poll(std::time::SystemTime::now());
+    assert!(
+        out.tasks
+            .iter()
+            .find(|t| t.session_id.as_deref() == Some("fixture-session"))
+            .unwrap()
+            .stale
+    );
+    assert!(
+        !out.tasks
+            .iter()
+            .find(|t| t.session_id.as_deref() == Some("healthy-peer"))
+            .unwrap()
+            .stale
+    );
+    let mut restart = GenericEventProvider::with_home(src, home.path().into());
+    assert!(
+        restart
+            .poll(std::time::SystemTime::now())
+            .tasks
+            .iter()
+            .find(|t| t.session_id.as_deref() == Some("fixture-session"))
+            .unwrap()
+            .stale
+    );
+}
+
+#[test]
+fn f01_scoped_gap_requires_matching_recovery_and_survives_restart() {
+    let home = tempfile::tempdir().unwrap();
+    let src = source();
+    let mut p = GenericEventProvider::with_home(src.clone(), home.path().into());
+    let write = |e| journal::append(home.path(), &src.id, e, "self_reported", "v1").unwrap();
+    write(event(Kind::Started, "a", 1));
+    let mut q = event(Kind::Requested, "a", 2);
+    q.request_id = Some("approval-a".into());
+    q.call_id = Some("call-a".into());
+    q.payload.request_kind = Some(WaitingReason::Approval);
+    write(q);
+    for o in p.poll(std::time::SystemTime::now()).ordered {
+        acknowledge(home.path(), &o.receipt).unwrap();
+    }
+    let mut missing = event(Kind::Resolved, "a", 3);
+    missing.request_id = Some("approval-a".into());
+    missing.call_id = Some("call-a".into());
+    super::health::record(home.path(), &src.id, "journal_sync_failed", Some(&missing)).unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    let mut peer = event(Kind::Started, "b", 4);
+    peer.session_id = "peer".into();
+    write(peer);
+    write(event(Kind::Heartbeat, "a", 5));
+    let out = p.poll(std::time::SystemTime::now());
+    assert!(!out.authoritative);
+    let a = out
+        .tasks
+        .iter()
+        .find(|t| t.session_id.as_deref() == Some("fixture-session"))
+        .unwrap();
+    assert!(a.stale);
+    assert_eq!(a.input_request_ids, vec!["approval-a"]);
+    assert!(
+        !out.tasks
+            .iter()
+            .find(|t| t.session_id.as_deref() == Some("peer"))
+            .unwrap()
+            .stale
+    );
+    for o in out.ordered {
+        acknowledge(home.path(), &o.receipt).unwrap();
+    }
+    let mut p = GenericEventProvider::with_home(src.clone(), home.path().into());
+    assert!(p
+        .poll(std::time::SystemTime::now())
+        .tasks
+        .iter()
+        .any(|t| t.stale));
+    write(missing);
+    let out = p.poll(std::time::SystemTime::now());
+    let a = out
+        .tasks
+        .iter()
+        .find(|t| t.session_id.as_deref() == Some("fixture-session"))
+        .unwrap();
+    assert!(!a.stale);
+    assert!(a.input_request_ids.is_empty());
+    for o in out.ordered {
+        acknowledge(home.path(), &o.receipt).unwrap();
+    }
+    super::health::record(
+        home.path(),
+        &src.id,
+        "journal_write_failed",
+        Some(&event(Kind::Completed, "a", 6)),
+    )
+    .unwrap();
+    std::thread::sleep(std::time::Duration::from_millis(3));
+    write(event(Kind::Heartbeat, "a", 7));
+    let out = p.poll(std::time::SystemTime::now());
+    assert!(out.tasks.iter().any(|t| t.stale));
+    for o in out.ordered {
+        acknowledge(home.path(), &o.receipt).unwrap();
+    }
+    write(event(Kind::Started, "new-turn", 8));
+    let out = p.poll(std::time::SystemTime::now());
+    assert!(out.tasks.iter().all(|t| !t.stale));
+    assert_eq!(
+        crate::providers::generic_event::quarantine_summary(home.path(), &src.id)
+            ["unresolved_fact_gaps"],
+        0
+    );
+    super::health::record(home.path(), &src.id, "invalid_json", None).unwrap();
+    assert!(p
+        .poll(std::time::SystemTime::now())
+        .tasks
+        .iter()
+        .all(|t| !t.stale));
+}
+
+#[test]
 fn review_r1_mixed_pipeline_replay_is_silent_only_for_its_own_fact() {
     use crate::{
         attention::AttentionTracker,
@@ -368,6 +519,20 @@ fn receiver_write_failures_degrade_source_without_finishing_a_task() {
         dir.path(),
         &src.id,
         event(Kind::Heartbeat, "a", 2),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let still_uncertain = provider.poll(std::time::SystemTime::now());
+    assert!(!still_uncertain.authoritative);
+    assert!(still_uncertain.tasks[0].stale);
+    for item in &still_uncertain.ordered {
+        acknowledge(dir.path(), &item.receipt).unwrap();
+    }
+    journal::append(
+        dir.path(),
+        &src.id,
+        event(Kind::Started, "new-baseline", 3),
         "self_reported",
         "v1",
     )

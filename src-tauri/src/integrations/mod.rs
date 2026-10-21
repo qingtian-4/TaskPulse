@@ -2,6 +2,7 @@
 pub mod api;
 pub mod bridge;
 pub mod configuration;
+pub mod health;
 pub mod journal;
 pub mod manifest;
 pub mod reducer;
