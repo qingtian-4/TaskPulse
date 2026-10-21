@@ -12,7 +12,18 @@ TaskPulse 是 Windows 优先的桌面托盘应用，不是 VS Code 插件。它�
 
 当前产品使用紧凑的深色任务面板、独立来源管理窗口和窄条通知。原生 WebView2 截图及输入说明见 [展示素材](assets/README.md)；不使用上游 AgentTray 的旧界面充当 TaskPulse 截图。
 
-<!-- Native screenshots are added after isolated UI acceptance. -->
+![TaskPulse Alpha.7 原生关注面板](assets/screenshots/dashboard-alpha7.png)
+
+<details>
+<summary>查看来源管理与独立提醒</summary>
+
+![TaskPulse Alpha.7 原生来源管理](assets/screenshots/sources-alpha7.png)
+
+![TaskPulse Alpha.7 原生测试提醒](assets/screenshots/notice-alpha7.png)
+
+</details>
+
+截图为 Windows 原生 Tauri / WebView2 实际渲染，输入为隔离的公开**合成标准事件**，通知图为明确标记的测试提醒。不是浏览器 mock、真实 Agent 对话或四款宿主实机支持证明。当前 UI 为中文。[复现与验证记录](docs/UI_UX_VALIDATION_2026-10-21.md)
 
 ## 把注意力留给工作
 

@@ -12,7 +12,18 @@ TaskPulse is a Windows-first desktop tray companion, not a VS Code extension. It
 
 The product uses a compact dark dashboard, an independent source manager and narrow reminders. See [screenshots and input provenance](assets/README.md). Upstream AgentTray images are not presented as TaskPulse screenshots.
 
-<!-- Native screenshots are added after isolated UI acceptance. -->
+![TaskPulse Alpha.7 native attention dashboard](assets/screenshots/dashboard-alpha7.png)
+
+<details>
+<summary>Source management and independent reminder</summary>
+
+![TaskPulse Alpha.7 native source manager](assets/screenshots/sources-alpha7.png)
+
+![TaskPulse Alpha.7 native test reminder](assets/screenshots/notice-alpha7.png)
+
+</details>
+
+Actual Windows Tauri / WebView2 rendering with isolated, public **synthetic standard events**; the reminder is explicitly a test. These are not browser mocks, real Agent conversations or proof of host compatibility. The current UI is Chinese. [Reproduction and validation](docs/UI_UX_VALIDATION_2026-10-21.md)
 
 ## Keep your attention on the work
 

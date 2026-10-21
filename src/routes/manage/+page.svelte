@@ -37,7 +37,7 @@
   let now=$state(Date.now());
   let reading=$state(false), readTest=$state<{id:string;message:string}|null>(null);
   let notificationTest=$state(false);
-  const testStage=$derived(deliveryRecords.some(r=>r.test && r.stage==='rendered')?'测试界面已渲染（不代表已阅读）':notificationTest?'测试已提交 · 请确认是否看到':'尚未测试');
+  const testStage=$derived(deliveryRecords.some(r=>r.test && r.stage==='rendered')?'已有测试渲染记录（非已读）':notificationTest?'已提交 · 请确认是否看到':'本窗口暂无测试记录');
   async function testRead(){
     if(!editor || dirty || reading)return;
     const id=editor.id;reading=true;readTest=null;error='';
@@ -65,7 +65,7 @@
     try{notice=await invoke<string>('configure_claude_events',{sourceId:choice.sourceId,enabled:choice.enabled,confirmed:true});}catch(e){error=String(e);}finally{saving=false;}
   }
   function list(value:string):string[]{return value.split('\n').map(s=>s.trim()).filter(Boolean);}
-  function changed(){dirty=true;}
+  function changed(){dirty=true;readTest=null;}
   function add(){
     if(!settings)return;
     const builtin:Partial<Record<SourceKind,string>>={codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
@@ -177,9 +177,11 @@
       </aside><section class="editor">
         {#if editor}
           <h2>{editor.name}</h2>
-          <div class="setup-status" aria-label="来源接入状态"><span>{sourceState(editor)}</span><span>测试提醒：{testStage}</span><span>真实生命周期：需按宿主版本单独验收</span></div>
+          <div class="setup-status" aria-label="来源接入状态"><span>{sourceState(editor)}</span><span>提醒通道（全局）：{testStage}</span><span>真实生命周期：需按宿主版本单独验收</span></div>
           <p class="capability-note">{sourceCapability(editor.kind)}</p>
-          {#if editor.kind==='generic_event'}<IntegrationEditor source={editor} {dirty} changed={changed}/>{/if}
+          <div class="source-tests"><button class="secondary" disabled={dirty || saving || reading || !editor.enabled} onclick={testRead}>{reading?'正在读取…':'测试读取来源'}</button><button class="secondary" disabled={dirty || saving} onclick={testNotification}>发送测试提醒</button></div>
+          {#if readTest?.id===editor.id}<p class="read-result" role="status">{readTest.message}</p>{/if}
+          {#if editor.kind==='generic_event'}{#key editor.id}<IntegrationEditor source={editor} {dirty} changed={changed}/>{/key}{/if}
           <label>显示名称<input aria-label="来源显示名称" bind:value={editor.name} oninput={changed}/></label>
           {#if editor.kind==='remote_codex' || editor.kind==='tmux'}<label>SSH 别名<input bind:value={editor.location} oninput={changed} placeholder="例如 dev-server"/></label><p class="help">使用系统 SSH 配置和已有登录方式，不在 TaskPulse 保存密码。</p><label>轮询周期（毫秒）<input type="number" min="500" max="60000" bind:value={editor.poll_interval_ms} oninput={changed}/></label>
           {:else if editor.kind==='claude_code'}<label>Claude 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 CLAUDE_CONFIG_DIR 或本机 .claude"/></label><p class="help">自动观测 VS Code / CLI 原生会话、标题与上报模型；未启用精确事件时，内部格式的状态显示为“推断”。</p>
@@ -193,8 +195,6 @@
           <p class="help">推荐自动关注所有项目的新任务：只要来源启用，旧项目再次执行也会自动回来。主面板按最近 {settings.recent_days ?? 7} 天的执行活动显示，不复制历史会话。指定项目限制不会自动改写，可在上方取消。排除规则优先。</p>
           {#if !editor.projects.includes('*')}<label class="radio"><input type="checkbox" checked={editor.projects.includes('@unassociated')} onchange={e=>{editor!.projects=e.currentTarget.checked ? [...editor!.projects,'@unassociated'] : editor!.projects.filter(p=>p!=='@unassociated');changed();}}/>也包括未关联项目的会话</label>{/if}
           {#if editor.kind==='tmux'}<label>tmux session（留空表示全部，每行一个）<textarea value={editor.tmux_sessions.join('\n')} oninput={e=>{editor!.tmux_sessions=list(e.currentTarget.value);changed();}}></textarea></label><label>tmux pane（可选，每行一个）<textarea value={editor.tmux_panes.join('\n')} oninput={e=>{editor!.tmux_panes=list(e.currentTarget.value);changed();}}></textarea></label>{/if}
-          <div class="source-tests"><button class="secondary" disabled={dirty || saving || reading || !editor.enabled} onclick={testRead}>{reading?'正在读取…':'测试读取来源'}</button><button class="secondary" disabled={dirty || saving} onclick={testNotification}>发送测试提醒</button></div>
-          {#if readTest?.id===editor.id}<p class="read-result" role="status">{readTest.message}</p>{/if}
           <p class="help">保存后，范围内的新执行会自动加入。测试只验证读取 / 提醒通道；请在 Agent 中启动一轮真实任务，核对开始、阶段、结束和提醒。没有真实宿主证据时，仍以能力矩阵的验证等级为准。</p>
           <details class="advanced"><summary>高级设置 · 排除、诊断与来源移除</summary>
           <label>排除项目（可选，每行一个）<textarea value={editor.excluded_projects.join('\n')} oninput={e=>{editor!.excluded_projects=list(e.currentTarget.value);changed();}}></textarea></label>

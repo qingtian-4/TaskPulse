@@ -1,7 +1,7 @@
 import {test,expect} from 'bun:test';
 import {readFileSync,existsSync} from 'node:fs';
 import {resolve,dirname} from 'node:path';
-const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md'];
+const documents=['README.md','README.en.md','docs/INSTALL.md','docs/AGENT_COMPATIBILITY.md','docs/PRODUCT_DASHBOARD.md','assets/README.md','docs/UI_UX_VALIDATION_2026-10-21.md'];
 test('product docs use resolvable local links and images',()=>{
   for(const path of documents){
     const body=readFileSync(path,'utf8');
@@ -27,4 +27,15 @@ test('bilingual landing pages lead with the product and disclose alpha availabil
     expect(body).toContain('sprklai/agenttray');expect(body).toContain('(LICENSE)');
     expect(body).not.toMatch(/!\[[^\]]*\]\([^)]*(agenttray-screenshot|agenttray-demo|taskpulse-overview)/);
   }
+});
+
+test('current product materials retain dimensions and explicit synthetic native provenance',()=>{
+  for(const [name,width,height] of [['dashboard-alpha7',440,720],['sources-alpha7',1040,900],['notice-alpha7',320,132]] as const){
+    const path=`assets/screenshots/${name}.png`,png=readFileSync(path);
+    expect(png.subarray(1,4).toString()).toBe('PNG');
+    expect(png.readUInt32BE(16)).toBe(width);expect(png.readUInt32BE(20)).toBe(height);
+    for(const doc of ['README.md','README.en.md'])expect(readFileSync(doc,'utf8')).toContain(path);
+  }
+  expect(readFileSync('assets/README.md','utf8')).toContain('合成');
+  expect(readFileSync('README.en.md','utf8')).toContain('synthetic standard events');
 });
