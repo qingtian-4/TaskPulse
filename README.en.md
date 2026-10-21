@@ -1,71 +1,34 @@
 # TaskPulse
 
-Other-agent integration: [guide](docs/AGENT_INTEGRATION_GUIDE.md), [v1 protocol](docs/AGENT_INTEGRATION_PROTOCOL.md), [capability matrix](docs/AGENT_COMPATIBILITY.md), [validation](docs/AGENT_INTEGRATION_VALIDATION.md). Windows-local standardized events and restricted declarative manifests are implemented. Kimi Code CLI / TRAE CN IDE / ZCode have **partial, synthetic-tested Hook mappings, no real host version verified**; WorkBuddy Desktop remains a candidate without event mapping or installation. A blockable Stop is never a completion event. Imported manifests cannot install hooks or claim official evidence; real host changes require a fingerprint-bound preview and explicit confirmation.
+**Less window switching. More focus. Multiple coding agents, one task overview.**
 
-**Running several coding agents? Stop switching windows to check each one. See their task states at a glance and get notified when a turn ends or explicitly needs your input.**
+[中文](README.md) · [Getting started](docs/INSTALL.md) · [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Contributing](CONTRIBUTING.md) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
 
-[中文](README.md) · [Contributing](CONTRIBUTING.md) · [Architecture](docs/ARCHITECTURE.md) · [Implementation review](docs/PROJECT_REVIEW_2026-10.md)
+TaskPulse is a Windows-first desktop tray companion, not a VS Code extension. It brings tasks across agents, projects and machines into a dynamic attention list: what is running, what needs input, and which results you have not viewed. Independent reminders let you leave the dashboard closed while you work.
 
-TaskPulse is an **alpha, Windows-first** desktop application derived from
-[AgentTray](https://github.com/sprklai/agenttray). The executable and package are
-named `agent-tray`.
+> **Current version: 0.2.0-alpha.7. No Alpha.7 installer is publicly available; run from source for now.** Windows Quality / Security CI and publishing an accepted installer are separate milestones. Passing CI is not clean-system, installer or sustained real-host acceptance.
 
-![Illustrative TaskPulse UI, not live monitoring data](assets/taskpulse-overview.svg)
+## See it in action
 
-## Install and start
+The product uses a compact dark dashboard, an independent source manager and narrow reminders. See [screenshots and input provenance](assets/README.md). Upstream AgentTray images are not presented as TaskPulse screenshots.
 
-[Download / pre-releases](https://github.com/qingtian-4/TaskPulse/releases) · [Installation](docs/INSTALL.md) · [Changelog](CHANGELOG.md) · [Report an issue](https://github.com/qingtian-4/TaskPulse/issues)
+<!-- Native screenshots are added after isolated UI acceptance. -->
 
-1. On Windows 10/11 x64, choose `TaskPulse_<version>_windows_x64_setup.exe` under Release **Assets**. WebView2 is required; the installed app needs no Rust/Bun/Node.
-2. Confirm your sources and project scopes. New sources can watch all projects' new executions; WSL and SSH are separate opt-in sources.
-3. Send a labelled test reminder, start a task, and open the dashboard from the tray or `Ctrl+Shift+A`.
+## Keep your attention on the work
 
-**Alpha.7 is a new candidate containing dependency security fixes, not a public release.** Alpha.6 passed Windows CI and independent installer acceptance, but its old draft does not contain these fixes and is not a recommended download. The new candidate needs its own remote CI, installer, clean-system and sustained real-Agent acceptance. If no matching installer asset is available, [run from source](#run-from-source). Source archives are not installers. Portable and experimental Linux/macOS bundles are not supported release promises. This is a standalone desktop companion, not a VS Code extension. See the [open-source checklist](docs/OPEN_SOURCE_CHECKLIST.md), [security record](docs/SECURITY_AUDIT_2026-10.md) and [release gates](docs/RELEASING.md).
+- **Watch several agents together.** Task titles, projects, agent identity and observed activity are separate. Thinking and model waits remain running.
+- **Follow work, not idle history.** New executions join automatically; unviewed results and unresolved requests stay available. Pin important sessions.
+- **Get reminded away from the dashboard.** Turn ends and failures differ from explicit approvals/questions. Closing a reminder does not mark a task viewed or approve a command.
+- **Separate environments.** Choose local, WSL and SSH sources and project scopes. An old project executing again can re-enter attention without manual task registration.
+- **See uncertainty honestly.** Lost sources, bad records and catch-up are not success. Silence, low CPU and tool returns never prove an agent turn ended. No invented progress percentage.
 
-## Features
+Use it while one agent reviews code, another fixes tests, and a server runs an experiment in tmux. TaskPulse helps you decide when to switch back; it does not replace the agent's conversation or approval UI.
 
-- Real session titles, separate project names, and observable execution activity.
-- Explicit source selection and project scopes for local, supported WSL, and SSH sources.
-- Independent task popups, system notifications, and persistent notification deduplication.
-- Unviewed results, manual pins, and a configurable execution-activity window.
-- Remote tmux process observation and `tp-run` exit-code records.
-- Stale-source and disconnected-host indicators without inventing task completion.
+## Install and get started
 
-## Support matrix
+Use source builds today: [Releases](https://github.com/qingtian-4/TaskPulse/releases) has no public Alpha.7 installer. Source archives are not installers, and old AgentTray packages are not TaskPulse. Future Windows x64 naming and acceptance gates are in [Releasing](docs/RELEASING.md).
 
-WSL means monitoring Linux data from the Windows application. These are code
-capabilities, not a guarantee covering every installed Agent version.
-
-| Source | Local | WSL | SSH |
-|---|---|---|---|
-| Codex | Native adapter | Dedicated adapter | Dedicated collection, with bounded log snapshots |
-| Claude Code | Native records; opt-in hooks | No dedicated adapter | No dedicated adapter |
-| Hermes | SQLite and turn leases | No dedicated adapter | No dedicated adapter |
-| DeepSeek Harness | Desktop/CLI adapter | Dedicated adapter | No dedicated adapter |
-| Gemini CLI | Legacy hooks/process scanning | No dedicated adapter | No dedicated adapter |
-| Kimi Code CLI / TRAE CN IDE / ZCode | Partial documented Hook mappings; host-native verification pending | Generic transport not implemented | Generic transport not implemented |
-| WorkBuddy Desktop | Candidate only; no event mapping or installer | Not implemented | Not implemented |
-| Custom/community Agent | Local v1 events / restricted manifest import; self-reported evidence | Not implemented | Not implemented |
-
-Seeing an Agent process inside remote tmux does not provide its conversation
-lifecycle or approval events. Native undocumented formats are best-effort.
-Hermes lease loss/expiry is stale evidence, never a completion event. If native
-end metadata is unavailable, completion remains unconfirmed.
-
-Remote tmux code runs can be observed without a wrapper. `tp-run` adds real exit
-codes and also writes records outside tmux, provided the configured source does
-not restrict sessions/panes. It requires Python 3. Active records have no age
-cutoff; heartbeats, PID start ticks and boot IDs verify liveness without renewing
-execution activity. Lost evidence becomes stale, not success.
-Arbitrary local, WSL, and unwrapped non-tmux remote runs do not yet have a complete
-monitoring workflow. Repaired local wrappers preserve argv and exit codes, but
-only supervise the foreground child, not background/container/Slurm jobs.
-
-## Run from source
-
-Install Rust, Bun and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
-The standard Windows setup includes Microsoft C++ Build Tools and WebView2.
-Linux/macOS compatibility remains in the code but Windows is the primary validation target.
+Prepare Rust 1.89+, Bun and [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Standard Windows development includes Microsoft C++ Build Tools and WebView2.
 
 ```powershell
 git clone https://github.com/qingtian-4/TaskPulse.git
@@ -74,88 +37,55 @@ bun install --frozen-lockfile
 bun run tauri dev
 ```
 
-Use `bun run tauri build` to build desktop bundles. `bun run build` builds only
-the frontend. See [development notes](docs/DEVELOPMENT.md).
+1. Discover or choose your agent in source management and review its capabilities.
+2. Configure the environment and projects, then save. New sources watch all projects' new executions; existing allowlists are preserved.
+3. Test reading and reminders, then start real work in the agent. **A successful test reminder does not verify real lifecycle delivery.**
+4. Open the tray or press `Ctrl+Shift+A`. Mark results viewed after reading; answer and approve requests in the original agent.
 
-First launch asks you to confirm monitoring sources. Later use the tray menu or
-`Ctrl+Shift+A`. WSL Codex is a separate opt-in source; see [WSL setup](docs/WSL_CODEX.md).
-SSH monitoring uses your system SSH client and your own host aliases/authentication.
+See [Installation](docs/INSTALL.md), [the user guide](docs/PRODUCT_DASHBOARD.md) and [Development](docs/DEVELOPMENT.md) for configuration, Claude Code / CC Switch, server `tp-run`, privacy and troubleshooting. WSL and SSH are opt-in; stopped distributions are not woken and servers are not all connected automatically. Detailed guides currently use Chinese, with command examples.
 
-For command exit codes, copy `scripts/tp-run` to the server and run from the repository:
+## Agent support matrix
 
-```bash
-mkdir -p ~/.local/bin
-install -m 755 scripts/tp-run ~/.local/bin/tp-run
-~/.local/bin/tp-run "Training experiment" -- python train.py
-```
+Adapters do not guarantee every host version. Installation discovery, successful reading, notification tests and real lifecycle verification are separate evidence. WSL means observing Linux data from the Windows application.
 
-Enable the server's tmux source and include the project path. The long-run
-limitation above still applies.
+| Agent / source | Local | WSL | SSH | Important boundary |
+|---|---|---|---|---|
+| Codex | Native adapter | Separate source | Native session collection | Only explicit approval events notify; large cold logs need catch-up |
+| Claude Code | Native records; optional explicit hooks | No dedicated adapter | No dedicated adapter | Proxy models do not change agent identity; hooks require consent |
+| Hermes | SQLite / runtime leases | No dedicated adapter | No dedicated adapter | Lease loss is not completion; missing end evidence remains uncertain |
+| DeepSeek Harness | Desktop / CLI | Separate source | No dedicated adapter | Legacy / v4 compressed logs and native title projections |
+| Gemini CLI | Legacy hooks / process scanning | No dedicated adapter | No dedicated adapter | Not a full native conversation adapter |
+| Kimi Code CLI / TRAE CN IDE / ZCode | **Partial mappings, fixture-tested** | Generic transport not implemented | Generic transport not implemented | No host Hook version verified; Stop is not final completion |
+| WorkBuddy Desktop | **Candidate only, no event adapter** | Not implemented | Not implemented | CodeBuddy CLI does not establish Desktop support |
+| Custom / community agent | Local v1 events / declarative manifest | Not implemented | Not implemented | Self-reported evidence, not official native support |
+| Ordinary code runs | Unified workflow incomplete | No dedicated provider | tmux / `tp-run` | Foreground exit codes do not prove detached, container or Slurm completion |
 
-## State and notifications
+See [per-capability support and verified versions](docs/AGENT_COMPATIBILITY.md). Discovering a process does not establish conversation, title or approval access.
 
-The dashboard orders ongoing work, unviewed results, uncertain/stale state, then
-pinned/viewed tasks. Explicit blockers remain ongoing with their actual status;
-failed results and source faults are not conflated. Compact counters expose
-approvals, questions, failed results and source health.
-
-Thinking, tool execution and model-response waits remain running. An Agent turn
-ending is not proof that its project is complete. Only real exit codes establish
-command success. Missing logs and failed probes never establish completion.
-
-Completion popups normally close after 15 seconds, pausing while hovered.
-Confirmed approval/question popups do not time out. Closing a popup or opening details
-does not mark a result viewed. Approval is performed in the original Agent.
-The bell opens an unresolved-request inbox restored from attention state after
-restart, without replaying old completion notifications. Only fresh confirmed
-requests can be explicitly reopened. The transient queue holds up to 128 alerts;
-overflowed items remain in the dashboard. Blockers rotate when other alerts wait,
-without resolving the request or marking it viewed.
-Codex escalation parameters and slow commands are not evidence of pending human
-approval. Only explicit source approval events trigger authorization reminders;
-sources without these events may miss approval waits. Timed approval guesses are
-not used.
-
-## Data and privacy
-
-Settings, attention state, recent results and notification deduplication live in
-`~/.taskpulse/`. Delivery evidence is bounded to 500 entries and is not proof of
-user reading. Generic `.status` files are accepted in `~/.taskpulse/` and the
-legacy `~/.agent-monitor/` directory.
-
-There is no TaskPulse cloud account or telemetry service. TaskPulse does not read
-Claude `*.key` files or capture tmux pane content. Native logs, process arguments,
-run files and activity summaries may contain commands or paths; review diagnostic
-material before sharing it.
-
-Claude hooks require explicit installation, preserve other settings, and can be
-removed. CC Switch model/provider changes do not change the Agent identity.
-Local Codex quota is queried through Codex app-server; there is currently no
-independent quota toggle, and these values do not represent WSL/SSH accounts.
-
-## Development and roadmap
+## Architecture and extension
 
 ```text
-Provider → scope/normalization/dedup → TaskStore → AttentionTracker
-         → TransitionEngine → tray / UI / notifications
+Provider → scope / normalization / dedup → TaskStore
+         → AttentionTracker → TransitionEngine → tray / UI / reminders
 ```
 
-While the Windows tray is running, use the isolated verification target:
+Rust / Tauri 2 handles collection and state; Svelte 5 handles presentation. Stable session/turn identity is separate from titles, phases and delivery. Renames do not create tasks; tool completion does not end a turn.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
-bun run test:ui-model
-```
+There is no TaskPulse cloud account or telemetry service. Settings and attention live in `~/.taskpulse/`; activity and diagnostics can contain commands or paths, so review them before sharing. TaskPulse never auto-installs real hooks, changes proxy/model settings or relaxes approval policies. Local Codex quota is account data, not task progress or remote-account quota.
 
-Real Agent, SSH, WSL and native WebView2 acceptance checks are opt-in and separate
-from unit tests. See [AGENTS.md](AGENTS.md) and [contributing](CONTRIBUTING.md).
+Prefer explicit lifecycle events, then verifiable read-only data. See [Architecture](docs/ARCHITECTURE.md), [Integration guide](docs/AGENT_INTEGRATION_GUIDE.md) and [v1 protocol](docs/AGENT_INTEGRATION_PROTOCOL.md). There is no general executable third-party plugin loader.
 
-Planned priorities are reliable cross-environment code-run monitoring, missing
-Claude/Hermes transports, continued live validation of presentation and recovery,
-a generic Agent event contract, and optional quota display/querying. These are
-not current capabilities. There is no general third-party plugin loader yet.
+## Roadmap
 
-## License
+- Alpha.7: collect real-version, notification and sustained-runtime evidence; complete Windows installer acceptance.
+- Onboarding: reduce setup friction and verify Kimi / TRAE / ZCode / WorkBuddy individually, without promoting candidates to full support.
+- Environments: add missing Claude / Hermes transports and a unified local/WSL/SSH code-run workflow.
+- Optional information: independently control account-quota querying and display.
 
-[MIT](LICENSE). Derived from [AgentTray](https://github.com/sprklai/agenttray);
-retain the original copyright, license and attribution when renaming or redistributing.
+These are future directions, not current promises. Completed bounded-log, checkpoint-recovery and cache work is in [Reliability optimization](docs/RELIABILITY_OPTIMIZATION_2026-10.md); remaining gates are in the [delivery checklist](docs/OPEN_SOURCE_CHECKLIST.md).
+
+## Contributing / Credits
+
+Read [CONTRIBUTING.md](CONTRIBUTING.md) before contributing. Bug reports should include OS, agent version and source type, with private conversations and credentials removed. Development and native acceptance commands are in [AGENTS.md](AGENTS.md).
+
+Derived from [sprklai/agenttray](https://github.com/sprklai/agenttray). Upstream authors, copyright and Git history are preserved under the [MIT License](LICENSE). Thanks to AgentTray for the tray, terminal-focus and hook-bridge foundations.

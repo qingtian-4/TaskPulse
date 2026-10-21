@@ -6,6 +6,8 @@
 
 ## 使用方式
 
+当前 Alpha.7 没有公开安装包；从源码启动与依赖准备见 [安装指南](INSTALL.md)。GitHub 首页只保留产品概览，原 README 的状态语义、隐私、Claude/服务器接入细节以本指南和安装指南为准。
+
 1. 托盘点击或 `Ctrl+Shift+A` 打开面板，齿轮打开独立管理窗口。
 2. 在“监控来源”启用需要的实例。Windows DeepSeek、WSL DeepSeek、每个 SSH 服务器分别配置，不混为同一来源。
 3. 默认自动关注该来源所有项目的新执行；也可设置项目名称/完整路径的允许列表、排除项目、tmux session/pane。完整 Linux 路径区分大小写，Windows 路径不区分；`@unassociated` 表示未关联项目。

@@ -10,6 +10,7 @@
     "prepare": "svelte-kit sync || echo ''",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
     "test:ui-model": "bun test scripts/dashboard.test.ts scripts/notice.test.ts",
+    "test:docs": "bun test scripts/docs.test.ts",
     "test:release": "bun test scripts/release.test.ts",
     "audit:frontend": "bun audit --audit-level=moderate",
     "audit:rust": "bun scripts/security.ts rust",

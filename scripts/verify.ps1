@@ -33,6 +33,8 @@ try {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run check
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:docs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run test:ui-model
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run release:check

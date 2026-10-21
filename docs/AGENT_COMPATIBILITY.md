@@ -1,4 +1,22 @@
-# 通用接入兼容矩阵
+# Agent 支持与通用接入兼容矩阵
+
+## 内置来源
+
+以下为 Alpha.7 已实现范围，不等于所有版本实机验收。安装发现、配置保存、读取成功、测试提醒与
+真实生命周期验证是不同阶段，管理界面不会将其中一个自动提升为后者。
+
+| 来源 | 可用环境 | 证据与限制 |
+|---|---|---|
+| Codex | Windows、按运行发行版启用的 WSL、已配置 SSH | 原生标题/rollout；只在有明确审批事件时提醒。大日志追赶、服务器日志窗口有边界 |
+| Claude Code | Windows 本机 | 原生只读记录 best-effort；官方 Hook 显式确认安装，代理模型不改变 Agent 身份；无专用 WSL/SSH 适配 |
+| Hermes | Windows 本机 | SQLite 与租约，租约丢失不证明完成；无专用 WSL/SSH 适配 |
+| DeepSeek Harness | Windows Desktop/CLI、独立 WSL | 旧版/v4 压缩日志与标题 projection；无专用 SSH 适配 |
+| Gemini CLI | 兼容 Hook / 进程扫描 | 不能作为完整会话/阶段/审批验收 |
+| 远程普通代码 | SSH tmux / tp-run | wrapper 的前台退出码可靠性不扩展到 detached/container/Slurm 子任务 |
+
+第一轮只读与原生平台验证见 [可靠性记录](RELIABILITY_OPTIMIZATION_2026-10.md)。这些记录不替下面四款宿主 Hook 背书，也不证明所有内置来源的新任务端到端时延。
+
+## 四款通用接入的验证等级
 
 核验日期：2026-10-21（R1–R4 修复后能力边界）。TaskPulse `0.2.0-alpha.7`、Windows 10 Pro 22H2 x64（19045）。**以下四款的宿主 Hook 实机验证版本均为“无”**。安装元数据不是事件验证；合成载荷测试与 TaskPulse 原生 WebView2/GUI exe 验收均不升级为宿主 native-tested。
 
