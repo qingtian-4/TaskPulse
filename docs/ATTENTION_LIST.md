@@ -42,6 +42,7 @@ Codex 的 app-server 只负责原生标题和重命名同步。运行状态仍�
 
 ### 状态边界
 
+- Codex 日志以该文件首个有效 `session_meta` 为会话身份；子 Agent／分支日志里复制的父会话元数据不能重置身份或归属。原生 `source.subagent.thread_spawn.parent_thread_id` 明确指向父会话的自动工作线程，与 guardian 一样不作为独立用户任务提醒；子线程的 `task_complete` 不能结束父任务。手动分支／普通会话不能仅因标题、目录或 `forked_from_id` 被排除。该规则由本地、WSL 与 SSH 共用的解析器执行。
 - `RUNNING`：存在明确的进行中 turn、有效运行租约、未结束的工具调用，或仍存活的受监控进程。仅仅“会话窗口仍打开”不算运行中。
 - `WAITING_INPUT`：明确的本轮结束，或来源明确请求用户批准／回答。Codex 的 `task_complete`、DSH 的 `turn/end`、Claude 的 `Stop`／原生 `end_turn` 属于本轮结束；不是项目完成。Hermes 仅在原生 `ended_at/end_reason` 明确结束时确认，租约释放或过期本身不属于结束事件。
 - `SUCCEEDED`：有权威的成功结束信号，例如 wrapper 的退出码 0，或 Agent 原生的明确完成阶段。普通对话回复完成默认是 `WAITING_INPUT`，不是 `SUCCEEDED`。

@@ -174,7 +174,7 @@ impl CodexProvider {
                             rollout_path: row.rollout_path.clone(),
                             updated_at: row.updated_at,
                             pinned: row.is_pinned,
-                            internal: internal_guardian(&row.source),
+                            internal: internal_codex_source(&row.source),
                         },
                     )
                 })
@@ -299,7 +299,7 @@ impl CodexProvider {
                     rollout_path: row.get(5)?,
                     updated_at: row.get(6)?,
                     pinned: row.get(7)?,
-                    internal: internal_guardian(
+                    internal: internal_codex_source(
                         &serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(8)?)
                             .unwrap_or_default(),
                     ),
@@ -524,6 +524,9 @@ pub struct SessionState {
     active_tools: std::collections::BTreeMap<String, String>,
     confirmed_approvals: std::collections::BTreeMap<String, Option<String>>,
     pub session_id: String,
+    /// The first native header owns this rollout. Forked transcripts can embed
+    /// another session_meta from the parent; that is history, not a new owner.
+    metadata_session_id: Option<String>,
     pub turn_key: Option<String>,
     pub first_user_message: Option<String>,
     pub quota_5h_used_pct: Option<f64>,
@@ -566,7 +569,7 @@ struct AppThreadMeta {
     source: serde_json::Value,
 }
 
-fn internal_guardian(source: &serde_json::Value) -> bool {
+fn internal_codex_source(source: &serde_json::Value) -> bool {
     // SQLite may carry JSON text while app-server / rollout carry an object.
     // Classify the native origin, never a task name or prompt substring.
     let parsed;
@@ -577,6 +580,10 @@ fn internal_guardian(source: &serde_json::Value) -> bool {
         source
     };
     source.pointer("/subagent/other").and_then(|v| v.as_str()) == Some("guardian")
+        || source
+            .pointer("/subagent/thread_spawn/parent_thread_id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|parent| !parent.trim().is_empty())
 }
 
 #[derive(Debug)]
@@ -799,7 +806,7 @@ impl ThreadMeta {
             rollout_path: meta.path.clone(),
             updated_at: meta.updated_at,
             pinned: false,
-            internal: internal_guardian(&meta.source),
+            internal: internal_codex_source(&meta.source),
         }
     }
 }
@@ -926,6 +933,7 @@ fn apply_codex_rollout(
         mut active_tools,
         mut confirmed_approvals,
         mut session_id,
+        mut metadata_session_id,
         mut turn_key,
         mut first_user_message,
         mut quota_5h_used_pct,
@@ -947,6 +955,7 @@ fn apply_codex_rollout(
         active_tools: Default::default(),
         confirmed_approvals: Default::default(),
         session_id: default_session_id.into(),
+        metadata_session_id: None,
         turn_key: None,
         first_user_message: None,
         quota_5h_used_pct: None,
@@ -1046,6 +1055,30 @@ fn apply_codex_rollout(
             continue;
         };
 
+        // A fork's first header describes the child, followed by a copied
+        // parent header/history. Never let the latter re-key this file, replace
+        // its project or classify a normal user fork as a parent's service.
+        // A genuine file replacement resets SessionState in cached_session_state.
+        let is_session_meta = value.get("type").and_then(|v| v.as_str()) == Some("session_meta")
+            || payload.get("type").and_then(|v| v.as_str()) == Some("session_meta");
+        if is_session_meta {
+            if let Some(id) = payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .filter(|id| !id.is_empty())
+            {
+                if metadata_session_id
+                    .as_deref()
+                    .is_some_and(|owner| owner != id)
+                {
+                    continue;
+                }
+                metadata_session_id = Some(id.to_owned());
+                session_id = id.to_owned();
+            }
+            internal |= payload.get("source").is_some_and(internal_codex_source);
+        }
+
         // Extract project (cwd) + session id on ANY line that carries them
         // — session_meta / turn_context have no `payload.type`, so this
         // must run before the type guard below.
@@ -1064,18 +1097,6 @@ fn apply_codex_rollout(
                 .and_then(|v| v.as_str())
                 .map(str::to_owned);
         }
-        // Codex emits session_meta with `type` in different places depending
-        // on host form: local Desktop puts it in payload.type, headless
-        // app-server (Server3) puts it at the top level. Accept both.
-        let is_session_meta = value.get("type").and_then(|v| v.as_str()) == Some("session_meta")
-            || payload.get("type").and_then(|v| v.as_str()) == Some("session_meta");
-        if is_session_meta {
-            if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                session_id = id.to_string();
-            }
-            internal |= payload.get("source").is_some_and(internal_guardian);
-        }
-
         let Some(ptype) = payload.get("type").and_then(|v| v.as_str()) else {
             continue;
         };
@@ -1343,6 +1364,7 @@ fn apply_codex_rollout(
         active_tools,
         confirmed_approvals,
         session_id,
+        metadata_session_id,
         turn_key,
         first_user_message,
         quota_5h_used_pct,
@@ -1486,20 +1508,29 @@ struct RemoteThreadMeta {
 fn remote_thread_metadata(section: &str) -> HashMap<String, RemoteThreadMeta> {
     let mut metadata = HashMap::new();
     let mut internal_origins = std::collections::HashSet::new();
+    let mut rollout_owner: Option<String> = None;
     for line in section.lines() {
-        if let Some(raw) = line.strip_prefix("META\t") {
+        if line.starts_with("===S:") {
+            rollout_owner = None;
+        } else if let Some(raw) = line.strip_prefix("META\t") {
             if let Ok(mut meta) = serde_json::from_str::<RemoteThreadMeta>(raw) {
                 if !meta.id.trim().is_empty() {
-                    meta.internal = internal_guardian(&meta.source);
+                    meta.internal = internal_codex_source(&meta.source);
                     // Retain origin even if the native title is unavailable.
                     metadata.insert(meta.id.clone(), meta);
                 }
             }
         } else if let Ok(row) = serde_json::from_str::<serde_json::Value>(line) {
-            if row.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+            if row.get("type").and_then(|v| v.as_str()) == Some("session_meta")
+                || row.pointer("/payload/type").and_then(|v| v.as_str()) == Some("session_meta")
+            {
                 if let Some(payload) = row.get("payload") {
-                    if payload.get("source").is_some_and(internal_guardian) {
-                        if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                        if rollout_owner.as_deref().is_some_and(|owner| owner != id) {
+                            continue;
+                        }
+                        rollout_owner = Some(id.to_owned());
+                        if payload.get("source").is_some_and(internal_codex_source) {
                             internal_origins.insert(id.to_owned());
                         }
                     }
@@ -2086,6 +2117,271 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn fork_meta(id: &str, source: serde_json::Value, cwd: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(5),
+            "type":"session_meta","payload":{"id":id,"cwd":cwd,"source":source}})
+        )
+    }
+
+    fn spawned_source(parent: &str) -> serde_json::Value {
+        serde_json::json!({"subagent":{"thread_spawn":{"parent_thread_id":parent,
+            "depth":1,"agent_path":"/root/worker"}}})
+    }
+
+    #[test]
+    fn fork_identity_cannot_be_overwritten_by_inherited_metadata_across_batches() {
+        let now = SystemTime::now();
+        for source in [spawned_source("parent"), serde_json::json!("vscode")] {
+            let own = fork_meta("child", source.clone(), "/child-project");
+            let state = apply_codex_rollout(&own, now, "filename-fallback", None).unwrap();
+            let history = fork_meta("parent", serde_json::json!("vscode"), "/parent-project");
+            let state =
+                apply_codex_rollout(&history, now, "filename-fallback", Some(state)).unwrap();
+            assert_eq!(
+                state.session_id, "child",
+                "copied parent metadata is not the file owner"
+            );
+            assert_eq!(state.cwd.as_deref(), Some("/child-project"));
+            assert_eq!(state.internal, source != serde_json::json!("vscode"));
+            // Repeated metadata for the actual owner remains compatible.
+            let same = apply_codex_rollout(&own, now, "filename-fallback", Some(state)).unwrap();
+            assert_eq!(same.session_id, "child");
+        }
+    }
+
+    #[test]
+    fn forked_workers_cannot_end_running_parent_through_store_attention_and_restart() {
+        use crate::attention::AttentionTracker;
+        use crate::store::TaskStore;
+        use crate::transition::TransitionEngine;
+        for wsl in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let sessions = dir.path().join("sessions");
+            std::fs::create_dir(&sessions).unwrap();
+            let parent_path = sessions.join("rollout-parent.jsonl");
+            let parent_header = fork_meta("parent", serde_json::json!("vscode"), "/project");
+            std::fs::write(
+                &parent_path,
+                format!(
+                    "{parent_header}{}",
+                    turn_event("task_started", "parent-turn", 4)
+                ),
+            )
+            .unwrap();
+            let mut provider = if wsl {
+                CodexProvider::with_wsl_root(
+                    dir.path().into(),
+                    dir.path().into(),
+                    "codex-wsl:ubuntu",
+                )
+            } else {
+                CodexProvider::with_root(sessions.clone())
+            };
+            let ledger = dir.path().join("notifications.json");
+            let mut engine = TransitionEngine::open(ledger.clone());
+            let mut store = TaskStore::default();
+            let mut attention = AttentionTracker::open(dir.path().join("attention.json"));
+            let now = SystemTime::now();
+            let initial = provider.poll(now);
+            let merged = store.merge(initial.tasks, now);
+            assert!(engine.apply(&merged, &[], now).is_empty());
+            attention.reconcile(merged);
+            let parent_id = provider.task_id("parent");
+            // Native thread_spawn rollouts begin with their own metadata and
+            // then replay a parent's metadata/history before their own turn.
+            for i in 0..2 {
+                let child = format!("child-{i}");
+                let child_turn = format!("child-turn-{i}");
+                let path = sessions.join(format!("rollout-{child}.jsonl"));
+                let prefix = format!(
+                    "{}{}{}{}",
+                    fork_meta(&child, spawned_source("parent"), "/project"),
+                    parent_header,
+                    turn_event("task_complete", "old-parent-turn", 3),
+                    turn_event("task_started", "parent-turn", 2)
+                );
+                std::fs::write(&path, &prefix).unwrap();
+                for suffix in [
+                    turn_event("task_started", &child_turn, 1),
+                    turn_event("task_complete", &child_turn, 0),
+                ] {
+                    std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .unwrap()
+                        .write_all(suffix.as_bytes())
+                        .unwrap();
+                    let output = provider.poll(now);
+                    let parent = output.tasks.iter().find(|t| t.id == parent_id).unwrap();
+                    assert_eq!(
+                        parent.status,
+                        TaskStatus::Running,
+                        "a child must never replace its parent (WSL={wsl})"
+                    );
+                    assert_eq!(parent.turn_key.as_deref(), Some("parent-turn"));
+                    let child_task = output
+                        .tasks
+                        .iter()
+                        .find(|t| t.session_id.as_deref() == Some(&child))
+                        .unwrap();
+                    assert!(
+                        child_task.internal,
+                        "native spawned workers are not independent user turns"
+                    );
+                    let merged = store.merge(
+                        output.tasks.into_iter().filter(|t| !t.internal).collect(),
+                        now,
+                    );
+                    assert!(engine.apply(&merged, &[], now).is_empty());
+                    let visible = attention.reconcile(merged);
+                    assert_eq!(visible.len(), 1);
+                    assert_eq!(visible[0].status, TaskStatus::Running);
+                    engine = TransitionEngine::open(ledger.clone());
+                }
+            }
+            // Real parent completion must still notify once, including after
+            // restart; do not reset the persisted notification ledger to fix it.
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&parent_path)
+                .unwrap()
+                .write_all(turn_event("task_complete", "parent-turn", 0).as_bytes())
+                .unwrap();
+            let tasks = provider
+                .poll(now)
+                .tasks
+                .into_iter()
+                .filter(|t| !t.internal)
+                .collect();
+            let merged = store.merge(tasks, now);
+            assert_eq!(engine.apply(&merged, &[], now).len(), 1);
+            engine = TransitionEngine::open(ledger);
+            assert!(engine.apply(&merged, &[], now).is_empty());
+            assert!(attention.reconcile(merged)[0].unread);
+        }
+    }
+
+    #[test]
+    fn fork_spawn_origin_survives_remote_full_and_truncated_rollouts() {
+        let child = "11111111-1111-7111-8111-111111111111";
+        for source in [
+            spawned_source("parent"),
+            serde_json::Value::String(spawned_source("parent").to_string()),
+        ] {
+            for with_header in [false, true] {
+                let inherited = if with_header {
+                    format!(
+                        "{}{}",
+                        fork_meta(child, source.clone(), "/project"),
+                        fork_meta("parent", serde_json::json!("vscode"), "/parent-project")
+                    )
+                } else {
+                    String::new()
+                };
+                let section = format!("META\t{}\n===S:10===F:rollout-2026-10-22T12-00-00-{child}.jsonl===\n{inherited}{}",
+                    serde_json::json!({"id":child,"t":"Worker","cwd":"/project","source":source}),
+                    turn_event("task_complete", "worker-turn", 0));
+                let tasks =
+                    tasks_from_codex_section(&section, "Server", "server", SystemTime::now());
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].session_id.as_deref(), Some(child));
+                assert!(tasks[0].internal);
+                assert!(catalog_from_codex_section(&section, "Server", "server")[0].internal);
+                assert!(crate::transition::TransitionEngine::new()
+                    .apply(&tasks, &[], SystemTime::now())
+                    .is_empty());
+            }
+        }
+        assert!(
+            !internal_codex_source(&serde_json::json!({"subagent":{"thread_spawn":{}}})),
+            "unknown origin is not proof of a spawned worker"
+        );
+    }
+
+    #[test]
+    fn user_fork_does_not_inherit_service_classification_from_copied_history() {
+        let body = format!(
+            "{}{}{}",
+            fork_meta("user", serde_json::json!("vscode"), "/project"),
+            fork_meta(
+                "service",
+                serde_json::json!({"subagent":{"other":"guardian"}}),
+                "/service"
+            ),
+            turn_event("task_started", "user-turn", 0)
+        );
+        let state = parse_codex_rollout(&body, SystemTime::now(), "fallback").unwrap();
+        assert_eq!(state.session_id, "user");
+        assert!(!state.internal);
+        let section = format!("META\t{{\"id\":\"service\",\"t\":\"User title\",\"source\":\"vscode\"}}\n===S:10===F:rollout.jsonl===\n{body}");
+        assert!(!remote_thread_metadata(&section)["service"].internal);
+    }
+
+    #[test]
+    #[ignore = "read-only real rollout replay; requires TASKPULSE_CODEX_REPLAY_ROOT"]
+    fn live_codex_fork_identity_replay() {
+        let root = PathBuf::from(
+            std::env::var("TASKPULSE_CODEX_REPLAY_ROOT").expect("explicit sessions root required"),
+        );
+        let now = SystemTime::now();
+        let mut files = 0;
+        let mut spawned = 0;
+        let mut provider = CodexProvider::with_root(root.clone());
+        for path in walk(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|s| s == "jsonl"))
+        {
+            let body = std::fs::read_to_string(&path).unwrap();
+            let first: serde_json::Value =
+                serde_json::from_str(body.lines().next().unwrap()).unwrap();
+            let Some(owner) = first.pointer("/payload/id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let state = parse_codex_rollout_unfiltered(&body, now, "fallback").unwrap();
+            assert_eq!(state.session_id, owner, "rollout header identity changed");
+            if first
+                .pointer("/payload/source/subagent/thread_spawn/parent_thread_id")
+                .is_some()
+            {
+                spawned += 1;
+                assert!(state.internal);
+            }
+            // The same native file must keep its identity in the bounded
+            // incremental path too, not just when parsed as one string.
+            let mut caught = None;
+            for _ in 0..30 {
+                caught = provider.cached_session_state(&path, now);
+                if caught.is_some() {
+                    break;
+                }
+            }
+            let caught = caught.expect("bounded reader did not catch up");
+            assert_eq!(caught.session_id, owner);
+            assert_eq!(caught.internal, state.internal);
+            assert_eq!(caught.turn_key, state.turn_key);
+            if std::env::var("TASKPULSE_CODEX_REPLAY_SESSION")
+                .ok()
+                .as_deref()
+                == Some(owner)
+            {
+                println!(
+                    "target_session={owner} status={:?} phase={:?} turn={:?}",
+                    caught.status, caught.phase, caught.turn_key
+                );
+            }
+            files += 1;
+        }
+        assert!(
+            files > 0 && spawned > 0,
+            "real spawned rollout evidence required"
+        );
+        println!("read_only_replay: files={files} native_spawned_workers={spawned}; no Agent tasks or notification state changed");
+    }
+
     #[test]
     fn lifecycle_schema_error_is_scoped_and_retry_or_rate_limit_is_not_exhaustion() {
         let now = SystemTime::now();
