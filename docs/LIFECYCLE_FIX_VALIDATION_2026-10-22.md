@@ -28,11 +28,17 @@
 
 含 `result.json`、`dashboard.png`、`quota.png`。截图为实际原生渲染的合成测试，不是真实额度耗尽或宿主认证。
 
-额外运行既有 `native-product-smoke.ts`：Dashboard/DPR/短窗口/滚动检查已执行，但后续管理页查询 `.integration-advanced` / `.hook-registry` 的 `open` 时元素为 null，完整脚本退出 1。该文件含原有未提交修改，本轮未覆盖或放宽其断言；不宣称全套跨页面 smoke 通过。失败证据在 `product-native-2026-10-22T01-26-30-228Z/`，临时测试目录保留在 target，不是用户配置目录。
+8. 既有 `native-product-smoke.ts` 首轮在管理页查询 `.integration-advanced` 的 `open` 时元素为 null，退出 1。定位为测试就绪条件不完整：`.setup-flow` 随 settings 先渲染，而当前来源在异步发现后才选中并渲染编辑器。保留该文件原有未提交修改，只增加等待具体编辑器、Hook 登记与能力摘要就绪，不删改折叠状态或能力边界断言。重新运行退出 0：跨 Dashboard / 来源管理 / 通知三页、DPR 1/1.5/2、480px 短窗口、27 任务滚动、搜索/未读/已查看、来源保存/测试读取/事件接收、真实通知渲染均通过。仍是隔离合成来源，不等于真实宿主认证。
+
+完整原生 smoke 成功证据（`result.json` 记录三页九项 DPR 检查；另保留 `sources-100.png`，Dashboard / quota 截图见上面的 lifecycle 目录）：
+
+`src-tauri/target/ui-smoke/evidence/product-native-2026-10-22T01-42-47-050Z/`
+
+首轮失败证据 `product-native-2026-10-22T01-26-30-228Z/` 保留。成功轮结束时 Windows 仍持有临时 WebView2 profile，脚本记录清理 EBUSY 警告；证据已复制到上述目录，临时目录 `target/product-native-sTzxRN` 仍保留，不是用户配置目录，未为清理它而停止真实 Agent。
 
 ## 发布与能力边界
 
 - 仅重启本工作区 TaskPulse，未停止 Codex、WSL 或服务器任务。旧 EXE 和 attention/recent/notifications 替换前以 `pre-lifecycle-fix-19de7e13` 后缀备份；未清空状态，未修改真实 Hook、代理、模型或审批设置。
 - 支持明确结构化 `usageLimitExceeded` / usage-limit 错误；不按普通百分比或 HTTP 429 猜测任务被阻塞。本机账号不代替 WSL/远程账号；没有明确额度事件的宿主仍可能无法投递该类提醒。
-- 真实账号额度耗尽、长期误报/漏报统计与完整管理页 smoke 仍有缺口；独立干净 Windows 安装验收继续暂缓。
+- 真实账号额度耗尽、长期误报/漏报统计仍有缺口；完整跨页面 smoke 已补通过，独立干净 Windows 安装验收继续暂缓。
 - 真实会话、命令与完整日志不提交 Git。此修复不包含在既有源 SHA `b5dc64a` 的 Alpha.7 安装包内。

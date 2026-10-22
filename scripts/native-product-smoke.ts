@@ -177,6 +177,9 @@ try{
   checks.push('27 native tasks remain rendered with bounded vertical scrolling and no horizontal overflow');
   await root.invoke('open_management');management=await page('/manage');
   await management.wait(`!!document.querySelector('.setup-flow')`);
+  // Settings render before asynchronous discovery selects the source/editor.
+  // Wait for the actual controls; keep the folded-state/capability assertions.
+  await management.wait(`!!document.querySelector('.integration-advanced') && !!document.querySelector('.hook-registry') && !!document.querySelector('.capability-summary')`);
   assert.equal(await management.evaluate(`document.querySelector('.integration-advanced').open`),false);
   assert.equal(await management.evaluate(`document.querySelector('.hook-registry').open`),false);
   assert.ok(await management.evaluate(`document.querySelector('.capability-summary').textContent.includes('仍需真实宿主验收')`));
