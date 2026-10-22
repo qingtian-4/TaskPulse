@@ -80,6 +80,8 @@ jobs:
         run: bun run test:ui-model
       - name: Test integration contracts
         run: bun run test:integration-contract
+      - name: Test smoke evidence and bounded owned-directory cleanup
+        run: bun run test:smoke-cleanup
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Lint Rust

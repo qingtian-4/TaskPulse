@@ -45,6 +45,8 @@ try {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run test:integration-contract
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:smoke-cleanup
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run build
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }

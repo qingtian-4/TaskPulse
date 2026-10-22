@@ -47,6 +47,8 @@ jobs:
         run: bun run test:security
       - name: Test integration contracts
         run: bun run test:integration-contract
+      - name: Test smoke evidence and bounded owned-directory cleanup
+        run: bun run test:smoke-cleanup
       - name: Test read-only WSL source detection (offline fixtures)
         run: python scripts/test-wsl-discovery.py
       - name: Build frontend

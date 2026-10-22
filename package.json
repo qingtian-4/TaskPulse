@@ -17,6 +17,7 @@
     "audit:secrets": "bun scripts/security.ts secrets",
     "test:security": "bun test ./scripts/security.test.ts",
     "test:integration-contract": "bun test ./scripts/integration-contract.test.ts",
+    "test:smoke-cleanup": "bun test ./scripts/smoke-workspace.test.ts",
     "release:check": "bun scripts/release.ts check",
     "tauri": "tauri"
   },
