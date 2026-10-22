@@ -71,12 +71,16 @@ try{
   assert.equal((await root.invoke('get_task_notice')).current,null,'Thinking must not notify');
   event('one','a','input.requested',{request_kind:'question'},{request_id:'q1'});
   await until(async()=> Boolean((await root.invoke('get_task_notice')).current));
-  const alert=await page(true);await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('需处理')`));
+  const alert=await page(true);await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('需处理：等待输入')`));
   assert.equal((await root.invoke('get_task_notice')).current.auto_dismiss_ms,null);
+  assert.equal((await root.invoke('get_task_notice')).current.context.task_name,'合成：任务一');
+  assert.equal(await alert.evaluate(`document.querySelector('.summary')?.textContent.includes('本轮结束')`),false,'A question is not a completed turn');
   event('one','a','input.resolved',{}, {request_id:'q1'});
   await until(async()=> !(await root.invoke('get_task_notice')).current);
   event('one','a','turn.completed');
   await until(async()=> Boolean((await root.invoke('get_task_notice')).current));
+  await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('本轮结束，等待后续输入')`));
+  assert.equal((await root.invoke('get_task_notice')).current.auto_dismiss_ms,15000);
   event('one','b','turn.started');
   await until(async()=> !(await root.invoke('get_task_notice')).current);
   await root.invoke('test_notification',{kind:'quota_exhausted'});
@@ -85,7 +89,7 @@ try{
   await Bun.write(join(owned,'quota.png'),Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.invoke('dismiss_task_notice',{id:quota.current.id});
   await Bun.write(join(owned,'dashboard.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  const result={passed:true,size,checks:['two running tasks visible','thinking does not notify','question says action required and stays','matching answer clears notice','new turn withdraws obsolete result','quota test is sticky and never creates a task'],realHostTested:false};
+  const result={passed:true,size,checks:['two running tasks visible','thinking does not notify','question says action required and waiting input for the matching task, without a completion label or timer','matching answer clears notice','real turn end has a separate completion label and timer','new turn withdraws obsolete result','quota test is sticky and never creates a task'],realHostTested:false};
   await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,evidence}));
 }catch(error){await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr}));throw error;}
 });

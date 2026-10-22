@@ -68,7 +68,7 @@ export function needsAction(task: TaskSnapshot): boolean {
 export function taskLabel(task: TaskSnapshot): string {
   if (task.outcome === 'interrupted' && task.finished_at) return '已中断';
   if (task.stale) return '状态待更新';
-  if (needsAction(task)) return task.waiting_reason === 'quota_exhausted' ? '额度已用完' : task.waiting_reason === 'approval' ? '需要授权' : '需要你确认';
+  if (needsAction(task)) return task.waiting_reason === 'quota_exhausted' ? '额度已用完' : task.waiting_reason === 'approval' ? '需要授权' : '等待输入';
   if (isInferredCommandEnd(task)) return '观察到结束 · 退出码未知';
   if (task.status === 'running') return '运行中';
   if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '状态待确认';

@@ -32,6 +32,8 @@ use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use crate::providers::{Provider, ProviderOutput};
 use std::collections::HashMap;
 
+mod questions;
+
 /// A session whose last event is `task_complete` is WAITING_INPUT for this
 /// long before we consider it dormant/uninteresting.
 const WAITING_TTL: Duration = Duration::from_secs(24 * 3600);
@@ -473,6 +475,7 @@ impl CodexProvider {
         task.turn_key = host.turn_key.clone();
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
+        task.input_request_ids = host.pending_input_ids();
         task.pinned = meta.is_some_and(|meta| meta.pinned);
         task.internal = host.internal || meta.is_some_and(|meta| meta.internal);
         // A completed turn means the agent is waiting on the user — keep the
@@ -523,6 +526,8 @@ pub struct SessionState {
     pub phase: Option<crate::domain::ExecutionPhase>,
     active_tools: std::collections::BTreeMap<String, String>,
     confirmed_approvals: std::collections::BTreeMap<String, Option<String>>,
+    questions: questions::Questions,
+    turn_completed: bool,
     pub session_id: String,
     /// The first native header owns this rollout. Forked transcripts can embed
     /// another session_meta from the parent; that is history, not a new owner.
@@ -533,6 +538,24 @@ pub struct SessionState {
     pub quota_5h_resets_at: Option<i64>,
     pub quota_1w_used_pct: Option<f64>,
     pub quota_1w_resets_at: Option<i64>,
+}
+
+impl SessionState {
+    fn parser_protected(&self) -> bool {
+        self.status == TaskStatus::Running
+            || !self.confirmed_approvals.is_empty()
+            || !self.internal && self.questions.has_active()
+    }
+
+    fn pending_input_ids(&self) -> Vec<String> {
+        match self.waiting_reason {
+            Some(crate::domain::WaitingReason::Question) => self.questions.active_ids(),
+            Some(crate::domain::WaitingReason::Approval) => {
+                self.confirmed_approvals.keys().cloned().collect()
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -932,6 +955,8 @@ fn apply_codex_rollout(
         mut phase,
         mut active_tools,
         mut confirmed_approvals,
+        mut questions,
+        mut turn_completed,
         mut session_id,
         mut metadata_session_id,
         mut turn_key,
@@ -954,6 +979,8 @@ fn apply_codex_rollout(
         phase: None,
         active_tools: Default::default(),
         confirmed_approvals: Default::default(),
+        questions: Default::default(),
+        turn_completed: false,
         session_id: default_session_id.into(),
         metadata_session_id: None,
         turn_key: None,
@@ -1115,6 +1142,8 @@ fn apply_codex_rollout(
 
         match ptype {
             "task_started" => {
+                questions.clear();
+                turn_completed = false;
                 status = TaskStatus::Running;
                 waiting_reason = None;
                 input_request_id = None;
@@ -1136,8 +1165,32 @@ fn apply_codex_rollout(
                 if ptype == "user_message"
                     || payload.get("role").and_then(|v| v.as_str()) == Some("user") =>
             {
+                if let Some(changed) = questions.replied(payload) {
+                    if changed {
+                        if waiting_reason == Some(crate::domain::WaitingReason::Question) {
+                            status = if turn_completed {
+                                TaskStatus::WaitingInput
+                            } else {
+                                TaskStatus::Running
+                            };
+                            waiting_reason =
+                                turn_completed.then_some(crate::domain::WaitingReason::TurnEnded);
+                            input_request_id = None;
+                            phase = (!turn_completed).then_some(if active_tools.is_empty() {
+                                crate::domain::ExecutionPhase::AwaitingModel
+                            } else {
+                                crate::domain::ExecutionPhase::Tool
+                            });
+                        }
+                        if let Some(t) = ts {
+                            updated_at = t;
+                        }
+                    }
+                    continue;
+                }
                 if status != TaskStatus::Running
                     && confirmed_approvals.is_empty()
+                    && !questions.has_active()
                     && !matches!(
                         waiting_reason,
                         Some(
@@ -1154,6 +1207,8 @@ fn apply_codex_rollout(
                     status = TaskStatus::Running;
                     activity = None;
                     active_tools.clear();
+                    questions.clear();
+                    turn_completed = false;
                     phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 }
                 if status != TaskStatus::WaitingInput {
@@ -1250,19 +1305,11 @@ fn apply_codex_rollout(
                     );
                 }
                 phase = Some(crate::domain::ExecutionPhase::Tool);
-                if payload
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|name| {
-                        name == "request_user_input" || name.ends_with(".request_user_input")
-                    })
-                {
+                questions.called(payload);
+                if let Some(id) = questions.active_ids().first() {
                     status = TaskStatus::WaitingInput;
                     waiting_reason = Some(crate::domain::WaitingReason::Question);
-                    input_request_id = payload
-                        .get("call_id")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
+                    input_request_id = Some(id.clone());
                 }
             }
             "function_call_output" | "custom_tool_call_output" => {
@@ -1278,14 +1325,19 @@ fn apply_codex_rollout(
                 if let Some(t) = ts {
                     updated_at = t;
                 }
-                if input_request_id.is_some()
-                    && payload.get("call_id").and_then(|v| v.as_str())
-                        == input_request_id.as_deref()
+                questions.returned(payload);
+                if waiting_reason == Some(crate::domain::WaitingReason::Question)
+                    && !questions.has_active()
                 {
-                    status = TaskStatus::Running;
-                    waiting_reason = None;
+                    status = if turn_completed {
+                        TaskStatus::WaitingInput
+                    } else {
+                        TaskStatus::Running
+                    };
+                    waiting_reason =
+                        turn_completed.then_some(crate::domain::WaitingReason::TurnEnded);
                     input_request_id = None;
-                    phase = Some(if active_tools.is_empty() {
+                    phase = (!turn_completed).then_some(if active_tools.is_empty() {
                         crate::domain::ExecutionPhase::AwaitingModel
                     } else {
                         crate::domain::ExecutionPhase::Tool
@@ -1293,6 +1345,8 @@ fn apply_codex_rollout(
                 }
             }
             "task_complete" => {
+                questions.finish_turn();
+                turn_completed = true;
                 if waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted) {
                     continue;
                 }
@@ -1315,6 +1369,7 @@ fn apply_codex_rollout(
                 }
             }
             "turn_aborted" | "thread_rolled_back" => {
+                questions.clear();
                 status = TaskStatus::WaitingInput;
                 waiting_reason = Some(crate::domain::WaitingReason::Unknown);
                 input_request_id = None;
@@ -1349,6 +1404,20 @@ fn apply_codex_rollout(
         }
     }
 
+    // Human requests are independent of tool execution / dispatch success.
+    // In particular an accepted async question can coexist with ongoing work
+    // or an ordinary completed turn, and must never become a green end notice.
+    if confirmed_approvals.is_empty()
+        && waiting_reason != Some(crate::domain::WaitingReason::QuotaExhausted)
+    {
+        if let Some(id) = questions.active_ids().first() {
+            status = TaskStatus::WaitingInput;
+            waiting_reason = Some(crate::domain::WaitingReason::Question);
+            input_request_id = Some(id.clone());
+            phase = None;
+        }
+    }
+
     let state = SessionState {
         status,
         waiting_reason,
@@ -1363,6 +1432,8 @@ fn apply_codex_rollout(
         phase,
         active_tools,
         confirmed_approvals,
+        questions,
+        turn_completed,
         session_id,
         metadata_session_id,
         turn_key,
@@ -1716,6 +1787,7 @@ fn flush_codex(
     }
     let Some(slug) = slug else { return };
     if let Some(state) = parse_codex_rollout(buf, now, slug) {
+        let pending_input_ids = state.pending_input_ids();
         // The tail we read may not carry session_meta (it's at the top of the
         // file), so prefer the thread id extracted from the rollout filename.
         let sid = uuid
@@ -1760,6 +1832,7 @@ fn flush_codex(
             .filter(|cwd| !cwd.is_empty())
             .or(state.cwd);
         t.waiting_reason = state.waiting_reason;
+        t.input_request_ids = pending_input_ids;
         t.input_request_id = state.input_request_id;
         t.started_at = state.started_at;
         t.message = state.last_message;
@@ -1847,11 +1920,10 @@ impl Provider for CodexProvider {
         let files: Vec<PathBuf> = discovered
             .into_iter()
             .filter(|path| {
-                let protected = self.cache.get(path).is_some_and(|c| {
-                    c.state.as_ref().is_some_and(|s| {
-                        s.status == TaskStatus::Running || !s.confirmed_approvals.is_empty()
-                    })
-                });
+                let protected = self
+                    .cache
+                    .get(path)
+                    .is_some_and(|c| c.state.as_ref().is_some_and(SessionState::parser_protected));
                 self.cache_policy
                     .eligible(path, protected, self.cache.contains_key(path))
                     && (eligible_paths.contains(path)
@@ -1951,9 +2023,7 @@ impl Provider for CodexProvider {
                 .iter()
                 .map(|(p, c)| {
                     let protected = !c.tail.trusted()
-                        || c.state.as_ref().is_some_and(|s| {
-                            s.status == TaskStatus::Running || !s.confirmed_approvals.is_empty()
-                        });
+                        || c.state.as_ref().is_some_and(SessionState::parser_protected);
                     let bytes = c.tail.retained_bytes()
                         + c.state.as_ref().map_or(0, |s| {
                             s.active_tools
@@ -2007,7 +2077,7 @@ impl Provider for CodexProvider {
         super::resources::record(
             "codex",
             &self.sessions_root,
-            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(|s|s.status==TaskStatus::Running || !s.confirmed_approvals.is_empty())).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES}),
+            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(SessionState::parser_protected)).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES}),
         );
         let catalog = metadata
             .values()
@@ -2117,6 +2187,272 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn question_call(name: &str, id: &str, count: usize) -> String {
+        let questions: Vec<_> = (0..count)
+            .map(|i| serde_json::json!({"title":format!("Question {i}"),"options":["Yes","No"]}))
+            .collect();
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item",
+            "payload":{"type":"function_call","name":name,"call_id":id,"arguments":serde_json::json!({"questions":questions}).to_string()}})
+        )
+    }
+
+    fn question_ack(id: &str, accepted: bool) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item",
+            "payload":{"type":"function_call_output","call_id":id,"output":[{"type":"input_text","text":serde_json::json!({"accepted":accepted}).to_string()}]}})
+        )
+    }
+
+    fn question_reply(id: &str, index: usize, role: &str) -> String {
+        let item_id = serde_json::json!(["request_user_input_async", id, index]).to_string();
+        let answers =
+            serde_json::json!([{"questionItemId":item_id,"question":"Question","answer":"Yes"}]);
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item",
+            "payload":{"type":"message","role":role,"content":[{"type":"input_text","text":format!("<send_user_message_question_reply>\n{answers}\n</send_user_message_question_reply>")}]}})
+        )
+    }
+
+    #[test]
+    fn async_question_acknowledgement_is_not_an_answer_or_turn_end() {
+        use crate::domain::{ExecutionPhase, WaitingReason};
+        let now = SystemTime::now();
+        let mut state = parse_codex_rollout_unfiltered(
+            &format!(
+                "{}{}",
+                header("/project"),
+                turn_event("task_started", "current", 1)
+            ),
+            now,
+            "s",
+        )
+        .unwrap();
+        for line in [
+            question_call("request_user_input_async", "question", 1),
+            question_ack("question", true),
+        ] {
+            state = apply_codex_rollout(&line, now, "s", Some(state)).unwrap();
+        }
+        assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        assert_eq!(state.input_request_id.as_deref(), Some("question"));
+        let started = state.started_at;
+        for line in [
+            serde_json::json!({"payload":{"type":"function_call","name":"exec_command","call_id":"work","arguments":"{\"cmd\":\"read-only-check\"}"}}).to_string(),
+            serde_json::json!({"payload":{"type":"token_count"}}).to_string(),
+            question_reply("unrelated",0,"user"), question_reply("question",0,"assistant"),
+        ] {
+            state = apply_codex_rollout(&line,now,"s",Some(state)).unwrap();
+            assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        }
+        state = apply_codex_rollout(
+            &question_reply("question", 0, "user"),
+            now,
+            "s",
+            Some(state),
+        )
+        .unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.phase, Some(ExecutionPhase::Tool));
+        assert_eq!(state.waiting_reason, None);
+        assert_eq!(state.turn_key.as_deref(), Some("current"));
+        assert_eq!(state.started_at, started);
+    }
+
+    #[test]
+    fn async_question_end_does_not_hide_unanswered_items_or_parallel_requests() {
+        use crate::domain::WaitingReason;
+        let now = SystemTime::now();
+        let body = format!(
+            "{}{}{}{}{}{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 1),
+            question_call("functions.request_user_input_async", "a", 2),
+            question_ack("a", true),
+            question_call("request_user_input_async", "b", 1),
+            question_ack("b", true),
+            turn_event("task_complete", "current", 0)
+        );
+        let mut state = parse_codex_rollout_unfiltered(&body, now, "s").unwrap();
+        let provider = CodexProvider::with_root(PathBuf::new());
+        assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        assert_eq!(
+            provider
+                .session_to_task(&state, None, now)
+                .input_request_ids,
+            vec!["a", "b"]
+        );
+        for (id, index, left) in [("a", 0, 2), ("b", 0, 1)] {
+            state = apply_codex_rollout(&question_reply(id, index, "user"), now, "s", Some(state))
+                .unwrap();
+            assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+            assert_eq!(
+                provider
+                    .session_to_task(&state, None, now)
+                    .input_request_ids
+                    .len(),
+                left
+            );
+        }
+        state =
+            apply_codex_rollout(&question_reply("a", 1, "user"), now, "s", Some(state)).unwrap();
+        assert_eq!(state.waiting_reason, Some(WaitingReason::TurnEnded));
+        assert_eq!(state.status, TaskStatus::WaitingInput);
+        assert!(!provider
+            .session_to_task(&state, None, now)
+            .requires_action());
+    }
+
+    #[test]
+    fn async_question_rejected_dispatch_and_old_replies_do_not_block_new_turns() {
+        use crate::domain::WaitingReason;
+        let now = SystemTime::now();
+        let start = format!(
+            "{}{}",
+            header("/project"),
+            turn_event("task_started", "old", 1)
+        );
+        let failed = format!(
+            "{start}{}{}",
+            question_call("request_user_input_async", "rejected", 1),
+            question_ack("rejected", false)
+        );
+        let mut state = parse_codex_rollout_unfiltered(&failed, now, "s").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.waiting_reason, None);
+        let next = format!(
+            "{}{}{}{}",
+            turn_event("task_started", "new", 0),
+            question_call("request_user_input_async", "new-question", 1),
+            question_ack("new-question", true),
+            question_reply("rejected", 0, "user")
+        );
+        state = apply_codex_rollout(&next, now, "s", Some(state)).unwrap();
+        assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        assert_eq!(state.input_request_id.as_deref(), Some("new-question"));
+        assert_eq!(state.turn_key.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn async_question_pipeline_notifies_once_then_resumes_and_notifies_real_end() {
+        use crate::{attention::AttentionTracker, store::TaskStore, transition::TransitionEngine};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout-question.jsonl");
+        let ledger = root.path().join("notifications.json");
+        let now = SystemTime::now();
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                header("/project"),
+                turn_event("task_started", "current", 1)
+            ),
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(root.path().into());
+        let mut engine = TransitionEngine::open(ledger.clone());
+        let mut store = TaskStore::default();
+        let mut attention = AttentionTracker::open(root.path().join("attention.json"));
+        let initial = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(engine.apply(&initial, &[], now).is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(
+                format!(
+                    "{}{}",
+                    question_call("request_user_input_async", "q", 1),
+                    question_ack("q", true)
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let pending = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(pending[0].requires_action());
+        assert_eq!(engine.apply(&pending, &[], now).len(), 1);
+        engine = TransitionEngine::open(ledger.clone());
+        provider = CodexProvider::with_root(root.path().into());
+        let replay = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(replay[0].requires_action());
+        assert!(engine.apply(&replay, &[], now).is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(question_reply("q", 0, "user").as_bytes())
+            .unwrap();
+        let answered = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert_eq!(answered[0].status, TaskStatus::Running);
+        assert!(engine.apply(&answered, &[], now).is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(turn_event("task_complete", "current", 0).as_bytes())
+            .unwrap();
+        let completed = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(!completed[0].requires_action());
+        assert_eq!(engine.apply(&completed, &[], now).len(), 1);
+        engine = TransitionEngine::open(ledger);
+        assert!(engine.apply(&completed, &[], now).is_empty());
+    }
+
+    #[test]
+    #[ignore = "read-only native async question replay; explicit file and call ID required"]
+    fn live_codex_async_question_replay() {
+        let file = std::env::var("TASKPULSE_CODEX_QUESTION_REPLAY_FILE")
+            .expect("explicit rollout file required");
+        let request = std::env::var("TASKPULSE_CODEX_QUESTION_CALL_ID")
+            .expect("explicit request call ID required");
+        let body = std::fs::read_to_string(file).unwrap();
+        let mut state = None;
+        let mut accepted = false;
+        let mut answered = false;
+        let mut pending_observations = 0;
+        let mut identity = None;
+        let mut started = None;
+        for line in body.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let before = state.clone();
+            state = apply_codex_rollout(line, SystemTime::now(), "replay", state);
+            let current = state.as_ref().unwrap();
+            if current.questions.active_ids().contains(&request) {
+                accepted = true;
+                assert_eq!(
+                    current.waiting_reason,
+                    Some(crate::domain::WaitingReason::Question)
+                );
+                if identity.is_none() {
+                    identity = current.turn_key.clone();
+                    started = current.started_at;
+                }
+                assert_eq!(current.turn_key, identity);
+                pending_observations += 1;
+            } else if accepted {
+                // Confirm an actual structured user reply resolved the known
+                // request, not a tool result, timeout, reasoning or completion.
+                let mut questions = before.unwrap().questions;
+                assert_eq!(questions.replied(&value["payload"]), Some(true));
+                assert_eq!(current.status, TaskStatus::Running);
+                assert_eq!(current.turn_key, identity);
+                assert_eq!(current.started_at, started);
+                answered = true;
+                break;
+            }
+        }
+        assert!(
+            accepted && answered && pending_observations > 1,
+            "real accepted request plus matching reply required"
+        );
+        println!("read_only_async_replay: pending_observations={pending_observations}; accepted ACK remains Question, matching user reply resumes RUNNING; no host/state writes");
+    }
 
     fn fork_meta(id: &str, source: serde_json::Value, cwd: &str) -> String {
         format!(

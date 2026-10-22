@@ -5,6 +5,14 @@ import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
 
+test('explicit pending question is waiting input, never a completed result',()=>{
+  const question={...base,status:'waiting_input' as const,waiting_reason:'question' as const,input_request_id:'q1'};
+  expect(taskLabel(question)).toBe('等待输入');
+  expect(taskSection(question)).toBe('ongoing');
+  expect(taskTone(question)).toBe('action');
+  expect(isEndedResult(question)).toBe(false);
+  expect(taskLabel({...question,stale:true})).toBe('状态待更新');
+});
 test('explicit exhausted quota is actionable and thinking is never a blocking request',()=>{
   const quota:TaskSnapshot={...base,status:'waiting_input',waiting_reason:'quota_exhausted'};
   expect(matchesSignal(quota,'action')).toBe(true);

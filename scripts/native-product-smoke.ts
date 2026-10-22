@@ -126,7 +126,7 @@ try{
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   await checkScales(root,'dashboard',440,720);
   await root.evaluate(`[...document.querySelectorAll('.counts .overview')].find(b=>b.textContent.includes('需处理')).click()`);
-  await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('需要你确认')`);
+  await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('等待输入')`);
   await click(root,'.counts .total');
   await screenshot(root,'dashboard-alpha7',440,720);
   event('failed','turn.started',{title:'示例：失败结果展示回归',project:'State Demo'});

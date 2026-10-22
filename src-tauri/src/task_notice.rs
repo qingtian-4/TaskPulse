@@ -325,6 +325,8 @@ pub async fn reopen_task_prompt(app: AppHandle, id: String) -> Result<NoticeStat
             "TaskPulse · 需处理：额度已用完".into()
         } else if task.waiting_reason == Some(crate::domain::WaitingReason::Approval) {
             "TaskPulse · 需处理：需要授权".into()
+        } else if task.waiting_reason == Some(crate::domain::WaitingReason::Question) {
+            "TaskPulse · 需处理：等待输入".into()
         } else {
             "TaskPulse · 需处理：需要你确认".into()
         },

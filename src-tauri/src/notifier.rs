@@ -259,9 +259,7 @@ fn notification_copy(event: &NotifyEvent) -> (String, String) {
                         "TaskPulse · 本轮结束，等待后续输入"
                     }
                     Some(crate::domain::WaitingReason::Approval) => "TaskPulse · 需处理：需要授权",
-                    Some(crate::domain::WaitingReason::Question) => {
-                        "TaskPulse · 需处理：需要你确认"
-                    }
+                    Some(crate::domain::WaitingReason::Question) => "TaskPulse · 需处理：等待输入",
                     Some(crate::domain::WaitingReason::QuotaExhausted) => {
                         "TaskPulse · 需处理：额度已用完"
                     }
@@ -708,7 +706,7 @@ mod tests {
                 reason: None
             })
             .0,
-            "TaskPulse · 需处理：需要你确认"
+            "TaskPulse · 需处理：等待输入"
         );
         task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
         assert_eq!(
