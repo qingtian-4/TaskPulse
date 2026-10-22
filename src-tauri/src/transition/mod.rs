@@ -146,6 +146,25 @@ impl TransitionEngine {
                 continue;
             }
             let id = task.id.clone();
+            // Preserve the existing ledger, including its last delivered turn,
+            // when upgrading from task-only keys. Historical turn replays must
+            // never clear another turn's delivery evidence.
+            let notification_id = if task.is_agent_session() && task.turn_key.is_some() {
+                if let Some(Some(previous)) = self.prev_turns.get(&id) {
+                    let legacy: Vec<_> = self
+                        .notified
+                        .iter()
+                        .filter(|(key, kind)| key == &id && *kind != EventKind::InferredFinished)
+                        .map(|(_, kind)| *kind)
+                        .collect();
+                    let key = turn_notification_key(&id, previous);
+                    self.notified
+                        .extend(legacy.into_iter().map(|kind| (key.clone(), kind)));
+                }
+                turn_notification_key(&id, task.turn_key.as_deref().unwrap())
+            } else {
+                id.clone()
+            };
             // Legacy pane-scoped exact results move to their own run identity.
             // Match the run key before transferring dedup, never apply A's
             // memory to a new B run in the same pane.
@@ -193,7 +212,8 @@ impl TransitionEngine {
                     .get(&id)
                     .is_some_and(|previous| previous != &wait);
             if wait_changed && task.requires_action() {
-                self.notified.remove(&(id.clone(), EventKind::WaitingInput));
+                self.notified
+                    .remove(&(notification_id.clone(), EventKind::WaitingInput));
             }
 
             // A poll may coalesce several concurrent explicit requests. Dedup
@@ -212,7 +232,8 @@ impl TransitionEngine {
                         });
                     }
                 }
-                self.notified.insert((id.clone(), EventKind::WaitingInput));
+                self.notified
+                    .insert((notification_id.clone(), EventKind::WaitingInput));
             }
 
             let prev_status = match self.prev.get(&id).copied() {
@@ -255,6 +276,10 @@ impl TransitionEngine {
 
             match status {
                 TaskStatus::WaitingInput => {
+                    if task.is_agent_session() && !task.requires_action()
+                        && task.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded) {
+                        continue; // Unknown state is not a confirmed human blocker or completion.
+                    }
                     let duplicate_request=task.input_request_id.as_ref().is_some_and(|request| {
                         let key=serde_json::to_string(&(&task.turn_key,task.waiting_reason,request)).unwrap_or_default();
                         !self.input_notifications.insert((id.clone(),key))
@@ -262,7 +287,7 @@ impl TransitionEngine {
                     let kind = if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
                         EventKind::TurnEnded
                     } else { EventKind::WaitingInput };
-                    if !duplicate_request && !already(&mut self.notified, &id, kind) {
+                    if !duplicate_request && !already(&mut self.notified, &notification_id, kind) {
                         events.push(TaskEvent::WaitingInput {
                             task: task.clone(),
                             reason: task.hook_matcher.clone(),
@@ -272,14 +297,14 @@ impl TransitionEngine {
                 TaskStatus::Succeeded => {
                     // If we already announced an inferred finish for this
                     // task, silently upgrade (no double notification).
-                    if !already(&mut self.notified, &id, EventKind::InferredFinished)
-                        && !already(&mut self.notified, &id, EventKind::Succeeded) {
+                    if !already(&mut self.notified, &notification_id, EventKind::InferredFinished)
+                        && !already(&mut self.notified, &notification_id, EventKind::Succeeded) {
                             events.push(TaskEvent::Succeeded { task: task.clone() });
                         }
                 }
                 TaskStatus::Failed => {
-                    if !already(&mut self.notified, &id, EventKind::InferredFinished)
-                        && !already(&mut self.notified, &id, EventKind::Failed) {
+                    if !already(&mut self.notified, &notification_id, EventKind::InferredFinished)
+                        && !already(&mut self.notified, &notification_id, EventKind::Failed) {
                             events.push(TaskEvent::Failed { task: task.clone() });
                         }
                 }
@@ -489,6 +514,13 @@ impl TransitionEngine {
     }
 }
 
+fn turn_notification_key(id: &str, turn: &str) -> String {
+    format!(
+        "turn:{}",
+        serde_json::to_string(&(id, turn)).unwrap_or_default()
+    )
+}
+
 /// Returns true if this (id, kind) was ALREADY notified (dedup).
 fn already(notified: &mut HashSet<(String, EventKind)>, id: &str, kind: EventKind) -> bool {
     !notified.insert((id.to_string(), kind))
@@ -501,6 +533,60 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_legacy_ledger_migration_keeps_completion_but_not_false_inferred_finish() {
+        for kind in [EventKind::TurnEnded, EventKind::InferredFinished] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("notifications.json");
+            let mut engine = TransitionEngine::open(path.clone());
+            let mut task = task_turn("codex:s", TaskStatus::Running, "same");
+            task.source = TaskSource::Codex;
+            task.session_id = Some("s".into());
+            apply_once(&mut engine, &[task.clone()]);
+            engine.notified.insert((task.id.clone(), kind));
+            assert!(engine.flush());
+            let mut restored = TransitionEngine::open(path);
+            task.status = TaskStatus::WaitingInput;
+            task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+            assert_eq!(
+                apply_once(&mut restored, &[task]).len(),
+                usize::from(kind == EventKind::InferredFinished)
+            );
+        }
+    }
+    #[test]
+    fn lifecycle_unknown_native_wait_is_not_a_confirmed_input_notification() {
+        let mut engine = TransitionEngine::new();
+        let mut t = task_turn("codex:s", TaskStatus::Running, "same");
+        t.source = TaskSource::Codex;
+        t.session_id = Some("s".into());
+        apply_once(&mut engine, &[t.clone()]);
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Unknown);
+        assert!(apply_once(&mut engine, &[t]).is_empty());
+    }
+    #[test]
+    fn lifecycle_turn_rollback_never_replays_delivered_completion_even_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut t = task_turn("codex:s", TaskStatus::Running, "a");
+        t.source = TaskSource::Codex;
+        t.session_id = Some("s".into());
+        apply_once(&mut engine, &[t.clone()]);
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert_eq!(apply_once(&mut engine, &[t.clone()]).len(), 1);
+        let ended_a = t.clone();
+        t.status = TaskStatus::Running;
+        t.waiting_reason = None;
+        t.turn_key = Some("b".into());
+        apply_once(&mut engine, &[t.clone()]);
+        assert!(apply_once(&mut engine, &[ended_a.clone()]).is_empty());
+        let mut restored = TransitionEngine::open(path);
+        apply_once(&mut restored, &[t]);
+        assert!(apply_once(&mut restored, &[ended_a]).is_empty());
+    }
     #[test]
     fn reclassifying_a_previously_observed_service_never_emits_completion() {
         let dir = tempfile::tempdir().unwrap();

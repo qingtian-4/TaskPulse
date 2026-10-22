@@ -136,10 +136,17 @@ pub struct CodexProvider {
     last_tasks: Vec<TaskSnapshot>,
 }
 
-#[derive(Default)]
 struct RolloutCache {
     tail: super::jsonl_tail::JsonlTail,
     state: Option<SessionState>,
+}
+impl Default for RolloutCache {
+    fn default() -> Self {
+        Self {
+            tail: super::jsonl_tail::JsonlTail::ignoring_envelopes(&["compacted", "world_state"]),
+            state: None,
+        }
+    }
 }
 
 impl CodexProvider {
@@ -963,12 +970,32 @@ fn apply_codex_rollout(
             value.get("params"),
         ) {
             if params.get("threadId").and_then(|v| v.as_str()) == Some(session_id.as_str()) {
+                if params
+                    .get("turnId")
+                    .and_then(|v| v.as_str())
+                    .zip(turn_key.as_deref())
+                    .is_some_and(|(event, current)| event != current)
+                {
+                    continue;
+                }
                 let request = |v: &serde_json::Value| {
                     v.as_str()
                         .map(str::to_owned)
                         .or_else(|| v.as_i64().map(|n| n.to_string()))
                 };
                 match method {
+                    "error" if explicit_quota_error(params) => {
+                        status = TaskStatus::WaitingInput;
+                        waiting_reason = Some(crate::domain::WaitingReason::QuotaExhausted);
+                        input_request_id = turn_key.as_ref().map(|turn| format!("quota:{turn}"));
+                        last_message = Some("额度已用完，请在原 Agent 检查额度后继续".into());
+                        activity = None;
+                        active_tools.clear();
+                        phase = None;
+                        if let Some(t) = ts {
+                            updated_at = t;
+                        }
+                    }
                     "item/commandExecution/requestApproval"
                     | "item/fileChange/requestApproval"
                     | "item/permissions/requestApproval" => {
@@ -1053,6 +1080,18 @@ fn apply_codex_rollout(
             continue;
         };
 
+        // Asynchronous callbacks belong to their original turn. Never let an
+        // old completion/abort/approval mutate whichever turn is now active.
+        if ptype != "task_started"
+            && payload
+                .get("turn_id")
+                .and_then(|v| v.as_str())
+                .zip(turn_key.as_deref())
+                .is_some_and(|(event, current)| event != current)
+        {
+            continue;
+        }
+
         match ptype {
             "task_started" => {
                 status = TaskStatus::Running;
@@ -1072,10 +1111,26 @@ fn apply_codex_rollout(
                     .map(str::to_string)
                     .or_else(|| value_timestamp_key(ts));
             }
-            "user_message" => {
-                if status != TaskStatus::Running && status != TaskStatus::WaitingInput {
+            "user_message" | "message"
+                if ptype == "user_message"
+                    || payload.get("role").and_then(|v| v.as_str()) == Some("user") =>
+            {
+                if status != TaskStatus::Running
+                    && confirmed_approvals.is_empty()
+                    && !matches!(
+                        waiting_reason,
+                        Some(
+                            crate::domain::WaitingReason::Approval
+                                | crate::domain::WaitingReason::Question
+                                | crate::domain::WaitingReason::QuotaExhausted
+                        )
+                    )
+                {
                     started_at = ts;
                     turn_key = value_timestamp_key(ts);
+                    waiting_reason = None;
+                    input_request_id = None;
+                    status = TaskStatus::Running;
                     activity = None;
                     active_tools.clear();
                     phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
@@ -1217,6 +1272,9 @@ fn apply_codex_rollout(
                 }
             }
             "task_complete" => {
+                if waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted) {
+                    continue;
+                }
                 status = TaskStatus::WaitingInput;
                 waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
                 input_request_id = None;
@@ -1242,6 +1300,19 @@ fn apply_codex_rollout(
                 activity = None;
                 active_tools.clear();
                 confirmed_approvals.clear();
+                phase = None;
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+            }
+            "error" if explicit_quota_error(payload) => {
+                status = TaskStatus::WaitingInput;
+                waiting_reason = Some(crate::domain::WaitingReason::QuotaExhausted);
+                input_request_id = turn_key.as_ref().map(|turn| format!("quota:{turn}"));
+                last_message =
+                    Some("额度已用完，请在原 Agent 检查账号、重置时间或切换可用额度后继续".into());
+                activity = None;
+                active_tools.clear();
                 phase = None;
                 if let Some(t) = ts {
                     updated_at = t;
@@ -1280,6 +1351,45 @@ fn apply_codex_rollout(
         quota_1w_resets_at,
     };
     Some(state)
+}
+
+fn explicit_quota_error(value: &serde_json::Value) -> bool {
+    if value
+        .get("will_retry")
+        .or_else(|| value.get("willRetry"))
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        return false;
+    }
+    let known = |v: &serde_json::Value| {
+        v.as_str().is_some_and(|code| {
+            matches!(
+                code,
+                "usage_limit_reached"
+                    | "insufficient_quota"
+                    | "usageLimitExceeded"
+                    | "UsageLimitExceeded"
+            )
+        })
+    };
+    [
+        value,
+        value.get("error").unwrap_or(&serde_json::Value::Null),
+    ]
+    .iter()
+    .any(|v| {
+        ["code", "codex_error_info", "codexErrorInfo"]
+            .iter()
+            .any(|key| v.get(*key).is_some_and(known))
+            || v.get("message")
+                .and_then(|v| v.as_str())
+                .is_some_and(|message| {
+                    let message = message.to_ascii_lowercase();
+                    message.starts_with("you've hit your usage limit")
+                        || message.starts_with("you have hit your usage limit")
+                })
+    })
 }
 
 fn summarize_tool_activity(payload: &serde_json::Value) -> Option<String> {
@@ -1976,6 +2086,127 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_schema_error_is_scoped_and_retry_or_rate_limit_is_not_exhaustion() {
+        let now = SystemTime::now();
+        let body = format!(
+            "{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 1)
+        );
+        let original = parse_codex_rollout_unfiltered(&body, now, "s").unwrap();
+        for (turn, info, retry, expected) in [
+            ("current", "usageLimitExceeded", false, true),
+            ("old", "usageLimitExceeded", false, false),
+            ("current", "usageLimitExceeded", true, false),
+            ("current", "rateLimitExceeded", false, false),
+            ("current", "serverOverloaded", false, false),
+        ] {
+            let event = serde_json::json!({"timestamp":recent_rfc3339(0),"method":"error","params":{"threadId":"sess-1","turnId":turn,"willRetry":retry,"error":{"codexErrorInfo":info}}}).to_string();
+            let state = apply_codex_rollout(&event, now, "s", Some(original.clone())).unwrap();
+            assert_eq!(
+                state.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn lifecycle_large_compaction_does_not_poison_new_running_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-large.jsonl");
+        let compacted = serde_json::json!({"type":"compacted","payload":{"replacement_history":"x".repeat(super::super::jsonl_tail::LINE_BUDGET + 1024)}});
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}\n{}",
+                header("/project"),
+                compacted,
+                turn_event("task_started", "current", 0)
+            ),
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().into());
+        let mut parsed = None;
+        for _ in 0..30 {
+            parsed = provider.cached_session_state(&path, SystemTime::now());
+            if parsed.is_some() {
+                break;
+            }
+        }
+        let parsed = parsed
+            .expect("irrelevant oversized compaction must not permanently hide lifecycle events");
+        assert_eq!(parsed.status, TaskStatus::Running);
+        assert_eq!(parsed.turn_key.as_deref(), Some("current"));
+        assert!(provider.cache[&path].tail.retained_bytes() < 1024);
+    }
+
+    #[test]
+    fn lifecycle_late_old_turn_end_cannot_end_current_turn() {
+        let body = format!(
+            "{}{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 2),
+            turn_event("task_complete", "previous", 0)
+        );
+        let state = parse_codex_rollout_unfiltered(&body, SystemTime::now(), "s").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.turn_key.as_deref(), Some("current"));
+    }
+
+    #[test]
+    fn lifecycle_new_user_message_reopens_ended_but_not_an_explicit_gate() {
+        let now = SystemTime::now();
+        let body = format!(
+            "{}{}{}",
+            header("/project"),
+            turn_event("task_started", "old", 3),
+            turn_event("task_complete", "old", 2)
+        );
+        let old = parse_codex_rollout_unfiltered(&body, now, "s").unwrap();
+        let message = serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}).to_string();
+        let next = apply_codex_rollout(&message, now, "s", Some(old.clone())).unwrap();
+        assert_eq!(next.status, TaskStatus::Running);
+        assert_ne!(next.turn_key, old.turn_key);
+        let mut blocked = old;
+        blocked.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        blocked
+            .confirmed_approvals
+            .insert("request".into(), Some("call".into()));
+        assert_eq!(
+            apply_codex_rollout(&message, now, "s", Some(blocked))
+                .unwrap()
+                .waiting_reason,
+            Some(crate::domain::WaitingReason::Approval)
+        );
+    }
+
+    #[test]
+    fn lifecycle_explicit_quota_error_is_actionable_not_a_successful_end() {
+        let now = SystemTime::now();
+        let start = format!(
+            "{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 1)
+        );
+        let error = serde_json::json!({"timestamp":recent_rfc3339(0),"payload":{"type":"error","turn_id":"current","code":"usage_limit_reached","will_retry":false}}).to_string();
+        let state = parse_codex_rollout_unfiltered(
+            &format!(
+                "{start}{error}\n{}",
+                turn_event("task_complete", "current", 0)
+            ),
+            now,
+            "s",
+        )
+        .unwrap();
+        assert_eq!(state.status, TaskStatus::WaitingInput);
+        assert_eq!(
+            serde_json::to_value(state.waiting_reason).unwrap(),
+            "quota_exhausted"
+        );
+        let retry = error.replace("false", "true");
+        let state = parse_codex_rollout_unfiltered(&format!("{start}{retry}"), now, "s").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+    }
     use std::io::Write;
 
     fn escalation_log(id: &str) -> String {

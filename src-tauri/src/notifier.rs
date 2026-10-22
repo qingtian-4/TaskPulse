@@ -258,8 +258,13 @@ fn notification_copy(event: &NotifyEvent) -> (String, String) {
                     Some(crate::domain::WaitingReason::TurnEnded) => {
                         "TaskPulse · 本轮结束，等待后续输入"
                     }
-                    Some(crate::domain::WaitingReason::Approval) => "TaskPulse · 需要授权",
-                    Some(crate::domain::WaitingReason::Question) => "TaskPulse · 需要你确认",
+                    Some(crate::domain::WaitingReason::Approval) => "TaskPulse · 需处理：需要授权",
+                    Some(crate::domain::WaitingReason::Question) => {
+                        "TaskPulse · 需处理：需要你确认"
+                    }
+                    Some(crate::domain::WaitingReason::QuotaExhausted) => {
+                        "TaskPulse · 需处理：额度已用完"
+                    }
                     _ => "TaskPulse · 等待输入",
                 }
                 .to_string(),
@@ -453,6 +458,11 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
             {
                 "本轮结束"
             }
+            TaskEvent::WaitingInput { task, .. }
+                if task.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted) =>
+            {
+                "额度已用完"
+            }
             TaskEvent::WaitingInput { .. } => "等待输入/授权",
             TaskEvent::Succeeded { .. } => "任务已完成",
             TaskEvent::Failed { .. } => "任务失败",
@@ -539,6 +549,10 @@ fn test_event(kind: &str) -> Result<NotifyEvent, String> {
         std::time::SystemTime::now(),
     );
     match kind {
+        "quota_exhausted" => {
+            task.waiting_reason = Some(WaitingReason::QuotaExhausted);
+            Ok(NotifyEvent::WaitingInput { task, reason: None })
+        }
         "turn_ended" => {
             task.waiting_reason = Some(WaitingReason::TurnEnded);
             Ok(NotifyEvent::WaitingInput { task, reason: None })
@@ -694,7 +708,7 @@ mod tests {
                 reason: None
             })
             .0,
-            "TaskPulse · 需要你确认"
+            "TaskPulse · 需处理：需要你确认"
         );
         task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
         assert_eq!(

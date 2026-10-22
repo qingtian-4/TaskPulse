@@ -145,12 +145,18 @@ impl NoticeQueue {
             let Some(previous) = entry.task.as_ref() else {
                 return true;
             };
-            if entry.notice.auto_dismiss_ms.is_some() {
-                return true;
-            }
             let Some(current) = tasks.iter().find(|t| t.id == previous.id && !t.stale) else {
                 return true;
             };
+            if entry.notice.auto_dismiss_ms.is_some() {
+                let relevant = current.turn_key == previous.turn_key
+                    && current.status != crate::domain::TaskStatus::Running
+                    && !current.requires_action();
+                if !relevant {
+                    removed.push(entry.clone());
+                }
+                return relevant;
+            }
             let same_request = previous.requires_action()
                 && current.requires_action()
                 && current.waiting_reason == previous.waiting_reason
@@ -315,10 +321,12 @@ pub async fn reopen_task_prompt(app: AppHandle, id: String) -> Result<NoticeStat
     }
     let notice = TaskNotice {
         id: next_id(),
-        title: if task.waiting_reason == Some(crate::domain::WaitingReason::Approval) {
-            "TaskPulse · 需要授权".into()
+        title: if task.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted) {
+            "TaskPulse · 需处理：额度已用完".into()
+        } else if task.waiting_reason == Some(crate::domain::WaitingReason::Approval) {
+            "TaskPulse · 需处理：需要授权".into()
         } else {
-            "TaskPulse · 需要你确认".into()
+            "TaskPulse · 需处理：需要你确认".into()
         },
         body: "未解决请求 · 手动重新打开，请在原 Agent 中处理".into(),
         created_at: SystemTime::now()
@@ -624,6 +632,29 @@ fn audit_current(stage: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_queued_old_result_is_withdrawn_when_new_turn_is_running() {
+        let mut queue = NoticeQueue::default();
+        let mut task = TaskSnapshot::new(
+            "codex:s",
+            "native",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        task.turn_key = Some("old".into());
+        task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        let mut e = entry(1);
+        e.task = Some(task.clone());
+        e.notice.auto_dismiss_ms = Some(15000);
+        queue.push(e);
+        task.status = crate::domain::TaskStatus::Running;
+        task.turn_key = Some("new".into());
+        task.waiting_reason = None;
+        assert_eq!(queue.reconcile(&[task]).len(), 1);
+        assert!(queue.state().current.is_none());
+    }
     fn entry(id: u64) -> Entry {
         Entry {
             notice: TaskNotice {

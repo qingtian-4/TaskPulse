@@ -51,6 +51,7 @@ pub enum WaitingReason {
     TurnEnded,
     Approval,
     Question,
+    QuotaExhausted,
     Unknown,
 }
 
@@ -402,7 +403,11 @@ impl TaskSnapshot {
         self.status == TaskStatus::WaitingInput
             && matches!(
                 self.waiting_reason,
-                Some(WaitingReason::Approval | WaitingReason::Question)
+                Some(
+                    WaitingReason::Approval
+                        | WaitingReason::Question
+                        | WaitingReason::QuotaExhausted
+                )
             )
     }
     /// Compatibility alias for a legacy pane-scoped exact run.

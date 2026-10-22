@@ -250,6 +250,17 @@ impl TaskStore {
 /// 3. A stale observation never replaces a non-stale one. Cross-source ties
 ///    still use the provider timestamp and prefer active state on an exact tie.
 fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot) {
+    if existing.is_agent_session()
+        && new.source == existing.source
+        && new.source_instance == existing.source_instance
+        && new.session_id == existing.session_id
+        && new.updated_at < existing.updated_at
+    {
+        if new.stale {
+            existing.stale = true;
+        }
+        return;
+    }
     // Native adapters already reconcile their event/lease/hook evidence. A
     // newer same-session observation must not be frozen behind the previous
     // turn's stronger hook confidence. Cross-provider/process guesses retain
@@ -323,6 +334,21 @@ fn confidence_cmp(a: DetectionConfidence, b: DetectionConfidence) -> std::cmp::O
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_old_native_turn_never_replaces_newer_running_observation() {
+        let mut current = t0("codex:s", TaskStatus::Running, DetectionConfidence::Hook);
+        current.source = TaskSource::Codex;
+        current.session_id = Some("s".into());
+        current.turn_key = Some("new".into());
+        let mut old = current.clone();
+        old.updated_at -= Duration::from_secs(10);
+        old.turn_key = Some("old".into());
+        old.status = TaskStatus::WaitingInput;
+        old.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        merge_into(&mut current, old);
+        assert_eq!(current.status, TaskStatus::Running);
+        assert_eq!(current.turn_key.as_deref(), Some("new"));
+    }
     #[test]
     fn native_retry_and_tool_phase_can_replace_prior_hook_evidence() {
         let now = SystemTime::now();

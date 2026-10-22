@@ -10,6 +10,8 @@ pub const LINE_BUDGET: usize = 4 * 1024 * 1024;
 
 #[derive(Default)]
 pub struct JsonlTail {
+    ignored_envelopes: &'static [&'static str],
+    oversized: Option<EnvelopeProbe>,
     offset: u64,
     signature: Option<(SystemTime, u64)>,
     created: Option<SystemTime>,
@@ -29,6 +31,14 @@ pub struct TailBatch {
 }
 
 impl JsonlTail {
+    /// Only the owning adapter may declare envelopes that contain no lifecycle
+    /// evidence. Unknown/invalid oversized records still leave a permanent gap.
+    pub fn ignoring_envelopes(names: &'static [&'static str]) -> Self {
+        Self {
+            ignored_envelopes: names,
+            ..Self::default()
+        }
+    }
     /// More than one bounded buffer can be folded on the independent worker.
     /// This is a resource budget, never a lifecycle or approval timeout.
     pub fn drain(
@@ -91,6 +101,7 @@ impl JsonlTail {
         if reset {
             self.pending = Vec::new();
             self.discarding = false;
+            self.oversized = None;
             self.gap = false;
         }
         // An I/O error after a partial read must force a parser reset next
@@ -108,11 +119,18 @@ impl JsonlTail {
             bytes_read += read;
             for part in chunk[..read].split_inclusive(|b| *b == b'\n') {
                 let ended = part.last() == Some(&b'\n');
-                if !self.discarding {
+                if self.discarding {
+                    if let Some(probe) = &mut self.oversized {
+                        probe.feed(part);
+                    }
+                } else {
                     if self.pending.len() + part.len() > LINE_BUDGET {
+                        let mut probe = EnvelopeProbe::default();
+                        probe.feed(&self.pending);
+                        probe.feed(part);
+                        self.oversized = Some(probe);
                         self.pending = Vec::new();
                         self.discarding = true;
-                        self.gap = true;
                     } else {
                         let needed = self.pending.len() + part.len();
                         if needed > self.pending.capacity() {
@@ -125,7 +143,12 @@ impl JsonlTail {
                     }
                 }
                 if ended {
-                    if !self.discarding {
+                    if self.discarding {
+                        self.gap |= !self
+                            .oversized
+                            .take()
+                            .is_some_and(|p| p.ignored(self.ignored_envelopes));
+                    } else {
                         self.consume_line(&mut body);
                     }
                     self.discarding = false;
@@ -176,10 +199,128 @@ impl JsonlTail {
     }
 }
 
+/// Bounded lexical discriminator for adapter-declared irrelevant envelopes.
+/// Root fields may occur after megabytes of nested history. Never search text,
+/// retain history, trust duplicate discriminators, or filter unknown events.
+#[derive(Default)]
+struct EnvelopeProbe {
+    depth: usize,
+    in_string: bool,
+    escaped: bool,
+    key: bool,
+    type_value: bool,
+    capture: bool,
+    text: Vec<u8>,
+    name: Option<String>,
+    ambiguous: bool,
+    object: bool,
+}
+impl EnvelopeProbe {
+    fn feed(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            if self.in_string {
+                if self.capture && self.text.len() < 256 {
+                    self.text.push(byte);
+                } else if self.capture {
+                    self.ambiguous = true;
+                }
+                if self.escaped {
+                    self.escaped = false;
+                    continue;
+                }
+                if byte == b'\\' {
+                    self.escaped = true;
+                    continue;
+                }
+                if byte == b'"' {
+                    self.in_string = false;
+                    if self.capture {
+                        let value = serde_json::from_slice::<String>(&self.text).ok();
+                        if self.key {
+                            self.type_value = value.as_deref() == Some("type");
+                            if self.type_value && self.name.is_some() {
+                                self.ambiguous = true;
+                            }
+                            self.key = false;
+                        } else if self.type_value {
+                            if self.name.is_some() {
+                                self.ambiguous = true;
+                            }
+                            self.name = value;
+                            self.type_value = false;
+                        }
+                    }
+                }
+                continue;
+            }
+            match byte {
+                b'"' => {
+                    self.in_string = true;
+                    self.capture = self.depth == 1 && (self.key || self.type_value);
+                    self.text.clear();
+                    if self.capture {
+                        self.text.push(b'"');
+                    }
+                }
+                b'{' | b'[' => {
+                    if self.depth == 0 {
+                        self.object = byte == b'{';
+                        self.key = self.object;
+                    }
+                    self.depth = self.depth.saturating_add(1);
+                }
+                b'}' | b']' => self.depth = self.depth.saturating_sub(1),
+                b',' if self.depth == 1 => {
+                    self.key = true;
+                    self.type_value = false;
+                }
+                _ => {}
+            }
+        }
+    }
+    fn ignored(&self, allowed: &[&str]) -> bool {
+        self.object
+            && self.depth == 0
+            && !self.in_string
+            && !self.ambiguous
+            && self
+                .name
+                .as_deref()
+                .is_some_and(|name| allowed.contains(&name))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write;
+    #[test]
+    fn lifecycle_oversized_filter_uses_only_unique_root_kind_and_remains_opt_in() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("large.jsonl");
+        for kind in ["compacted", "event_msg"] {
+            let row = serde_json::json!({"payload":{"type":"compacted","text":"x".repeat(LINE_BUDGET+1)},"type":kind});
+            std::fs::write(&path, format!("{row}\n{{\"next\":true}}\n")).unwrap();
+            let mut tail = JsonlTail::ignoring_envelopes(&["compacted"]);
+            for _ in 0..30 {
+                if tail.read(&path).unwrap().caught_up {
+                    break;
+                }
+            }
+            assert_eq!(tail.trusted(), kind == "compacted");
+            assert!(tail.retained_bytes() < 1024);
+            let mut normal = JsonlTail::default();
+            for _ in 0..30 {
+                if normal.read(&path).unwrap().caught_up {
+                    break;
+                }
+            }
+            assert!(!normal.trusted());
+        }
+        let mut probe = EnvelopeProbe::default();
+        probe.feed(br#"{"type":"compacted","type":"event_msg","payload":{}}"#);
+        assert!(!probe.ignored(&["compacted"]));
+    }
     #[test]
     fn f04_eight_readers_release_consumed_eight_mib_buffers() {
         let dir = tempfile::tempdir().unwrap();
