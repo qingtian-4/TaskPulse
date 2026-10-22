@@ -63,15 +63,15 @@ export function filterDescription(filters: DashboardFilters, tasks: TaskSnapshot
 }
 
 export function needsAction(task: TaskSnapshot): boolean {
-  return task.status === 'waiting_input' && (task.waiting_reason === 'approval' || task.waiting_reason === 'question');
+  return task.status === 'waiting_input' && (task.waiting_reason === 'approval' || task.waiting_reason === 'question' || task.waiting_reason === 'quota_exhausted');
 }
 export function taskLabel(task: TaskSnapshot): string {
   if (task.outcome === 'interrupted' && task.finished_at) return '已中断';
   if (task.stale) return '状态待更新';
-  if (needsAction(task)) return task.waiting_reason === 'approval' ? '需要授权' : '需要你确认';
+  if (needsAction(task)) return task.waiting_reason === 'quota_exhausted' ? '额度已用完' : task.waiting_reason === 'approval' ? '需要授权' : '需要你确认';
   if (isInferredCommandEnd(task)) return '观察到结束 · 退出码未知';
   if (task.status === 'running') return '运行中';
-  if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '等待输入';
+  if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '状态待确认';
   return { succeeded: '已完成', failed: '失败', idle: '空闲', disconnected: '已断开', unknown: '状态未知' }[task.status];
 }
 // Subphase is presentation, never a lifecycle/notification heuristic. Missing

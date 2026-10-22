@@ -39,7 +39,7 @@ export interface TaskSnapshot {
   tmux_session?: string;
   tmux_pane?: string;
   tmux_target?: string;
-  waiting_reason?: 'turn_ended' | 'approval' | 'question' | 'unknown';
+  waiting_reason?: 'turn_ended' | 'approval' | 'question' | 'quota_exhausted' | 'unknown';
   input_request_id?: string;
   input_request_ids?: string[];
   attention_since?: number;

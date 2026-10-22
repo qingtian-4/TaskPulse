@@ -186,7 +186,7 @@
   });
 </script>
 
-<div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="glass-panel glass-noise dashboard tp-theme" style:max-height={'min('+maxHeight+'px, 100dvh)'} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
+<div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="glass-panel glass-noise dashboard tp-theme" style:height={'min('+maxHeight+'px, 100dvh)'} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><span class="brand-mark" aria-hidden="true"><Activity size={17}/></span>TaskPulse</span>
     <div class="header-actions">
@@ -198,7 +198,7 @@
   </header>
   <div class="counts" aria-label="任务概览">
     <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title="运行中的任务与明确待处理请求" onclick={()=>chooseSection('ongoing')}><span>进行中</span><b>{tasks.filter(t=>taskSection(t)==='ongoing').length}</b></button>
-    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="仅明确待批准或待回答，不含普通结束" onclick={()=>chooseSignal('action')}><span>需处理</span><b>{tasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
+    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="明确待批准、待回答或额度耗尽，不含普通结束" onclick={()=>chooseSignal('action')}><span>需处理</span><b>{tasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
     <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title="尚未查看的本轮结果，包括失败" onclick={()=>chooseSection('results')}><span>待查看</span><b>{tasks.filter(t=>taskSection(t)==='results').length}</b></button>
     <button class="overview tp-tone" data-tone="stale" class:active={filterSection==='uncertain'} aria-pressed={filterSection==='uncertain'} title="不确定或来源待更新，不代表失败" onclick={()=>chooseSection('uncertain')}><span>待更新</span><b>{tasks.filter(t=>taskSection(t)==='uncertain').length}</b></button>
     <button class="overview total tp-tone" class:active={!showArchive && !filterText} aria-pressed={!showArchive && !filterText} title="清除筛选，查看全部近期关注" onclick={()=>{showArchive=false;resetFilters();}}><span>全部</span><b>{tasks.length}</b></button>

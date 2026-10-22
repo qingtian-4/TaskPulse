@@ -42,6 +42,7 @@ test('non-task and older notification payloads preserve full message', () => {
 });
 
 test('status accents distinguish blockers, failed tasks and uncertain completion', () => {
+  expect(noticeContent({ ...base, title: 'TaskPulse · 需处理：额度已用完' }).tone).toBe('attention');
   expect(noticeContent({ ...base, title: 'TaskPulse · 需要授权' }).tone).toBe('attention');
   expect(noticeContent({ ...base, title: 'TaskPulse · 任务失败，需要处理' }).tone).toBe('danger');
   expect(noticeContent({ ...base, title: 'TaskPulse · 任务可能已结束' }).tone).toBe('attention');

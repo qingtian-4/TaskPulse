@@ -32,6 +32,7 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
     if tasks.iter().any(|t| {
         t.status == TaskStatus::WaitingInput
             && t.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded)
+            && (!t.is_agent_session() || t.requires_action())
     }) {
         return "needs-input";
     }
@@ -44,6 +45,11 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
     let Some(best) = tasks.iter().min_by_key(|t| {
         if t.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
             4
+        } else if t.is_agent_session()
+            && t.status == TaskStatus::WaitingInput
+            && !t.requires_action()
+        {
+            5
         } else {
             t.status.priority()
         }
@@ -57,6 +63,7 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
         {
             "idle"
         }
+        TaskStatus::WaitingInput if best.is_agent_session() && !best.requires_action() => "offline",
         TaskStatus::WaitingInput => "needs-input",
         TaskStatus::Disconnected => "disconnected",
         TaskStatus::Running => "working",
@@ -196,7 +203,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title("TaskPulse")
-        .inner_size(440.0, 520.0)
+        .inner_size(440.0, 720.0)
         .decorations(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
