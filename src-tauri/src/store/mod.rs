@@ -233,6 +233,10 @@ impl TaskStore {
                 continue;
             }
             task.recent = true;
+            // A restart restores display history, not current source evidence.
+            // Otherwise the first merge could revalidate stale attention from
+            // the same disk cache before the provider has even responded.
+            task.stale = true;
             self.recent.retain(|existing| existing.id != task.id);
             self.recent.push(task);
         }

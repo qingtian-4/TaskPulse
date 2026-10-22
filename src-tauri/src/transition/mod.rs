@@ -146,6 +146,20 @@ impl TransitionEngine {
                 continue;
             }
             let id = task.id.clone();
+            if task.stale {
+                // Retain the last trustworthy transition baseline. A stale
+                // cache cannot advance it or consume a future fresh request.
+                if let Some(status) = self.prev.get(&id) {
+                    current.insert(id.clone(), *status);
+                }
+                if let Some(turn) = self.prev_turns.get(&id) {
+                    current_turns.insert(id.clone(), turn.clone());
+                }
+                if let Some(wait) = self.prev_waits.get(&id) {
+                    current_waits.insert(id, wait.clone());
+                }
+                continue;
+            }
             // Preserve the existing ledger, including its last delivered turn,
             // when upgrading from task-only keys. Historical turn replays must
             // never clear another turn's delivery evidence.
@@ -564,6 +578,24 @@ mod tests {
         t.status = TaskStatus::WaitingInput;
         t.waiting_reason = Some(crate::domain::WaitingReason::Unknown);
         assert!(apply_once(&mut engine, &[t]).is_empty());
+    }
+    #[test]
+    fn lifecycle_stale_gate_cannot_consume_next_fresh_notification_or_baseline() {
+        let mut engine = TransitionEngine::new();
+        let mut current = task_turn("codex:s", TaskStatus::Running, "current");
+        current.source = TaskSource::Codex;
+        current.session_id = Some("s".into());
+        apply_once(&mut engine, &[current.clone()]);
+        let mut gate = current.clone();
+        gate.status = TaskStatus::WaitingInput;
+        gate.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        gate.input_request_id = Some("request".into());
+        gate.stale = true;
+        assert!(apply_once(&mut engine, &[gate.clone()]).is_empty());
+        assert_eq!(engine.prev.get(&current.id), Some(&TaskStatus::Running));
+        gate.stale = false;
+        assert_eq!(apply_once(&mut engine, &[gate.clone()]).len(), 1);
+        assert!(apply_once(&mut engine, &[gate]).is_empty());
     }
     #[test]
     fn lifecycle_turn_rollback_never_replays_delivered_completion_even_after_restart() {

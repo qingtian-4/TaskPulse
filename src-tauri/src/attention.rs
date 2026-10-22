@@ -107,6 +107,11 @@ impl AttentionTracker {
             }
             // This is an observation-edge flag, not durable lifecycle state.
             record.task.new_execution = false;
+            // Persistent attention is not a fresh provider observation. Slow
+            // startup collectors must not replay a cached end/request while
+            // another source refreshes. Keep outcome and user preferences;
+            // only a matching successful observation restores freshness.
+            record.task.stale = true;
             if record.last_execution_at == 0 {
                 record.last_execution_at = millis(record.task.updated_at);
             }
@@ -535,6 +540,70 @@ fn effective_turn_key(task: &TaskSnapshot) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_restart_caches_do_not_replay_old_turn_during_other_source_refresh() {
+        use crate::store::TaskStore;
+        use crate::transition::{TaskEvent, TransitionEngine};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let ledger = dir.path().join("notifications.json");
+        let now = SystemTime::now();
+        let mut old = task("slow", TaskStatus::Running, Some("old"));
+        let mut tracker = AttentionTracker::open(path.clone());
+        tracker.reconcile(vec![old.clone()]);
+        tracker.set_pinned("slow", true).unwrap();
+        old.status = TaskStatus::WaitingInput;
+        old.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        old.finished_at = Some(now);
+        tracker.reconcile(vec![old.clone()]);
+        let mut current = task("slow", TaskStatus::Running, Some("current"));
+        let mut fast = task("fast", TaskStatus::Running, Some("fast-turn"));
+        fast.source_instance = Some("other-source".into());
+        let mut engine = TransitionEngine::open(ledger.clone());
+        assert!(engine
+            .apply_snapshots(&[current.clone(), fast.clone()], &[], now)
+            .is_empty());
+
+        // A crash can leave attention/history older than the durable ledger.
+        // A fast provider must still notify, not replay the slow cached end.
+        let mut restored = AttentionTracker::open(path);
+        let retained = restored
+            .known()
+            .into_iter()
+            .find(|t| t.id == "slow")
+            .unwrap();
+        assert!(retained.unread && retained.pinned);
+        let mut store = TaskStore::default();
+        store.restore_recent(vec![old], now);
+        let mut engine = TransitionEngine::open(ledger);
+        fast.status = TaskStatus::Succeeded;
+        restored.reconcile(store.merge(vec![fast], now));
+        let events = engine.apply_snapshots(&restored.known(), &[], now);
+        assert_eq!(events.len(), 1);
+        assert!(matches!(&events[0], TaskEvent::Succeeded { task } if task.id == "fast"));
+        assert!(
+            restored
+                .known()
+                .iter()
+                .find(|t| t.id == "slow")
+                .unwrap()
+                .stale
+        );
+
+        restored.reconcile(store.merge(vec![current.clone()], now));
+        assert!(engine
+            .apply_snapshots(&restored.known(), &[], now)
+            .is_empty());
+        current.status = TaskStatus::WaitingInput;
+        current.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        restored.reconcile(store.merge(vec![current], now));
+        let events = engine.apply_snapshots(&restored.known(), &[], now);
+        assert_eq!(events.len(), 1);
+        assert!(
+            matches!(&events[0], TaskEvent::WaitingInput { task, .. } if task.id == "slow" && task.turn_key.as_deref() == Some("current"))
+        );
+    }
+
     #[test]
     fn pane_scoped_exact_records_migrate_with_backup_without_losing_unread_or_manual_pin() {
         let dir = tempfile::tempdir().unwrap();
