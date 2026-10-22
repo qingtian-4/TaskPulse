@@ -1,12 +1,14 @@
 /** Isolated native WebView2 attention/presentation regression, not Agent-host certification. */
 import assert from 'node:assert/strict';
-import {mkdtemp, mkdir, copyFile, rm} from 'node:fs/promises';
+import {mkdir, copyFile} from 'node:fs/promises';
 import {resolve, join, dirname} from 'node:path';
-import {spawn, spawnSync} from 'node:child_process';
+import {spawn, spawnSync, type ChildProcess} from 'node:child_process';
+import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
 const at=process.argv.indexOf('--exe');if(at<0)throw Error('--exe required');
-const original=resolve(process.argv[at+1]), owned=await mkdtemp(resolve('src-tauri/target/lifecycle-native-'));
-const evidence=resolve('src-tauri/target/ui-smoke/evidence/lifecycle-'+new Date().toISOString().replace(/[:.]/g,'-'));
-await mkdir(evidence,{recursive:true});
+const original=resolve(process.argv[at+1]);
+await withSmokeWorkspace('lifecycle-native',async({owned,evidenceDir:evidence,onStop})=>{
+let app:ChildProcess|undefined,spawnFailure:Error|undefined;const sockets:WebSocket[]=[];
+onStop(async()=>{try{for(const ws of sockets)ws.close();}finally{await stopOwnedChild(app);}});
 const exe=join(owned,'agent-tray.exe'),home=join(owned,'profile');await mkdir(home);await copyFile(original,exe);
 const loader=join(dirname(original),'WebView2Loader.dll');if(await Bun.file(loader).exists())await copyFile(loader,join(owned,'WebView2Loader.dll'));
 await Bun.write(join(home,'config.toml'),`[dashboard]
@@ -36,11 +38,11 @@ accept_since_ms=0
 const env={...process.env,TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port=9339'};
 const tabs=()=>fetch('http://127.0.0.1:9339/json').then(r=>r.json()) as Promise<any[]>;
 assert.equal(await tabs().then(()=>true).catch(()=>false),false,'Owned CDP port must be free');
-const app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});
+app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});
+app.once('error',error=>spawnFailure=error);
 let stderr='';app.stderr?.on('data',d=>stderr=(stderr+String(d)).slice(-4000));
-const sockets:WebSocket[]=[];
 async function page(notice=false){
-  let tab:any;for(let i=0;i<200;i++){tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&(notice?t.url.includes('/notice'):!t.url.includes('/notice')&&!t.url.includes('/manage')));if(tab)break;if(app.exitCode!==null)throw Error('Owned app exited');await Bun.sleep(100);}
+  let tab:any;for(let i=0;i<200;i++){if(spawnFailure)throw spawnFailure;tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&(notice?t.url.includes('/notice'):!t.url.includes('/notice')&&!t.url.includes('/manage')));if(tab)break;if(app?.exitCode!==null)throw Error('Owned app exited');await Bun.sleep(100);}
   if(!tab)throw Error('Native page unavailable');const ws=new WebSocket(tab.webSocketDebuggerUrl);sockets.push(ws);
   await new Promise<void>((ok,fail)=>{ws.onopen=()=>ok();ws.onerror=()=>fail(Error('CDP connection failed'));});
   let seq=0;const pending=new Map<number,any>();
@@ -80,19 +82,10 @@ try{
   await root.invoke('test_notification',{kind:'quota_exhausted'});
   await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('额度已用完')`));
   const quota=await root.invoke('get_task_notice');assert.equal(quota.current.test,true);assert.equal(quota.current.task_id,null);assert.equal(quota.current.auto_dismiss_ms,null);
-  await Bun.write(join(evidence,'quota.png'),Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await Bun.write(join(owned,'quota.png'),Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.invoke('dismiss_task_notice',{id:quota.current.id});
-  await Bun.write(join(evidence,'dashboard.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await Bun.write(join(owned,'dashboard.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   const result={passed:true,size,checks:['two running tasks visible','thinking does not notify','question says action required and stays','matching answer clears notice','new turn withdraws obsolete result','quota test is sticky and never creates a task'],realHostTested:false};
-  await Bun.write(join(evidence,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,evidence}));
-}catch(error){await Bun.write(join(evidence,'failure.json'),JSON.stringify({error:String(error),stderr}));throw error;}
-finally{
-  for(const ws of sockets)ws.close();app.kill();
-  await new Promise<void>((ok,fail)=>{if(app.exitCode!==null)ok();else{const timer=setTimeout(()=>fail(Error('Owned app exit timeout')),10000);app.once('exit',()=>{clearTimeout(timer);ok();});}});
-  // WebView2 releases profile handles after the parent exits. Bun on Windows
-  // does not consistently apply fs.rm's maxRetries, so keep our own bound.
-  for(let attempt=0;attempt<24;attempt++){
-    try{await rm(owned,{recursive:true,force:true});break;}
-    catch(error){if(attempt===23)throw error;await Bun.sleep(250);}
-  }
-}
+  await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,evidence}));
+}catch(error){await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr}));throw error;}
+});

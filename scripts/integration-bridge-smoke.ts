@@ -1,16 +1,17 @@
 /** Real executable stdin/exit-code acceptance. Every write stays under an
  * owned temporary TASKPULSE_HOME; no real host configuration or Agent work. */
-import { mkdtemp, mkdir, copyFile, readdir, readFile } from 'node:fs/promises';
+import { mkdir, copyFile, readdir, readFile } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { spawnSync, spawn } from 'node:child_process';
 import { createHash } from 'node:crypto';
+import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
 const at=process.argv.indexOf('--exe');
 if(at<0||!process.argv[at+1])throw Error('--exe is required; never guess a running user executable');
 const originalExe=resolve(process.argv[at+1]);
+await withSmokeWorkspace('integration-bridge',async({owned,evidenceDir,onStop})=>{
 const binary=await readFile(originalExe);
 const pe=binary.readUInt32LE(0x3c), subsystem=binary.readUInt16LE(pe+24+68);
 if(process.argv.includes('--require-gui')&&subsystem!==2)throw Error('Requires an actual Windows GUI-subsystem release executable');
-const owned=await mkdtemp(resolve('src-tauri/target/integration-bridge-'));
 const installed=join(owned,"安装 目录 & team's app");await mkdir(installed);
 const exe=join(installed,'agent-tray.exe');await copyFile(originalExe,exe);
 // GNU development/release builds dynamically import Microsoft's loader;
@@ -50,6 +51,7 @@ if(process.platform==='win32'){
   const lockPath=join(home,'integrations',hash(source),'writer.lock');
   const script=`$tpFile=[IO.File]::Open('${lockPath.replaceAll("'","''")}',[IO.FileMode]::OpenOrCreate,[IO.FileAccess]::ReadWrite,[IO.FileShare]::ReadWrite);try{$tpFile.Lock(0,1);[Console]::Out.WriteLine('locked');[Console]::In.ReadLine()|Out-Null}finally{$tpFile.Dispose()}`;
   const holder=spawn('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-Command',script],{env,windowsHide:true,stdio:['pipe','pipe','pipe']});
+  onStop(()=>stopOwnedChild(holder));
   try{
     await new Promise<void>((ok,fail)=>{const timer=setTimeout(()=>fail(Error('Lock helper timeout')),10000);holder.stdout.once('data',data=>{clearTimeout(timer);String(data).includes('locked')?ok():fail(Error('Lock helper failed'));});holder.once('error',fail);});
     const began=performance.now();const blocked=call(flags,JSON.stringify({...start,event_id:'locked-write'}));const elapsed=performance.now()-began;
@@ -60,4 +62,5 @@ if(process.platform==='win32'){
 }
 const result={passed:true,guiSubsystem:subsystem===2,checks:['actual redirected stdin','machine-readable validator failure','silent Hook mode','bounded size and identity rejection','private payload omitted','separate connection-test channel','space/Unicode/apostrophe/metacharacter executable path'],lockTimeoutVerified,realHostConfigurationsChanged:false};
 await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));
-console.log(JSON.stringify({...result,evidence:owned}));
+console.log(JSON.stringify({...result,evidence:evidenceDir}));
+});

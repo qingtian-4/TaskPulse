@@ -2,12 +2,15 @@
  * Run: bun scripts/native-product-smoke.ts --exe <unused-built-exe>
  * --capture writes three public PNGs only after privacy/layout assertions. Never installs Hooks. */
 import assert from 'node:assert/strict';
-import {mkdtemp,mkdir,copyFile} from 'node:fs/promises';
+import {mkdir,copyFile} from 'node:fs/promises';
 import {resolve,join,dirname} from 'node:path';
-import {spawn,spawnSync} from 'node:child_process';
+import {spawn,spawnSync,type ChildProcess} from 'node:child_process';
+import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
-const owned=await mkdtemp(resolve('src-tauri/target/product-native-'));
+await withSmokeWorkspace('product-native',async({owned,evidenceDir,onStop})=>{
+let app:ChildProcess|undefined,root:any,management:any,notice:any,spawnFailure:Error|undefined;
+onStop(async()=>{try{notice?.close();management?.close();root?.close();}finally{await stopOwnedChild(app);}});
 const home=join(owned,'profile');await mkdir(home);
 const exe=join(owned,'agent-tray.exe');await copyFile(original,exe);
 if(await Bun.file(join(dirname(original),'WebView2Loader.dll')).exists())await copyFile(join(dirname(original),'WebView2Loader.dll'),join(owned,'WebView2Loader.dll'));
@@ -52,10 +55,10 @@ async function connect(tab:Tab){
   await send('Log.enable');return {send,evaluate,invoke,wait,close:()=>ws.close()};
 }
 
-const app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});
+app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});
+app.once('error',error=>spawnFailure=error);
 let stderr='';app.stderr?.on('data',d=>stderr=(stderr+String(d)).slice(-12000));
-let root:any,management:any,notice:any;
-async function page(part:string){for(let n=0;n<200;n++){const tab=(await tabs().catch(()=>[])).find(t=>part?t.url.includes(part):t.url.includes('tauri.localhost')&&!/\/(manage|notice)/.test(t.url));if(tab)return connect(tab);if(app.exitCode!==null)throw Error('Owned native app exited');await Bun.sleep(100);}throw Error('Page missing: '+part);}
+async function page(part:string){for(let n=0;n<200;n++){if(spawnFailure)throw spawnFailure;const tab=(await tabs().catch(()=>[])).find(t=>part?t.url.includes(part):t.url.includes('tauri.localhost')&&!/\/(manage|notice)/.test(t.url));if(tab)return connect(tab);if(app?.exitCode!==null)throw Error('Owned native app exited');await Bun.sleep(100);}throw Error('Page missing: '+part);}
 let sequence=0;
 function event(session:string,kind:string,payload:Record<string,string>={},extra:Record<string,string>={}){
   const data={schema_version:1,agent_id:'custom-agent',session_id:session,turn_id:'turn-1',event_id:session+'-'+(++sequence),kind,payload,...extra};
@@ -215,10 +218,7 @@ try{
     await mkdir('assets/screenshots',{recursive:true});
     for(const name of ['dashboard-alpha7','sources-alpha7','notice-alpha7'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
   }
-  const report={passed:true,checks,layout,scaleChecks,scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:owned};
+  const report={passed:true,checks,layout,scaleChecks,scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
-}catch(error){const ui=await management?.evaluate(`({read:document.querySelector('.read-result')?.textContent,buttons:[...document.querySelectorAll('.source-tests button')].map(b=>({text:b.textContent,disabled:b.disabled})),errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)})`).catch(()=>null);const providers=await root?.invoke('get_providers').catch(()=>null);await Bun.write(join(owned,'failure.json'),JSON.stringify({error:String(error),stderr,errors,ui,providers},null,2));console.error('Evidence: '+owned);throw error;}
-finally{
-  notice?.close();management?.close();root?.close();
-  if(app.exitCode===null){app.kill();await new Promise<void>((ok,fail)=>{const timer=setTimeout(()=>fail(Error('Owned process exit timeout')),10000);app.once('exit',()=>{clearTimeout(timer);ok();});});}
-}
+}catch(error){const ui=await management?.evaluate(`({read:document.querySelector('.read-result')?.textContent,buttons:[...document.querySelectorAll('.source-tests button')].map(b=>({text:b.textContent,disabled:b.disabled})),errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)})`).catch(()=>null);const providers=await root?.invoke('get_providers').catch(()=>null);await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr,errors,ui,providers},null,2));console.error('Evidence: '+evidenceDir);throw error;}
+});

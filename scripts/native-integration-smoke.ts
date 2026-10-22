@@ -2,13 +2,16 @@
  * Synthetic producers exercise TaskPulse, NOT actual Agent-host support.
  * No real host settings, accounts, approvals, prompts or sources are changed. */
 import assert from 'node:assert/strict';
-import { mkdtemp, mkdir, copyFile, readFile, unlink } from 'node:fs/promises';
+import { mkdir, copyFile, readFile, unlink } from 'node:fs/promises';
 import { resolve, join, dirname } from 'node:path';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { cpus, release, arch } from 'node:os';
+import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe is required');
 const originalExe=resolve(process.argv[arg+1]);
-const owned=await mkdtemp(resolve('src-tauri/target/integration-native-'));
+await withSmokeWorkspace('integration-native',async({owned,evidenceDir,onStop})=>{
+let app:ChildProcess|undefined;let root:any;let management:any;let stderr='';let spawnFailure:Error|undefined;
+onStop(async()=>{if(app)await stop();});
 const installed=join(owned,"安装 & team's App");await mkdir(installed);
 const exe=join(installed,'agent-tray.exe');await copyFile(originalExe,exe);
 if(await Bun.file(join(dirname(originalExe),'WebView2Loader.dll')).exists())await copyFile(join(dirname(originalExe),'WebView2Loader.dll'),join(installed,'WebView2Loader.dll'));
@@ -20,7 +23,6 @@ const env={...process.env,TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUME
 type Tab={url:string;webSocketDebuggerUrl:string};
 const tabs=async():Promise<Tab[]>=>fetch('http://127.0.0.1:9337/json').then(r=>r.json());
 if(await tabs().then(()=>true).catch(()=>false))throw Error('CDP 9337 already in use; refusing to attach to another app');
-let app:ChildProcess|undefined;let root:any;let management:any;let stderr='';
 const errors:string[]=[];const checks:string[]=[];
 async function connect(tab:Tab){
   const ws=new WebSocket(tab.webSocketDebuggerUrl);await new Promise<void>((ok,fail)=>{ws.onopen=()=>ok();ws.onerror=()=>fail(Error('CDP failed'));});
@@ -33,14 +35,16 @@ async function connect(tab:Tab){
   await send('Log.enable');return {send,evaluate,invoke,wait,close:()=>ws.close()};
 }
 async function start(){
+  spawnFailure=undefined;
   app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','pipe','pipe']});
+  app.once('error',error=>spawnFailure=error);
   app.stderr?.on('data',data=>{const s=String(data);stderr=(stderr+s).slice(-16000);if(/PANIC|panicked|failed to run app/i.test(s))errors.push('native startup failure');});
   let tab:Tab|undefined;
-  for(let n=0;n<200;n++){tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&!/\/(manage|notice)/.test(t.url));if(tab)break;if(app.exitCode!==null)throw Error('Owned app exited during startup');await Bun.sleep(100);}
+  for(let n=0;n<200;n++){if(spawnFailure)throw spawnFailure;tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&!/\/(manage|notice)/.test(t.url));if(tab)break;if(app.exitCode!==null)throw Error('Owned app exited during startup');await Bun.sleep(100);}
   if(!tab)throw Error('Native popup missing');root=await connect(tab);await root.wait(`!!globalThis.__TAURI_INTERNALS__&&!!document.querySelector('.dashboard')`);
   const environment=await root.invoke('integration_environment');assert.equal(environment.isolated,true);assert.equal(resolve(environment.state_directory).toLowerCase(),home.toLowerCase());
 }
-async function stop(){management?.close();root?.close();management=undefined;root=undefined;if(app&&app.exitCode===null){app.kill();await new Promise<void>((ok,fail)=>{const timer=setTimeout(()=>fail(Error('Owned app did not exit')),10000);app!.once('exit',()=>{clearTimeout(timer);ok();});});}app=undefined;for(let n=0;n<50;n++){if(!await tabs().then(()=>true).catch(()=>false))return;await Bun.sleep(100);}throw Error('Owned debug listener did not close');}
+async function stop(){try{management?.close();root?.close();}finally{await stopOwnedChild(app);}management=undefined;root=undefined;app=undefined;for(let n=0;n<50;n++){if(!await tabs().then(()=>true).catch(()=>false))return;await Bun.sleep(100);}throw Error('Owned debug listener did not close');}
 async function openManagement(){await root.invoke('open_management');let tab:Tab|undefined;for(let n=0;n<100;n++){tab=(await tabs()).find(t=>t.url.includes('/manage'));if(tab)break;await Bun.sleep(100);}if(!tab)throw Error('Management missing');management=await connect(tab);await management.wait(`!!document.querySelector('.source-layout')`);}
 async function addSource(adapter:string){
   await management.evaluate(`(()=>{const select=document.querySelector('[aria-label="新增来源类型"]');select.value='generic_event';select.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('.add button').click();})()`);
@@ -183,9 +187,9 @@ try{
   resourceMetrics=await root.invoke('get_resource_diagnostics');
   assert.ok(resourceMetrics.checkpoint_writes>0);
   report={passed:true,checks,loadMetrics,resourceMetrics,platform:{os:release(),arch:arch(),cpu:cpus()[0]?.model,logicalCpus:cpus().length},realHostsVerified:[],realHostConfigurationsChanged:false,fixtureProducersOnly:true,notVerified:['actual Kimi/TRAE/ZCode/WorkBuddy hook delivery','external editor focus','long-run real-host latency']};
-  await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({...report,evidence:owned}));
+  await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify({...report,evidence:evidenceDir}));
 }catch(error){
   const ui=management?await management.evaluate(`({adapter:document.querySelector('[aria-label="Agent 适配描述"]')?.value,disabled:document.querySelector('[aria-label="Agent 适配描述"]')?.disabled,errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent),statuses:[...document.querySelectorAll('[role=status]')].map(e=>e.textContent)})`).catch(()=>null):null;
-  await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,checks,loadMetrics,error:String(error),errors,ui,stderr},null,2));console.error('Isolated evidence: '+owned);throw error;
+  await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,checks,loadMetrics,error:String(error),errors,ui,stderr},null,2));console.error('Isolated evidence: '+evidenceDir);throw error;
 }
-finally{await stop();}
+});
