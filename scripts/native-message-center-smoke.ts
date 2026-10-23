@@ -23,7 +23,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
     const send=(method:string,params:any={})=>new Promise<any>((ok,fail)=>{const id=++seq,timer=setTimeout(()=>{pending.delete(id);fail(Error('CDP timeout'));},15000);pending.set(id,{ok,fail,timer});ws.send(JSON.stringify({id,method,params}));});
     const evaluate=async(expression:string)=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,userGesture:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description??'Native JS error');return r.result.value;};
     const invoke=(cmd:string,args:any={})=>evaluate(`__TAURI_INTERNALS__.invoke(${JSON.stringify(cmd)},${JSON.stringify(args)})`);
-    const wait=async(expression:string,timeout=25000)=>{const end=Date.now()+timeout;while(Date.now()<end){if(await evaluate(expression))return;await Bun.sleep(100);}throw Error('Native assertion timeout: '+expression);};
+    const wait=async(expression:string,timeout=25000)=>{const caller=new Error().stack;const end=Date.now()+timeout;while(Date.now()<end){if(await evaluate(expression))return;await Bun.sleep(100);}await Bun.write(join(owned,'failure.json'),JSON.stringify({expression,caller,visible:await invoke('plugin:window|is_visible',{label:'popup'}),ui:await evaluate(`({center:!!document.querySelector('.message-center'),visibility:document.visibilityState,buttons:[...document.querySelectorAll('.message-center button')].map(b=>({text:b.textContent,disabled:b.disabled})),height:innerHeight})`),center:await invoke('get_message_center')},null,2));throw Error('Native assertion timeout: '+expression+'\n'+caller);};
     return {send,evaluate,invoke,wait,close:()=>ws.close()};
   }
   async function start(){
@@ -50,8 +50,15 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
     await root.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);
   };
   const center=()=>root.invoke('get_message_center');
+  const readDisplayedMessages=async()=>{
+    for(const entry of (await center()).entries.filter((e:any)=>!e.seen)){
+      await root.evaluate(`document.querySelector('[data-message-id="${entry.id}"]').scrollIntoView({block:'center'})`);
+      await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.find(e=>e.id==='${entry.id}')?.seen)`);
+    }
+  };
   const checks:string[]=[];
   await start();assert.equal((await center()).unread,0);
+  await root.wait('innerHeight===400');
   const outer=await root.invoke('plugin:window|outer_size',{label:'popup'});
   const inner=await root.invoke('plugin:window|inner_size',{label:'popup'});
   assert.deepEqual(outer,inner,'Undecorated popup must have no native non-client frame');
@@ -64,6 +71,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   assert.equal(await root.evaluate(`document.querySelector('.counts').textContent.includes('待更新')`),false);
   const done=(await root.invoke('get_agents')).find((task:any)=>task.session_id==='result');assert.ok(done.unread);
   await click('[aria-label="消息中心：1 条未读"]');
+  await readDisplayedMessages();
   await root.wait(`!!document.querySelector('.message-center')&&document.querySelector('[aria-label="消息中心：0 条未读"]')`);
   assert.equal((await center()).unread,0);assert.ok((await root.invoke('get_agents')).find((t:any)=>t.id===done.id).unread);
   await click('.message-center .task-link');
@@ -75,6 +83,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   for(const request_id of ['q1','q2'])send('request','input.requested',{request_id,payload:{request_kind:'approval'}});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.unread===2)`);
   await click('[aria-label="消息中心：2 条未读"]');
+  await readDisplayedMessages();
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.unread===0)`);
   assert.equal(await root.evaluate(`document.querySelector('.counts [data-tone="action"] b').textContent`),'1');
   assert.equal(await root.evaluate(`document.querySelector('.counts [data-tone="running"] b').textContent`),'1');
@@ -96,6 +105,8 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
 
   // A background arrival is shown/read while the center stays open.
   send('failure','turn.started',{payload:{title:'合成明确失败'}});send('failure','turn.failed');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.length===4)`);
+  await readDisplayedMessages();
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.length===4&&c.unread===0)`);
   // Mounting/receiving while the native popup is hidden must not acknowledge.
   await root.invoke('plugin:window|hide',{label:'popup'});
@@ -103,10 +114,14 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.length===5&&c.unread===1)`);
   await Bun.sleep(1200);assert.equal((await center()).unread,1);
   await root.invoke('plugin:window|show',{label:'popup'});
+  await root.invoke('plugin:window|set_focus',{label:'popup'});
+  await readDisplayedMessages();
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.unread===0)`);
   checks.push('open center updates for a background event; hidden native window is not seen; visible viewport reads new row');
 
   send('request','input.requested',{request_id:'q3',payload:{request_kind:'question'}});
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.length===6)`);
+  await readDisplayedMessages();
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.length===6&&c.unread===0)`);
   const settings=await root.invoke('get_monitoring_settings'),failed=structuredClone(settings);
   Object.assign(failed.sources[0],{kind:'codex_wsl',location:'TaskPulse-Absent-Distro-Probe'});delete failed.sources[0].integration;
@@ -123,15 +138,15 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   assert.equal((await center()).entries.length,6);assert.equal((await center()).unread,0);
   checks.push('source fault demotes stale pending without resolving or losing task; recovery/reconfirmation cannot revive read messages');
 
-  for(const [width,height] of [[380,640],[360,600],[320,480],[440,720]]){
-    await root.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await Bun.sleep(200);
+  for(const [width,height] of [[412,620],[380,640],[320,480],[440,720]])for(const scale of [1,1.5,2]){
+    await root.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});await Bun.sleep(200);
     const layout=await root.evaluate(`(()=>{const p=document.querySelector('.message-center').getBoundingClientRect(),s=document.querySelector('.message-scroll');return {width:document.documentElement.scrollWidth,height:innerHeight,top:p.top,bottom:p.bottom,right:p.right,left:p.left,scroll:s.scrollHeight>s.clientHeight};})()`);
     assert.ok(layout.width<=width&&layout.bottom<=height&&layout.left>=0&&layout.right<=width);
-    await Bun.write(join(owned,`messages-${width}x${height}.png`),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await Bun.write(join(owned,`messages-${width}x${height}-${scale*100}.png`),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await click('[aria-label="关闭消息中心"]');
     assert.equal(await root.evaluate(`document.querySelectorAll('.counts .overview').length`),3);
     assert.ok(await root.evaluate(`document.documentElement.scrollWidth<=innerWidth`));
-    await Bun.write(join(owned,`dashboard-${width}x${height}.png`),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await Bun.write(join(owned,`dashboard-${width}x${height}-${scale*100}.png`),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await click('[aria-label^="消息中心："]');
   }
   // Offscreen rows are not auto-read; explicit all-read covers the snapshot.
@@ -164,7 +179,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await root.invoke('dismiss_task_notice',{id:historicalNotice.current.id});
   assert.equal((await center()).entries.length,15);assert.equal((await center()).unread,0);
   checks.push('fresh historical request without an inbox event remains manually reopenable without creating unread');
-  checks.push('380x640/360x600/320x480/440x720 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
+  checks.push('412x620/380x640/320x480/440x720 at DPR 1/1.5/2 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
   await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks,renderer:'Windows native Tauri WebView2',inputs:'isolated synthetic events',realHostConfigurationsChanged:false,notVerified:['actual Agent lifecycle','installer acceptance','OS mixed-DPI monitor migration']},null,2));
   console.log(JSON.stringify({passed:true,checks,evidence:evidenceDir}));
 });
