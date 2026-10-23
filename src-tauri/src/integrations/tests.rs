@@ -677,6 +677,40 @@ fn source() -> crate::monitoring::SourceConfig {
 }
 
 #[test]
+fn r03_recreated_collector_applies_current_acceptance_cutoff_without_erasing_history() {
+    let home = tempfile::tempdir().unwrap();
+    let old = source();
+    journal::append(
+        home.path(),
+        &old.id,
+        event(Kind::Started, "old", 1),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    let mut current = old.clone();
+    current.integration.as_mut().unwrap().accept_since_ms = super::now_ms() + 60_000;
+    let mut provider = GenericEventProvider::with_home(current, home.path().into());
+    let output = provider.poll(std::time::SystemTime::now());
+    assert!(output.tasks.is_empty() && output.ordered.is_empty());
+    let events = journal::root(home.path(), &old.id).join("events");
+    assert_eq!(std::fs::read_dir(events).unwrap().count(), 1);
+    // Distinct, newly eligible session still enters the real reducer.
+    let mut current = old.clone();
+    current.integration.as_mut().unwrap().accept_since_ms = 0;
+    let mut fresh = event(Kind::Started, "new", 2);
+    fresh.session_id = "new-session".into();
+    journal::append(home.path(), &old.id, fresh, "self_reported", "v1").unwrap();
+    let mut provider = GenericEventProvider::with_home(current, home.path().into());
+    let output = provider.poll(std::time::SystemTime::now());
+    assert_eq!(output.ordered.len(), 1);
+    assert_eq!(
+        output.ordered[0].task.session_id.as_deref(),
+        Some("new-session")
+    );
+}
+
+#[test]
 fn ordered_short_turns_durable_outbox_and_turn_dedup_survive_crash_boundaries() {
     let dir = tempfile::tempdir().unwrap();
     let src = source();
