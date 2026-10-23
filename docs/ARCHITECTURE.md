@@ -86,7 +86,7 @@ EXACT > HOOK > INFERRED 是合并优先级，不是宿主官方保证。stale �
 
 [`AttentionTracker`](../src-tauri/src/attention.rs) 决定用户继续关注什么：新执行、running、未查看结果、待处理请求与 pin。启动用来源 baseline 避免导入完整 idle 历史。unread、hidden、ignored、manual pin 是 TaskPulse 用户状态。默认 7 天 execution-activity 窗口只改变主视图与 older attention，不删除记录或未读；running 和明确 manual pin 不过期。Legacy pin 保留，但不会自动获得永久豁免。轮询/重命名不续期执行活动。
 
-Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前尝试备份 `attention.json.pre-lifecycle.bak`，不确认已读或删除。恢复的缓存全部 stale，等待 fresh 来源；运行任务也有 durable attention，已不是“只持久化 recent”。备份失败处理仍需加强，见维护者审查。
+Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前必须确认 `attention.json.pre-lifecycle.bak`（更旧版本使用 pre-recency）为完整原始字节的普通文件，不确认已读或删除。备份失败保留原文件并禁用写入。恢复的缓存全部 stale，等待 fresh 来源；运行任务也有 durable attention，已不是“只持久化 recent”。
 
 ## Transition、通知与恢复
 
@@ -114,6 +114,8 @@ Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前尝试备�
 | claude-events / session.jsonl 与 .json | Claude 独立 journal + compatibility checkpoint | 不属于 Generic Outbox；activity 可含路径/命令，目前没有等价总磁盘预算 |
 
 关键 JSON 使用同目录临时文件、flush/sync、原子替换，避免半文件；这些文件不组成数据库事务，不能泛称任意损坏均无损恢复。坏状态、迁移备份和配额失败应分别检查。
+
+Attention 与通知账本仅在文件确实不存在时初始化。读取失败、坏 JSON、未知版本或迁移备份失败会锁住本次进程的相应写入；原始文件不会被空状态覆盖。通知账本不可信时不发出生命周期提醒，标准事件批次也不确认消费。Dashboard 的来源异常中显示脱敏的状态故障。先保全原文件并恢复兼容、完整的状态，再重启；进程不会自动重试覆盖人工修复。通知账本新增 version=1，仍可读取无 version 的旧账本。
 
 ## WSL / SSH 隔离与安全
 
