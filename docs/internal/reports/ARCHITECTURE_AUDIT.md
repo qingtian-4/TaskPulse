@@ -1,3 +1,5 @@
+> Historical record: retained for provenance, not current implementation or release guidance. See [architecture](../../ARCHITECTURE.md) and [releasing](../../RELEASING.md).
+
 # TaskPulse — Architecture Audit
 
 > Status: Phase 0 (audit) complete · 2026-08-27

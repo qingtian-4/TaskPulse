@@ -1,3 +1,5 @@
+> Historical record: retained for provenance, not current implementation or release guidance. See [architecture](../../ARCHITECTURE.md) and [releasing](../../RELEASING.md).
+
 # 对 Claude 审查的采纳与执行记录
 
 日期：2026-10-10。输入为用户提供的 `REVIEW_HANDOFF.md`；不修改该审查原文。

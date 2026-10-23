@@ -36,7 +36,7 @@ bun run audit:secrets
 - `integration-bridge-WjyJhl`：全量验证中的隔离 EXE 桥接结果。
 - 最终原生验收构建 SHA-256：`06d0f00a3987e7b8af5f9aa36e45c86cf6dd5b062e7f9d1221d7beaece6e8090`。这是 GNU 开发构建，不是 MSVC 安装包。
 
-安全扫描：前端 moderate+ 门禁通过，完整报告仍有 **1 项 low**（cookie 0.6.0）；RustSec 数据库 `4b587f00996ebe5c05a73eaef105ef241e876414`（1348 条）查询完整、无阻断漏洞或 yanked，仍有 **10 unmaintained + 2 unsound** 警告，未通过忽略规则隐藏。既有平台/feature 风险说明见[安全记录](SECURITY_AUDIT_2026-10.md)。Gitleaks 在最终提交后复扫完整 Git 历史，不冒称覆盖未跟踪文件或图片。
+安全扫描：前端 moderate+ 门禁通过，完整报告仍有 **1 项 low**（cookie 0.6.0）；RustSec 数据库 `4b587f00996ebe5c05a73eaef105ef241e876414`（1348 条）查询完整、无阻断漏洞或 yanked，仍有 **10 unmaintained + 2 unsound** 警告，未通过忽略规则隐藏。既有平台/feature 风险说明见[安全记录](internal/reports/SECURITY_AUDIT_2026-10.md)。Gitleaks 在最终提交后复扫完整 Git 历史，不冒称覆盖未跟踪文件或图片。
 
 ### 缩放证据边界
 

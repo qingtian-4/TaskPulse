@@ -81,7 +81,7 @@ bun run tauri dev
 - **尚待公开发行验收**：在干净的 Windows 用户环境测试安装、升级、卸载；至少两类真实 Agent 的完整新任务/审批/通知链路与长时间稳定性；整理脱敏演示录屏。
 - **不会冒充已完成**：不把合成截图当真实宿主验收，不把没有证据的结束或输入请求当事实，不把 Draft Release 当公开下载。
 
-[发布清单](docs/OPEN_SOURCE_CHECKLIST.md) · [安全审查](docs/SECURITY_AUDIT_2026-10.md) · [历史修复与验收](docs/internal/)
+[发布清单](docs/OPEN_SOURCE_CHECKLIST.md) · [安全审查](docs/internal/reports/SECURITY_AUDIT_2026-10.md) · [历史修复与验收](docs/internal)
 
 ## 贡献与来源
 

@@ -31,7 +31,7 @@
 
 完整资产 SHA256、实际 runner 版本、安装验收字段和本机下载路径见[候选安装包验收记录](ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md)。安装包未加入 Git，也未在开发机执行安装或卸载。
 
-既有本机验证包含 Rust 390 通过 / 12 opt-in 忽略、UI Model 28 通过、Check/Build、fmt/clippy 与隔离 EXE bridge smoke；前一轮原生 WebView2 渲染证据见[视觉验收](VISUAL_POLISH_VALIDATION_2026-10-21.md)。这些不等于宿主实测，不能提升 Kimi/TRAE/ZCode/WorkBuddy 的支持等级。已知前端 low 与 Rust 维护/unsound 告警保留在[安全记录](SECURITY_AUDIT_2026-10.md)，审计阈值通过不等于零风险。
+既有本机验证包含 Rust 390 通过 / 12 opt-in 忽略、UI Model 28 通过、Check/Build、fmt/clippy 与隔离 EXE bridge smoke；前一轮原生 WebView2 渲染证据见[视觉验收](VISUAL_POLISH_VALIDATION_2026-10-21.md)。这些不等于宿主实测，不能提升 Kimi/TRAE/ZCode/WorkBuddy 的支持等级。已知前端 low 与 Rust 维护/unsound 告警保留在[安全记录](internal/reports/SECURITY_AUDIT_2026-10.md)，审计阈值通过不等于零风险。
 
 ## 维护者发布决策边界
 

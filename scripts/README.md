@@ -146,4 +146,4 @@ Adding a new terminal type usually means:
 
 ## Maintainer Docs
 
-- Release process: [../docs/maintainers/releasing.md](../docs/maintainers/releasing.md)
+- Release process: [../docs/maintainers/releasing.md](../docs/RELEASING.md)

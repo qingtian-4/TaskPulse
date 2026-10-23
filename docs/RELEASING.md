@@ -84,7 +84,7 @@ Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Ap
 - [x] 发布候选依赖审计：执行 `bun audit` 并记录全部告警，`bun run audit:frontend`
   阻止中等及以上告警；`bun run audit:rust` 和 `bun run audit:secrets` 另行门控。
   Alpha.7 main 和标签运行通过；仍有前端 1 low、Rust 10 maintenance / 2 unsound 告警，
-  见[安全审查](SECURITY_AUDIT_2026-10.md)。不能把阈值通过称为零风险。
+  见[安全审查](internal/reports/SECURITY_AUDIT_2026-10.md)。不能把阈值通过称为零风险。
 - [x] Alpha.7 准确候选提交 `b5dc64a` 的 main 质量/安全检查及两种安装器独立 CI 验收通过。
   见[发布运行](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)和
   [原始证据索引](ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md)，不复用 Alpha.6 结果。

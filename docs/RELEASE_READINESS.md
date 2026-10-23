@@ -1,6 +1,6 @@
 # TaskPulse 版本审查与开源准备
 
-最新更新：2026-10-19。Alpha.7 候选已包含前后端依赖修复、完整历史泄密扫描及安全门禁，本地完整验证和真实 WebView2 提醒验收通过；远端 CI 与新的 NSIS/MSI 安装器仍需验收。Alpha.6 的旧草稿验收通过但不包含修复，不推荐公开旧资产。仍有前端 1 low、Rust 10 项维护/2 项 unsound 警告，见 [安全记录](SECURITY_AUDIT_2026-10.md)。定位：Windows-first Alpha，不声称所有 Agent 或所有版本均已稳定支持。当前交付顺序见 [开源清单](OPEN_SOURCE_CHECKLIST.md)。后文保留历史记录，其测试数量和验证边界属于当时版本。
+最新更新：2026-10-19。Alpha.7 候选已包含前后端依赖修复、完整历史泄密扫描及安全门禁，本地完整验证和真实 WebView2 提醒验收通过；远端 CI 与新的 NSIS/MSI 安装器仍需验收。Alpha.6 的旧草稿验收通过但不包含修复，不推荐公开旧资产。仍有前端 1 low、Rust 10 项维护/2 项 unsound 警告，见 [安全记录](internal/reports/SECURITY_AUDIT_2026-10.md)。定位：Windows-first Alpha，不声称所有 Agent 或所有版本均已稳定支持。当前交付顺序见 [开源清单](OPEN_SOURCE_CHECKLIST.md)。后文保留历史记录，其测试数量和验证边界属于当时版本。
 
 ## 当前发布门禁
 
@@ -10,7 +10,7 @@
 - Linux/macOS 是独立按需 experimental artifacts，不阻断 Windows，不宣称稳定安装支持。
 - 主界面进行中优先；失败结果和来源异常分开；未解决请求可在重启后回查，弹窗有界且不重播旧结果。
 - 安装、跨版本升级、干净 Windows/WebView2 场景、真实新批准以及端到端 P95 **不能仅以编译或单元测试通过判为已验收**。
-- 当前验证和任务状态以 [审查执行记录](PROJECT_REVIEW_2026-10.md) 为准；发布前填写 [安装与实机清单](RELEASING.md#从草稿到可下载-alpha-的人工门禁)。
+- 当前验证和任务状态以 [审查执行记录](internal/reports/PROJECT_REVIEW_2026-10.md) 为准；发布前填写 [安装与实机清单](RELEASING.md#从草稿到可下载-alpha-的人工门禁)。
 - 2026-10-15 本机：Rust 333/7 opt-in，UI 模型 19，发布模型 7，fmt/clippy/check/build
   通过；实际原生面板/弹窗与只读 SSH 通过。MSVC 安装器/干净机器/跨版本升级/
   新真实批准/编辑器焦点/长期 P95 尚不因这些结果而视为通过。

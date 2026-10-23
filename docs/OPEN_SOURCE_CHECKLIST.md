@@ -34,7 +34,7 @@ Alpha.7 已在准确源 SHA `b5dc64a760bae916c9d40b147616f9720405887b` 通过 ma
 - 2026-10-15 交接记录已保存的下载核验：MSI evidence `11953903152`、NSIS
   evidence `11953833264`、installers `11953483244`，草稿 ID `413503171`。
   两个 result.json 为 passed，原生 IPC 为 embedded=true、onboarding=false、
-  tasks=0、prompts=0；资产和 ZIP digest 已核对。详见[原始记录](PROJECT_REVIEW_2026-10.md#2026-10-15-连接恢复后的最终核验)。
+  tasks=0、prompts=0；资产和 ZIP digest 已核对。详见[原始记录](internal/reports/PROJECT_REVIEW_2026-10.md#2026-10-15-连接恢复后的最终核验)。
 - 2026-10-19 复核受 GitHub 连接器 transport error、匿名 API 限流影响，未重新下载 Alpha.6
   私有草稿资产。2026-10-22 已重新下载并核验的是 Alpha.7；不要混用两个版本的下载记录。
 - 签名 NotSigned；跨版本升级、格式迁移、焦点证据为 not_verified。
@@ -58,7 +58,7 @@ Svelte 5.57.2、Vite 8.3.4，及修复后的 devalue、PostCSS、nanoid、source
 10 项 unmaintained 和 2 项 unsound 警告，未隐藏或标为已修复。Gitleaks 8.30.1
 对完整本地 refs/合并差异扫描为 0 命中，不能据此保证未知凭据格式、不可达对象
 或全部个人信息安全。工具只在忽略目录中运行，未全局安装。详细版本、公告、
-依赖链和覆盖边界见[安全审查记录](SECURITY_AUDIT_2026-10.md)。
+依赖链和覆盖边界见[安全审查记录](internal/reports/SECURITY_AUDIT_2026-10.md)。
 
 ### 历史本地回归（不是 Alpha.7 安装器验收）
 

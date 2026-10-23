@@ -81,7 +81,7 @@ Source discovery does not establish that turn-completion events are reliable. Se
 
 **Not yet accepted for public distribution:** clean-user Windows install/upgrade/uninstall, sustained real-agent lifecycle and notification checks, and a safely redacted screen recording. CI installation and synthetic events are not substitutes for real-host evidence.
 
-[Release checklist](docs/OPEN_SOURCE_CHECKLIST.md) · [Security](docs/SECURITY_AUDIT_2026-10.md)
+[Release checklist](docs/OPEN_SOURCE_CHECKLIST.md) · [Security](docs/internal/reports/SECURITY_AUDIT_2026-10.md)
 
 ## Contributing & credits
 

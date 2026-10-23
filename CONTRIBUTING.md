@@ -51,7 +51,7 @@ framework upgrade or hide an advisory to make a release pass.
 Windows/Linux x64 tools under ignored target directories, with no global install.
 They require network access; a timeout is not a clean scan. Git scanning requires
 full history and never publishes raw reports. Run `bun run test:security` for the
-report/workflow regressions. See [audit boundaries](docs/SECURITY_AUDIT_2026-10.md).
+report/workflow regressions. See [audit boundaries](docs/internal/reports/SECURITY_AUDIT_2026-10.md).
 
 ## Adding an Agent adapter
 

@@ -63,7 +63,7 @@ df54765e42a4e9aba9748896998d62dab415b094ba8a7c31c90aa1bb80f9db4f  TaskPulse_0.2.
 - 真实 Codex 与另一款已安装 Agent 的新任务、工具、明确结束、通知、重启去重、误报/漏报和事件到提醒延迟。本轮没有新增此类样本，也没有可报告的 P50/P95。
 - 外部编辑器窗口焦点与长时间运行。CI 的 focus 字段明确为 `not_verified`。
 
-前端仍有 1 项 low cookie 告警；Rust 仍有 10 项维护和 2 项 unsound 告警，风险与平台/feature 分析见[安全记录](SECURITY_AUDIT_2026-10.md)。四款扩展 Agent 的 fixture/candidate 支持等级不因安装器 CI 成功而升级，见[支持矩阵](AGENT_COMPATIBILITY.md)。
+前端仍有 1 项 low cookie 告警；Rust 仍有 10 项维护和 2 项 unsound 告警，风险与平台/feature 分析见[安全记录](internal/reports/SECURITY_AUDIT_2026-10.md)。四款扩展 Agent 的 fixture/candidate 支持等级不因安装器 CI 成功而升级，见[支持矩阵](AGENT_COMPATIBILITY.md)。
 
 第 2 项已完成不代表第 3、4 项通过。[发布流程](RELEASING.md)中的人工门禁仍有效。当前保持 Draft；只有维护者核对真实支持范围、残余风险、资产和未完成门禁后才能单独决定公开预发布。本轮没有 Publish、自动发稳定版或改写标签。
 

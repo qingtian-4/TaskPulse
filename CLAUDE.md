@@ -23,4 +23,4 @@ Legacy `~/.agent-monitor/` status files are compatible inputs, not the main arch
 - Preserve unrelated edits; use small commits on the current `codex/*` branch.
 
 See [architecture](docs/ARCHITECTURE.md), [product rules](docs/PRODUCT_DASHBOARD.md),
-[attention rules](docs/ATTENTION_LIST.md), and [review response](docs/REVIEW_RESPONSE.md).
+[attention rules](docs/ATTENTION_LIST.md), and [review response](docs/internal/reports/REVIEW_RESPONSE.md).

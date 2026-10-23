@@ -89,4 +89,4 @@ providers/worker.rs 独立采集线程：Codex/Hermes 1s，DSH/扫描 2s；慢�
 - 复用：tray/popup 生命周期、通知机制、状态文件格式、hook 脚本、进程扫描、focusers。
 - 升级：字符串状态 → 枚举任务模型；单 watcher.rs → Provider/Store/Transition 管道。
 - 新增：RemoteTmuxProvider（核心能力）、RECENT 完成历史、tp-run 精确模式。
-- 完整清单见 `docs/ARCHITECTURE_AUDIT.md`（reuse / modify / replace / not-copy）。
+- 完整清单见 `docs/internal/reports/ARCHITECTURE_AUDIT.md`（reuse / modify / replace / not-copy）。

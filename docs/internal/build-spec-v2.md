@@ -9,7 +9,7 @@ It described features that changed, moved, or never shipped, so keeping the orig
 Use these instead:
 
 - `README.md` for the user-facing overview
-- `docs/compatibility.md` for current support status
+- `docs/internal/upstream/compatibility.md` for current support status
 - `CONTRIBUTING.md` for contribution paths
 - `scripts/README.md` plus the code under `scripts/` and `src-tauri/src/` for implementation details
 
