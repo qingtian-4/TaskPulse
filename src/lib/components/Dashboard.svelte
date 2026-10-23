@@ -32,7 +32,6 @@
   let settings = $state<DashboardSettings | null>(null);
   let quota = $state<CodexAccountQuota | null>(null);
   let selected = $state<TaskSnapshot | null>(null);
-  let selectedTask = $derived([...confirmedTasks,...archived].find(t => t.id === selected?.id) ?? selected);
   let filterSource = $state('');
   let filterProject = $state('');
   let filterLocation = $state('');
@@ -58,6 +57,7 @@
   const maxHeight = typeof screen === 'undefined' ? 720 : Math.min(720, Math.floor(screen.availHeight * .8));
   const width = typeof screen === 'undefined' ? 440 : Math.min(440,screen.availWidth - 16);
   const confirmedTasks = $derived(demo ? tasks : observedDashboardTasks(tasks,providers,settings,now));
+  const selectedTask = $derived([...confirmedTasks,...archived].find(t => t.id === selected?.id) ?? selected);
   const displayed = $derived(showArchive ? archived : confirmedTasks);
   const filters = $derived({source:filterSource,project:filterProject,location:filterLocation,section:filterSection,signal:filterSignal,query,unreadOnly});
   const filtered = $derived(filterTasks(displayed,filters,settings));

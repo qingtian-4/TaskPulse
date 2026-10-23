@@ -40,7 +40,7 @@
         <div class="state-line"><span>{messageStatus(entry)}</span>{#if entry.can_reopen}<button class="link" onclick={()=>onReopen(entry)}>重新打开提醒</button>{/if}</div>
       </article>
     {:else}<p class="empty">暂无新消息。历史待核对请求不会补算为新通知。</p>{/each}
-    {#if prompts.length}<details class="pending-history tp-fold"><summary>当前与待核对请求 {prompts.length}</summary><p>这里记录原 Agent 的请求，与消息已读无关。</p>{#each prompts as task (task.id)}<div class="pending-item"><button class="task-link" onclick={()=>onPrompt(task)}>{task.name}</button><span>{task.stale?'来源待确认，请在原 Agent 核对':'原 Agent 仍待处理'}{task.input_request_ids?.length ? ' · '+task.input_request_ids.length+' 个请求':''}</span></div>{/each}</details>{/if}
+    {#if prompts.length}<details class="pending-history tp-fold"><summary>当前与待核对请求 {prompts.length}</summary><p>这里记录原 Agent 的请求，与消息已读无关。</p>{#each prompts as task (task.id)}<div class="pending-item"><button class="task-link" onclick={()=>onPrompt(task)}>{task.name}</button><span>{task.stale?'来源待确认，请在原 Agent 核对':'请在原 Agent 核对是否仍待处理'}{task.input_request_ids?.length ? ' · '+task.input_request_ids.length+' 个请求':''}</span></div>{/each}</details>{/if}
   </div>
   <footer>最多保留最近 200 条；旧消息不会因打开提醒而变成新消息。</footer>
 </section>

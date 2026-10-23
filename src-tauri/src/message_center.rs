@@ -241,8 +241,7 @@ impl MessageStore {
             let state = if !pending {
                 "result"
             } else if still_pending {
-                if prompt.is_some_and(|p| !p.stale && p.confidence != DetectionConfidence::Inferred)
-                {
+                if prompt.is_some_and(|p| !p.stale && explicit_lifecycle(p)) {
                     "pending"
                 } else {
                     "unconfirmed"
@@ -265,7 +264,9 @@ impl MessageStore {
                 state: state.into(),
                 request_id: current_request,
                 turn_key: task.turn_key.clone(),
-                can_reopen: state == "pending",
+                // Keep the existing stricter popup policy for inferred producer
+                // provenance, even when the standard event itself is explicit.
+                can_reopen: state == "pending" && task.confidence != DetectionConfidence::Inferred,
             });
         }
         MessageCenter {
@@ -296,14 +297,17 @@ fn message_event(event: &TaskEvent) -> Option<(&TaskSnapshot, MessageKind)> {
         TaskEvent::Failed { task } => (task, MessageKind::Failed),
         _ => return None, // Host flaps and inferred shell-return are not inbox messages.
     };
+    (!task.stale && !task.internal && explicit_lifecycle(task)).then_some((task, kind))
+}
+
+fn explicit_lifecycle(task: &TaskSnapshot) -> bool {
     // Standard Events uses Inferred for producer provenance, but a validated
-    // explicit end with a durable epoch/sequence is not an inferred shell end.
-    let explicit = task.confidence != DetectionConfidence::Inferred
+    // explicit event with a durable epoch/sequence is not an inferred shell end.
+    task.confidence != DetectionConfidence::Inferred
         || task.source == crate::domain::TaskSource::GenericEvent
             && task.evidence_channel.as_deref() == Some("self_reported")
             && task.integration_epoch.is_some()
-            && task.integration_sequence > 0;
-    (!task.stale && !task.internal && explicit).then_some((task, kind))
+            && task.integration_sequence > 0
 }
 
 #[derive(Clone, Serialize)]
@@ -710,5 +714,33 @@ mod tests {
         assert_eq!(store.state.entries.len(), 1);
         store.record(&TaskEvent::InferredFinished { task }, 3);
         assert_eq!(store.state.entries.len(), 1);
+    }
+
+    #[test]
+    fn fresh_standard_request_is_pending_without_weakening_popup_reopen_policy() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = MessageStore::open(dir.path().join("messages.json"));
+        let mut task = requested("standard", "q");
+        task.source = TaskSource::GenericEvent;
+        task.confidence = DetectionConfidence::Inferred;
+        task.evidence_channel = Some("self_reported".into());
+        task.integration_epoch = Some("durable-epoch".into());
+        task.integration_sequence = 2;
+        store.record(
+            &TaskEvent::WaitingInput {
+                task: task.clone(),
+                reason: None,
+            },
+            1,
+        );
+        let center = store.view(&[task.clone()], &[task.clone()]);
+        assert_eq!(center.entries[0].state, "pending");
+        assert!(!center.entries[0].can_reopen);
+        let mut stale = task.clone();
+        stale.stale = true;
+        assert_eq!(
+            store.view(&[task], &[stale]).entries[0].state,
+            "unconfirmed"
+        );
     }
 }
