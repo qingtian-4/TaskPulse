@@ -28,7 +28,7 @@ const call=(args:string[],input:string|Buffer)=>{
   const r=spawnSync(exe,args,{input,encoding:'utf8',env,windowsHide:true,timeout:10000,maxBuffer:1024*1024});
   if(r.error)throw r.error;return {code:r.status,stdout:r.stdout,stderr:r.stderr};
 };
-const start={schema_version:1,agent_id:'custom-agent',session_id:'synthetic/中文:session',turn_id:'turn-a',event_id:'event-start',kind:'turn.started',payload:{title:'合成测试，不是真实宿主任务'}};
+const start={schema_version:1,agent_id:'custom-agent',session_id:'synthetic/中文:session',turn_id:'turn-a',event_id:'event-start',kind:'turn.started',payload:{title:'SYNTHETIC_PRIVATE_DIAGNOSTIC_TITLE'}};
 const flags=['--integration-event','--source',source,'--adapter','standard-events'];
 const valid=call(['--integration-validate'],JSON.stringify(start));if(valid.code!==0||!JSON.parse(valid.stdout).valid)throw Error('valid input rejected');
 const bad=call(['--integration-validate'],JSON.stringify({...start,schema_version:99}));if(bad.code===0||JSON.parse(bad.stdout).valid)throw Error('validator hid invalid schema');
@@ -42,6 +42,13 @@ for(const input of [JSON.stringify({...start,source_instance_id:'spoof'}),JSON.s
 if(await Bun.file(journal).text()!==before)throw Error('Invalid input reached journal');
 const diagnostic=call(['--integration-diagnose','--source',source],'');const report=JSON.parse(diagnostic.stdout);
 if(diagnostic.code!==0||report.events!==1||JSON.stringify(report).includes('SYNTHETIC_PRIVATE'))throw Error('Invalid or leaking diagnostics');
+// Exercise the actual default CLI exporter, not only resource helper fixtures.
+const runtimeDiagnostic=call(['--diagnose','--diagnose-seconds=3'],'');
+const runtimeReport=JSON.parse(runtimeDiagnostic.stdout);
+if(runtimeDiagnostic.code!==0||!runtimeReport.tasks.length||runtimeDiagnostic.stderr!==''||
+  [start.session_id,start.payload.title,source].some(secret=>runtimeDiagnostic.stdout.includes(secret))||
+  !runtimeReport.tasks.every((task:any)=>task.task_hash&&!('name' in task)&&!('project' in task)&&!('id' in task)))
+  throw Error('Default runtime diagnostic leaked private task/source data');
 const test=call(flags,JSON.stringify({...start,kind:'connection.test',event_id:'test-event'}));
 if(test.code!==0||await Bun.file(journal).text()!==before)throw Error('Connection test became a monitored task');
 // Holding an OS byte-range lock overlaps Rust's whole-file lock. The child
@@ -60,7 +67,11 @@ if(process.platform==='win32'){
     lockTimeoutVerified=true;
   }finally{holder.stdin.end('\n');await new Promise<void>(ok=>{if(holder.exitCode!==null)ok();else{holder.once('exit',()=>ok());setTimeout(()=>{holder.kill();ok();},3000).unref();}});}
 }
-const result={passed:true,guiSubsystem:subsystem===2,checks:['actual redirected stdin','machine-readable validator failure','silent Hook mode','bounded size and identity rejection','private payload omitted','separate connection-test channel','space/Unicode/apostrophe/metacharacter executable path'],lockTimeoutVerified,realHostConfigurationsChanged:false};
+await Bun.write(join(home,'config.toml'),'private = "SYNTHETIC_CONFIG_SECRET"\n[unterminated');
+const damagedConfig=call(['--diagnose','--diagnose-seconds=1'],'');
+if(damagedConfig.code!==0||damagedConfig.stderr!==''||damagedConfig.stdout.includes('SYNTHETIC_CONFIG_SECRET'))
+  throw Error('Malformed configuration escaped default diagnostic redaction');
+const result={passed:true,guiSubsystem:subsystem===2,checks:['actual redirected stdin','machine-readable validator failure','silent Hook mode','bounded size and identity rejection','private payload omitted','default runtime diagnostic redaction','malformed config diagnostic redaction','separate connection-test channel','space/Unicode/apostrophe/metacharacter executable path'],lockTimeoutVerified,realHostConfigurationsChanged:false};
 await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));
 console.log(JSON.stringify({...result,evidence:evidenceDir}));
 });

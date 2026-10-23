@@ -64,7 +64,7 @@ pub fn parse_panes(output: &str) -> Vec<PaneInfo> {
         let fields: Vec<&str> = line.split('\t').collect();
         if fields.len() != PANE_FIELDS {
             log::debug!(
-                "parse_panes: skipping malformed line ({} fields): {line}",
+                "parse_panes: skipping malformed line ({} fields)",
                 fields.len()
             );
             continue;

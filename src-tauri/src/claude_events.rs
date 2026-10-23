@@ -155,20 +155,20 @@ pub fn record(dir: &Path, input: &Value, at: u64, root: &Path) -> std::io::Resul
         .iter()
         .filter_map(|p| p.get("id").cloned())
         .collect();
-    let tool = input.get("tool_name").and_then(Value::as_str).unwrap_or("");
-    let command = input
-        .pointer("/tool_input/command")
-        .or_else(|| input.pointer("/tool_input/file_path"))
-        .and_then(Value::as_str)
-        .unwrap_or("");
-    let payload = json!({"v":2,"session_id":id,"hook_event_name":event,"observed_at":at,
+    let activity = matches!(event, "PreToolUse" | "PermissionRequest")
+        .then(|| crate::privacy::tool_activity(input));
+    let notification_type = (input.get("notification_type").and_then(Value::as_str)
+        == Some("permission_prompt"))
+    .then_some("permission_prompt");
+    let payload = json!({"v":3,"session_id":id,"hook_event_name":event,"observed_at":at,
         "event_id":event_id,"sequence":sequence,"turn_key":turn,"turn_started_at":turn_start,
-        "config_dir":root,"cwd":input.get("cwd"),"tool_use_id":call,
-        "notification_type":input.get("notification_type"),
+        "config_root_key":crate::privacy::config_root_key(root),
+        "cwd":input.get("cwd").and_then(Value::as_str),"tool_use_id":call,
+        "notification_type":notification_type,
         "request_id":permission,"resolved_request_id":resolved.first(),"resolved_request_ids":resolved,
         "open_calls":calls,"pending_requests":pending,"pending_request_ids":request_ids,
         "pending_request_id":permission,"pending_call_id":permission_call,
-        "activity":format!("{tool} · {}",command.chars().take(300).collect::<String>())});
+        "activity":activity});
     let mut bytes = serde_json::to_vec(&payload)?;
     bytes.push(b'\n');
     journal.seek(SeekFrom::End(0))?;
@@ -203,6 +203,66 @@ fn tool_signature(input: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r04_untrusted_tool_payloads_never_enter_new_journal_or_checkpoint_activity() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = "token-command-private-file-prompt-sentinel";
+        let root = dir.path().join(secret);
+        for (n, tool) in ["Bash", "Read", secret].iter().enumerate() {
+            let input = json!({"session_id":"s","hook_event_name":"PreToolUse","tool_use_id":format!("call-{n}"),
+                "tool_name":tool,"tool_input":{"command":secret,"file_path":secret,"token":secret},
+                "prompt":secret,"tool_response":secret,"notification_type":secret,"cwd":"/public-project"});
+            let payload = record(dir.path(), &input, n as u64, &root).unwrap();
+            assert_eq!(payload["activity"], crate::privacy::tool_activity(&input));
+            assert_eq!(payload["cwd"], "/public-project"); // Necessary local scope metadata.
+            assert!(payload.get("config_dir").is_none());
+            assert_eq!(
+                payload["config_root_key"],
+                crate::privacy::config_root_key(&root)
+            );
+            for name in ["s.jsonl", "s.json"] {
+                assert!(!std::fs::read_to_string(dir.path().join(name))
+                    .unwrap()
+                    .contains(secret));
+            }
+        }
+    }
+
+    #[test]
+    fn r04_legacy_activity_is_not_copied_forward_and_permission_correlation_survives() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = "legacy-command-secret";
+        std::fs::write(
+            dir.path().join("s.json"),
+            serde_json::to_vec(&json!({
+                "v":2,"sequence":1,"activity":secret,"config_dir":secret
+            }))
+            .unwrap(),
+        )
+        .unwrap();
+        let send =
+            |name: &str, call: Option<&str>, at| {
+                record(dir.path(), &json!({
+            "session_id":"s","hook_event_name":name,"tool_name":"Bash","tool_use_id":call,
+            "tool_input":{"command":secret}
+        }), at, Path::new("/public-root")).unwrap()
+            };
+        send("PreToolUse", Some("call"), 2);
+        let pending = send("PermissionRequest", None, 3);
+        assert_eq!(pending["pending_call_id"], "call");
+        assert!(!std::fs::read_to_string(dir.path().join("s.json"))
+            .unwrap()
+            .contains(secret));
+        let resolved = send("PostToolUse", Some("call"), 4);
+        assert_eq!(resolved["resolved_request_id"], pending["request_id"]);
+        assert!(resolved["pending_request_ids"]
+            .as_array()
+            .unwrap()
+            .is_empty());
+        assert!(!std::fs::read_to_string(dir.path().join("s.jsonl"))
+            .unwrap()
+            .contains(secret));
+    }
     #[test]
     fn parallel_permissions_match_inputs_not_last_tool_and_resolve_independently() {
         let dir = tempfile::tempdir().unwrap();

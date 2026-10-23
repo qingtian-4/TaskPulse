@@ -197,8 +197,8 @@ pub fn load_config() -> TaskPulseConfig {
         return cfg;
     }
     match std::fs::read_to_string(&path) {
-        Ok(text) => toml::from_str(&text).unwrap_or_else(|e| {
-            log::warn!("Invalid config {}: {} — using defaults", path.display(), e);
+        Ok(text) => toml::from_str(&text).unwrap_or_else(|_| {
+            log::warn!("Invalid config; using defaults (details available in local settings)");
             default_config()
         }),
         Err(_) => default_config(),

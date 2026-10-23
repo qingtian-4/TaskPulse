@@ -73,7 +73,13 @@ tmux 外的 wrapper 记录仍由 tmux 来源读取，需要将 session/pane 限�
 配置、关注/未读/固定、最近结果和通知去重分别保存在 `~/.taskpulse/` 的 config.toml、
 attention.json、recent.json、notifications.json。投递记录 notification-log.json 最多500条，
 不证明用户已读。兼容旧 `~/.agent-monitor/*.status`；`tp-run` 使用服务器的
-`~/.local/state/taskpulse/runs/`。本机账号额度不是远程账号额度。诊断可能含私人路径、命令或标题，分享前检查。
+`~/.local/state/taskpulse/runs/`。本机账号额度不是远程账号额度。
+
+默认 `--diagnose` 导出哈希身份、状态和耗时，不导出标题、路径、命令、错误原文或账号额度；
+诊断进程关闭其他日志输出，完整错误仍可在本机来源管理中核对。哈希可关联同一任务，仍应在分享前检查。
+新 Claude Hook v3 日志只保存工具活动类别和 config root hash；cwd、session/turn/call/request
+仍作为本地范围与审批关联元数据保存。旧日志不自动重写，原生任务、关注状态和其他专用诊断可能
+包含私人路径或标题，不要把整个状态目录上传到 Issue。v1/v2 Hook 信封继续可读；读取 v3 root 隔离应使用新版本。
 
 ## 升级与卸载
 
