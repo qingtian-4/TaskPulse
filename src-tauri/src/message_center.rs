@@ -296,8 +296,14 @@ fn message_event(event: &TaskEvent) -> Option<(&TaskSnapshot, MessageKind)> {
         TaskEvent::Failed { task } => (task, MessageKind::Failed),
         _ => return None, // Host flaps and inferred shell-return are not inbox messages.
     };
-    (!task.stale && !task.internal && task.confidence != DetectionConfidence::Inferred)
-        .then_some((task, kind))
+    // Standard Events uses Inferred for producer provenance, but a validated
+    // explicit end with a durable epoch/sequence is not an inferred shell end.
+    let explicit = task.confidence != DetectionConfidence::Inferred
+        || task.source == crate::domain::TaskSource::GenericEvent
+            && task.evidence_channel.as_deref() == Some("self_reported")
+            && task.integration_epoch.is_some()
+            && task.integration_sequence > 0;
+    (!task.stale && !task.internal && explicit).then_some((task, kind))
 }
 
 #[derive(Clone, Serialize)]
@@ -617,10 +623,14 @@ mod tests {
     }
     #[test]
     fn corrupt_future_and_oversized_read_state_is_preserved_and_write_failure_never_fakes_seen() {
-        for bytes in [b"bad".as_slice(), b"{\"version\":99}"] {
+        for bytes in [
+            b"bad".to_vec(),
+            b"{\"version\":99}".to_vec(),
+            vec![b' '; BYTE_LIMIT as usize + 1],
+        ] {
             let dir = tempfile::tempdir().unwrap();
             let path = dir.path().join("messages.json");
-            std::fs::write(&path, bytes).unwrap();
+            std::fs::write(&path, &bytes).unwrap();
             let mut store = MessageStore::open(path.clone());
             assert!(store.error.is_some());
             assert!(store.mark_seen(&[]).is_err());
@@ -681,5 +691,24 @@ mod tests {
             .apply_snapshots(&[task], &[], std::time::SystemTime::now())
             .is_empty());
         assert!(store.state.entries[0].seen);
+    }
+
+    #[test]
+    fn validated_standard_end_is_an_explicit_fact_not_an_inferred_shell_return() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut store = MessageStore::open(dir.path().join("messages.json"));
+        let mut task = task("standard");
+        task.source = TaskSource::GenericEvent;
+        task.confidence = DetectionConfidence::Inferred;
+        task.status = TaskStatus::Succeeded;
+        task.evidence_channel = Some("self_reported".into());
+        store.record(&TaskEvent::Succeeded { task: task.clone() }, 1);
+        assert!(store.state.entries.is_empty());
+        task.integration_epoch = Some("durable-epoch".into());
+        task.integration_sequence = 2;
+        store.record(&TaskEvent::Succeeded { task: task.clone() }, 2);
+        assert_eq!(store.state.entries.len(), 1);
+        store.record(&TaskEvent::InferredFinished { task }, 3);
+        assert_eq!(store.state.entries.len(), 1);
     }
 }

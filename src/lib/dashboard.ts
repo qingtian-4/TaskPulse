@@ -6,6 +6,24 @@ export interface DashboardFilters { source: string; project: string; location: s
 export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null,signal:null,query:'',unreadOnly:false};
 export const SECTION_ORDER: TaskSection[] = ['ongoing', 'results', 'uncertain', 'pinned'];
 export const SECTION_NAMES: Record<TaskSection,string> = {ongoing:'进行中',results:'结果待查看',uncertain:'状态待更新',pinned:'固定与已查看'};
+// Presentation freshness is stricter than a cached provider snapshot. Keep
+// every record reachable, but never count degraded-source work as confirmed.
+export function observedDashboardTasks(tasks:TaskSnapshot[], providers:ProviderHealth[], settings:DashboardSettings|null, now:number):TaskSnapshot[] {
+  return tasks.map(task=>{
+    if(task.status!=='running' && !needsAction(task))return task;
+    const source=taskSource(task,settings??undefined);
+    const health=providers.find(provider=>provider.provider===source?.id);
+    const fresh=source?.enabled && health?.status==='connected' && health.last_success!==undefined &&
+      now-health.last_success<=Math.max(30000,(source.poll_interval_ms??3000)*3);
+    const eventEvidence=task.confidence!=='inferred' || task.source==='generic_event' &&
+      task.evidence_channel==='self_reported' && !!task.integration_epoch && (task.integration_sequence??0)>0;
+    const explicit=!needsAction(task) || eventEvidence &&
+      (task.waiting_reason==='quota_exhausted' || !!task.input_request_id || !!task.input_request_ids?.length);
+    const confirmed=task.source!=='generic_event' || !needsAction(task) ||
+      task.pending_confirmed_at!==undefined && now-task.pending_confirmed_at<=30000;
+    return fresh&&explicit&&confirmed ? task : {...task,stale:true};
+  });
+}
 export function sectionRank(task: TaskSnapshot): number { return SECTION_ORDER.indexOf(taskSection(task)); }
 export function matchesSignal(task:TaskSnapshot, signal:TaskSignal):boolean {
   if(signal==='failed')return task.status==='failed' && isEndedResult(task);

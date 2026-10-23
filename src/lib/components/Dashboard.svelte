@@ -7,6 +7,10 @@
   import { SOURCE_LABEL, CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type CodexAccountQuota, type SourceDiscovery } from '$lib/types';
   import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, unconfirmedRunning, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
+  import MessageCenter from './MessageCenter.svelte';
+  import {observedDashboardTasks} from '$lib/dashboard';
+  import {acceptMessageState} from '$lib/messages';
+  import type {MessageCenterState,MessageEntry} from '$lib/types';
   import Settings from '@lucide/svelte/icons/settings';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Pin from '@lucide/svelte/icons/pin';
@@ -28,7 +32,7 @@
   let settings = $state<DashboardSettings | null>(null);
   let quota = $state<CodexAccountQuota | null>(null);
   let selected = $state<TaskSnapshot | null>(null);
-  let selectedTask = $derived([...tasks,...archived].find(t => t.id === selected?.id) ?? selected);
+  let selectedTask = $derived([...confirmedTasks,...archived].find(t => t.id === selected?.id) ?? selected);
   let filterSource = $state('');
   let filterProject = $state('');
   let filterLocation = $state('');
@@ -44,6 +48,8 @@
   let newSources = $state(0);
   let pendingPrompts = $state<TaskSnapshot[]>([]);
   let showPrompts = $state(false);
+  let messages = $state<MessageCenterState>({revision:0,unread:0,entries:[],error:null});
+  let messagesEpoch=0;
   let panel = $state<HTMLDivElement | null>(null);
   let demo = $state(false);
   let lastHidden = $state<{task:TaskSnapshot;action:'restore'|'unignore'} | null>(null);
@@ -51,11 +57,13 @@
   const progress = $derived(refreshProgress(settings,providers,refreshSince));
   const maxHeight = typeof screen === 'undefined' ? 720 : Math.min(720, Math.floor(screen.availHeight * .8));
   const width = typeof screen === 'undefined' ? 440 : Math.min(440,screen.availWidth - 16);
-  const displayed = $derived(showArchive ? archived : tasks);
+  const confirmedTasks = $derived(demo ? tasks : observedDashboardTasks(tasks,providers,settings,now));
+  const displayed = $derived(showArchive ? archived : confirmedTasks);
   const filters = $derived({source:filterSource,project:filterProject,location:filterLocation,section:filterSection,signal:filterSignal,query,unreadOnly});
   const filtered = $derived(filterTasks(displayed,filters,settings));
-  const outsideRunning = $derived(runningOutsideView(tasks,filtered));
-  const pendingRunning = $derived(unconfirmedRunning(tasks));
+  const outsideRunning = $derived(runningOutsideView(confirmedTasks,filtered));
+  const pendingRunning = $derived(unconfirmedRunning(confirmedTasks));
+  const uncertainTasks = $derived(confirmedTasks.filter(t=>taskSection(t)==='uncertain'));
   let refreshSources = $state<string[]>([]);
   const refreshResult = $derived(refreshSources.length ? refreshResultMessage(refreshSources,providers.filter(p=>p.status==='degraded').map(p=>p.provider),Object.fromEntries(settings?.sources.map(s=>[s.id,s.name])??[])) : '');
   const filterText = $derived(filterDescription(filters,displayed,settings));
@@ -66,10 +74,28 @@
   const degraded = $derived(providers.filter(p => p.status === 'degraded'));
 
   async function snapshots() {
+    const epoch=messagesEpoch;
     const [nextTasks,nextProviders,nextSettings,nextQuota,nextArchived,nextPrompts] = await Promise.all([
       invoke<TaskSnapshot[]>('get_agents'), invoke<ProviderHealth[]>('get_providers'), invoke<DashboardSettings>('get_monitoring_settings'), invoke<CodexAccountQuota>('get_codex_quota'), invoke<TaskSnapshot[]>('get_archived_attention'), invoke<TaskSnapshot[]>('get_pending_task_prompts')
     ]);
     tasks=nextTasks; providers=nextProviders; settings=nextSettings; quota=nextQuota; archived=nextArchived; pendingPrompts=nextPrompts;
+    const center=await invoke<MessageCenterState>('get_message_center');
+    if(epoch===messagesEpoch)messages=acceptMessageState(messages,center);
+  }
+  async function readMessages(ids:string[]) {
+    if(!ids.length||!isTauri())return;
+    try{const center=await invoke<MessageCenterState>('mark_messages_seen',{ids});messagesEpoch++;messages=acceptMessageState(messages,center);}
+    catch(e){error='消息已读状态未保存：'+String(e);}
+  }
+  async function selectMessage(id:string) {
+    showPrompts=false;
+    const task=[...tasks,...archived,...pendingPrompts].find(task=>task.id===id);
+    if(task)selectTask(task);
+    else if(isTauri())try{await invoke('open_task',{id});}catch(e){error=String(e);}
+  }
+  async function reopenMessage(entry:MessageEntry) {
+    try{await invoke('reopen_task_prompt',{id:entry.task_id,requestId:entry.request_id,turnKey:entry.turn_key});note='已重新打开原提醒；消息已读、任务未读和请求状态均不改变';}
+    catch(e){error=String(e);}
   }
   async function refresh() {
     if (!isTauri() || refreshing) return;
@@ -117,11 +143,6 @@
     try { const outcome=await invoke<string>('open_task',{id:task.id}); note=outcome==='window_focused' ? '已聚焦运行窗口；请在查看结果后标记已查看' : '已定位任务详情；此来源暂不支持精确会话跳转'; }
     catch(e) { error=String(e); }
   }
-  async function reopenPrompt(task:TaskSnapshot) {
-    if(!isTauri())return;
-    try {await invoke('reopen_task_prompt',{id:task.id});note='已重新打开提醒；请在原 Agent 中处理，不会自动批准';}
-    catch(e){error=String(e);}
-  }
   $effect(()=>{
     if (!panel || !isTauri()) return;
     let previous=0;
@@ -166,6 +187,7 @@
         await subscribe(listen<TaskSnapshot[]>('archived-attention-updated',e=>archived=e.payload));
         await subscribe(listen<ProviderHealth[]>('providers-updated',e=>providers=e.payload));
         await subscribe(listen<TaskSnapshot[]>('pending-prompts-updated',e=>pendingPrompts=e.payload));
+        await subscribe(listen<MessageCenterState>('messages-updated',e=>{messagesEpoch++;messages=acceptMessageState(messages,e.payload);}));
         await subscribe(listen<CodexAccountQuota>('codex-quota-updated',e=>quota=e.payload));
         await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settings=e.payload;view=e.payload.default_view;void discover();}));
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selectTask(e.payload)));
@@ -193,30 +215,30 @@
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><span class="brand-mark" aria-hidden="true"><Activity size={17}/></span>TaskPulse</span>
     <div class="header-actions">
-      <button class="tp-btn tp-icon" data-variant="ghost" onclick={()=>showPrompts=!showPrompts} aria-expanded={showPrompts} title={'未解决请求：'+pendingPrompts.length} aria-label={'查看未解决请求：'+pendingPrompts.length}><Bell size={15}/>{#if pendingPrompts.length}<span>{pendingPrompts.length}</span>{/if}</button>
+      <button class="tp-btn tp-icon" data-variant="ghost" onclick={()=>showPrompts=!showPrompts} aria-expanded={showPrompts} title={'消息中心 · '+messages.unread+' 条未读'} aria-label={'消息中心：'+messages.unread+' 条未读'}><Bell size={15}/>{#if messages.unread}<span>{messages.unread}</span>{/if}</button>
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={manage} title="管理监控来源" aria-label="管理监控来源"><Settings size={15}/></button>
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={refresh} disabled={refreshing || demo} title="立即刷新" aria-label="立即刷新"><RefreshCw size={15} class={refreshing?'animate-spin':''}/></button>
       <button class="tp-btn tp-icon" data-variant="ghost" disabled={demo} onclick={()=>invoke('toggle_pin')} title={pinned?'取消固定窗口':'固定窗口'} aria-label={pinned?'取消固定窗口':'固定窗口'}>{#if pinned}<Pin size={15}/>{:else}<PinOff size={15}/>{/if}</button>
     </div>
   </header>
   <div class="counts" aria-label="任务概览">
-    <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title="运行中的任务与明确待处理请求" onclick={()=>chooseSection('ongoing')}><span>进行中</span><b>{tasks.filter(t=>taskSection(t)==='ongoing').length}</b></button>
-    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="明确待批准、待回答或额度耗尽，不含普通结束" onclick={()=>chooseSignal('action')}><span>需处理</span><b>{tasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
-    <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title="尚未查看的本轮结果，包括失败" onclick={()=>chooseSection('results')}><span>待查看</span><b>{tasks.filter(t=>taskSection(t)==='results').length}</b></button>
-    <button class="overview tp-tone" data-tone="stale" class:active={filterSection==='uncertain'} aria-pressed={filterSection==='uncertain'} title="不确定或来源待更新，不代表失败" onclick={()=>chooseSection('uncertain')}><span>待更新</span><b>{tasks.filter(t=>taskSection(t)==='uncertain').length}</b></button>
-    <button class="overview total tp-tone" class:active={!showArchive && !filterText} aria-pressed={!showArchive && !filterText} title="清除筛选，查看全部近期关注" onclick={()=>{showArchive=false;resetFilters();}}><span>全部</span><b>{tasks.length}</b></button>
+    <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title="来源新鲜的运行任务，包含明确待处理请求" onclick={()=>chooseSection('ongoing')}><span>进行中</span><b>{confirmedTasks.filter(t=>taskSection(t)==='ongoing').length}</b></button>
+    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="进行中的子集：明确待批准、待回答或额度耗尽" onclick={()=>chooseSignal('action')}><span>待处理</span><b>{confirmedTasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
+    <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title="尚未查看的本轮结果，包括失败" onclick={()=>chooseSection('results')}><span>待查看</span><b>{confirmedTasks.filter(t=>taskSection(t)==='results').length}</b></button>
   </div>
+  <p class="count-help">待处理包含在进行中，计数不相加。</p>
   {#if pendingRunning.length}<p class="notice pending-running" role="status">上次运行 {pendingRunning.length} · 当前采集待更新，不代表结束<button class="link" onclick={()=>{showArchive=false;resetFilters();filterSection='uncertain';}}>查看待确认任务</button></p>{/if}
-  {#if tasks.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed')) || degraded.length}<div class="signals">
-    {#if tasks.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>待批准 {tasks.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
-    {#if tasks.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>待回答 {tasks.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
-    {#if tasks.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>失败结果 {tasks.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
-    {#if degraded.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={manage}>来源异常 {degraded.length}</button>{/if}
+  {#if confirmedTasks.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed')) || degraded.length || uncertainTasks.length}<div class="signals">
+    {#if confirmedTasks.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>待批准 {confirmedTasks.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
+    {#if confirmedTasks.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>待回答 {confirmedTasks.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
+    {#if confirmedTasks.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>失败结果 {confirmedTasks.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
+    {#if degraded.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={manage}>来源待更新 {degraded.length}</button>{/if}
+    {#if uncertainTasks.length && !pendingRunning.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={()=>chooseSection('uncertain')}>状态待确认 {uncertainTasks.length}</button>{/if}
   </div>{/if}
-  <div class="view-bar"><button class:active={!showArchive} onclick={()=>{showArchive=false;resetFilters();}}>{settings?.recent_days===0?'全部关注':'近期活动 · '+(settings?.recent_days ?? 7)+'天'}</button>{#if archived.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>较早关注 {archived.length}</button>{/if}<button class="filter-toggle tp-btn" data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?'收起筛选':'筛选 / 分组'}</button></div>
+  <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>全部 {confirmedTasks.length}</button>{#if archived.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>较早关注 {archived.length}</button>{/if}<button class="filter-toggle tp-btn" data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?'收起筛选':'筛选 / 分组'}</button></div>
   <div class="search-bar"><label class="search"><Search size={14}/><input aria-label="搜索任务" placeholder="搜索任务、项目或 Agent   /" bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label="清除搜索">×</button>{/if}</label><button class="unread-filter tp-chip tp-tone" data-tone="unread" class:active={unreadOnly} aria-pressed={unreadOnly} onclick={()=>unreadOnly=!unreadOnly} title="只显示尚未查看的任务，不改变未读状态">未查看 {displayed.filter(t=>t.unread).length}</button></div>
   {#if demo}<p class="notice">浏览器演示 · 以下均为示例，不是真实采集结果</p>{/if}
-  {#if showPrompts}<section class="prompt-inbox glass-panel glass-scroll" aria-label="未解决请求"><h2>未解决请求<span>{pendingPrompts.length}</span><button class="link" onclick={()=>showPrompts=false} aria-label="关闭未解决请求">×</button></h2><p class="notice">关闭弹窗、查看详情或标记已查看不会批准请求。重启后从关注记录恢复，不重发旧完成通知。</p>{#each pendingPrompts as task (task.id)}<div class="prompt-item"><button class="link" onclick={()=>selectTask(task)}>{task.name} · {taskLabel(task)}</button><p>{taskContext(task,settings)}</p>{#if task.stale || task.confidence==='inferred'}<span>上次记录仍待核对；来源未确认最新状态，请打开 Agent 检查</span>{:else}<button class="link" onclick={()=>reopenPrompt(task)}>重新打开提醒</button>{/if}</div>{:else}<p class="notice">没有已确认的未解决请求。完成和失败结果请在“待查看”回查。</p>{/each}</section>{/if}
+  {#if showPrompts}<MessageCenter center={messages} prompts={pendingPrompts} {now} onRead={readMessages} onClose={()=>showPrompts=false} onSelect={id=>void selectMessage(id)} onReopen={entry=>void reopenMessage(entry)} onPrompt={task=>{showPrompts=false;selectTask(task);}} />{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
   {#if note}<p class="notice" role="status">{note}<button class="dismiss" onclick={()=>note=''} aria-label="关闭提示">×</button></p>{/if}
   {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label="关闭刷新结果">×</button></p>{/if}
@@ -267,11 +289,12 @@
   .brand-mark{width:25px;height:25px;border:1px solid var(--tp-accent-line);border-radius:7px;display:grid;place-items:center;background:var(--tp-accent-soft);color:var(--tp-accent)}
   .header-actions{display:flex;gap:2px}.header-actions button{border:0;position:relative}
   .header-actions span{position:absolute;right:0;top:0;font-size:9px;min-width:12px;line-height:13px;text-align:center;border-radius:4px;background:var(--tp-card);color:var(--tp-action)}
-  .counts{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:6px;padding:12px 12px 8px;flex:none}
+  .counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;padding:12px 12px 5px;flex:none}
+  .count-help{margin:0;padding:0 14px 6px;color:var(--tp-quiet);font-size:9px;line-height:1.5;flex:none}
   .overview{position:relative;text-align:left;padding:8px;border:1px solid var(--tp-border);border-radius:var(--tp-radius-md);background:var(--tp-card);min-width:0;box-shadow:var(--tp-shadow-card)}
   .overview span{font-size:10px;color:var(--tp-muted);white-space:nowrap}.overview b{display:block;font-size:21px;line-height:1.2;font-weight:600;letter-spacing:-.03em;color:var(--tone);margin-top:4px;font-variant-numeric:tabular-nums}
   .overview:hover{border-color:var(--tone-line);background:var(--tp-raised)}.overview.active{border-color:var(--tone-line);background:linear-gradient(140deg,var(--tone-soft),transparent),var(--tp-card);box-shadow:inset 0 -2px var(--tone)}
-  .overview.active span{color:var(--tp-text)}.overview.total b{color:var(--tp-text)}
+  .overview.active span{color:var(--tp-text)}
   .signals{display:flex;gap:6px;flex-wrap:wrap;padding:0 12px 4px;flex:none}.signals button{font-size:10px;padding:2px 7px;border-radius:20px}.signals .active{box-shadow:inset 0 0 0 1px var(--tone)}
   .view-bar{display:flex;align-items:center;gap:10px;padding:6px 14px;flex:none}.view-bar>button{font-size:10px;color:var(--tp-quiet);border-radius:5px;padding:4px 0}.view-bar>button.active{color:var(--tp-accent)}.view-bar .filter-toggle{margin-left:auto;min-height:26px;padding:4px 6px;gap:4px;font-size:10px}
   .search-bar{display:flex;gap:8px;padding:0 12px 10px;flex:none}
@@ -296,8 +319,6 @@
   footer{display:flex;gap:8px;justify-content:space-between;border-top:1px solid var(--tp-border);padding:8px 14px;font-size:9px;color:var(--tp-quiet);flex:none}footer button{font-size:10px;color:var(--tp-muted)}
   .quota{font-size:10px;padding:8px 14px;border-top:1px solid var(--tp-border);color:var(--tp-muted);flex:none}.quota summary{cursor:pointer;display:flex;justify-content:space-between;gap:10px}.quota p{font-size:10px;line-height:1.7;margin:7px 0 2px;overflow-wrap:anywhere}
   .onboarding{padding:13px 14px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:13px}.onboarding p{font-size:11px;color:var(--tp-muted);line-height:1.7;margin:8px 0}
-  .prompt-inbox{position:absolute;z-index:4;top:49px;right:8px;left:8px;max-height:min(340px,70%);overflow:auto;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-lg);box-shadow:var(--tp-shadow-window)}
-  .prompt-inbox h2{padding:12px 14px}.prompt-item{padding:10px 14px;border-top:1px solid var(--tp-border);font-size:11px}.prompt-item .link{white-space:normal;text-align:left;font-size:11px}.prompt-item p,.prompt-item>span{font-size:10px;color:var(--tp-muted);margin:4px 0;display:block}
   @media(max-width:350px){.counts{gap:4px;padding:10px 8px 6px}.overview{padding:7px 5px}.overview b{font-size:18px}.search-bar{padding:0 8px 8px}.detail-heading{flex-wrap:wrap}}
   @media(max-height:560px){
     header{padding-top:6px;padding-bottom:6px}.counts{padding:8px 10px 6px}.overview{padding:5px 7px}.overview b{font-size:18px;margin-top:2px}.signals{padding-bottom:2px}

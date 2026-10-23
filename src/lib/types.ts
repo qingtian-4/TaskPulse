@@ -97,6 +97,14 @@ export interface TaskNotice {
 }
 export interface NoticeState { current: TaskNotice | null; pending: number }
 export interface DeliveryRecord { at:number; channel:string; stage:string; notice_id:number | null; task_id:string | null; request_id:string | null; title:string; test:boolean }
+export type MessageKind = 'approval' | 'question' | 'quota' | 'completed' | 'failed' | 'interrupted';
+export interface MessageEntry {
+  id:string; at:number; seen:boolean; kind:MessageKind;
+  task_id:string; task_name:string; source:Source; agent_name?:string; project?:string;
+  state:'pending'|'unconfirmed'|'resolved'|'result'; can_reopen:boolean;
+  request_id?:string; turn_key?:string;
+}
+export interface MessageCenterState { revision:number; unread:number; entries:MessageEntry[]; error:string|null }
 export interface SourceDiscovery { id: string; available: boolean; detail: string; candidate?: MonitorSource }
 export interface SessionPage { items: Array<{ task: TaskSnapshot; reason: string }>; total: number }
 
