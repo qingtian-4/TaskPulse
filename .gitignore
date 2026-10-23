@@ -46,3 +46,53 @@ scripts/*.tmp
 nocommit
 nocommit/
 .codex
+
+# Local diagnostics, recordings, and acceptance evidence
+# (Tracked documentation and curated assets remain versioned.)
+*.trace
+*.profraw
+*.profdata
+*.cpuprofile
+*.heapprofile
+*.heapsnapshot
+*.etl
+*.dmp
+*.mdmp
+*.core
+crash-dumps/
+coverage/
+playwright-report/
+test-results/
+screenshots-local/
+recordings-local/
+evidence-local/
+local-results/
+.local/
+.tmp/
+.temp/
+.cache/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.bun-cache/
+
+# Disposable local media exports. Publish curated examples under assets/.
+*.mp4
+*.webm
+*.mov
+*.avi
+*.mkv
+!assets/demo/*.mp4
+!assets/demo/*.webm
+!assets/demo/*.gif
+
+# Local diagnostics and test databases
+*.sqlite-journal
+*.sqlite-shm
+*.sqlite-wal
+*.db-journal
+*.db-shm
+*.db-wal
+
+# Keep docs/ validation reports, integrations/*.json, source fixtures,
+# release contracts and production icons tracked.
