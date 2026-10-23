@@ -10,7 +10,7 @@
   import MessageCenter from './MessageCenter.svelte';
   import {observedDashboardTasks} from '$lib/dashboard';
   import {acceptMessageState} from '$lib/messages';
-  import type {MessageCenterState,MessageEntry} from '$lib/types';
+  import type {MessageCenterState} from '$lib/types';
   import Settings from '@lucide/svelte/icons/settings';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Pin from '@lucide/svelte/icons/pin';
@@ -93,8 +93,8 @@
     if(task)selectTask(task);
     else if(isTauri())try{await invoke('open_task',{id});}catch(e){error=String(e);}
   }
-  async function reopenMessage(entry:MessageEntry) {
-    try{await invoke('reopen_task_prompt',{id:entry.task_id,requestId:entry.request_id,turnKey:entry.turn_key});note='已重新打开原提醒；消息已读、任务未读和请求状态均不改变';}
+  async function reopenRequest(id:string,requestId?:string|null,turnKey?:string|null) {
+    try{await invoke('reopen_task_prompt',{id,requestId,turnKey});note='已重新打开原提醒；消息已读、任务未读和请求状态均不改变';}
     catch(e){error=String(e);}
   }
   async function refresh() {
@@ -238,7 +238,7 @@
   <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>全部 {confirmedTasks.length}</button>{#if archived.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>较早关注 {archived.length}</button>{/if}<button class="filter-toggle tp-btn" data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?'收起筛选':'筛选 / 分组'}</button></div>
   <div class="search-bar"><label class="search"><Search size={14}/><input aria-label="搜索任务" placeholder="搜索任务、项目或 Agent   /" bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label="清除搜索">×</button>{/if}</label><button class="unread-filter tp-chip tp-tone" data-tone="unread" class:active={unreadOnly} aria-pressed={unreadOnly} onclick={()=>unreadOnly=!unreadOnly} title="只显示尚未查看的任务，不改变未读状态">未查看 {displayed.filter(t=>t.unread).length}</button></div>
   {#if demo}<p class="notice">浏览器演示 · 以下均为示例，不是真实采集结果</p>{/if}
-  {#if showPrompts}<MessageCenter center={messages} prompts={pendingPrompts} {now} onRead={readMessages} onClose={()=>showPrompts=false} onSelect={id=>void selectMessage(id)} onReopen={entry=>void reopenMessage(entry)} onPrompt={task=>{showPrompts=false;selectTask(task);}} />{/if}
+  {#if showPrompts}<MessageCenter center={messages} prompts={pendingPrompts} {now} onRead={readMessages} onClose={()=>showPrompts=false} onSelect={id=>void selectMessage(id)} onReopen={entry=>void reopenRequest(entry.task_id,entry.request_id,entry.turn_key)} onReopenPrompt={task=>void reopenRequest(task.id,task.input_request_id,task.turn_key)} onPrompt={task=>{showPrompts=false;selectTask(task);}} />{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
   {#if note}<p class="notice" role="status">{note}<button class="dismiss" onclick={()=>note=''} aria-label="关闭提示">×</button></p>{/if}
   {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label="关闭刷新结果">×</button></p>{/if}

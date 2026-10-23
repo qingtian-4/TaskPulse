@@ -38,7 +38,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   async function stop(){root?.close();await stopOwnedChild(app);root=undefined;app=undefined;for(let n=0;n<100;n++){if(!await tabs().then(()=>true).catch(()=>false))return;await Bun.sleep(100);}throw Error('Owned debug listener did not close');}
   let sequence=0;
   const send=(session:string,kind:string,extra:any={},source='a')=>{
-    const host=source==='a'&&session==='request';
+    const host=source==='a'&&['request','legacy-request'].includes(session);
     const hostEvent=({'turn.started':'TurnStarted','input.requested':'PermissionRequest','input.resolved':'PermissionResult'} as Record<string,string>)[kind];
     const event=host?{hook_event_name:hostEvent,session_id:session,turn_id:'turn',request_id:extra.request_id,tool_call_id:extra.request_id,session_title:'合成并行审批'}:
       {schema_version:1,agent_id:source==='a'?'kimi-code-cli':'custom-agent',session_id:session,turn_id:'turn',event_id:'event-'+(++sequence),kind,payload:{},...extra};
@@ -144,6 +144,20 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   const known=await root.invoke('list_discovered_sessions',{offset:0,limit:100});assert.equal(known.items.find((i:any)=>i.task.id===done.id).task.unread,false);
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id===requestTask.id&&t.pinned));
   const persisted=await Bun.file(join(home,'messages.json')).text();assert.ok(!persisted.includes('合成')&&!persisted.includes('q3')&&!persisted.includes('custom-agent'));
+  // A pending fact that has no inbox event (e.g. pre-upgrade or reminders off)
+  // must remain manually reopenable without backfilling new unread messages.
+  const preferences=await root.invoke('get_monitoring_settings');
+  await root.invoke('save_monitoring_settings',{settings:{...preferences,notifications:false}});
+  send('legacy-request','turn.started');send('legacy-request','input.requested',{request_id:'legacy-q'});
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_pending_task_prompts').then(p=>p.some(t=>t.session_id==='legacy-request'&&!t.stale))`);
+  await root.invoke('save_monitoring_settings',{settings:preferences});
+  await click('[aria-label^="消息中心："]');await click('.pending-history summary');
+  const legacy=(await root.invoke('get_pending_task_prompts')).find((t:any)=>t.session_id==='legacy-request');
+  await click(`[data-prompt-id="${legacy.id}"] .link`);
+  const historicalNotice=await root.invoke('get_task_notice');assert.ok(historicalNotice.current);assert.equal(historicalNotice.current.task_id,legacy.id);
+  await root.invoke('dismiss_task_notice',{id:historicalNotice.current.id});
+  assert.equal((await center()).entries.length,15);assert.equal((await center()).unread,0);
+  checks.push('fresh historical request without an inbox event remains manually reopenable without creating unread');
   checks.push('440x720/320x480 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
   await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks,renderer:'Windows native Tauri WebView2',inputs:'isolated synthetic events',realHostConfigurationsChanged:false,notVerified:['actual Agent lifecycle','installer acceptance','OS mixed-DPI monitor migration']},null,2));
   console.log(JSON.stringify({passed:true,checks,evidence:evidenceDir}));

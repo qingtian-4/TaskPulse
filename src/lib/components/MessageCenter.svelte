@@ -3,9 +3,9 @@
   import {isTauri} from '@tauri-apps/api/core';
   import {SOURCE_LABEL,formatAgo,type MessageCenterState,type MessageEntry,type TaskSnapshot} from '$lib/types';
   import {MESSAGE_LABELS,messageStatus,unreadMessageIds} from '$lib/messages';
-  let {center,prompts,now,onRead,onClose,onSelect,onReopen,onPrompt}:
+  let {center,prompts,now,onRead,onClose,onSelect,onReopen,onReopenPrompt,onPrompt}:
     {center:MessageCenterState;prompts:TaskSnapshot[];now:number;onRead:(ids:string[])=>Promise<void>;
-    onClose:()=>void;onSelect:(id:string)=>void;onReopen:(entry:MessageEntry)=>void;onPrompt:(task:TaskSnapshot)=>void}=$props();
+    onClose:()=>void;onSelect:(id:string)=>void;onReopen:(entry:MessageEntry)=>void;onReopenPrompt:(task:TaskSnapshot)=>void;onPrompt:(task:TaskSnapshot)=>void}=$props();
   // A message counts as seen only after its row intersects the scroll viewport
   // and the actual native popup is visible. Mounting a hidden tray is not read.
   function readWhenVisible(node:HTMLElement,entry:MessageEntry) {
@@ -40,7 +40,7 @@
         <div class="state-line"><span>{messageStatus(entry)}</span>{#if entry.can_reopen}<button class="link" onclick={()=>onReopen(entry)}>重新打开提醒</button>{/if}</div>
       </article>
     {:else}<p class="empty">暂无新消息。历史待核对请求不会补算为新通知。</p>{/each}
-    {#if prompts.length}<details class="pending-history tp-fold"><summary>当前与待核对请求 {prompts.length}</summary><p>这里记录原 Agent 的请求，与消息已读无关。</p>{#each prompts as task (task.id)}<div class="pending-item"><button class="task-link" onclick={()=>onPrompt(task)}>{task.name}</button><span>{task.stale?'来源待确认，请在原 Agent 核对':'请在原 Agent 核对是否仍待处理'}{task.input_request_ids?.length ? ' · '+task.input_request_ids.length+' 个请求':''}</span></div>{/each}</details>{/if}
+    {#if prompts.length}<details class="pending-history tp-fold"><summary>当前与待核对请求 {prompts.length}</summary><p>这里记录原 Agent 的请求，与消息已读无关。</p>{#each prompts as task (task.id)}<div class="pending-item" data-prompt-id={task.id}><button class="task-link" onclick={()=>onPrompt(task)}>{task.name}</button><span>{task.stale?'来源待确认，请在原 Agent 核对':'请在原 Agent 核对是否仍待处理'}{task.input_request_ids?.length ? ' · '+task.input_request_ids.length+' 个请求':''}</span>{#if !task.stale && task.confidence!=='inferred'}<button class="link" onclick={()=>onReopenPrompt(task)}>重新打开提醒</button>{/if}</div>{/each}</details>{/if}
   </div>
   <footer>最多保留最近 200 条；旧消息不会因打开提醒而变成新消息。</footer>
 </section>
