@@ -205,6 +205,9 @@ fn create_popup(app: &AppHandle) {
         .title("TaskPulse")
         .inner_size(440.0, 720.0)
         .decorations(false)
+        // Windows adds a white non-client frame when an undecorated window
+        // keeps its native shadow. The transparent dashboard draws its own edge.
+        .shadow(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
         .always_on_top(true)

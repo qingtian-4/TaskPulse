@@ -52,6 +52,10 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   const center=()=>root.invoke('get_message_center');
   const checks:string[]=[];
   await start();assert.equal((await center()).unread,0);
+  const outer=await root.invoke('plugin:window|outer_size',{label:'popup'});
+  const inner=await root.invoke('plugin:window|inner_size',{label:'popup'});
+  assert.deepEqual(outer,inner,'Undecorated popup must have no native non-client frame');
+  checks.push('actual native outer/client dimensions match; no Windows shadow frame');
   send('result','turn.started',{payload:{title:'合成结果 · 非真实 Agent'}});
   send('result','turn.completed');
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.unread===1)`);
@@ -77,6 +81,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   let c=await center();assert.equal(c.entries.filter((e:any)=>e.state==='pending').length,2);
   const q1=c.entries.find((entry:any)=>entry.request_id==='q1'),requestTask=(await root.invoke('get_agents')).find((t:any)=>t.session_id==='request');
   await click(`[data-message-id="${q1.id}"] .state-line .link`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(n=>n.current?.task_id===${JSON.stringify(requestTask.id)}&&n.current.auto_dismiss_ms===null)`);
   assert.equal((await center()).unread,0);assert.equal((await center()).entries.length,3);
   const notice=await root.invoke('get_task_notice');assert.ok(notice.current);assert.equal(notice.current.auto_dismiss_ms,null);
   await root.invoke('dismiss_task_notice',{id:notice.current.id});
