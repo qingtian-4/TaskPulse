@@ -111,7 +111,7 @@ Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前必须确�
 | notification-log.json | 投递证据 | 500 条，UI 最近 100 条，排除采集/监听触发 |
 | integrations / source hash / events / session hash.jsonl | OS 锁 journal，epoch/sequence | session 32 MiB、source 128 MiB；超额明确拒绝 |
 | integrations / source hash / state / session hash.json | cursor/reducer/outbox checkpoint | checkpoint 16 MiB，outbox 4 MiB；每 journal 批次 128 facts / 256 KiB |
-| claude-events / session.jsonl 与 .json | Claude 独立 journal + compatibility checkpoint | 不属于 Generic Outbox；activity 可含路径/命令，目前没有等价总磁盘预算 |
+| claude-events / session.jsonl 与 .json | Claude 独立 journal + compatibility checkpoint | 不属于 Generic Outbox；新 v3 activity 仅保留工具类别、root 用 hash；本地 cwd 用于项目范围，仍没有等价总磁盘预算 |
 
 关键 JSON 使用同目录临时文件、flush/sync、原子替换，避免半文件；这些文件不组成数据库事务，不能泛称任意损坏均无损恢复。坏状态、迁移备份和配额失败应分别检查。
 

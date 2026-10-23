@@ -330,14 +330,6 @@ fn emit_agents(
     providers: &[ProviderHealth],
 ) {
     log::info!("emit_agents: {} tasks, {} hosts", tasks.len(), hosts.len());
-    for t in tasks {
-        log::debug!(
-            "  task: name={:?} status={:?} conf={:?}",
-            t.name,
-            t.status,
-            t.confidence
-        );
-    }
     {
         let mut cache = LATEST_TASKS.lock().unwrap_or_else(|e| {
             log::warn!("LATEST_TASKS mutex poisoned, recovering");
@@ -530,11 +522,11 @@ pub fn install_hooks(app: AppHandle, cli: String, uninstall: bool) -> Result<Str
     let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     if output.status.success() {
-        log::info!("Hook installation succeeded for '{cli}': {}", stdout.trim());
+        log::info!("Hook installation succeeded");
         Ok(stdout)
     } else {
         let msg = if stderr.is_empty() { &stdout } else { &stderr };
-        log::error!("Hook installation failed for '{cli}': {}", msg.trim());
+        log::error!("Hook installation failed; details available in local application state");
         Err(format!("Installation failed: {}", msg.trim()))
     }
 }
@@ -915,7 +907,11 @@ impl LocalProviders {
             while let Ok(mut observation) = worker.observations.try_recv() {
                 crate::monitoring::observe(&observation.output.catalog);
                 self.ordered.append(&mut observation.output.ordered);
-                log::debug!("provider {name}: {} ms", observation.duration_ms);
+                log::debug!(
+                    "provider {}: {} ms",
+                    crate::privacy::fingerprint(name),
+                    observation.duration_ms
+                );
                 if self
                     .configured
                     .iter()
@@ -1118,7 +1114,7 @@ fn merge_and_emit(
     let merged = store.merge_partition(tasks, remote, now);
     let events = engine.apply(&merged, hosts, now);
     for e in &events {
-        log::info!("transition event: {e:?}");
+        log::info!("transition event: {}", crate::privacy::event_kind(e));
     }
     crate::notifier::handle_events(app, &events, &merged);
     if let Err(error) = history.save_if_changed(store.recent()) {
@@ -1144,7 +1140,7 @@ fn refresh_local(
     let merged = store.merge_sources(batch.tasks, &batch.authoritative_sources, now);
     let events = engine.apply(&merged, hosts, now);
     for event in &events {
-        log::info!("transition event: {event:?}");
+        log::info!("transition event: {}", crate::privacy::event_kind(event));
     }
     crate::notifier::handle_events(app, &events, &merged);
     if let Err(error) = history.save_if_changed(store.recent()) {
@@ -1342,8 +1338,8 @@ pub fn watch(app: AppHandle) {
                     }
                     watcher = Some(next);
                 }
-                Err(error) => {
-                    log::warn!("file watcher unavailable; polling remains active: {error}")
+                Err(_) => {
+                    log::warn!("file watcher unavailable; polling remains active")
                 }
             }
             watch_revision = Some(revision);
@@ -1603,8 +1599,11 @@ pub fn is_ignored(id: &str) -> bool {
 }
 
 /// Read-only, bounded sampling of the same workers used by the tray. This
-/// reports native task titles/status and cadence, without prompts or commands.
+/// exports allowlisted lifecycle/cadence metrics and hashed identities only.
 pub fn diagnose() {
+    // The CLI export must not be accompanied by legacy/provider debug strings.
+    // It runs in its own process; the normal UI logger is unaffected.
+    log::set_max_level(log::LevelFilter::Off);
     crate::monitoring::initialize();
     let mut providers = LocalProviders::new(MonitoringConfig::default());
     let started = Instant::now();
@@ -1617,7 +1616,6 @@ pub fn diagnose() {
         .clamp(1, 60);
     let force_quota_refresh = std::env::args().any(|arg| arg == "--refresh-quota");
     let mut requested_quota_refresh = false;
-    let mut quota_observations = Vec::new();
     let mut last_quota_at = None;
     let mut samples = std::collections::HashMap::new();
     let mut first_ready = std::collections::HashMap::new();
@@ -1643,7 +1641,6 @@ pub fn diagnose() {
         let observed_at = quota.observed_at;
         if observed_at.is_some() && observed_at != last_quota_at {
             last_quota_at = observed_at;
-            quota_observations.push(quota);
         }
         for (name, _, worker) in &providers.workers {
             while let Ok(observation) = worker.observations.try_recv() {
@@ -1674,23 +1671,16 @@ pub fn diagnose() {
     let tasks: Vec<_> = latest
         .tasks
         .iter()
-        .map(|task| {
-            serde_json::json!({
-                "id": task.id, "name": task.name, "project": task.project,
-                "source": task.source, "status": task.status, "stale": task.stale,
-                "has_activity": task.activity.is_some(),
-                "phase": task.phase, "turn": task.turn_key,
-            })
-        })
+        .map(crate::privacy::task_summary)
         .collect();
     println!(
         "{}",
         serde_json::json!({
-            "sample_window_ms": started.elapsed().as_millis(), "samples": samples,
-            "first_ready_ms": first_ready, "last_poll_ms": durations,
-            "providers": providers.health, "tasks": tasks, "transition_count": event_count,
-            "codex_account_quota": crate::providers::codex::get_codex_quota(),
-            "quota_observations": quota_observations, "requested_quota_refresh": requested_quota_refresh,
+            "sample_window_ms": started.elapsed().as_millis(), "samples": crate::privacy::keyed_metrics(&samples),
+            "first_ready_ms": crate::privacy::keyed_metrics(&first_ready), "last_poll_ms": crate::privacy::keyed_metrics(&durations),
+            "providers": providers.health.iter().map(crate::privacy::provider_summary).collect::<Vec<_>>(),
+            "tasks": tasks, "transition_count": event_count,
+            "has_quota_observation": last_quota_at.is_some(), "requested_quota_refresh": requested_quota_refresh,
             "resources": crate::providers::resources::snapshot(),
         })
     );

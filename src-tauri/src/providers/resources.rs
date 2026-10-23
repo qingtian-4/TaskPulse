@@ -33,7 +33,7 @@ pub fn continuity(
         ring.pop_front();
     }
     ring.push_back(
-        json!({"at_ms":epoch_ms(std::time::SystemTime::now()),"stage":stage,"source_id":source,
+        json!({"at_ms":epoch_ms(std::time::SystemTime::now()),"stage":stage,"source_hash":crate::privacy::fingerprint(source),
         "count":tasks.len(),"truncated":tasks.len()>128,"tasks":safe_tasks,"metrics":metrics}),
     );
 }
@@ -275,7 +275,7 @@ mod tests {
         for _ in 0..520 {
             continuity(
                 "privacy_test",
-                "codex-wsl:privacy",
+                secret,
                 std::slice::from_ref(&task),
                 json!({}),
             );

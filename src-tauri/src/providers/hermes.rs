@@ -347,7 +347,7 @@ impl Provider for HermesProvider {
             Ok(c) => c,
             Err(e) => {
                 let error = format!("open state.db failed: {e}");
-                log::warn!("hermes: {error}");
+                log::warn!("hermes: database open failed");
                 return self.degraded(error);
             }
         };
@@ -359,7 +359,7 @@ impl Provider for HermesProvider {
         let leases = match read_turn_leases(&conn, now) {
             Ok(leases) => leases,
             Err(error) => {
-                log::warn!("hermes: {error}");
+                log::warn!("hermes: runtime lease query failed");
                 return self.degraded(error);
             }
         };
@@ -373,7 +373,7 @@ impl Provider for HermesProvider {
             Ok(stmt) => stmt,
             Err(error) => {
                 let error = format!("query sessions failed: {error}");
-                log::warn!("hermes: {error}");
+                log::warn!("hermes: session query failed");
                 return self.degraded(error);
             }
         };
@@ -399,13 +399,13 @@ impl Provider for HermesProvider {
                 Ok(rows) => rows,
                 Err(error) => {
                     let error = format!("parse sessions failed: {error}");
-                    log::warn!("hermes: {error}");
+                    log::warn!("hermes: session parse failed");
                     return self.degraded(error);
                 }
             },
             Err(error) => {
                 let error = format!("read sessions failed: {error}");
-                log::warn!("hermes: {error}");
+                log::warn!("hermes: session read failed");
                 return self.degraded(error);
             }
         };

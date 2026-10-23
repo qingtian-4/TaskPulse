@@ -832,6 +832,9 @@ fn text<'a>(value: &'a Value, key: &str) -> Option<&'a str> {
         .filter(|s| !s.trim().is_empty())
 }
 fn event_belongs_to_root(event: &Value, root: &Path) -> bool {
+    if let Some(key) = text(event, "config_root_key") {
+        return key == crate::privacy::config_root_key(root);
+    }
     let origin = text(event, "config_dir")
         .map(PathBuf::from)
         .unwrap_or_else(default_root);
@@ -975,6 +978,19 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r04_hashed_hook_roots_are_isolated_and_legacy_root_envelopes_still_match() {
+        let root = tempfile::tempdir().unwrap();
+        let other = tempfile::tempdir().unwrap();
+        let event = serde_json::json!({"config_root_key":crate::privacy::config_root_key(root.path()),
+            "config_dir":other.path()});
+        assert!(event_belongs_to_root(&event, root.path()));
+        assert!(!event_belongs_to_root(&event, other.path()));
+        assert!(event_belongs_to_root(
+            &serde_json::json!({"config_dir":root.path()}),
+            root.path()
+        ));
+    }
     #[test]
     fn f04_claude_cold_parser_eviction_keeps_business_result_without_replay() {
         let root = tempfile::tempdir().unwrap();
