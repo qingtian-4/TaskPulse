@@ -46,7 +46,7 @@
 </section>
 
 <style>
-  .message-center{position:absolute;z-index:4;top:49px;right:8px;left:8px;max-height:min(480px,calc(100% - 60px));display:flex;flex-direction:column;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-lg);box-shadow:var(--tp-shadow-window);overflow:hidden}
+  .message-center{position:absolute;z-index:4;top:56px;right:8px;left:8px;max-height:calc(100% - 64px);display:flex;flex-direction:column;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-lg);box-shadow:var(--tp-shadow-window);overflow:hidden}
   header{display:flex;align-items:center;gap:8px;padding:8px 10px;flex:none;border-bottom:1px solid var(--tp-border)}h2{margin:0;flex:1;font-size:12px;color:var(--tp-text)}h2 span{font-size:9px;font-weight:400;color:var(--tp-muted);white-space:nowrap}
   button{font-size:10px}.link{color:var(--tp-accent);white-space:nowrap}.link:disabled{opacity:.45}.explanation{padding:7px 12px;margin:0;font-size:10px;line-height:1.6;color:var(--tp-muted);flex:none}
   .message-scroll{overflow:auto;min-height:50px;flex:1}.message-error{font-size:10px;color:var(--tp-danger);margin:0;padding:7px 12px}article{padding:10px 12px;border-top:1px solid var(--tp-border)}article.unseen{background:var(--tp-accent-soft)}
@@ -54,5 +54,6 @@
   .context,.state-line{font-size:10px;color:var(--tp-muted);line-height:1.6;margin:0;overflow-wrap:anywhere}.state-line{margin-top:5px}.state-line .link{flex:none}.empty{font-size:11px;color:var(--tp-muted);padding:10px 12px;line-height:1.7}
   .pending-history{margin:8px;font-size:10px;color:var(--tp-muted)}.pending-history summary{padding:8px}.pending-history p{margin:7px}.pending-item{padding:6px 8px;border-top:1px solid var(--tp-border)}.pending-item span{display:block;font-size:10px}
   footer{flex:none;padding:7px 12px;border-top:1px solid var(--tp-border);color:var(--tp-quiet);font-size:9px;line-height:1.6}
-  @media(max-width:350px){header{gap:5px;padding:6px}h2 span{display:block}.state-line{flex-wrap:wrap}.explanation{padding:6px 9px}}
+  header{padding:12px;gap:8px}h2{font-size:14px}h2 span{font-size:11px}button{font-size:11px}.explanation{padding:8px 12px;font-size:11px}article{padding:12px}.event-line strong{font-size:12px}.event-line>span{font-size:10px}.task-link{font-size:13px;line-height:1.5;padding:8px 0}.context,.state-line,.pending-history,.pending-item span{font-size:11px}.state-line{margin-top:8px}footer{font-size:10px;padding:8px 12px}
+  @media(max-width:350px){header{gap:4px;padding:8px}h2 span{display:block}.state-line{flex-wrap:wrap}.explanation{padding:8px}.event-line>span{white-space:normal;text-align:right}}
 </style>

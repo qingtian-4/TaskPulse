@@ -215,6 +215,7 @@ fn main() {
             task_notice::open_task_notice,
             tray::toggle_pin,
             tray::get_pinned,
+            tray::resize_dashboard,
             tray::open_management,
             tray::close_popup
         ])
