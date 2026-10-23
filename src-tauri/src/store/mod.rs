@@ -1,4 +1,4 @@
-//! TaskStore — the single source of truth for what the UI shows.
+//! TaskStore — reconciled provider facts; AttentionTracker owns UI retention.
 //!
 //! Responsibilities:
 //! * Merge provider snapshots by stable task `id`.
@@ -164,8 +164,8 @@ impl TaskStore {
     ///
     /// A successful provider cycle is authoritative for its partition: tasks
     /// that were previously active but are absent now must not remain as
-    /// ghosts forever. A vanished RUNNING task is retained in RECENT as an
-    /// inferred finish; waiting/idle tasks simply disappear. Remote SSH
+    /// ghosts forever. A vanished RUNNING Agent stays stale; other running
+    /// tasks become stale/unknown without a completion. Remote SSH
     /// failures are safe because RemoteTmuxProvider re-emits its last tasks
     /// with `stale=true` rather than returning an empty successful snapshot.
     pub fn merge_partition(

@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 800" width="1280" height="800" role="img" aria-labelledby="title desc">
 <title id="title">TaskPulse architecture — from agent evidence to trustworthy reminders</title>
-<desc id="desc">Local and remote coding agents feed independent provider workers. Results are normalized and merged into the TaskStore, then AttentionTracker and TransitionEngine produce the dashboard, tray and notifications. The versioned event lane persists journal, checkpoints and delivery acknowledgments.</desc>
+<desc id="desc">Native and WSL providers have independent workers; SSH has a remote polling thread and legacy files are read by the watcher. Facts flow through scope, TaskStore, AttentionTracker and TransitionEngine. Only the Generic Event lane uses Journal, Checkpoint and Outbox; acknowledgment follows durable state flush, not proof of visible delivery.</desc>
 <defs>
 <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#0c1b26"/><stop offset="1" stop-color="#111421"/></linearGradient>
 <linearGradient id="card" x1="0" y1="0" x2="1" y2="0"><stop stop-color="#172b34"/><stop offset="1" stop-color="#18222e"/></linearGradient>
@@ -36,8 +36,8 @@
 <path d="M242 298 V330"/><path d="M640 298 V330"/><path d="M1039 298 V330"/>
 </g>
 <rect x="65" y="335" width="1150" height="97" rx="17" fill="#173834" stroke="#38998f" stroke-width="1.5"/>
-<text x="94" y="374" font-size="22" font-weight="750" fill="#e2fcf7">Independent Provider Workers</text>
-<text x="94" y="401" font-size="16" fill="#acd5d0">Poll / incremental JSONL · SQLite / zstd · source diagnostics · fresh / stale evidence · bounded collection</text>
+<text x="94" y="374" font-size="22" font-weight="750" fill="#e2fcf7">Provider collection</text>
+<text x="94" y="401" font-size="16" fill="#acd5d0">Independent native / WSL workers · remote polling thread · legacy files in watcher · fresh / stale evidence</text>
 <path d="M640 432 V461" stroke="#69cfc5" stroke-width="2" marker-end="url(#arrow)"/>
 <text x="67" y="468" font-size="14" fill="#72d7c7" letter-spacing="2" font-weight="700">02  RECONCILE &amp; ACT</text>
 <g filter="url(#shadow)">
@@ -63,9 +63,9 @@
 </g>
 <path d="M1085 596 V621 H640 V655" stroke="#69cfc5" stroke-width="2" fill="none" marker-end="url(#arrow)"/>
 <rect x="65" y="618" width="445" height="93" rx="15" fill="#1d2633" stroke="#384f69"/>
-<text x="87" y="649" font-size="17" font-weight="700" fill="#d7e6ff">Durable event lane</text>
-<text x="87" y="675" font-size="14" fill="#acbfd7">Journal · Checkpoint · Outbox</text>
-<text x="87" y="695" font-size="13" fill="#88a0ba">Ordered replay / ack / restart recovery</text>
+<text x="87" y="649" font-size="17" font-weight="700" fill="#d7e6ff">Generic Event lane only</text>
+<text x="87" y="675" font-size="14" fill="#acbfd7">CLI → Journal → reducer / Checkpoint / Outbox</text>
+<text x="87" y="695" font-size="12" fill="#88a0ba">Ordered facts enter above; ack after durable state flush</text>
 <rect x="541" y="655" width="673" height="86" rx="15" fill="#142e34" stroke="#328f92"/>
 <text x="563" y="690" font-size="20" fill="#e5fafa" font-weight="750">Tauri tray · Svelte dashboard · reminders</text>
 <text x="563" y="715" font-size="14" fill="#9ad0cb">Running · needs input · unread results · collection uncertainty</text>

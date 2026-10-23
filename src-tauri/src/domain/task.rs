@@ -4,9 +4,10 @@
 //! and remote tmux panes — so the store, transition engine, tray, and UI all
 //! speak one language.  Semantic rules enforced by the model:
 //!
-//! * `WAITING_INPUT` means "agent finished its current turn, waiting for the
-//!   user" — never `SUCCEEDED` (no exit code involved).
-//! * `SUCCEEDED`/`FAILED` are only ever derived from a real command exit code.
+//! * `WAITING_INPUT` uses `WaitingReason` to distinguish explicit requests
+//!   from an ended turn; it does not imply command success.
+//! * Command success uses an exit code; explicit Agent failures may also
+//!   produce `FAILED` without a shell exit code.
 //! * `DetectionConfidence` distinguishes exact (tp-run exit code), hook
 //!   (deterministic hook event), and inferred (process-tree heuristics).
 
@@ -31,11 +32,11 @@ pub struct TerminalInfo {
 pub enum TaskStatus {
     /// A local agent is mid-turn, or a remote workload process is running.
     Running,
-    /// Agent finished its current turn and is waiting for user input.
+    /// Explicit input gate or ended turn, distinguished by `WaitingReason`.
     WaitingInput,
     /// Finished with exit code == 0 (exact knowledge only).
     Succeeded,
-    /// Finished with exit code != 0 (exact knowledge only).
+    /// Explicit Agent failure or a command with a non-zero exit code.
     Failed,
     /// Shell at a prompt with no workload, or an inferred-finished task.
     Idle,
