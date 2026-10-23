@@ -82,8 +82,6 @@ __pycache__/
 *.mov
 *.avi
 *.mkv
-!assets/demo/*.mp4
-!assets/demo/*.webm
 !assets/demo/*.gif
 
 # Local diagnostics and test databases

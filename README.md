@@ -6,7 +6,7 @@ Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex�
 
 [English](README.en.md) · [使用指南](docs/INSTALL.md) · [兼容性](docs/AGENT_COMPATIBILITY.md) · [架构](docs/ARCHITECTURE.md) · [提交问题](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **Alpha 阶段 · Windows 优先。** 已构建内部 Alpha.7 候选安装包，但**尚未公开发布可下载的安装程序**。下方源码安装指向 `main`；最新 WSL 连续性修复目前仍在开发分支，尚未包含在 Alpha.7 候选包中。[版本与发布验收](docs/OPEN_SOURCE_CHECKLIST.md)。
+> **当前版本：0.2.0-alpha.7 · Windows 优先。** 已构建并通过 CI 测试的 Alpha.7 候选安装包，尚无公开可下载的 Alpha.7 安装包。下方源码安装指向默认分支 `main`；最新 WSL 连续性修复目前仍在开发分支，尚未包含在 Alpha.7 候选包中。[版本与发布验收](docs/OPEN_SOURCE_CHECKLIST.md)。
 
 ## 一眼了解
 
@@ -39,7 +39,7 @@ Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex�
 目前没有公开的 Alpha.7 安装包。Windows x64 用户可以从源码运行；需要 Rust 1.89+、Bun、Microsoft C++ Build Tools 和 [Tauri 2 先决条件](https://v2.tauri.app/start/prerequisites/)（含 WebView2）。
 
 ```powershell
-git clone https://github.com/qingtian-4/TaskPulse.git
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
 cd TaskPulse
 bun install --frozen-lockfile
 bun run tauri dev
@@ -61,8 +61,9 @@ bun run tauri dev
 | **Kimi / TRAE / ZCode** | 部分声明式映射、fixture 测试 | 尚未完成真实宿主 Hook 验收 |
 | **WorkBuddy** | 候选入口 | 尚无事件适配器 |
 | **自定义 Agent** | 标准事件 v1 / 声明式 Manifest | 仅已有证据支持的能力；不提供通用可执行插件加载器 |
+| **普通代码运行** | SSH tmux / `tp-run` | 本机/WSL/SSH 统一运行工作流尚未交付；前台退出不证明后台、容器或 Slurm 任务结束 |
 
-**“检测到来源”不等于“能可靠判定本轮结束”。** 更细的能力矩阵、验证等级和不支持项见 [Agent 兼容性文档](docs/AGENT_COMPATIBILITY.md)。
+**“检测到来源”不等于“能可靠判定本轮结束”。** Kimi / TRAE / ZCode 当前为 **fixture-tested**，不代表 native-tested。Linux/macOS 仅提供可选实验构建，不具有 Windows 原生验收等级。更细的能力与不支持项见 [Agent 兼容性文档](docs/AGENT_COMPATIBILITY.md)。
 
 ## 工作原理
 
@@ -72,6 +73,8 @@ bun run tauri dev
 2. **统一状态与关注**：通过来源/项目过滤、TaskStore、AttentionTracker 管理 Session/Turn、待处理请求、未读与固定。
 3. **可信通知**：TransitionEngine 只对可信的状态迁移产生提醒；标准事件通道使用 Journal、Checkpoint、Outbox 支撑有序恢复与去重。
 4. **桌面展示**：Rust / Tauri 2 + Svelte 5 显示任务面板、托盘状态和独立提醒；stale 不冒充新的运行或完成事实。
+
+没有 TaskPulse 云账号或遥测服务。设置与关注通常保存在 `~/.taskpulse/`；本地活动和诊断可能包含路径、命令片段，请脱敏后分享。TaskPulse 不自动安装真实 Hook 或放宽审批策略。截图复现与录屏方案见 [演示说明](docs/DEMO_RECORDING_PLAN.md)。
 
 [详细架构](docs/ARCHITECTURE.md) · [第三方接入](docs/AGENT_INTEGRATION_GUIDE.md) · [事件协议](docs/AGENT_INTEGRATION_PROTOCOL.md)
 

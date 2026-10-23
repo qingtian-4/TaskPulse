@@ -6,13 +6,13 @@ A Windows-first desktop tray companion that brings Codex, Claude Code, Hermes, D
 
 [中文](README.md) · [Getting started](docs/INSTALL.md) · [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Architecture](docs/ARCHITECTURE.md) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **Alpha · Windows-first.** An Alpha.7 installer candidate was built and CI-tested, but **no public installer has been published**. The source instructions below use `main`; recent WSL continuity fixes remain on the development branch and are not in the Alpha.7 candidate. [Release gates](docs/OPEN_SOURCE_CHECKLIST.md).
+> **Current version: 0.2.0-alpha.7 · Windows-first.** An Alpha.7 installer candidate was built and CI-tested. No Alpha.7 installer is publicly available. The source instructions below use the default branch `main`; recent WSL continuity fixes remain on the development branch and are not in the Alpha.7 candidate. [Release gates](docs/OPEN_SOURCE_CHECKLIST.md).
 
 ## At a glance
 
 ![TaskPulse native Windows task dashboard](assets/screenshots/dashboard-alpha7.png)
 
-*Actual Tauri/WebView2 rendering with isolated **synthetic task events**. This is not a real agent session or evidence that every adapter is host-verified.*
+*Actual Tauri/WebView2 rendering with isolated **synthetic standard events**. This is not a real agent session or evidence that every adapter is host-verified.*
 
 | Task overview | Explicit human requests | Recoverable attention |
 |---|---|---|
@@ -39,7 +39,7 @@ Ask Codex to edit code, Claude Code to review it, and a separate WSL Codex to ru
 There is no publicly downloadable Alpha.7 installer. On Windows x64, build from source with Rust 1.89+, Bun, Microsoft C++ Build Tools and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) including WebView2.
 
 ```powershell
-git clone https://github.com/qingtian-4/TaskPulse.git
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
 cd TaskPulse
 bun install --frozen-lockfile
 bun run tauri dev
@@ -61,8 +61,9 @@ Open source management from the tray → choose a source and project scope → s
 | **Kimi / TRAE / ZCode** | Partial declarative mappings and fixtures | Not real-host hook-verified |
 | **WorkBuddy** | Candidate entry | No event adapter |
 | **Custom / community** | Standard Events v1 / declarative Manifest | No general executable plugin loader |
+| **Ordinary code runs** | SSH tmux / `tp-run` | Unified local/WSL/SSH execution workflow not delivered; foreground exit does not prove detached, container or Slurm completion |
 
-Source discovery does not establish that turn-completion events are reliable. See [the detailed compatibility matrix](docs/AGENT_COMPATIBILITY.md).
+Source discovery does not establish that turn-completion events are reliable. Kimi / TRAE / ZCode are **fixture-tested**, not native-tested. Linux/macOS builds are opt-in experimental and do not inherit Windows native acceptance. See [the detailed compatibility matrix](docs/AGENT_COMPATIBILITY.md).
 
 ## Architecture
 
@@ -72,6 +73,8 @@ Source discovery does not establish that turn-completion events are reliable. Se
 2. **Normalize and reconcile** source/project scope, stable session/turn identity and freshness through TaskStore and AttentionTracker.
 3. **Notify meaningful changes** using TransitionEngine; the versioned event lane uses Journal, Checkpoint and Outbox for ordered recovery and deduplication.
 4. **Present facts** through Rust/Tauri 2 and Svelte 5: task panel, tray and reminders. A stale task does not become a fresh run or completed turn.
+
+There is no TaskPulse cloud account or telemetry service. Settings and attention normally live in `~/.taskpulse/`; local activity and diagnostics may contain paths or command fragments, so redact before sharing. TaskPulse never auto-installs real hooks or relaxes approval policies. See [demo reproduction and recording](docs/DEMO_RECORDING_PLAN.md).
 
 [Architecture](docs/ARCHITECTURE.md) · [Integration guide](docs/AGENT_INTEGRATION_GUIDE.md) · [Event protocol](docs/AGENT_INTEGRATION_PROTOCOL.md)
 

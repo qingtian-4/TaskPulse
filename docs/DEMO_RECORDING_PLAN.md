@@ -2,6 +2,22 @@
 
 本文件是**待执行的录制方案**，不是已经存在的演示视频。录制只应使用原生 Windows Tauri/WebView2 程序，且必须注明合成数据与真实宿主的证据边界。
 
+PR #10 提供的是 storyboard，没有可执行录屏器。本轮保留已有三张原生截图；未提供 MP4/GIF 成品。当前终端没有发现 `ffmpeg` 可执行文件，也未确认可靠的可交互桌面采集能力，因此不以 CDP 连续截图拼成所谓屏幕录制。
+
+## 可复现的原生界面检查
+
+在 Windows PowerShell 中执行；不会改真实 Agent 设置或安装真实 Hook：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
+bun scripts/native-product-smoke.ts --exe src-tauri/target/codex-check/debug/agent-tray.exe
+bun scripts/native-integration-smoke.ts --exe src-tauri/target/codex-check/debug/agent-tray.exe --notices
+```
+
+两个原生脚本必须顺序执行，临时 CDP 9337 被占用时会拒绝附着其他应用。脚本复制构建到自有目录，创建独立 TASKPULSE_HOME，只启用公开合成 Generic Event 来源，保留 result/failure/PNG 到被忽略的 `src-tauri/target/ui-smoke/evidence/`，仅清理自身临时目录。无 `--capture` 时不会替换仓库公开 PNG；该选项会覆盖三个素材，只应在人工审阅后显式使用。沙箱中的 manifest 配置回归不是安装真实宿主 Hook。
+
+已存在的 PNG 与尺寸/输入说明见 [素材来源](../assets/README.md)。原生 smoke 不生成影片，不证明外部编辑器焦点、真实 Agent 版本支持或真实 OS 混合 DPI。运行时的提权/锁屏状态可能让 WebView2 CDP 不可用，应保存失败证据，不能弱化 CSP 或跳过 native checks。
+
 ## 推荐录制（45–60 秒，16:9，1080p）
 
 | 时间 | 画面 | 讲述/字幕 |
@@ -27,3 +43,16 @@
 至少一台干净 Windows 10/11 机器的 NSIS/MSI 体验；两种已安装 Coding Agent 的实际新任务与提醒场景；长时运行中的 WSL 降级与恢复；重启后不重复提醒；明示 unsigned 安装提示和支持范围。测试通过才考虑公开下载。
 
 跟踪：`docs/OPEN_SOURCE_CHECKLIST.md` 和 `docs/RELEASING.md`。
+
+## 媒体交付与 Release 附件
+
+录制前人工确认交互桌面可用，关闭其他私人窗口/系统通知，仅选择 TaskPulse 窗口或明确裁剪区。45–60 秒视频全程显示“真实应用界面，合成事件输入”；允许分别出现多品牌，但必须写明品牌是合成标签，不是该宿主产生的任务。现有 native-product 的通用事件品牌保持诚实，不改称真实 Codex/Claude 输出。
+
+后续可使用人工选择窗口的系统录屏器或 OBS 保存至被忽略的 `recordings-local/`。原始视频与压缩 MP4 均不进入 Git；制作 ≤12 秒、≤5 MB 的 GIF 摘要前先人工审查字幕、窗口路径和每个通知。若已安装 FFmpeg，可采用以下离线压缩模板（它本身不负责屏幕采集）：
+
+```powershell
+ffmpeg -i recordings-local/taskpulse-raw.mp4 -an -c:v libx264 -crf 24 -preset slow -pix_fmt yuv420p -movflags +faststart recordings-local/taskpulse-demo.mp4
+ffmpeg -ss 6 -t 12 -i recordings-local/taskpulse-demo.mp4 -filter_complex "[0:v]fps=10,scale=720:-1:flags=lanczos,split[a][b];[a]palettegen=max_colors=80[p];[b][p]paletteuse" recordings-local/taskpulse-demo.gif
+```
+
+附件提案：`TaskPulse_<version>_windows_synthetic-demo.mp4`、GIF、SHA256 与 provenance 文本，记录构建 SHA、OS/WebView2 版本、合成输入和未验证事项。仅在维护者授权后上传至明确的 Release/附件；不覆盖现有 Draft、Tag 或资产。README 保留轻量 PNG，并在成品审核后加入附件链接。本轮没有上传或发布媒体。

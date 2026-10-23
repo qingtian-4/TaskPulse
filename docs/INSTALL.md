@@ -1,7 +1,7 @@
 # 安装与快速入门
 
 当前版本为 **0.2.0-alpha.7，尚无公开可下载的 Alpha.7 安装包**。请先使用
-[源码运行](../README.md#安装与快速开始)。Windows Quality / Security CI 已通过不等于安装包已发布或真实宿主全面验收。
+[源码运行](../README.md#快速开始)。Windows Quality / Security CI 已通过不等于安装包已发布或真实宿主全面验收。
 
 Alpha.7 源码已合入默认 `main`，请按 README 的 `--branch main` 命令克隆；
 已有克隆先用 `git status` 检查本地修改，不要为升级覆盖工作区。用 `git rev-parse HEAD` 核对实际提交，

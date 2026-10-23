@@ -23,6 +23,12 @@
 
 缺少新画面时不以历史或示意素材代替。
 
+## 当前架构示意
+
+[taskpulse-architecture.svg](diagrams/taskpulse-architecture.svg) 来自 PR #10，2026-10-23 按源码修正：native/WSL Worker、远端独立线程、watcher 内兼容文件采集分别标明；Journal/Checkpoint/Outbox 只适用于 Generic Event，ack 不等于可见投递。它是说明图，不是应用截图。详细事实与限制见 [架构](../docs/ARCHITECTURE.md)。
+
+2026-10-23 再次人工检查上方三张公开 PNG：尺寸分别为 440×720、1040×900、320×132；任务与来源均为公开示例，没有私人路径、服务器或对话；管理界面仍明确“真实宿主版本需单独验收”。当前 UI 为中文。没有新 MP4/GIF 成品，复现命令、storyboard、字幕及 Release 附件方案见 [演示计划](../docs/DEMO_RECORDING_PLAN.md)。
+
 ## 安全录制
 
 1. 使用未运行的构建目标执行 `scripts/verify.ps1 -Frontend`。
