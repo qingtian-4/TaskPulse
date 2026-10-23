@@ -154,6 +154,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await click('[aria-label^="消息中心："]');await click('.pending-history summary');
   const legacy=(await root.invoke('get_pending_task_prompts')).find((t:any)=>t.session_id==='legacy-request');
   await click(`[data-prompt-id="${legacy.id}"] .link`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(n=>n.current?.task_id===${JSON.stringify(legacy.id)})`);
   const historicalNotice=await root.invoke('get_task_notice');assert.ok(historicalNotice.current);assert.equal(historicalNotice.current.task_id,legacy.id);
   await root.invoke('dismiss_task_notice',{id:historicalNotice.current.id});
   assert.equal((await center()).entries.length,15);assert.equal((await center()).unread,0);
