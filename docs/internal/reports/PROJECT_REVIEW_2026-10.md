@@ -531,7 +531,7 @@ bun run test:ui-model
 - Svelte check：0 errors、0 warnings；`bun run test:ui-model`：16 通过；前端生产构建通过。沙箱下 Vite spawn EPERM 属环境限制，经审批在正常环境重跑通过。
 - Windows `bun scripts/run-wrapper-smoke.ts`：空字符串、引号、尾反斜杠、Unicode、重定向 stdin、250 KB stderr、非零退出、静默心跳、启动失败通过；状态全部在 target/wrapper-smoke 内，未写真实监控目录。
 - 已运行 Ubuntu 的 `python3 scripts/run-wrapper-smoke.py`：参数、大输出、静默、成功、失败、SIGTERM、SIGKILL、旧 wrap.sh 兼容入口通过。长于 3 小时、PID 复用／重启由 Rust 模拟时间测试覆盖，不宣称连续运行了三小时。
-- 真实 SSH：`live_remote_snapshot`，Server1_wanghy／Server3 的四类分段全部健康；154 个原生会话目录；确认 YOLO-RDD 的“梳理 YOLO-RDD 项目流程”和目录里的 HyperMem。HyperMem 本次无近期执行任务，未批量导入空闲历史。用 EXPECT_REMOTE_CATALOG_PROJECT 与 EXPECT_REMOTE_PROJECT 分别验收目录发现／活跃结果。
+- 真实 SSH：`live_remote_snapshot`，两个测试主机的四类分段全部健康；154 个原生会话目录；确认项目 A 的原生任务标题及项目 B 的目录记录。项目 B 本次无近期执行任务，未批量导入空闲历史。主机别名、项目名称与任务标题已从公开记录脱敏；用 EXPECT_REMOTE_CATALOG_PROJECT 与 EXPECT_REMOTE_PROJECT 分别验收目录发现／活跃结果。
 - 真实只读来源：`live_hermes_snapshot`、`live_claude_snapshot`、`live_wsl_codex_snapshot`、`live_desktop_snapshot`、`live_desktop_schema` 通过。Claude 已安装 VSCode 扩展 2.1.296；DSH 读取 v4 事件和原生标题；WSL Codex 冷采集约 1.2 秒、下一次约 0.4 秒。本次没有发起真实 Agent 任务，也未自动安装 Hook。
 - 原生 WebView2 `native-notice-smoke.ts` 两轮通过：深色 320×132、长标题和按钮、悬停、批准超过 15 秒仍保留、普通结果约 15 秒隐藏、多条队列、旧回调、点击详情、总开关和无假任务／已查看变更。结果及 PNG 在 `src-tauri/target/ui-smoke/`。第二轮因屏保跳过编辑器焦点验证；新真实 Agent 完成／批准、OS 系统横幅和编辑器真实焦点仍未验收。不能把测试提醒通过说成真实批准全链路通过。
 - 没有更改现有项目白名单、代理、statusLine、批准策略；测试后 config.toml SHA256 与执行前相同。`docs/REVIEW_HANDOFF.md` 是用户已有未跟踪文件，保持原样，不提交。

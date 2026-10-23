@@ -76,6 +76,14 @@ jobs:
         run: bun run check
       - name: Test documentation links and candidate source instructions
         run: bun run test:docs
+      - name: Audit tracked documentation, media and ignored outputs
+        run: bun run test:repo
+      - name: Test read-only WSL source detection (offline fixtures)
+        run: python scripts/test-wsl-discovery.py
+      - name: Test remote Codex metadata schemas (offline fixtures)
+        run: python scripts/test-codex-metadata.py
+      - name: Test WSL metadata freshness and read failures (offline fixtures)
+        run: python scripts/wsl-metadata.test.py
       - name: Test frontend models
         run: bun run test:ui-model
       - name: Test integration contracts

@@ -1,5 +1,6 @@
 """Schema regression tests; runs with Python 3 on Windows, Linux or WSL."""
 import json
+from contextlib import closing
 import os
 from pathlib import Path
 import sqlite3
@@ -24,13 +25,13 @@ class MetadataTests(unittest.TestCase):
         return [json.loads(line.split('\t', 1)[1]) for line in output.splitlines()]
 
     def legacy_db(self):
-        with sqlite3.connect(self.root / 'state_3.sqlite') as db:
+        with closing(sqlite3.connect(self.root / 'state_3.sqlite')) as db, db:
             db.execute('create table threads (id text, title text, cwd text)')
             db.execute("insert into threads values ('thread-1','Native task','/home/user/YOLO-RDD')")
 
     def test_older_schema_without_name_pin_or_archived(self):
         self.legacy_db()
-        self.assertEqual(self.probe(), [{'id': 'thread-1', 't': 'Native task', 'cwd': '/home/user/YOLO-RDD', 'p': False, 'u': 0}])
+        self.assertEqual(self.probe(), [{'id': 'thread-1', 't': 'Native task', 'cwd': '/home/user/YOLO-RDD', 'p': False, 'u': 0, 'source': None}])
 
     def test_index_rename_and_incomplete_index_line(self):
         self.legacy_db()
@@ -39,11 +40,22 @@ class MetadataTests(unittest.TestCase):
 
     def test_manual_name_wins_over_index(self):
         self.legacy_db()
-        with sqlite3.connect(self.root / 'state_3.sqlite') as db:
+        with closing(sqlite3.connect(self.root / 'state_3.sqlite')) as db, db:
             db.execute('alter table threads add name text')
             db.execute("update threads set name='Manual name'")
         (self.root / 'session_index.jsonl').write_text(json.dumps({'id': 'thread-1', 'thread_name': 'Older index name'}), encoding='utf-8')
         self.assertEqual(self.probe()[0]['t'], 'Manual name')
+
+    def test_native_origin_is_preserved_for_parent_and_subagent_filtering(self):
+        self.legacy_db()
+        origin = {'subagent': {'thread_spawn': {'parent_thread_id': 'parent'}}}
+        with closing(sqlite3.connect(self.root / 'state_3.sqlite')) as db, db:
+            db.execute('alter table threads add source text')
+            db.execute('update threads set source=?', (json.dumps(origin),))
+        self.assertEqual(self.probe()[0]['source'], origin)
+        with closing(sqlite3.connect(self.root / 'state_3.sqlite')) as db, db:
+            db.execute("update threads set source='appServer'")
+        self.assertEqual(self.probe()[0]['source'], 'appServer')
 
     def test_no_database_is_created(self):
         self.assertEqual(self.probe(), [])

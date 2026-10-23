@@ -1,13 +1,12 @@
 //! Watcher — the orchestration loop.
 //!
-//! Pipeline:  Provider → Normalize → Store → Transition Engine → Tray / UI
+//! Pipeline: Provider → Scope / Normalize → Store → Attention → Transition → UI.
 //!
-//! * `LocalFileProvider`  — hook/wrapper status files (`~/.agent-monitor`,
-//!   `~/.taskpulse`), watched for changes.
-//! * `Scanner`           — local agent process scan (AgentTray's mature
-//!   implementation, converted to `TaskSnapshot`).
-//! * `RemoteTmuxProvider` — parallel SSH polling of Server1/Server3, on its
-//!   own thread so a slow host never blocks local updates.
+//! * Native, WSL, scanner and Generic Event sources have independent workers.
+//! * `LocalFileProvider` reads compatible hook/wrapper files in this loop.
+//! * `RemoteTmuxProvider` polls configured SSH hosts on a separate thread.
+//! * Generic Event ordered facts retain their durable outboxes until the
+//!   attention and transition batch is flushed; UI snapshots can coalesce.
 //!
 //! The `agents-updated` event contract, tray icon updates, and the popup
 //! commands are preserved from AgentTray.

@@ -4,7 +4,7 @@
 
 ## 待确认的具体差异
 
-目标文件：`%USERPROFILE%\.zcode\cli\config.json`（本机解析为 `C:\Users\Administrator\.zcode\cli\config.json`），预检时不存在。拟新增的完整内容见 [JSON 差异提案](proposals/zcode-hooks-2026-10-21.json)，**这个文件只是仓库里的提案，不能直接覆盖已有用户配置**。如果确认前宿主创建/修改了文件，重新生成 UI 指纹预览并合并，只追加 TaskPulse 条目。
+目标文件：`%USERPROFILE%\.zcode\cli\config.json`（公开记录省略本机用户名），预检时不存在。拟新增的完整内容见 [JSON 差异提案](proposals/zcode-hooks-2026-10-21.json)，**这个文件只是仓库里的提案，不能直接覆盖已有用户配置**。如果确认前宿主创建/修改了文件，重新生成 UI 指纹预览并合并，只追加 TaskPulse 条目。
 
 只新增 hooks.events 下 SessionStart / UserPromptSubmit / PreToolUse / PermissionRequest / PostToolUse / PostToolUseFailure / Stop 共7个事件组。每组同一固定 process + argv：
 

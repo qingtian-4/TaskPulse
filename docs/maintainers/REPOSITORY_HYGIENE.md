@@ -35,4 +35,6 @@ PR 后 305 个跟踪文件，共 8,702,000 bytes；最大的文件是上游 GIF�
 
 归档不会移除 Git 历史中的内容。旧审查中的示例机器、路径与历史结果不是当前验收；分享诊断前仍须脱敏。未做历史重写、GC、clean、缓存删除、Tag/Release 变更。若未来要求减小 clone 历史，应单独设计 LFS/新历史迁移，列出版权与下载兼容性影响并获授权。
 
+额外检查全部跟踪 Markdown 的用户目录、个人主机别名与 IPv4：公开仓库作者链接和 localhost 调试地址继续保留；`LIFECYCLE_FIXES.md`、历史 `PROJECT_REVIEW_2026-10.md` 中个人主机/项目/任务标题改为匿名测试描述，保留 149/154 目录计数与断言语义；`ZCODE_HOST_ACCEPTANCE_PROPOSAL.md` 去掉展开后的 Windows 用户名路径，保留 `%USERPROFILE%`。没有改真实主机或 Hook 提案的功能参数。这只减少当前树暴露，不声称清除了历史。
+
 新增 `test:repo` 将检查所有跟踪 Markdown 本地链接/锚点、SVG 本地素材引用、跟踪忽略冲突和大型视频；它不验证外部网页或私人状态目录。

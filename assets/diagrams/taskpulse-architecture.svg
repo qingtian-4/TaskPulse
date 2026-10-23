@@ -38,7 +38,7 @@
 <rect x="65" y="335" width="1150" height="97" rx="17" fill="#173834" stroke="#38998f" stroke-width="1.5"/>
 <text x="94" y="374" font-size="22" font-weight="750" fill="#e2fcf7">Provider collection</text>
 <text x="94" y="401" font-size="16" fill="#acd5d0">Independent native / WSL workers · remote polling thread · legacy files in watcher · fresh / stale evidence</text>
-<path d="M640 432 V461" stroke="#69cfc5" stroke-width="2" marker-end="url(#arrow)"/>
+<path d="M640 432 V475 H194 V481" fill="none" stroke="#69cfc5" stroke-width="2" marker-end="url(#arrow)"/>
 <text x="67" y="468" font-size="14" fill="#72d7c7" letter-spacing="2" font-weight="700">02  RECONCILE &amp; ACT</text>
 <g filter="url(#shadow)">
 <rect x="65" y="484" width="258" height="112" rx="15" fill="#1b2936" stroke="#3c5861"/>

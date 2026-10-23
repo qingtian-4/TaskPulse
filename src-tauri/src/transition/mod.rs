@@ -3,7 +3,7 @@
 //! Rule: never notify on every poll.  Notify only on meaningful transitions:
 //!   RUNNING → WAITING_INPUT
 //!   RUNNING → SUCCEEDED (exact)
-//!   RUNNING → FAILED (exact)
+//!   RUNNING → FAILED (explicit Agent failure or exact command exit)
 //!   RUNNING → IDLE with explicit tmux shell-return evidence (inferred finish)
 //!   CONNECTED → DISCONNECTED (already debounced by the provider)
 //!   DISCONNECTED → CONNECTED (recovery)
@@ -20,14 +20,14 @@ use crate::providers::{HostHealth, HostStatus};
 /// A meaningful change worth surfacing (notification + UI emphasis).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskEvent {
-    /// Agent finished its turn and needs the user (local agents).
+    /// Explicit user gate or ended turn, distinguished by `waiting_reason`.
     WaitingInput {
         task: TaskSnapshot,
         reason: Option<String>,
     },
     /// Exact exit code 0.
     Succeeded { task: TaskSnapshot },
-    /// Exact non-zero exit code.
+    /// Explicit Agent failure or an exact non-zero command exit code.
     Failed { task: TaskSnapshot },
     /// Workload disappeared / shell returned — no exit code known.
     InferredFinished { task: TaskSnapshot },

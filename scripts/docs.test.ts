@@ -18,7 +18,7 @@ test('product docs use resolvable local links and images',()=>{
 });
 test('bilingual landing pages lead with the product and disclose alpha availability and evidence',()=>{
   const cn=readFileSync('README.md','utf8'),en=readFileSync('README.en.md','utf8');
-  expect(en.split('##')[0]).toContain('Less window switching');
+  expect(en.split('##')[0]).toContain('Let TaskPulse watch your coding agents');
   expect(en.split('##')[0]).not.toContain('v1 protocol');
   expect(cn).toContain('尚无公开可下载的 Alpha.7 安装包');
   expect(en).toContain('No Alpha.7 installer is publicly available');

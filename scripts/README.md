@@ -1,5 +1,11 @@
 # Scripts
 
+`bun run test:repo` checks all Git-tracked Markdown links/anchors, SVG references,
+ignored tracked outputs and disposable media. It skips fenced code examples and
+does not fetch external URLs. New documentation must be staged to enter this inventory.
+`verify.ps1 -Frontend` also requires Python 3 for the three isolated Codex/WSL
+metadata fixture suites; it prefers `python3.11.exe` when available, otherwise `python`.
+
 ## Generic Agent integration acceptance
 
 `bun run test:integration-contract` checks the public schema/manifests; Rust
