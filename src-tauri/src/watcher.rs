@@ -646,6 +646,20 @@ struct LocalProviders {
     configured: Vec<crate::monitoring::SourceConfig>,
 }
 
+/// Scope is applied at consumption time. Do not throw away native incremental
+/// parsers on a project-filter/label change (notably WSL continuity). Generic
+/// reducers capture integration policy and their fallback display name.
+fn same_collector(
+    old: &crate::monitoring::SourceConfig,
+    next: &crate::monitoring::SourceConfig,
+) -> bool {
+    old.id == next.id
+        && old.kind == next.kind
+        && old.location == next.location
+        && old.integration == next.integration
+        && (old.kind != crate::monitoring::SourceKind::GenericEvent || old.name == next.name)
+}
+
 impl LocalProviders {
     fn new(_monitoring: MonitoringConfig) -> Self {
         let mut providers = Self {
@@ -678,18 +692,7 @@ impl LocalProviders {
             })
             .cloned()
             .collect();
-        self.workers.retain(|(id, _, _)| {
-            desired.iter().any(|s| {
-                &s.id == id
-                    && self.configured.iter().any(|old| {
-                        old.id == s.id && old.kind == s.kind && old.location == s.location
-                    })
-            })
-        });
-        let live: HashSet<_> = self.workers.iter().map(|(id, _, _)| id.clone()).collect();
-        self.latest.retain(|id, _| live.contains(id));
-        self.observed_at.retain(|id, _| live.contains(id));
-        self.health.retain(|h| live.contains(&h.provider));
+        let live = self.retain_collectors(&desired);
         for source in &desired {
             if live.contains(&source.id) {
                 continue;
@@ -778,7 +781,6 @@ impl LocalProviders {
                             task.id = format!("{}:{}", source.id, task.id);
                         }
                     }
-                    crate::monitoring::observe(&output.catalog);
                     output
                 }),
             ));
@@ -796,6 +798,28 @@ impl LocalProviders {
             .filter(|s| s.enabled && !matches!(s.kind, SourceKind::RemoteCodex | SourceKind::Tmux))
             .cloned()
             .collect();
+    }
+
+    fn retain_collectors(
+        &mut self,
+        desired: &[crate::monitoring::SourceConfig],
+    ) -> HashSet<String> {
+        self.workers.retain(|(id, _, _)| {
+            desired.iter().any(|next| {
+                &next.id == id && self.configured.iter().any(|old| same_collector(old, next))
+            })
+        });
+        // Each worker owns a distinct receiver: dropping it revokes this
+        // generation's authority, including a poll that finishes later. Worker
+        // closures must never mutate the shared discovered-session catalog.
+        let live: HashSet<_> = self.workers.iter().map(|(id, _, _)| id.clone()).collect();
+        self.latest.retain(|id, _| live.contains(id));
+        self.observed_at.retain(|id, _| live.contains(id));
+        self.health.retain(|h| live.contains(&h.provider));
+        // These facts are still durable in their unacknowledged outboxes.
+        self.ordered
+            .retain(|fact| live.contains(&fact.receipt.source));
+        live
     }
 
     fn watch_paths(&self) -> Vec<(PathBuf, RecursiveMode)> {
@@ -881,6 +905,7 @@ impl LocalProviders {
         let mut changed = false;
         for (name, _, worker) in &self.workers {
             while let Ok(mut observation) = worker.observations.try_recv() {
+                crate::monitoring::observe(&observation.output.catalog);
                 self.ordered.append(&mut observation.output.ordered);
                 log::debug!(
                     "provider {}: {} ms",
@@ -1129,6 +1154,28 @@ fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
     let cfg = provider.config_for_poll();
     let min_ms = cfg.iter().map(|h| h.poll_interval_ms).min().unwrap_or(3000);
     Duration::from_millis(min_ms.max(500))
+}
+
+fn append_state_health(
+    health: &mut Vec<ProviderHealth>,
+    attention_error: Option<&str>,
+    notification_error: Option<&str>,
+    now: SystemTime,
+) {
+    for (provider, error) in [
+        ("state:attention", attention_error),
+        ("state:notifications", notification_error),
+    ] {
+        if let Some(error) = error {
+            health.push(ProviderHealth {
+                provider: provider.into(),
+                status: ProviderStatus::Degraded,
+                last_success: None,
+                last_attempt: Some(now),
+                message: Some(error.into()),
+            });
+        }
+    }
 }
 
 /// Ignore read/access events and our own atomic state writes. Otherwise each
@@ -1494,6 +1541,18 @@ pub fn watch(app: AppHandle) {
                 log::warn!("recent history: {error}");
             }
             let mut health = providers.health.clone();
+            let attention_error = ATTENTION_TRACKER.get().and_then(|tracker| {
+                tracker
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .persistence_error()
+            });
+            append_state_health(
+                &mut health,
+                attention_error,
+                engine.persistence_error(),
+                SystemTime::now(),
+            );
             for source in active_settings.sources.iter().filter(|s| {
                 s.enabled
                     && matches!(
@@ -1630,6 +1689,162 @@ pub fn diagnose() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r02_persistence_failures_are_visible_as_degraded_health() {
+        let mut health = vec![];
+        append_state_health(&mut health, None, None, SystemTime::now());
+        assert!(health.is_empty());
+        let message = crate::state_file::StateError::Invalid.message();
+        append_state_health(&mut health, Some(message), Some(message), SystemTime::now());
+        assert_eq!(health.len(), 2);
+        assert!(health
+            .iter()
+            .all(|item| item.status == ProviderStatus::Degraded && item.last_success.is_none()));
+        assert_eq!(health[0].provider, "state:attention");
+        assert_eq!(health[1].provider, "state:notifications");
+    }
+
+    fn r03_source() -> crate::monitoring::SourceConfig {
+        serde_json::from_value(serde_json::json!({
+            "id":"r03-source","name":"Source","kind":"generic_event","enabled":true,
+            "location":"","integration":{"agent_id":"fixture-agent","adapter_id":"fixture-adapter",
+            "transport":"local","accept_since_ms":0}
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn r03_collector_policy_changes_invalidate_but_live_scope_changes_keep_parsers() {
+        let old = r03_source();
+        for key in [
+            "agent_id",
+            "adapter_id",
+            "transport",
+            "host_version",
+            "accept_since_ms",
+        ] {
+            let mut next = serde_json::to_value(&old).unwrap();
+            next["integration"][key] = if key == "accept_since_ms" {
+                10.into()
+            } else {
+                "changed".into()
+            };
+            assert!(
+                !same_collector(&old, &serde_json::from_value(next).unwrap()),
+                "{key}"
+            );
+        }
+        let mut native = old.clone();
+        native.kind = crate::monitoring::SourceKind::CodexWsl;
+        native.integration = None;
+        native.location = "RunningDistro".into();
+        let mut scoped = native.clone();
+        scoped.projects = vec!["/new-project".into()];
+        scoped.excluded_projects = vec!["/ignored".into()];
+        scoped.name = "Display rename".into();
+        assert!(same_collector(&native, &scoped));
+        scoped.location = "OtherDistro".into();
+        assert!(!same_collector(&native, &scoped));
+    }
+
+    #[test]
+    fn r03_late_obsolete_worker_cannot_publish_catalog_snapshot_or_ordered_facts() {
+        use crate::providers::worker::Worker;
+        use std::sync::mpsc;
+        struct Exit(mpsc::Sender<()>);
+        impl Drop for Exit {
+            fn drop(&mut self) {
+                let _ = self.0.send(());
+            }
+        }
+        let old = r03_source();
+        let mut next = old.clone();
+        next.integration.as_mut().unwrap().accept_since_ms = 10;
+        let (started_tx, started_rx) = mpsc::channel();
+        let (release_tx, release_rx) = mpsc::channel();
+        let (exit_tx, exit_rx) = mpsc::channel();
+        let exit = Exit(exit_tx);
+        let old_task = TaskSnapshot::new(
+            "r03-obsolete",
+            "Obsolete",
+            TaskSource::GenericEvent,
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        let fact = crate::providers::generic_event::OrderedObservation {
+            task: old_task.clone(),
+            notify: true,
+            receipt: crate::providers::generic_event::Receipt {
+                source: old.id.clone(),
+                session_key: "session".into(),
+                epoch: "epoch".into(),
+                sequence: 1,
+            },
+        };
+        let late_task = old_task.clone();
+        let late_fact = fact.clone();
+        let worker = Worker::spawn(Duration::from_secs(60), move |_| {
+            let _keep_until_thread_exits = &exit;
+            started_tx.send(()).unwrap();
+            release_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+            ProviderOutput {
+                tasks: vec![late_task.clone()],
+                catalog: vec![late_task.clone()],
+                ordered: vec![late_fact.clone()],
+                ..Default::default()
+            }
+        });
+        started_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        let mut providers = LocalProviders {
+            ordered: vec![fact],
+            file: LocalFileProvider::new(),
+            workers: vec![(old.id.clone(), vec![], worker)],
+            latest: [(old.id.clone(), ProviderOutput::tasks(vec![old_task]))].into(),
+            observed_at: [(old.id.clone(), Instant::now())].into(),
+            started_at: Instant::now(),
+            health: vec![],
+            configured: vec![old],
+        };
+        assert!(providers
+            .retain_collectors(std::slice::from_ref(&next))
+            .is_empty());
+        providers.configured = vec![next.clone()];
+        assert!(
+            providers.latest.is_empty()
+                && providers.ordered.is_empty()
+                && providers.observed_at.is_empty()
+        );
+        release_tx.send(()).unwrap();
+        exit_rx.recv_timeout(Duration::from_secs(5)).unwrap();
+        assert!(!providers.collect_ready());
+        assert!(crate::monitoring::find_session("r03-obsolete").is_none());
+        let fresh = TaskSnapshot::new(
+            "r03-current",
+            "Current",
+            TaskSource::GenericEvent,
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        providers.workers.push((
+            next.id.clone(),
+            vec![],
+            Worker::spawn(Duration::from_secs(60), move |_| ProviderOutput {
+                catalog: vec![fresh.clone()],
+                tasks: vec![fresh.clone()],
+                ..Default::default()
+            }),
+        ));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !providers.collect_ready() {
+            assert!(Instant::now() < deadline);
+            std::thread::yield_now();
+        }
+        assert_eq!(providers.latest[&next.id].tasks[0].id, "r03-current");
+        assert!(crate::monitoring::find_session("r03-current").is_some());
+        assert!(crate::monitoring::find_session("r03-obsolete").is_none());
+    }
     use crate::domain::{DetectionConfidence, TaskStatus};
 
     #[test]

@@ -80,11 +80,13 @@ EXACT > HOOK > INFERRED 是合并优先级，不是宿主官方保证。stale �
 
 ## TaskStore 与 Attention 边界
 
+本地 Worker 的独立接收通道同时界定采集 generation。来源 ID、类型、位置或 integration 策略变化会撤销旧通道、缓存和未提交批次；旧线程完成后不能写发现目录。catalog 只由主循环接收当前 Worker 结果后更新。有序事实仍留在 durable outbox，撤销通道不确认消费。native 项目筛选与显示重命名在消费时生效，不重建 WSL/Codex 增量解析器；Generic reducer 捕获的 fallback name 变化则重建该 Worker。
+
 [`TaskStore`](../src-tauri/src/store/mod.rs) 按稳定 ID 合并观测、置信度与来源实例，维护 active/recent。正常运行使用 merge_instances；早期 partition/source helper 仍供兼容、诊断和测试。Agent running 消失保留 stale；普通运行消失变 stale/unknown，不转成功。终态 recent 默认保留 30 分钟，由 [`HistoryStore`](../src-tauri/src/history.rs) 保存。
 
 [`AttentionTracker`](../src-tauri/src/attention.rs) 决定用户继续关注什么：新执行、running、未查看结果、待处理请求与 pin。启动用来源 baseline 避免导入完整 idle 历史。unread、hidden、ignored、manual pin 是 TaskPulse 用户状态。默认 7 天 execution-activity 窗口只改变主视图与 older attention，不删除记录或未读；running 和明确 manual pin 不过期。Legacy pin 保留，但不会自动获得永久豁免。轮询/重命名不续期执行活动。
 
-Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前尝试备份 `attention.json.pre-lifecycle.bak`，不确认已读或删除。恢复的缓存全部 stale，等待 fresh 来源；运行任务也有 durable attention，已不是“只持久化 recent”。备份失败处理仍需加强，见维护者审查。
+Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前必须确认 `attention.json.pre-lifecycle.bak`（更旧版本使用 pre-recency）为完整原始字节的普通文件，不确认已读或删除。备份失败保留原文件并禁用写入。恢复的缓存全部 stale，等待 fresh 来源；运行任务也有 durable attention，已不是“只持久化 recent”。
 
 ## Transition、通知与恢复
 
@@ -112,6 +114,8 @@ Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前尝试备�
 | claude-events / session.jsonl 与 .json | Claude 独立 journal + compatibility checkpoint | 不属于 Generic Outbox；新 v3 activity 仅保留工具类别、root 用 hash；本地 cwd 用于项目范围，仍没有等价总磁盘预算 |
 
 关键 JSON 使用同目录临时文件、flush/sync、原子替换，避免半文件；这些文件不组成数据库事务，不能泛称任意损坏均无损恢复。坏状态、迁移备份和配额失败应分别检查。
+
+Attention 与通知账本仅在文件确实不存在时初始化。读取失败、坏 JSON、未知版本或迁移备份失败会锁住本次进程的相应写入；原始文件不会被空状态覆盖。通知账本不可信时不发出生命周期提醒，标准事件批次也不确认消费。Dashboard 的来源异常中显示脱敏的状态故障。先保全原文件并恢复兼容、完整的状态，再重启；进程不会自动重试覆盖人工修复。通知账本新增 version=1，仍可读取无 version 的旧账本。
 
 ## WSL / SSH 隔离与安全
 
