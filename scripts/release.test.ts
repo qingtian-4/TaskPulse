@@ -2,6 +2,7 @@ import { expect, test } from 'bun:test';
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import {windowsTestProcess} from './windows-test-process';
 import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateMsiVersion, validateRelease, verifyChecksums } from './release';
 
 const version='0.2.0-alpha.1';
@@ -49,7 +50,7 @@ test('MSI numeric metadata is separate from SemVer but derived and bounded',()=>
   expect(msiVersionFor('0.2.0-rc.2')).toBe('0.2.0.3002');
   for(const v of ['256.2.0-alpha.1','0.256.0-alpha.1','0.2.65536-alpha.1','0.2.0-alpha.1000'])expect(()=>msiVersionFor(v)).toThrow();
 });
-test('installer acceptance de-elevates only the app, keeps native checks mandatory and saves failures',()=>{
+test('installer acceptance de-elevates only the app, keeps native checks mandatory and saves failures',async()=>{
   const root=join(import.meta.dir,'..');
   const workflow=Bun.YAML.parse(readFileSync(join(root,'.github/workflows/release.yml'),'utf8')) as any;
   const smoke=workflow.jobs['installer-smoke'];
@@ -77,16 +78,27 @@ test('installer acceptance de-elevates only the app, keeps native checks mandato
   expect(parent).toContain('foreach ($kind in @($InstallerKind))');
   for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1','installer-process.ps1','installer-process.test.ps1'] : []) {
     const script=join(root,'scripts',name).replaceAll("'","''");
-    const result=Bun.spawnSync(['powershell.exe','-NoProfile','-Command',`$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$parseErrors);if($parseErrors){$parseErrors|Out-String|Write-Error;exit 1}`]);
-    expect(result.exitCode, result.stderr.toString()).toBe(0);
+    const result=await windowsTestProcess('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$parseErrors);if($parseErrors){$parseErrors|Out-String|Write-Error;exit 1}`]);
+    expect(result.exitCode, result.stderr).toBe(0);
   }
 },15000);
-test('Windows process acceptance retains real fast exit codes/output and enforces timeout without installing software',()=>{
+test('Windows process acceptance retains real fast exit codes/output and enforces timeout without installing software',async()=>{
   if(process.platform!=='win32')return;
   const fixture=join(import.meta.dir,'installer-process.test.ps1');
-  const result=Bun.spawnSync(['powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',fixture]);
-  expect(result.exitCode,result.stderr.toString()).toBe(0);
-  expect(result.stdout.toString()).toContain('Fast zero/nonzero exits');
+  const result=await windowsTestProcess('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fixture]);
+  expect(result.exitCode,result.stderr).toBe(0);
+  expect(result.stdout).toContain('Fast zero/nonzero exits');
+},15000);
+
+test('Windows test launcher retains actual fast errors and rejects startup/timeout failures',async()=>{
+  if(process.platform!=='win32')return;
+  for(let i=0;i<5;i++){
+    const result=await windowsTestProcess('cmd.exe',['/d','/c','echo TaskPulse-launch-ok']);
+    expect(result.exitCode).toBe(0);expect(result.stdout.trim()).toBe('TaskPulse-launch-ok');
+  }
+  expect((await windowsTestProcess('cmd.exe',['/d','/c','exit 7'])).exitCode).toBe(7);
+  await expect(windowsTestProcess('taskpulse-missing-test-executable.exe',[])).rejects.toThrow();
+  await expect(windowsTestProcess('powershell.exe',['-NoProfile','-Command','Start-Sleep -Seconds 10'],100)).rejects.toThrow('timed out');
 },15000);
 test('release tag, app versions and lockfile must agree; stable publication is disabled',()=>{
   expect(validateRelease(`v${version}`,Array(4).fill(version))).toBe(version);
