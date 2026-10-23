@@ -123,7 +123,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   assert.equal((await center()).entries.length,6);assert.equal((await center()).unread,0);
   checks.push('source fault demotes stale pending without resolving or losing task; recovery/reconfirmation cannot revive read messages');
 
-  for(const [width,height] of [[440,720],[320,480]]){
+  for(const [width,height] of [[380,640],[360,600],[320,480],[440,720]]){
     await root.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await Bun.sleep(200);
     const layout=await root.evaluate(`(()=>{const p=document.querySelector('.message-center').getBoundingClientRect(),s=document.querySelector('.message-scroll');return {width:document.documentElement.scrollWidth,height:innerHeight,top:p.top,bottom:p.bottom,right:p.right,left:p.left,scroll:s.scrollHeight>s.clientHeight};})()`);
     assert.ok(layout.width<=width&&layout.bottom<=height&&layout.left>=0&&layout.right<=width);
@@ -164,7 +164,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await root.invoke('dismiss_task_notice',{id:historicalNotice.current.id});
   assert.equal((await center()).entries.length,15);assert.equal((await center()).unread,0);
   checks.push('fresh historical request without an inbox event remains manually reopenable without creating unread');
-  checks.push('440x720/320x480 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
+  checks.push('380x640/360x600/320x480/440x720 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
   await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks,renderer:'Windows native Tauri WebView2',inputs:'isolated synthetic events',realHostConfigurationsChanged:false,notVerified:['actual Agent lifecycle','installer acceptance','OS mixed-DPI monitor migration']},null,2));
   console.log(JSON.stringify({passed:true,checks,evidence:evidenceDir}));
 });

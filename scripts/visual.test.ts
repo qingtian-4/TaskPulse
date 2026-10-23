@@ -4,7 +4,7 @@ const css=readFileSync('src/app.css','utf8');
 test('dashboard retains the tall viewport instead of shrinking to its own content height',()=>{
   const dashboard=readFileSync('src/lib/components/Dashboard.svelte','utf8');
   expect(dashboard).toContain("style:height={'min('+maxHeight+'px, 100dvh)'}");
-  expect(readFileSync('src-tauri/src/tray.rs','utf8')).toContain('.inner_size(440.0, 720.0)');
+  expect(readFileSync('src-tauri/src/tray.rs','utf8')).toContain('.inner_size(380.0, 640.0)');
 });
 const hex=(token:string)=>{const value=css.match(new RegExp('--tp-'+token+': (#[0-9a-f]{6});'))?.[1];expect(value,'missing '+token).toBeDefined();return value!;};
 function luminance(hex:string){const [r,g,b]=[1,3,5].map(i=>{const v=parseInt(hex.slice(i,i+2),16)/255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return .2126*r+.7152*g+.0722*b;}

@@ -203,7 +203,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title("TaskPulse")
-        .inner_size(440.0, 720.0)
+        .inner_size(380.0, 640.0)
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
         // keeps its native shadow. The transparent dashboard draws its own edge.
@@ -307,7 +307,7 @@ fn compute_default_position(app: &AppHandle) -> (i32, i32) {
         })
         .map(|m| {
             (
-                m.position().x + m.size().width as i32 - (450.0 * m.scale_factor()) as i32,
+                m.position().x + m.size().width as i32 - (390.0 * m.scale_factor()) as i32,
                 m.position().y + 32,
             )
         })

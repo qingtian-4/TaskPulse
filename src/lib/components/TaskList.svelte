@@ -54,5 +54,6 @@
   .elapsed{font-size:10px;color:var(--tp-quiet);font-variant-numeric:tabular-nums}
   .task-item:has(.viewed) .row-status{padding-bottom:26px}
   .viewed{position:absolute;right:8px;bottom:7px;width:28px;height:26px;min-height:26px;color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line)}
+  @media(max-width:400px){.task-row{gap:7px;padding:9px 8px}.row-status{max-width:88px;gap:6px}.context{gap:5px;margin-top:4px}.activity,.freshness{margin-top:4px}}
   @media(max-width:340px){.task-row{gap:6px;padding:10px 8px}.row-status{max-width:84px}.status-label{padding:2px 4px}.row-title{font-size:12px}}
 </style>

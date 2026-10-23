@@ -54,8 +54,8 @@
   let lastHidden = $state<{task:TaskSnapshot;action:'restore'|'unignore'} | null>(null);
   let refreshSince = $state(0);
   const progress = $derived(refreshProgress(settings,providers,refreshSince));
-  const maxHeight = typeof screen === 'undefined' ? 720 : Math.min(720, Math.floor(screen.availHeight * .8));
-  const width = typeof screen === 'undefined' ? 440 : Math.min(440,screen.availWidth - 16);
+  const maxHeight = typeof screen === 'undefined' ? 640 : Math.min(640, Math.floor(screen.availHeight * .8));
+  const width = typeof screen === 'undefined' ? 380 : Math.min(380,screen.availWidth - 16);
   const confirmedTasks = $derived(demo ? tasks : observedDashboardTasks(tasks,providers,settings,now));
   const selectedTask = $derived([...confirmedTasks,...archived].find(t => t.id === selected?.id) ?? selected);
   const displayed = $derived(showArchive ? archived : confirmedTasks);
@@ -319,6 +319,12 @@
   footer{display:flex;gap:8px;justify-content:space-between;border-top:1px solid var(--tp-border);padding:8px 14px;font-size:9px;color:var(--tp-quiet);flex:none}footer button{font-size:10px;color:var(--tp-muted)}
   .quota{font-size:10px;padding:8px 14px;border-top:1px solid var(--tp-border);color:var(--tp-muted);flex:none}.quota summary{cursor:pointer;display:flex;justify-content:space-between;gap:10px}.quota p{font-size:10px;line-height:1.7;margin:7px 0 2px;overflow-wrap:anywhere}
   .onboarding{padding:13px 14px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:13px}.onboarding p{font-size:11px;color:var(--tp-muted);line-height:1.7;margin:8px 0}
+  @media(max-width:400px){
+    header{padding:8px 10px 8px 12px}.brand{gap:6px}.header-actions{gap:0}
+    .counts{padding:9px 10px 5px}.overview{padding:7px 8px}.overview b{font-size:20px;margin-top:3px}
+    .count-help{padding-left:12px}.view-bar{padding:5px 12px}.search-bar{gap:6px;padding:0 10px 8px}
+    .signals{padding-left:10px;padding-right:10px}.task-scroll{padding:0 8px 6px}
+  }
   @media(max-width:350px){.counts{gap:4px;padding:10px 8px 6px}.overview{padding:7px 5px}.overview b{font-size:18px}.search-bar{padding:0 8px 8px}.detail-heading{flex-wrap:wrap}}
   @media(max-height:560px){
     header{padding-top:6px;padding-bottom:6px}.counts{padding:8px 10px 6px}.overview{padding:5px 7px}.overview b{font-size:18px;margin-top:2px}.signals{padding-bottom:2px}
