@@ -5,7 +5,7 @@
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { LogicalSize } from '@tauri-apps/api/dpi';
   import { SOURCE_LABEL, CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type CodexAccountQuota, type SourceDiscovery } from '$lib/types';
-  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, type TaskSection, type TaskSignal } from '$lib/dashboard';
+  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, unconfirmedRunning, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import Settings from '@lucide/svelte/icons/settings';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
@@ -55,6 +55,9 @@
   const filters = $derived({source:filterSource,project:filterProject,location:filterLocation,section:filterSection,signal:filterSignal,query,unreadOnly});
   const filtered = $derived(filterTasks(displayed,filters,settings));
   const outsideRunning = $derived(runningOutsideView(tasks,filtered));
+  const pendingRunning = $derived(unconfirmedRunning(tasks));
+  let refreshSources = $state<string[]>([]);
+  const refreshResult = $derived(refreshSources.length ? refreshResultMessage(refreshSources,providers.filter(p=>p.status==='degraded').map(p=>p.provider),Object.fromEntries(settings?.sources.map(s=>[s.id,s.name])??[])) : '');
   const filterText = $derived(filterDescription(filters,displayed,settings));
   const sorted = $derived([...filtered].sort(compareTasks));
   const projects = $derived([...new Map(displayed.map(t => [projectKey(t,settings), { key:projectKey(t,settings), label:taskContext(t,settings), path:t.project_path }])).values()]);
@@ -70,13 +73,13 @@
   }
   async function refresh() {
     if (!isTauri() || refreshing) return;
-    refreshing=true; error='';
+    refreshing=true; error=''; refreshSources=[];
     try {
       refreshSince=await invoke<number>('request_refresh'); note='';
       for(let i=0;i<100;i++) {
         await new Promise(r=>setTimeout(r,300)); await snapshots();
         const result=refreshProgress(settings,providers,refreshSince);
-        if(!result.pending.length) {note=result.failed.length ? '刷新返回；采集失败：'+result.failed.map(s=>s.name).join('、') : '已收到全部启用来源的新采集结果';return;}
+        if(!result.pending.length) {refreshSources=settings?.sources.filter(s=>s.enabled).map(s=>s.id)??[];return;}
       }
       error='刷新超时，未返回：'+progress.pending.map(s=>s.name).join('、')+'。保留原状态，不视为已完成。';
     }
@@ -186,7 +189,7 @@
   });
 </script>
 
-<div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="glass-panel glass-noise dashboard tp-theme" style:height={'min('+maxHeight+'px, 100dvh)'} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
+<div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="glass-panel glass-noise dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(tasks,filtered))} style:height={'min('+maxHeight+'px, 100dvh)'} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><span class="brand-mark" aria-hidden="true"><Activity size={17}/></span>TaskPulse</span>
     <div class="header-actions">
@@ -203,6 +206,7 @@
     <button class="overview tp-tone" data-tone="stale" class:active={filterSection==='uncertain'} aria-pressed={filterSection==='uncertain'} title="不确定或来源待更新，不代表失败" onclick={()=>chooseSection('uncertain')}><span>待更新</span><b>{tasks.filter(t=>taskSection(t)==='uncertain').length}</b></button>
     <button class="overview total tp-tone" class:active={!showArchive && !filterText} aria-pressed={!showArchive && !filterText} title="清除筛选，查看全部近期关注" onclick={()=>{showArchive=false;resetFilters();}}><span>全部</span><b>{tasks.length}</b></button>
   </div>
+  {#if pendingRunning.length}<p class="notice pending-running" role="status">上次运行 {pendingRunning.length} · 当前采集待更新，不代表结束<button class="link" onclick={()=>{showArchive=false;resetFilters();filterSection='uncertain';}}>查看待确认任务</button></p>{/if}
   {#if tasks.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed')) || degraded.length}<div class="signals">
     {#if tasks.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>待批准 {tasks.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
     {#if tasks.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>待回答 {tasks.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
@@ -215,6 +219,7 @@
   {#if showPrompts}<section class="prompt-inbox glass-panel glass-scroll" aria-label="未解决请求"><h2>未解决请求<span>{pendingPrompts.length}</span><button class="link" onclick={()=>showPrompts=false} aria-label="关闭未解决请求">×</button></h2><p class="notice">关闭弹窗、查看详情或标记已查看不会批准请求。重启后从关注记录恢复，不重发旧完成通知。</p>{#each pendingPrompts as task (task.id)}<div class="prompt-item"><button class="link" onclick={()=>selectTask(task)}>{task.name} · {taskLabel(task)}</button><p>{taskContext(task,settings)}</p>{#if task.stale || task.confidence==='inferred'}<span>上次记录仍待核对；来源未确认最新状态，请打开 Agent 检查</span>{:else}<button class="link" onclick={()=>reopenPrompt(task)}>重新打开提醒</button>{/if}</div>{:else}<p class="notice">没有已确认的未解决请求。完成和失败结果请在“待查看”回查。</p>{/each}</section>{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
   {#if note}<p class="notice" role="status">{note}<button class="dismiss" onclick={()=>note=''} aria-label="关闭提示">×</button></p>{/if}
+  {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label="关闭刷新结果">×</button></p>{/if}
   {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>选择你要关注的 Agent</strong><p>确认本机来源，或添加远程服务器。新任务会自动出现。</p><button onclick={manage}>设置监控来源</button></div>{/if}
   {#if settings?.onboarding_complete && newSources}<p class="notice">发现 {newSources} 个可监控来源<button class="link" onclick={manage}>选择添加</button></p>{/if}
   {#if refreshing}<p class="notice" role="status">刷新中：{progress.total-progress.pending.length} / {progress.total} 个来源已返回{#if progress.failed.length} · {progress.failed.length} 个失败{/if}</p>{/if}

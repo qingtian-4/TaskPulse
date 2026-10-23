@@ -35,7 +35,7 @@ export function taskTone(task:TaskSnapshot):'running'|'action'|'danger'|'unread'
   return 'neutral';
 }
 export function taskSummary(task:TaskSnapshot):string {
-  if(task.stale)return '上次观测 · 等待来源更新';
+  if(task.stale)return task.status==='running'?'上次确认为运行中，当前采集待更新':'上次观测 · 等待来源更新';
   if(needsAction(task))return task.waiting_reason==='approval'?'等待你在原 Agent 中批准':'等待你在原 Agent 中回答';
   if(task.status==='running')return taskActivity(task);
   if(isEndedResult(task))return task.message || (task.status==='failed'?'执行失败 · 结果尚未查看':'本轮结果尚未查看');
@@ -51,6 +51,26 @@ export function overviewFilters(section: TaskSection, currentSection: TaskSectio
 export function runningOutsideView(tasks: TaskSnapshot[], visible: TaskSnapshot[]): TaskSnapshot[] {
   const ids=new Set(visible.map(t=>t.id));
   return tasks.filter(t=>t.status === 'running' && !t.stale && !ids.has(t.id));
+}
+// Keep uncertainty separate from fresh ongoing counts. The global hint remains
+// visible even when search/source/ongoing filters exclude the stale task.
+export function unconfirmedRunning(tasks:TaskSnapshot[]):TaskSnapshot[] {
+  return tasks.filter(t=>t.status==='running' && t.stale===true);
+}
+// Read-only DOM diagnostics: real frontend classification/filter counts, no
+// task titles, identifiers, search text, activity, paths or user responses.
+export function dashboardContinuity(tasks:TaskSnapshot[], visible:TaskSnapshot[]) {
+  const count=(list:TaskSnapshot[])=>{
+    const sections:Record<TaskSection,number>={ongoing:0,results:0,uncertain:0,pinned:0};
+    for(const task of list) sections[taskSection(task)]++;
+    return {...sections,total:list.length,unconfirmed_running:unconfirmedRunning(list).length};
+  };
+  const sources=[...new Set(tasks.map(t=>t.source_instance??t.source))];
+  return {global:count(tasks),visible:count(visible),sources:sources.slice(0,128).map(source=>({source_id:source,global:count(tasks.filter(t=>(t.source_instance??t.source)===source)),visible:count(visible.filter(t=>(t.source_instance??t.source)===source))})),sources_truncated:sources.length>128};
+}
+export function refreshResultMessage(ids:string[], failedIds:string[], labels:Record<string,string>={}):string {
+  const failed=ids.filter(id=>failedIds.includes(id));
+  return failed.length ? '本次刷新后仍待更新：'+failed.map(id=>labels[id]??id).join('、')+'；保留上次观测，不代表任务结束' : '已收到全部启用来源的新采集结果';
 }
 
 export function filterDescription(filters: DashboardFilters, tasks: TaskSnapshot[], settings?: DashboardSettings | null): string {

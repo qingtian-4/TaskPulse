@@ -69,6 +69,35 @@ try{
   assert.ok(size.height>=Math.min(700,Math.floor(size.available*.8))-2,JSON.stringify(size));
   assert.ok(size.list>=200,JSON.stringify(size));
   assert.equal((await root.invoke('get_task_notice')).current,null,'Thinking must not notify');
+  // UI boundary injection only: backend Provider→Store→Attention fault/recovery
+  // is covered by the Rust WSL continuity pipeline regression. Do not mutate
+  // a real WSL source or install Hooks to exercise uncertainty rendering.
+  const runningTasks=await root.invoke('get_agents');
+  const staleTasks=runningTasks.map((t:any)=>({...t,stale:true}));
+  let staleEvidence:any=null;
+  // The real fixture worker restores fresh Running every second. Capture a
+  // coherent before/after pair; do not freeze IPC, stop workers or make loose
+  // assertions against DOM nodes from different observations.
+  for(let attempt=0;attempt<5 && !staleEvidence;attempt++) {
+    await root.invoke('plugin:event|emit',{event:'agents-updated',payload:staleTasks});
+    await until(()=>root.evaluate(`!!document.querySelector('.pending-running')`));
+    const before=await root.evaluate(`!!document.querySelector('.pending-running button')`);
+    if(!before)continue;
+    const shot=await root.send('Page.captureScreenshot',{format:'png'});
+    const observed=await root.evaluate(`(()=>{const button=document.querySelector('.pending-running button');if(!button)return null;const snapshot={counts:JSON.parse(document.querySelector('.dashboard').dataset.continuity),ongoing:document.querySelector('.counts .overview b')?.textContent,hint:document.querySelector('.pending-running')?.textContent,rows:document.querySelector('.task-scroll')?.textContent};button.click();return snapshot;})()`);
+    if(!observed)continue;
+    assert.equal(observed.ongoing,'0');assert.equal(observed.counts.global.ongoing,0);
+    assert.equal(observed.counts.global.unconfirmed_running,2);
+    assert.ok(observed.hint.includes('上次运行 2'));assert.ok(observed.rows.includes('上次确认为运行中'));
+    staleEvidence=observed.counts;
+    await Bun.write(join(owned,'uncertain-running.png'),Buffer.from(shot.data,'base64'));
+  }
+  assert.ok(staleEvidence,'No coherent stale Running observation within five bounded attempts');
+  assert.equal(await root.evaluate(`document.querySelector('.counts .overview.active span')?.textContent`),'待更新');
+  await root.invoke('plugin:event|emit',{event:'agents-updated',payload:runningTasks});
+  await until(()=>root.evaluate(`!document.querySelector('.pending-running')`));
+  await root.evaluate(`document.querySelector('.overview.total').click()`);
+  assert.equal((await root.invoke('get_task_notice')).current,null,'Uncertainty/recovery must not fabricate a completion');
   event('one','a','input.requested',{request_kind:'question'},{request_id:'q1'});
   await until(async()=> Boolean((await root.invoke('get_task_notice')).current));
   const alert=await page(true);await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('需处理：等待输入')`));
@@ -89,7 +118,7 @@ try{
   await Bun.write(join(owned,'quota.png'),Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.invoke('dismiss_task_notice',{id:quota.current.id});
   await Bun.write(join(owned,'dashboard.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  const result={passed:true,size,checks:['two running tasks visible','thinking does not notify','question says action required and waiting input for the matching task, without a completion label or timer','matching answer clears notice','real turn end has a separate completion label and timer','new turn withdraws obsolete result','quota test is sticky and never creates a task'],realHostTested:false};
+  const result={passed:true,size,staleDiagnostics:staleEvidence,checks:['two running tasks visible','thinking does not notify','stale Running stays visible as unconfirmed, with a working global recovery hint and no fake fresh running count','question says action required and waiting input for the matching task, without a completion label or timer','matching answer clears notice','real turn end has a separate completion label and timer','new turn withdraws obsolete result','quota test is sticky and never creates a task'],realHostTested:false};
   await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,evidence}));
 }catch(error){await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr}));throw error;}
 });

@@ -2,8 +2,39 @@
 import { test, expect } from 'bun:test';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
-import {taskTone} from '../src/lib/dashboard';
+import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('WSL fresh ongoing 1 → 0 → 1 is uncertainty, not a vanished or ended task',()=>{
+  const running={...base,source_instance:'codex-wsl:ubuntu',session_id:'stable',turn_key:'one',pinned:true};
+  const stale={...running,stale:true};
+  const samples=[running,stale,stale,running];
+  expect(samples.map(t=>Number(taskSection(t)==='ongoing'))).toEqual([1,0,0,1]);
+  expect(samples.map(t=>unconfirmedRunning([t]).length)).toEqual([0,1,1,0]);
+  expect(taskSummary(stale)).toBe('上次确认为运行中，当前采集待更新');
+  expect(isEndedResult(stale)).toBe(false);
+  const other={...base,id:'claude',source:'claude_code' as const};
+  const list=[stale,other];
+  const hidden=filterTasks(list,{...EMPTY_FILTERS,section:'ongoing',query:'nonexistent'});
+  expect(hidden).toEqual([]);
+  const diagnostics=dashboardContinuity(list,hidden);
+  expect(diagnostics.global.ongoing).toBe(1);expect(diagnostics.global.uncertain).toBe(1);
+  expect(diagnostics.visible.total).toBe(0);expect(diagnostics.global.unconfirmed_running).toBe(1);
+  expect(JSON.stringify(diagnostics)).not.toContain('Native title');expect(JSON.stringify(diagnostics)).not.toContain('stable');
+  expect(unconfirmedRunning(list)).toEqual([stale]);
+  expect(filterTasks(list,overviewFilters('uncertain',null))).toEqual([stale]);
+  expect(stale.unread && stale.pinned).toBe(true);
+  const ended={...running,status:'waiting_input' as const,waiting_reason:'turn_ended' as const};
+  expect(unconfirmedRunning([ended])).toEqual([]);
+  expect(taskSection(ended)).toBe('results');
+});
+
+test('refresh collection fault reflects recovery instead of persisting a historical failure',()=>{
+  expect(refreshResultMessage(['WSL'],['WSL'])).toContain('不代表任务结束');
+  expect(refreshResultMessage(['WSL'],[])).toBe('已收到全部启用来源的新采集结果');
+  expect(refreshResultMessage(['wsl-id'],['wsl-id'],{'wsl-id':'重命名后的 Ubuntu'})).toContain('重命名后的 Ubuntu');
+  expect(refreshResultMessage(['other-id'],['wsl-id'],{'other-id':'WSL'})).not.toContain('仍待更新');
+});
 
 test('explicit pending question is waiting input, never a completed result',()=>{
   const question={...base,status:'waiting_input' as const,waiting_reason:'question' as const,input_request_id:'q1'};
