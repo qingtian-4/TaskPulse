@@ -282,7 +282,32 @@ impl AttentionTracker {
         if persist {
             self.save_best_effort();
         }
-        self.display()
+        let display = self.display();
+        let sources: HashSet<_> = self
+            .records
+            .values()
+            .filter_map(|r| r.task.source_instance.as_ref())
+            .filter(|s| s.starts_with("codex-wsl:"))
+            .collect();
+        for source in sources {
+            let tasks: Vec<_> = display
+                .iter()
+                .filter(|t| t.source_instance.as_ref() == Some(source))
+                .cloned()
+                .collect();
+            crate::providers::resources::continuity(
+                "attention_display",
+                source,
+                &tasks,
+                serde_json::json!({
+                    "stored_count":self.records.values().filter(|r|r.task.source_instance.as_ref()==Some(source)).count(),
+                    "observed_count":observed_ids.iter().filter(|id|self.records.get(*id).is_some_and(|r|r.task.source_instance.as_ref()==Some(source))).count(),
+                    "hidden_count":self.records.values().filter(|r|r.task.source_instance.as_ref()==Some(source) && (r.hidden || r.ignored)).count(),
+                    "archived_count":self.records.values().filter(|r|r.task.source_instance.as_ref()==Some(source) && self.expired(r,millis(SystemTime::now()))).count()
+                }),
+            );
+        }
+        display
     }
 
     pub fn mark_viewed(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {

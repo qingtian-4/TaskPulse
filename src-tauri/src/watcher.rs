@@ -892,6 +892,21 @@ impl LocalProviders {
             while let Ok(mut observation) = worker.observations.try_recv() {
                 self.ordered.append(&mut observation.output.ordered);
                 log::debug!("provider {name}: {} ms", observation.duration_ms);
+                if self
+                    .configured
+                    .iter()
+                    .any(|s| s.id == *name && s.kind == crate::monitoring::SourceKind::CodexWsl)
+                {
+                    crate::providers::resources::continuity(
+                        "worker_delivery",
+                        name,
+                        &observation.output.tasks,
+                        serde_json::json!({
+                            "duration_ms":observation.duration_ms,"delivery_delay_ms":SystemTime::now().duration_since(observation.completed_at).unwrap_or_default().as_millis(),
+                            "authoritative":observation.output.authoritative
+                        }),
+                    );
+                }
                 update_provider_health(
                     &mut self.health,
                     name,
@@ -992,7 +1007,34 @@ impl LocalProviders {
         dedup_hermes_over_scan(&mut tasks);
         dedup_dsh_over_scan(&mut tasks);
         crate::monitoring::observe(&tasks);
+        let wsl_before: Vec<_> = self
+            .configured
+            .iter()
+            .filter(|s| s.kind == crate::monitoring::SourceKind::CodexWsl)
+            .map(|s| {
+                (
+                    s.id.clone(),
+                    tasks
+                        .iter()
+                        .filter(|t| t.source_instance.as_ref() == Some(&s.id))
+                        .count(),
+                )
+            })
+            .collect();
         tasks.retain(crate::monitoring::allows);
+        for (source, before) in wsl_before {
+            let scoped: Vec<_> = tasks
+                .iter()
+                .filter(|t| t.source_instance.as_ref() == Some(&source))
+                .cloned()
+                .collect();
+            crate::providers::resources::continuity(
+                "watcher_scope",
+                &source,
+                &scoped,
+                serde_json::json!({"before_scope_count":before,"after_scope_count":scoped.len()}),
+            );
+        }
         LocalBatch {
             ordered: std::mem::take(&mut self.ordered),
             tasks,

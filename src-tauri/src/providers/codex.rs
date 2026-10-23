@@ -122,6 +122,7 @@ pub struct CodexProvider {
     identity_prefix: String,
     linux_share: Option<PathBuf>,
     external_metadata: Option<HashMap<String, ThreadMeta>>,
+    linux_rollouts: Option<HashMap<PathBuf, super::jsonl_tail::LinuxFileStamp>>,
     state_db: Option<PathBuf>,
     native_rx: Option<mpsc::Receiver<Result<NativeCodexSnapshot, String>>>,
     /// session id → last-seen mtime, so we can emit a terminal snapshot when a
@@ -152,6 +153,17 @@ impl Default for RolloutCache {
 }
 
 impl CodexProvider {
+    pub(super) fn diagnostics(&self) -> Option<serde_json::Value> {
+        super::resources::parser_metrics("codex", &self.sessions_root)
+    }
+    pub(super) fn set_linux_rollouts(&mut self, rows: Vec<super::codex_wsl::LinuxRollout>) {
+        self.linux_rollouts = Some(
+            rows.into_iter()
+                .filter(|r| r.path.starts_with('/') && !r.path.split('/').any(|s| s == ".."))
+                .map(|r| (self.resolve_rollout_path(&r.path), r.stamp))
+                .collect(),
+        );
+    }
     /// WSL transport supplies metadata/path mapping, not a second lifecycle.
     pub(super) fn with_wsl_root(root: PathBuf, share: PathBuf, instance: &str) -> Self {
         let mut provider = Self::with_root(root.join("sessions"));
@@ -252,6 +264,7 @@ impl CodexProvider {
             identity_prefix: "codex".into(),
             linux_share: None,
             external_metadata: None,
+            linux_rollouts: None,
             state_db: None,
             native_rx: None,
             seen: Default::default(),
@@ -383,6 +396,20 @@ impl CodexProvider {
     }
 
     fn discover(&self) -> std::io::Result<Vec<PathBuf>> {
+        if let Some(rows) = &self.linux_rollouts {
+            // Linux already enumerated and stat'ed these files. Avoid an
+            // additional slow/inconsistent UNC recursive directory snapshot.
+            let mut files: Vec<_> = rows
+                .keys()
+                .filter(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
+                })
+                .cloned()
+                .collect();
+            files.sort_by(|a, b| rows[b].modified_ns.cmp(&rows[a].modified_ns).then(a.cmp(b)));
+            return Ok(files);
+        }
         let mut files = Vec::new();
         for path in walk(&self.sessions_root)? {
             if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
@@ -415,19 +442,23 @@ impl CodexProvider {
 
     fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
         let cache = self.cache.entry(path.to_path_buf()).or_default();
-        let trusted = cache
-            .tail
-            .drain(path, |batch| {
-                self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
-                if batch.reset {
-                    cache.state = None;
-                }
-                if !batch.body.trim().is_empty() {
-                    let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
-                }
-            })
-            .ok()?;
+        if let Some(stamp) = self.linux_rollouts.as_ref().and_then(|rows| rows.get(path)) {
+            cache.tail.set_linux_stamp(stamp.clone());
+        }
+        let before_read = cache.tail.bytes_read_total;
+        let trusted = cache.tail.drain(path, |batch| {
+            if batch.reset {
+                cache.state = None;
+            }
+            if !batch.body.trim().is_empty() {
+                let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
+            }
+        });
+        self.read_bytes = self
+            .read_bytes
+            .saturating_add(cache.tail.bytes_read_total - before_read);
+        let trusted = trusted.ok()?;
         trusted.then(|| cache.state.clone()).flatten()
     }
 
@@ -1858,6 +1889,7 @@ impl Provider for CodexProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
+        let poll_read_before = self.read_bytes;
         self.refresh_title_index();
         let discovered = match self.discover() {
             Ok(files) => files,
@@ -1924,16 +1956,27 @@ impl Provider for CodexProvider {
                     .cache
                     .get(path)
                     .is_some_and(|c| c.state.as_ref().is_some_and(SessionState::parser_protected));
-                self.cache_policy
-                    .eligible(path, protected, self.cache.contains_key(path))
+                let stamp = self.linux_rollouts.as_ref().and_then(|rows| rows.get(path));
+                let eligible = if let Some(s) = stamp {
+                    self.cache_policy.eligible_observed(
+                        UNIX_EPOCH + Duration::from_nanos(s.modified_ns),
+                        UNIX_EPOCH + Duration::from_nanos(s.changed_ns),
+                        protected,
+                        self.cache.contains_key(path),
+                    )
+                } else {
+                    self.cache_policy
+                        .eligible(path, protected, self.cache.contains_key(path))
+                };
+                let modified = stamp
+                    .map(|s| UNIX_EPOCH + Duration::from_nanos(s.modified_ns))
+                    .or_else(|| path.metadata().and_then(|m| m.modified()).ok());
+                eligible
                     && (eligible_paths.contains(path)
                         || protected
-                        || path
-                            .metadata()
-                            .and_then(|m| m.modified())
-                            .is_ok_and(|modified| {
-                                now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
-                            }))
+                        || modified.is_some_and(|modified| {
+                            now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
+                        }))
             })
             .collect();
         let mut tasks = Vec::new();
@@ -1985,6 +2028,22 @@ impl Provider for CodexProvider {
             }
         }
         for (_, state) in sessions.into_values() {
+            // A complete OLD rollout is not a complete observation of a
+            // resumed session whose other rollout is still catching up or
+            // unreadable. Partial evidence for another session is independent.
+            if self.cache.iter().any(|(path, cache)| {
+                !cache.tail.trusted()
+                    && (cache
+                        .state
+                        .as_ref()
+                        .is_some_and(|partial| partial.session_id == state.session_id)
+                        || metadata
+                            .get(&state.session_id)
+                            .and_then(|m| m.rollout_path.as_deref())
+                            .is_some_and(|p| self.resolve_rollout_path(p) == *path))
+            }) {
+                continue;
+            }
             live.insert(state.session_id.clone(), state.updated_at);
             let mut task = self.session_to_task(&state, metadata.get(&state.session_id), now);
             if state.status == TaskStatus::Running
@@ -1999,7 +2058,12 @@ impl Provider for CodexProvider {
             .filter_map(|task| task.session_id.clone())
             .collect();
         for meta in metadata.values().filter(|meta| meta.pinned) {
-            if emitted.contains(&meta.id) {
+            if emitted.contains(&meta.id)
+                || self
+                    .last_tasks
+                    .iter()
+                    .any(|t| t.session_id.as_deref() == Some(&meta.id) && parser_protected(t))
+            {
                 continue;
             }
             let mut task = TaskSnapshot::new(
@@ -2018,26 +2082,40 @@ impl Provider for CodexProvider {
         }
         let selected: std::collections::HashSet<PathBuf> = files.into_iter().collect();
         self.cache.retain(|path, _| selected.contains(path));
-        let keep = self.cache_policy.keep(
-            self.cache
-                .iter()
-                .map(|(p, c)| {
-                    let protected = !c.tail.trusted()
-                        || c.state.as_ref().is_some_and(SessionState::parser_protected);
-                    let bytes = c.tail.retained_bytes()
-                        + c.state.as_ref().map_or(0, |s| {
-                            s.active_tools
-                                .iter()
-                                .map(|(k, v)| k.len() + v.len())
-                                .sum::<usize>()
-                                + s.first_user_message.as_ref().map_or(0, String::len)
-                                + 2048
+        let items = self
+            .cache
+            .iter()
+            .map(|(p, c)| {
+                let protected = !c.tail.trusted()
+                    || c.state.as_ref().is_some_and(SessionState::parser_protected);
+                let bytes = c.tail.retained_bytes()
+                    + c.state.as_ref().map_or(0, |s| {
+                        s.active_tools
+                            .iter()
+                            .map(|(k, v)| k.len() + v.len())
+                            .sum::<usize>()
+                            + s.first_user_message.as_ref().map_or(0, String::len)
+                            + 2048
+                    });
+                (p.clone(), protected, bytes)
+            })
+            .collect::<Vec<_>>();
+        let keep = if let Some(rows) = &self.linux_rollouts {
+            self.cache_policy.keep_observed(
+                items
+                    .into_iter()
+                    .map(|(p, protected, bytes)| {
+                        let at = rows.get(&p).map_or(UNIX_EPOCH, |s| {
+                            UNIX_EPOCH + Duration::from_nanos(s.modified_ns.max(s.changed_ns))
                         });
-                    (p.clone(), protected, bytes)
-                })
-                .collect(),
-            now,
-        );
+                        (p, protected, bytes, at)
+                    })
+                    .collect(),
+                now,
+            )
+        } else {
+            self.cache_policy.keep(items, now)
+        };
         self.cache.retain(|p, _| keep.contains(p));
 
         // Sessions we previously knew but that vanished / went stale → no
@@ -2049,13 +2127,21 @@ impl Provider for CodexProvider {
         for previous in &self.last_tasks {
             if !tasks.iter().any(|t| t.id == previous.id) && !parser_protected(previous) {
                 let mut previous = previous.clone();
+                if self.linux_rollouts.is_some() {
+                    previous.stale = true;
+                }
                 if let Some(meta) = previous.session_id.as_ref().and_then(|id| metadata.get(id)) {
                     previous.name = thread_task_name(meta);
                 }
                 tasks.push(previous);
             }
         }
-        let incomplete = self.cache.values().any(|cache| !cache.tail.trusted());
+        let missing_protected = self.linux_rollouts.is_some()
+            && self.last_tasks.iter().any(|t| {
+                parser_protected(t) && !tasks.iter().any(|new| new.id == t.id && !new.stale)
+            });
+        let incomplete =
+            missing_protected || self.cache.values().any(|cache| !cache.tail.trusted());
         if incomplete {
             for previous in &self.last_tasks {
                 if !tasks.iter().any(|t| t.id == previous.id) {
@@ -2074,10 +2160,16 @@ impl Provider for CodexProvider {
                 .sum::<usize>()
         );
         self.last_tasks = tasks.clone();
+        let tails:Vec<_> = self.cache.iter().take(128).map(|(p,c)| serde_json::json!({
+            "file_hash": &crate::integrations::key(&p.to_string_lossy())[..16],
+            "session_hash": c.state.as_ref().map(|s|crate::integrations::key(&s.session_id)[..16].to_string()),
+            "turn_hash": c.state.as_ref().and_then(|s|s.turn_key.as_ref()).map(|s|crate::integrations::key(s)[..16].to_string()),
+            "cursor": c.tail.diagnostics()
+        })).collect();
         super::resources::record(
             "codex",
             &self.sessions_root,
-            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(SessionState::parser_protected)).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES}),
+            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(SessionState::parser_protected)).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"poll_rollout_bytes_read":self.read_bytes-poll_read_before,"reset_count":self.cache.values().map(|c|c.tail.resets).sum::<u64>(),"validation_bytes":self.cache.values().map(|c|c.tail.validation_bytes_total).sum::<u64>(),"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES,"tails_truncated":self.cache.len()>128,"tails":tails}),
         );
         let catalog = metadata
             .values()
@@ -2100,7 +2192,24 @@ impl Provider for CodexProvider {
         ProviderOutput {
             catalog,
             authoritative: !incomplete,
-            error: incomplete.then(|| "Codex 日志追赶中或存在坏行；不发布中间终态".into()),
+            error: incomplete.then(|| {
+                if self.linux_rollouts.is_some() {
+                    if self.cache.values().any(|c| c.tail.size_raced()) {
+                        "[wsl:rollout_read:size_race] 文件正在追加；等待一致长度的观测"
+                    } else if self.cache.values().any(|c| c.tail.read_failed()) {
+                        "[wsl:rollout_read:io] 读取失败；保留上次观测"
+                    } else if self.cache.values().any(|c| c.tail.has_gap()) {
+                        "[wsl:rollout_decode:gap] 日志存在坏行；保留上次观测"
+                    } else if missing_protected && self.cache.values().all(|c| c.tail.trusted()) {
+                        "[wsl:rollout_discovery:missing_session] 已知会话日志缺失；保留上次观测"
+                    } else {
+                        "[wsl:rollout_read:catch_up] 日志追赶中；不发布中间终态"
+                    }
+                } else {
+                    "Codex 日志追赶中或存在坏行；不发布中间终态"
+                }
+                .into()
+            }),
             ..ProviderOutput::tasks(tasks)
         }
     }

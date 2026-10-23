@@ -31,8 +31,23 @@ pub(super) struct WslThread {
 }
 #[derive(Deserialize)]
 struct Metadata {
+    #[serde(default)]
     root: String,
+    #[serde(default)]
     threads: Vec<WslThread>,
+    #[serde(default)]
+    rollouts: Vec<LinuxRollout>,
+    error: Option<MetadataFault>,
+}
+#[derive(Deserialize)]
+pub(super) struct LinuxRollout {
+    pub path: String,
+    pub stamp: super::jsonl_tail::LinuxFileStamp,
+}
+#[derive(Deserialize)]
+struct MetadataFault {
+    stage: String,
+    code: String,
 }
 
 pub fn validate_distro(distro: &str) -> Result<(), String> {
@@ -172,7 +187,7 @@ fn command(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .spawn()
-        .map_err(|e| e.to_string())?;
+        .map_err(|e| format!("[wsl:process:spawn_{}]", e.raw_os_error().unwrap_or(0)))?;
     let (tx, rx) = std::sync::mpsc::channel();
     for (err, pipe) in [
         (
@@ -201,12 +216,12 @@ fn command(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
     }
     let deadline = Instant::now() + timeout;
     let status = loop {
-        match child.try_wait().map_err(|e| e.to_string())? {
+        match child.try_wait().map_err(|_| "[wsl:process:wait]")? {
             Some(s) => break s,
             None if Instant::now() >= deadline => {
                 let _ = child.kill();
                 let _ = child.wait();
-                return Err("WSL 采集超时；保留原任务状态".into());
+                return Err("[wsl:process:timeout] WSL 采集超时；保留原任务状态".into());
             }
             None => std::thread::sleep(Duration::from_millis(20)),
         }
@@ -215,7 +230,7 @@ fn command(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
     for _ in 0..2 {
         let (err, body) = rx
             .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-            .map_err(|_| "WSL 输出超时")?;
+            .map_err(|_| "[wsl:process:output_timeout]")?;
         if err {
             stderr = body;
         } else {
@@ -223,9 +238,10 @@ fn command(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
         }
     }
     if !status.success() {
+        let _ = stderr; // Never expose Python tracebacks, metadata or paths.
         return Err(format!(
-            "WSL 采集失败：{}",
-            String::from_utf8_lossy(&stderr).trim()
+            "[wsl:process:exit_{}]",
+            status.code().unwrap_or(-1)
         ));
     }
     Ok(stdout)
@@ -240,7 +256,9 @@ pub struct WslCodexProvider {
     instance: String,
     root: Option<String>,
     inner: Option<CodexProvider>,
-    last_tasks: Vec<TaskSnapshot>,
+    last_authoritative_tasks: Vec<TaskSnapshot>,
+    partial_tasks: Vec<TaskSnapshot>,
+    last_success: Option<SystemTime>,
 }
 impl WslCodexProvider {
     pub fn new(distro: String, instance: String) -> Self {
@@ -249,17 +267,20 @@ impl WslCodexProvider {
             instance,
             root: None,
             inner: None,
-            last_tasks: vec![],
+            last_authoritative_tasks: vec![],
+            partial_tasks: vec![],
+            last_success: None,
         }
     }
     fn sample(&mut self, now: SystemTime) -> Result<ProviderOutput, String> {
         use base64::Engine;
-        validate_distro(&self.distro)?;
-        if !running_distros()?
+        validate_distro(&self.distro).map_err(|_| "[wsl:configuration:invalid_distro]")?;
+        if !running_distros()
+            .map_err(|e| format!("[wsl:running_query] {e}"))?
             .iter()
             .any(|d| d.eq_ignore_ascii_case(&self.distro))
         {
-            return Err(format!("WSL {} 未运行；不会自动唤醒发行版", self.distro));
+            return Err("[wsl:running_query:stopped] 不会自动唤醒发行版".into());
         }
         let program = base64::engine::general_purpose::STANDARD
             .encode(include_bytes!("codex_wsl_metadata.py"));
@@ -274,11 +295,22 @@ impl WslCodexProvider {
                 &script,
             ],
             Duration::from_secs(10),
-        )?;
+        )
+        .map_err(|e| format!("[wsl:python_launch] {e}"))?;
         let meta: Metadata =
-            serde_json::from_slice(&body).map_err(|e| format!("WSL 元数据格式不可读：{e}"))?;
+            serde_json::from_slice(&body).map_err(|_| "[wsl:metadata_decode:invalid_json]")?;
+        if let Some(error) = meta.error {
+            let safe = |s: &str| {
+                s.len() <= 48 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_')
+            };
+            return Err(if safe(&error.stage) && safe(&error.code) {
+                format!("[wsl:{}:{}]", error.stage, error.code)
+            } else {
+                "[wsl:metadata_decode:invalid_error]".into()
+            });
+        }
         if !meta.root.starts_with('/') || meta.root.split('/').any(|s| s == "..") {
-            return Err("WSL Codex 目录无效".into());
+            return Err("[wsl:metadata_decode:invalid_root]".into());
         }
         if self.root.as_deref() != Some(&meta.root) {
             let share = PathBuf::from(format!(r"\\wsl.localhost\{}", self.distro));
@@ -286,8 +318,9 @@ impl WslCodexProvider {
             self.inner = Some(CodexProvider::with_wsl_root(root, share, &self.instance));
             self.root = Some(meta.root);
         }
-        let inner = self.inner.as_mut().ok_or("WSL 来源未初始化")?;
+        let inner = self.inner.as_mut().ok_or("[wsl:initialization:missing]")?;
         inner.set_external_metadata(&meta.threads);
+        inner.set_linux_rollouts(meta.rollouts);
         let mut output = inner.poll(now);
         for t in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
             t.source_instance = Some(self.instance.clone());
@@ -299,8 +332,74 @@ impl WslCodexProvider {
             t.quota_1w_used_pct = None;
             t.quota_1w_resets_at = None;
         }
-        self.last_tasks = output.tasks.clone();
+        self.accept_sample(&mut output);
         Ok(output)
+    }
+    fn accept_sample(&mut self, output: &mut ProviderOutput) {
+        let mut regressed = false;
+        for task in &mut output.tasks {
+            if let Some(latest) = self
+                .partial_tasks
+                .iter()
+                .chain(self.last_authoritative_tasks.iter())
+                .filter(|old| old.id == task.id)
+                .max_by_key(|old| old.updated_at)
+            {
+                if !task.stale && task.updated_at < latest.updated_at {
+                    *task = latest.clone();
+                    task.stale = true;
+                    regressed = true;
+                }
+            }
+        }
+        if regressed {
+            output.authoritative = false;
+            output.error = Some("[wsl:snapshot:regressed] 未使用倒退的生命周期观测".into());
+        }
+        if output.authoritative {
+            self.last_authoritative_tasks = output.tasks.clone();
+            self.partial_tasks.clear();
+        } else {
+            // Fresh, completely parsed sessions may advance even when a
+            // different file is catching up. Never resurrect an older turn or
+            // Running state over such a fresh explicit terminal observation.
+            for task in output.tasks.iter().filter(|t| !t.stale) {
+                if let Some(old) = self.partial_tasks.iter_mut().find(|t| t.id == task.id) {
+                    if task.updated_at >= old.updated_at {
+                        *old = task.clone();
+                    }
+                } else {
+                    self.partial_tasks.push(task.clone());
+                }
+            }
+            let mut retained = self.retained_tasks();
+            for task in &output.tasks {
+                if let Some(old) = retained.iter_mut().find(|t| t.id == task.id) {
+                    if !task.stale && task.updated_at >= old.updated_at {
+                        *old = task.clone();
+                    }
+                } else {
+                    retained.push(task.clone());
+                }
+            }
+            output.tasks = retained;
+        }
+    }
+    fn retained_tasks(&self) -> Vec<TaskSnapshot> {
+        let mut tasks = self.last_authoritative_tasks.clone();
+        for task in &self.partial_tasks {
+            if let Some(old) = tasks.iter_mut().find(|t| t.id == task.id) {
+                if task.updated_at >= old.updated_at {
+                    *old = task.clone();
+                }
+            } else {
+                tasks.push(task.clone());
+            }
+        }
+        for task in &mut tasks {
+            task.stale = true;
+        }
+        tasks
     }
 }
 impl Provider for WslCodexProvider {
@@ -308,25 +407,112 @@ impl Provider for WslCodexProvider {
         "codex-wsl"
     }
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
-        self.sample(now).unwrap_or_else(|error| {
-            ProviderOutput::degraded(
-                self.last_tasks
-                    .iter()
-                    .cloned()
-                    .map(|mut t| {
-                        t.stale = true;
-                        t
-                    })
-                    .collect(),
-                error,
-            )
-        })
+        let began = std::time::Instant::now();
+        let started = SystemTime::now();
+        let previous_root = self.root.clone();
+        let before_bytes = self
+            .inner
+            .as_ref()
+            .and_then(CodexProvider::diagnostics)
+            .and_then(|m| m["cumulative_rollout_bytes_read"].as_u64())
+            .unwrap_or(0);
+        let result = self.sample(now);
+        let mut metadata_ok = result.is_ok();
+        let mut output =
+            result.unwrap_or_else(|error| ProviderOutput::degraded(self.retained_tasks(), error));
+        let retried = output
+            .error
+            .as_deref()
+            .is_some_and(|e| e.starts_with("[wsl:rollout_read:size_race]"));
+        if retried {
+            // One transport consistency retry; this delay never infers a turn
+            // end or a human wait. Each sample rechecks the running distro.
+            std::thread::sleep(Duration::from_millis(40));
+            let result = self.sample(now);
+            metadata_ok = result.is_ok();
+            output = result
+                .unwrap_or_else(|error| ProviderOutput::degraded(self.retained_tasks(), error));
+        }
+        if output.authoritative {
+            self.last_success = Some(SystemTime::now());
+        }
+        let code = output
+            .error
+            .as_deref()
+            .and_then(|e| e.find(']').map(|end| &e[..=end]))
+            .unwrap_or("none");
+        let stage = code
+            .trim_matches(['[', ']'])
+            .split(':')
+            .nth(1)
+            .unwrap_or("none");
+        let error_codes: Vec<_> = output
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .split_inclusive(']')
+            .map(str::trim)
+            .filter(|s| {
+                s.starts_with("[wsl:")
+                    && s.ends_with(']')
+                    && s.bytes()
+                        .all(|b| b.is_ascii_alphanumeric() || b"[]:_-".contains(&b))
+            })
+            .take(4)
+            .collect();
+        let rollout_metrics = self.inner.as_ref().and_then(CodexProvider::diagnostics);
+        let after_bytes = rollout_metrics
+            .as_ref()
+            .and_then(|m| m["cumulative_rollout_bytes_read"].as_u64())
+            .unwrap_or(0);
+        let cycle_bytes = if previous_root == self.root {
+            after_bytes.saturating_sub(before_bytes)
+        } else {
+            after_bytes
+        };
+        super::resources::continuity(
+            "provider_poll",
+            &self.instance,
+            &output.tasks,
+            serde_json::json!({
+                "poll_start_ms":super::resources::epoch_ms(started),"poll_end_ms":super::resources::epoch_ms(SystemTime::now()),
+                "duration_ms":began.elapsed().as_millis(),"authoritative":output.authoritative,"degraded":!output.authoritative,
+                "error_stage":stage,"error_code":code,"error_codes":error_codes,"size_race_retried":retried,"last_success_ms":self.last_success.map(super::resources::epoch_ms),
+                "authoritative_baseline_count":self.last_authoritative_tasks.len(),"partial_count":self.partial_tasks.len(),
+                "cycle_rollout_bytes":cycle_bytes,"rollout_observed_this_cycle":metadata_ok,"rollout_metrics":rollout_metrics
+            }),
+        );
+        output
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wsl_continuity_partial_empty_does_not_erase_the_trusted_running_session() {
+        let mut provider = WslCodexProvider::new("-invalid".into(), "codex-wsl:test".into());
+        let task = TaskSnapshot::new(
+            "codex-wsl:test:codex:s",
+            "native",
+            crate::domain::TaskSource::Codex,
+            crate::domain::TaskStatus::Running,
+            crate::domain::DetectionConfidence::Hook,
+            SystemTime::now(),
+        );
+        provider.accept_sample(&mut ProviderOutput::tasks(vec![task]));
+        let mut partial = ProviderOutput::degraded(vec![], "rollout catch-up");
+        provider.accept_sample(&mut partial);
+        assert_eq!(
+            partial.tasks.len(),
+            1,
+            "partial observations must carry the known task as stale"
+        );
+        let failed = provider.poll(SystemTime::now());
+        assert_eq!(failed.tasks.len(), 1);
+        assert!(failed.tasks[0].stale);
+        assert_eq!(failed.tasks[0].status, crate::domain::TaskStatus::Running);
+    }
     #[test]
     fn wsl_discovery_probes_only_user_distros_in_the_running_snapshot() {
         let running: Vec<String> = [
@@ -407,7 +593,7 @@ mod tests {
             SystemTime::now(),
         );
         task.session_id = Some("s".into());
-        provider.last_tasks = vec![task];
+        provider.last_authoritative_tasks = vec![task];
         let output = provider.poll(SystemTime::now());
         assert!(!output.authoritative);
         assert_eq!(output.tasks[0].status, crate::domain::TaskStatus::Running);
@@ -478,3 +664,6 @@ mod tests {
         println!("second_ms={}", started.elapsed().as_millis());
     }
 }
+
+#[cfg(test)]
+mod continuity_tests;

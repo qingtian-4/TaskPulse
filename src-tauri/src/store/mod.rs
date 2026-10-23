@@ -40,6 +40,27 @@ impl TaskStore {
         authoritative: &HashSet<String>,
         now: SystemTime,
     ) -> Vec<TaskSnapshot> {
+        let wsl_sources: HashSet<_> = incoming
+            .iter()
+            .chain(self.active.values())
+            .chain(self.recent.iter())
+            .filter_map(|t| t.source_instance.as_ref())
+            .filter(|s| s.starts_with("codex-wsl:"))
+            .cloned()
+            .collect();
+        let before: HashMap<_, _> = wsl_sources
+            .iter()
+            .map(|s| {
+                (
+                    s.clone(),
+                    self.active
+                        .values()
+                        .chain(self.recent.iter())
+                        .filter(|t| t.source_instance.as_ref() == Some(s))
+                        .count(),
+                )
+            })
+            .collect();
         let ids: HashSet<_> = incoming.iter().map(|task| task.id.as_str()).collect();
         let vanished = self
             .active
@@ -51,7 +72,21 @@ impl TaskStore {
             .map(|(id, _)| id.clone())
             .collect();
         self.reconcile_vanished(vanished, now);
-        self.merge(incoming, now)
+        let merged = self.merge(incoming, now);
+        for source in wsl_sources {
+            let tasks: Vec<_> = merged
+                .iter()
+                .filter(|t| t.source_instance.as_ref() == Some(&source))
+                .cloned()
+                .collect();
+            crate::providers::resources::continuity(
+                "store_merge",
+                &source,
+                &tasks,
+                serde_json::json!({"before_count":before[&source],"after_count":tasks.len(),"authoritative":authoritative.contains(&source)}),
+            );
+        }
+        merged
     }
     pub fn new(recent_ttl: Duration) -> Self {
         Self {
