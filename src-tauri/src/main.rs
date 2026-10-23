@@ -12,6 +12,7 @@ mod integrations;
 mod monitoring;
 mod notification_log;
 mod notifier;
+mod privacy;
 mod providers;
 mod scanner;
 mod store;

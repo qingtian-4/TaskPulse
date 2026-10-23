@@ -716,7 +716,7 @@ impl Provider for DeepSeekHarnessProvider {
         let sessions = match self.recent_sessions() {
             Ok(sessions) => sessions,
             Err(error) => {
-                log::warn!("deepseek-harness: session discovery failed: {error}");
+                log::warn!("deepseek-harness: session discovery failed");
                 let tasks = self
                     .last_tasks
                     .iter()
@@ -736,7 +736,7 @@ impl Provider for DeepSeekHarnessProvider {
                 metadata
             }
             Err(error) => {
-                log::warn!("deepseek-harness: metadata projection unavailable: {error}");
+                log::warn!("deepseek-harness: metadata projection unavailable");
                 metadata_error = Some(error.to_string());
                 self.last_metadata.clone()
             }

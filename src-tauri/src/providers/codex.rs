@@ -355,10 +355,10 @@ impl CodexProvider {
                             .collect();
                     }
                 }
-                Err(error) => {
+                Err(_) => {
                     // app-server is optional. Keep the last successful title map,
                     // then fall back through state DB and rollout metadata.
-                    log::debug!("codex: native app-server metadata unavailable: {error}");
+                    log::debug!("codex: native app-server metadata unavailable");
                 }
             }
         }
@@ -1895,7 +1895,7 @@ impl Provider for CodexProvider {
             Ok(files) => files,
             Err(error) => {
                 let message = format!("session discovery failed: {error}");
-                log::warn!("codex: {message}");
+                log::warn!("codex: session discovery failed; preserving previous tasks");
                 let tasks = self
                     .last_tasks
                     .iter()
@@ -1910,8 +1910,8 @@ impl Provider for CodexProvider {
         };
         let mut metadata = match self.thread_metadata(now) {
             Ok(metadata) => metadata,
-            Err(error) => {
-                log::warn!("codex: {error}; falling back to rollout metadata");
+            Err(_) => {
+                log::warn!("codex: metadata unavailable; falling back to rollout metadata");
                 self.native_metadata
                     .values()
                     .map(ThreadMeta::from_app_server)
