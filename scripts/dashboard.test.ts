@@ -1,9 +1,45 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
+import {observedDashboardTasks} from '../src/lib/dashboard';
+import {acceptMessageState,unreadMessageIds,messageStatus} from '../src/lib/messages';
+import type {MessageCenterState} from '../src/lib/types';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('three headline counts retain task evidence while fresh blockers are an ongoing subset',()=>{
+  const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[{
+    id:'codex',name:'Local',kind:'codex',enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000}]};
+  const blocker={...base,id:'gate',source_instance:'codex',status:'waiting_input' as const,waiting_reason:'approval' as const,input_request_id:'q'};
+  const done={...base,id:'done',status:'failed' as const};
+  const health=[{provider:'codex',status:'connected' as const,last_success:100}];
+  const initial=observedDashboardTasks([base,blocker,done],health,settings,100);
+  expect(initial.filter(t=>taskSection(t)==='ongoing')).toHaveLength(2);
+  expect(initial.filter(t=>matchesSignal(t,'action'))).toHaveLength(1);
+  expect(initial.filter(isEndedResult)).toHaveLength(1);
+  const failed=observedDashboardTasks([base,blocker,done],[{...health[0],status:'degraded'}],settings,200);
+  expect(failed.filter(t=>taskSection(t)==='ongoing')).toHaveLength(0);
+  expect(failed.filter(t=>matchesSignal(t,'action'))).toHaveLength(0);
+  expect(failed[0].status).toBe('running');expect(failed).toHaveLength(3);
+  expect(filterTasks(failed,{...EMPTY_FILTERS,query:'Native'})).toHaveLength(3);
+  expect(observedDashboardTasks([blocker],health,settings,40000)[0].stale).toBe(true);
+  expect(observedDashboardTasks([{...blocker,confidence:'inferred'}],health,settings,100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([{...blocker,input_request_id:undefined}],health,settings,100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([base,blocker],health,settings,100).every(t=>!t.stale)).toBe(true);
+  expect(base.unread&&blocker.unread).toBe(true);
+});
+
+test('message revisions and exact read snapshot IDs preserve concurrent unseen arrivals',()=>{
+  const entry={id:'a',at:100,seen:false,kind:'approval' as const,task_id:'task',task_name:'native',source:'codex' as const,state:'pending' as const,can_reopen:true};
+  const current:MessageCenterState={revision:2,unread:1,entries:[entry],error:null};
+  const rendered=unreadMessageIds(current);
+  const incoming={...current,revision:3,unread:2,entries:[{...entry,id:'b'},entry]};
+  expect(rendered).toEqual(['a']);expect(unreadMessageIds(incoming)).toEqual(['b','a']);
+  expect(acceptMessageState(incoming,current)).toBe(incoming);
+  expect(messageStatus({...entry,seen:true})).toContain('仍待处理');
+  expect(messageStatus({...entry,state:'unconfirmed',can_reopen:false})).toContain('待确认');
+});
 
 test('WSL fresh ongoing 1 → 0 → 1 is uncertainty, not a vanished or ended task',()=>{
   const running={...base,source_instance:'codex-wsl:ubuntu',session_id:'stable',turn_key:'one',pinned:true};

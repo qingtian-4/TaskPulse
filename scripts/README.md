@@ -152,4 +152,12 @@ Adding a new terminal type usually means:
 
 ## Maintainer Docs
 
+`bun scripts/native-message-center-smoke.ts --exe <isolated-custom-protocol-exe>`
+runs the message-center acceptance in an owned Windows WebView2 instance with a
+temporary `TASKPULSE_HOME`. It checks visible reading, hidden-window delivery,
+parallel request IDs, source failure/recovery, restart persistence and 440×720 /
+320×480 layouts. Inputs are synthetic; this does not certify real Agent behavior
+or installers. Screenshots, assertions and cleanup evidence stay under ignored
+`src-tauri/target/ui-smoke/evidence/`. It never changes real Agent configuration.
+
 - Release process: [../docs/maintainers/releasing.md](../docs/RELEASING.md)
