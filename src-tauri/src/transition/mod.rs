@@ -69,6 +69,8 @@ pub struct TransitionEngine {
     input_notifications: HashSet<(String, String)>,
     #[serde(skip)]
     path: Option<std::path::PathBuf>,
+    #[serde(skip)]
+    load_error: Option<crate::state_file::StateError>,
 }
 
 impl TransitionEngine {
@@ -84,21 +86,42 @@ impl TransitionEngine {
     }
 
     pub fn open(path: std::path::PathBuf) -> Self {
-        let mut engine: Self = std::fs::read(&path)
-            .ok()
-            .and_then(|body| serde_json::from_slice(&body).ok())
-            .unwrap_or_default();
+        let loaded = crate::state_file::read(&path, 1, true).and_then(|loaded| {
+            loaded
+                .map(|(value, _)| {
+                    serde_json::from_value::<Self>(value)
+                        .map_err(|_| crate::state_file::StateError::Invalid)
+                })
+                .transpose()
+        });
+        let mut engine = match loaded {
+            Ok(Some(engine)) => engine,
+            Ok(None) => Self::default(),
+            Err(error) => Self {
+                load_error: Some(error),
+                ..Self::default()
+            },
+        };
         engine.path = Some(path);
         engine
     }
 
+    pub fn persistence_error(&self) -> Option<&'static str> {
+        self.load_error.map(|error| error.message())
+    }
+
     fn persist(&self) -> bool {
+        if self.load_error.is_some() {
+            return false;
+        }
         use std::io::Write;
         let Some(path) = &self.path else {
             return true;
         };
         let result = (|| -> std::io::Result<()> {
-            let body = serde_json::to_vec(&serde_json::to_value(self)?)?;
+            let mut value = serde_json::to_value(self)?;
+            value["version"] = 1.into();
+            let body = serde_json::to_vec(&value)?;
             if std::fs::read(path).ok().as_deref() == Some(body.as_slice()) {
                 return Ok(());
             }
@@ -131,6 +154,9 @@ impl TransitionEngine {
         hosts: &[HostHealth],
         _now: SystemTime,
     ) -> Vec<TaskEvent> {
+        if self.load_error.is_some() {
+            return vec![];
+        }
         let mut events = Vec::new();
 
         // ---- task transitions ----
@@ -547,6 +573,69 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r02_invalid_future_or_unreadable_ledger_never_replays_or_overwrites() {
+        for original in [
+            Some(b"{truncated".as_slice()),
+            Some(b"{}".as_slice()),
+            Some(b"{\"version\":99}".as_slice()),
+            None,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("notifications.json");
+            if let Some(bytes) = original {
+                std::fs::write(&path, bytes).unwrap();
+            } else {
+                std::fs::create_dir(&path).unwrap();
+            }
+            for _ in 0..2 {
+                let mut engine = TransitionEngine::open(path.clone());
+                assert!(engine.persistence_error().is_some());
+                let mut task = task_turn("codex:s", TaskStatus::Running, "turn");
+                assert!(engine
+                    .apply(&[task.clone()], &[], SystemTime::now())
+                    .is_empty());
+                task.status = TaskStatus::Succeeded;
+                assert!(engine
+                    .apply_snapshots(&[task], &[], SystemTime::now())
+                    .is_empty());
+                assert!(!engine.flush());
+                if let Some(bytes) = original {
+                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                } else {
+                    assert!(path.is_dir());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn r02_unversioned_ledger_preserves_dedup_when_upgraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut task = task_turn("codex:s", TaskStatus::Running, "turn");
+        engine.apply_snapshots(&[task.clone()], &[], SystemTime::now());
+        task.status = TaskStatus::Succeeded;
+        assert_eq!(
+            engine
+                .apply_snapshots(&[task.clone()], &[], SystemTime::now())
+                .len(),
+            1
+        );
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("version");
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut restored = TransitionEngine::open(path.clone());
+        assert!(restored.persistence_error().is_none());
+        assert!(restored
+            .apply_snapshots(&[task], &[], SystemTime::now())
+            .is_empty());
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["version"], 1);
+    }
     #[test]
     fn lifecycle_legacy_ledger_migration_keeps_completion_but_not_false_inferred_finish() {
         for kind in [EventKind::TurnEnded, EventKind::InferredFinished] {

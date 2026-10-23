@@ -50,4 +50,6 @@
 
 已有 Rust 438 个测试定义（默认执行与 ignored 的结果见验证记录），包含协议/Bridge、Codex/WSL/SSH fixtures、重启去重/Attention、权限关联、并发 journal、预算与隔离。不能把“有测试文件”当覆盖率统计。本轮没有生成行覆盖率，也没有证明所有故障分支。
 
+后续状态以 Issues 为准，不再追加重复交付报告。R02 跟踪于 [#11](https://github.com/qingtian-4/TaskPulse/issues/11)：修复分支已加入失败时保全/写保护、备份校验、降级提示及损坏/未来版本/备份失败/重启故障注入；是否合入以对应 PR 为准。
+
 优先顺序：R02 的损坏/backup failure 保全 → R03 的 in-flight config generation → R04 的敏感参数保留边界 → R05/R06 的磁盘/输出预算 → R01 的投递意图事务设计。补测时保持以下区分：fixture / isolated native TaskPulse / read-only real source / actual new Agent lifecycle / fresh installer / sustained runtime。只有最后两类的实测才能闭合相应公开发布 gate。

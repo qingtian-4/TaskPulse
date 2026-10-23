@@ -1135,6 +1135,28 @@ fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
     Duration::from_millis(min_ms.max(500))
 }
 
+fn append_state_health(
+    health: &mut Vec<ProviderHealth>,
+    attention_error: Option<&str>,
+    notification_error: Option<&str>,
+    now: SystemTime,
+) {
+    for (provider, error) in [
+        ("state:attention", attention_error),
+        ("state:notifications", notification_error),
+    ] {
+        if let Some(error) = error {
+            health.push(ProviderHealth {
+                provider: provider.into(),
+                status: ProviderStatus::Degraded,
+                last_success: None,
+                last_attempt: Some(now),
+                message: Some(error.into()),
+            });
+        }
+    }
+}
+
 /// Ignore read/access events and our own atomic state writes. Otherwise each
 /// attention save wakes every collector, which saves attention again.
 fn meaningful_file_event(event: &notify::Event) -> bool {
@@ -1498,6 +1520,18 @@ pub fn watch(app: AppHandle) {
                 log::warn!("recent history: {error}");
             }
             let mut health = providers.health.clone();
+            let attention_error = ATTENTION_TRACKER.get().and_then(|tracker| {
+                tracker
+                    .lock()
+                    .unwrap_or_else(|e| e.into_inner())
+                    .persistence_error()
+            });
+            append_state_health(
+                &mut health,
+                attention_error,
+                engine.persistence_error(),
+                SystemTime::now(),
+            );
             for source in active_settings.sources.iter().filter(|s| {
                 s.enabled
                     && matches!(
@@ -1640,6 +1674,20 @@ pub fn diagnose() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r02_persistence_failures_are_visible_as_degraded_health() {
+        let mut health = vec![];
+        append_state_health(&mut health, None, None, SystemTime::now());
+        assert!(health.is_empty());
+        let message = crate::state_file::StateError::Invalid.message();
+        append_state_health(&mut health, Some(message), Some(message), SystemTime::now());
+        assert_eq!(health.len(), 2);
+        assert!(health
+            .iter()
+            .all(|item| item.status == ProviderStatus::Degraded && item.last_success.is_none()));
+        assert_eq!(health[0].provider, "state:attention");
+        assert_eq!(health[1].provider, "state:notifications");
+    }
     use crate::domain::{DetectionConfidence, TaskStatus};
 
     #[test]

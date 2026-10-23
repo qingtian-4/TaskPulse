@@ -14,6 +14,7 @@ mod notification_log;
 mod notifier;
 mod providers;
 mod scanner;
+mod state_file;
 mod store;
 mod task_notice;
 mod transition;

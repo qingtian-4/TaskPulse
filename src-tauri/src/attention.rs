@@ -57,15 +57,26 @@ pub struct AttentionTracker {
     last_payload: Option<Vec<u8>>,
     baselines: HashMap<String, u64>,
     recent_days: u16,
+    load_error: Option<crate::state_file::StateError>,
 }
 
 impl AttentionTracker {
     pub fn open(path: PathBuf) -> Self {
-        let payload = std::fs::read(&path).ok();
-        let persisted = payload
-            .as_deref()
-            .and_then(|bytes| serde_json::from_slice::<PersistedAttention>(bytes).ok())
-            .filter(|state| state.version <= ATTENTION_VERSION);
+        let loaded =
+            crate::state_file::read(&path, ATTENTION_VERSION.into(), false).and_then(|loaded| {
+                loaded
+                    .map(|(value, bytes)| {
+                        serde_json::from_value::<PersistedAttention>(value)
+                            .map(|state| (state, bytes))
+                            .map_err(|_| crate::state_file::StateError::Invalid)
+                    })
+                    .transpose()
+            });
+        let (persisted, payload, mut load_error) = match loaded {
+            Ok(Some((state, bytes))) => (Some(state), Some(bytes), None),
+            Ok(None) => (None, None, None),
+            Err(error) => (None, None, Some(error)),
+        };
         if persisted
             .as_ref()
             .is_some_and(|state| state.version < ATTENTION_VERSION)
@@ -76,13 +87,12 @@ impl AttentionTracker {
                 } else {
                     "json.pre-lifecycle.bak"
                 });
-            if !backup.exists() {
-                if let Err(error) = std::fs::copy(&path, &backup) {
-                    log::warn!("attention migration backup: {error}");
-                }
+            if let Err(error) = crate::state_file::backup(&backup, payload.as_deref().unwrap()) {
+                load_error = Some(error);
             }
         }
-        let migrate = persisted.as_ref().is_some_and(|state| state.version < 4);
+        let migrate =
+            load_error.is_none() && persisted.as_ref().is_some_and(|state| state.version < 4);
         let (mut records, baselines) = persisted
             .map(|state| (state.records, state.baselines))
             .unwrap_or_default();
@@ -125,7 +135,8 @@ impl AttentionTracker {
             .collect();
         if !legacy_keys.is_empty() {
             let backup = path.with_extension("json.pre-run-identity.bak");
-            let backed_up = backup.exists() || std::fs::copy(&path, &backup).is_ok();
+            let backed_up = load_error.is_none()
+                && crate::state_file::backup(&backup, payload.as_deref().unwrap()).is_ok();
             if backed_up {
                 for old in legacy_keys {
                     let mut record = records.remove(&old).unwrap();
@@ -134,7 +145,7 @@ impl AttentionTracker {
                     records.entry(record.task.id.clone()).or_insert(record);
                 }
             } else {
-                log::warn!("run identity migration: backup failed; preserving original records");
+                load_error = Some(crate::state_file::StateError::Backup);
             }
         }
         Self {
@@ -143,7 +154,17 @@ impl AttentionTracker {
             last_payload: payload,
             baselines,
             recent_days: 7,
+            load_error,
         }
+    }
+
+    pub fn persistence_error(&self) -> Option<&'static str> {
+        self.load_error.map(|error| error.message())
+    }
+
+    fn writable(&self) -> Result<(), String> {
+        self.persistence_error()
+            .map_or(Ok(()), |error| Err(error.into()))
     }
 
     pub fn set_recent_days(&mut self, days: u16) {
@@ -311,6 +332,7 @@ impl AttentionTracker {
     }
 
     pub fn mark_viewed(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {
+        self.writable()?;
         let record = self
             .records
             .get_mut(id)
@@ -322,6 +344,7 @@ impl AttentionTracker {
     }
 
     pub fn hide(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {
+        self.writable()?;
         let record = self
             .records
             .get_mut(id)
@@ -340,6 +363,7 @@ impl AttentionTracker {
     }
 
     pub fn restore(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {
+        self.writable()?;
         let record = self
             .records
             .get_mut(id)
@@ -354,6 +378,7 @@ impl AttentionTracker {
     }
 
     pub fn set_pinned(&mut self, id: &str, pinned: bool) -> Result<Vec<TaskSnapshot>, String> {
+        self.writable()?;
         let record = self
             .records
             .get_mut(id)
@@ -448,6 +473,7 @@ impl AttentionTracker {
     }
 
     pub fn follow(&mut self, task: TaskSnapshot) -> Result<Vec<TaskSnapshot>, String> {
+        self.writable()?;
         let mut task = task;
         task.new_execution = false;
         let record = self
@@ -479,6 +505,7 @@ impl AttentionTracker {
     }
 
     pub fn set_ignored(&mut self, id: &str, ignored: bool) -> Result<Vec<TaskSnapshot>, String> {
+        self.writable()?;
         let record = self
             .records
             .get_mut(id)
@@ -508,6 +535,9 @@ impl AttentionTracker {
     }
 
     fn save_if_changed(&mut self) -> std::io::Result<()> {
+        if let Some(error) = self.persistence_error() {
+            return Err(std::io::Error::other(error));
+        }
         let payload = serde_json::to_vec_pretty(&PersistedAttention {
             version: ATTENTION_VERSION,
             records: self.records.clone(),
@@ -565,6 +595,84 @@ fn effective_turn_key(task: &TaskSnapshot) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r02_invalid_or_future_attention_never_overwrites_original_across_restarts() {
+        for original in [
+            b"{truncated".as_slice(),
+            b"{}",
+            b"{\"version\":99,\"records\":{}}",
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("attention.json");
+            std::fs::write(&path, original).unwrap();
+            for _ in 0..2 {
+                let mut tracker = AttentionTracker::open(path.clone());
+                assert!(tracker.persistence_error().is_some());
+                tracker.reconcile(vec![task("fresh", TaskStatus::Running, Some("turn"))]);
+                assert!(tracker.set_pinned("fresh", true).is_err());
+                assert!(tracker.mark_viewed("fresh").is_err());
+                assert!(tracker.flush().is_err());
+                assert_eq!(std::fs::read(&path).unwrap(), original);
+            }
+        }
+    }
+
+    #[test]
+    fn r02_attention_read_error_is_not_a_new_installation() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        std::fs::create_dir(&path).unwrap();
+        let mut tracker = AttentionTracker::open(path.clone());
+        assert!(tracker.persistence_error().is_some());
+        assert!(tracker.flush().is_err());
+        assert!(path.is_dir());
+    }
+
+    #[test]
+    fn r02_migration_requires_a_complete_matching_regular_backup() {
+        for backup_is_directory in [true, false] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("attention.json");
+            let mut tracker = AttentionTracker::open(path.clone());
+            tracker.reconcile(vec![task("a", TaskStatus::Running, Some("turn"))]);
+            tracker.set_pinned("a", true).unwrap();
+            let mut value: serde_json::Value =
+                serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            value["version"] = 3.into();
+            let original = serde_json::to_vec(&value).unwrap();
+            std::fs::write(&path, &original).unwrap();
+            let backup = path.with_extension("json.pre-lifecycle.bak");
+            if backup_is_directory {
+                std::fs::create_dir(&backup).unwrap();
+            } else {
+                std::fs::write(&backup, b"partial").unwrap();
+            }
+            let mut restored = AttentionTracker::open(path.clone());
+            assert!(restored.persistence_error().is_some());
+            assert!(restored.known()[0].unread && restored.known()[0].pinned);
+            assert!(restored.flush().is_err());
+            assert_eq!(std::fs::read(&path).unwrap(), original);
+            assert!(backup.is_dir() || std::fs::read(backup).unwrap() == b"partial");
+        }
+    }
+
+    #[test]
+    fn r02_missing_attention_initializes_and_valid_state_can_be_repaired_before_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        assert!(tracker.persistence_error().is_none());
+        tracker.reconcile(vec![task("a", TaskStatus::Running, Some("turn"))]);
+        let valid = std::fs::read(&path).unwrap();
+        std::fs::write(&path, b"bad").unwrap();
+        let mut failed = AttentionTracker::open(path.clone());
+        std::fs::write(&path, &valid).unwrap();
+        assert!(failed.flush().is_err()); // No implicit retry overwriting a repair.
+        let mut repaired = AttentionTracker::open(path);
+        assert!(repaired.persistence_error().is_none());
+        assert!(repaired.known()[0].unread);
+        assert!(repaired.flush().is_ok());
+    }
     #[test]
     fn lifecycle_restart_caches_do_not_replay_old_turn_during_other_source_refresh() {
         use crate::store::TaskStore;
