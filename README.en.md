@@ -6,11 +6,11 @@ A Windows-first desktop tray companion that brings Codex, Claude Code, Hermes, D
 
 [中文](README.md) · [Getting started](docs/INSTALL.md) · [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Architecture](docs/ARCHITECTURE.md) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **Current version: 0.2.0-alpha.7 · Windows-first.** An Alpha.7 installer candidate was built and CI-tested. No Alpha.7 installer is publicly available. The source instructions below use the default branch `main`; recent WSL continuity fixes remain on the development branch and are not in the Alpha.7 candidate. [Release gates](docs/OPEN_SOURCE_CHECKLIST.md).
+> **Windows-first · Source preview for the next candidate.** The application version remains 0.2.0-alpha.7. No Alpha.7 installer is publicly available. The source instructions below use the default branch `main`; the updated dashboard, message center and Runtime fixes are absent from the historical Alpha.7 candidate. CI artifacts identify their main SHA separately and do not constitute a new release. [Build and release rules](docs/RELEASING.md).
 
 ## At a glance
 
-![TaskPulse native Windows task dashboard](assets/screenshots/dashboard-alpha7.png)
+![TaskPulse native Windows task dashboard](assets/screenshots/dashboard-current.png)
 
 *Actual Tauri/WebView2 rendering with isolated **synthetic standard events**. This is not a real agent session or evidence that every adapter is host-verified.*
 
@@ -19,14 +19,18 @@ A Windows-first desktop tray companion that brings Codex, Claude Code, Hermes, D
 | See task, agent, project, and source independently | Distinguish approval, question, and tool activity | Independent reminders, unread items, pins, restart recovery |
 | Thinking and model waits remain running | Never guess end-of-turn from silence or tool return | Unavailable collection becomes *stale*, not a fake completion |
 
+The dashboard focuses on **running, needs action, and results to review**. Needs action is a subset of running; do not add the counts. The bell counts unread messages only: reading a message neither resolves an agent request nor marks its result viewed.
+
 <details>
-<summary>More native screenshots — source management and reminders</summary>
+<summary>More native screenshots — message center, source management and reminders</summary>
 
-![Source management](assets/screenshots/sources-alpha7.png)
+![Message center: reading messages is separate from pending requests](assets/screenshots/message-center-current.png)
 
-![Test reminder](assets/screenshots/notice-alpha7.png)
+![Source management](assets/screenshots/sources-current.png)
 
-Both use isolated synthetic data; the reminder is a clearly labeled test. [Media provenance](assets/README.md).
+![Test reminder](assets/screenshots/notice-current.png)
+
+All use isolated synthetic data; the reminder is a clearly labeled test. Previous Alpha.7 screenshots remain as historical materials. [Media provenance](assets/README.md).
 
 </details>
 
@@ -53,7 +57,7 @@ Open source management from the tray → choose a source and project scope → s
 
 | Source | Implemented | Important boundary |
 |---|---|---|
-| **Codex** | Local native sessions, independent WSL source, SSH sessions | Large history needs initial catch-up; newest WSL fixes not merged |
+| **Codex** | Local native sessions, independent WSL source, SSH sessions | Large history needs initial catch-up; WSL requires Python 3 and an already-running distro |
 | **Claude Code** | Local records and optional consented hooks | No dedicated WSL/SSH adapter |
 | **Hermes** | Local SQLite and runtime lease | Lease loss is not completion |
 | **DeepSeek Harness** | Desktop/CLI and separate WSL source | Local quotas are not remote account quotas |
@@ -72,7 +76,7 @@ Source discovery does not establish that turn-completion events are reliable. Ki
 1. **Collect evidence** in independent provider workers: native records, hooks, SQLite, bounded file tailers and selected remote sources.
 2. **Normalize and reconcile** source/project scope, stable session/turn identity and freshness through TaskStore and AttentionTracker.
 3. **Notify meaningful changes** using TransitionEngine; the versioned event lane uses Journal, Checkpoint and Outbox for ordered recovery and deduplication.
-4. **Present facts** through Rust/Tauri 2 and Svelte 5: task panel, tray and reminders. A stale task does not become a fresh run or completed turn.
+4. **Present facts** through Rust/Tauri 2 and Svelte 5: dashboard, independent message center, tray and reminders. Message seen, result viewed and request pending remain separate; a stale task does not become a fresh run or completed turn.
 
 There is no TaskPulse cloud account or telemetry service. Settings and attention normally live in `~/.taskpulse/`; local activity and diagnostics may contain paths or command fragments, so redact before sharing. TaskPulse never auto-installs real hooks or relaxes approval policies. See [demo reproduction and recording](docs/DEMO_RECORDING_PLAN.md).
 

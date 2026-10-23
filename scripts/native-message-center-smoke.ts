@@ -96,6 +96,17 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   const notice=await root.invoke('get_task_notice');assert.ok(notice.current);assert.equal(notice.current.auto_dismiss_ms,null);
   await root.invoke('dismiss_task_notice',{id:notice.current.id});
   assert.equal((await center()).unread,0);assert.ok((await root.invoke('get_agents')).find((t:any)=>t.id===requestTask.id).input_request_ids.includes('q1'));
+  if(process.argv.includes('--capture')){
+    await click('[aria-label="关闭消息中心"]');
+    await root.send('Emulation.setDeviceMetricsOverride',{width:412,height:620,deviceScaleFactor:1,mobile:false});
+    await root.wait(`document.querySelectorAll('.task-row').length===2`);
+    await Bun.sleep(200);
+    const visible=await root.evaluate('document.body.innerText');
+    assert.ok(!/[A-Z]:[\\/]Users[\\/]|Administrator|qingtian|Server[13]|wanghy/i.test(visible));
+    await Bun.write(join(owned,'dashboard-public.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await click('[aria-label^="消息中心："]');
+  }
+
   send('request','input.resolved',{request_id:'q1'});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.filter(e=>e.state==='pending').length===1)`);
   await assert.rejects(()=>root.invoke('reopen_task_prompt',{id:requestTask.id,requestId:'q1',turnKey:'turn'}));
@@ -143,6 +154,8 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
     await root.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});await Bun.sleep(200);
     const layout=await root.evaluate(`(()=>{const p=document.querySelector('.message-center').getBoundingClientRect(),s=document.querySelector('.message-scroll');return {width:document.documentElement.scrollWidth,height:innerHeight,top:p.top,bottom:p.bottom,right:p.right,left:p.left,scroll:s.scrollHeight>s.clientHeight};})()`);
     assert.ok(layout.width<=width&&layout.bottom<=height&&layout.left>=0&&layout.right<=width);
+    const visible=await root.evaluate('document.body.innerText');
+    assert.ok(!/[A-Z]:[\\/]Users[\\/]|Administrator|qingtian|Server[13]|wanghy/i.test(visible),'Public capture must not expose private host data');
     await Bun.write(join(owned,`messages-${width}x${height}-${scale*100}.png`),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await click('[aria-label="关闭消息中心"]');
     assert.equal(await root.evaluate(`document.querySelectorAll('.counts .overview').length`),3);
@@ -181,6 +194,11 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   assert.equal((await center()).entries.length,15);assert.equal((await center()).unread,0);
   checks.push('fresh historical request without an inbox event remains manually reopenable without creating unread');
   checks.push('412x620/380x640/320x480/440x720 at DPR 1/1.5/2 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
+  if(process.argv.includes('--capture')){
+    await mkdir('assets/screenshots',{recursive:true});
+    await copyFile(join(owned,'messages-412x620-100.png'),'assets/screenshots/message-center-current.png');
+    await copyFile(join(owned,'dashboard-public.png'),'assets/screenshots/dashboard-current.png');
+  }
   await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks,renderer:'Windows native Tauri WebView2',inputs:'isolated synthetic events',realHostConfigurationsChanged:false,notVerified:['actual Agent lifecycle','installer acceptance','OS mixed-DPI monitor migration']},null,2));
   console.log(JSON.stringify({passed:true,checks,evidence:evidenceDir}));
 });
