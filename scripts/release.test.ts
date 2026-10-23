@@ -3,7 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {windowsTestProcess} from './windows-test-process';
-import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateMsiVersion, validateRelease, verifyChecksums } from './release';
+import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, verifyChecksums } from './release';
 
 const version='0.2.0-alpha.1';
 test('repository versions and release workflow keep publication draft-only and separate from experimental platforms',()=>{
@@ -107,6 +107,19 @@ test('release tag, app versions and lockfile must agree; stable publication is d
   }
   expect(()=>validateRelease(`v${version}`,[version,version,'0.1.11',version])).toThrow();
 });
+
+test('untagged candidate pins the exact main SHA and cannot enter the Release job',()=>{
+  const sha='a'.repeat(40),other='b'.repeat(40);
+  expect(()=>validateCandidateCommit(sha,sha,sha)).not.toThrow();
+  for(const args of [[sha.slice(0,7),sha,sha],[sha,other,sha],[sha,sha,other],['main',sha,sha]])
+    expect(()=>validateCandidateCommit(...args as [string,string,string])).toThrow('full SHA');
+  const workflow=Bun.YAML.parse(readFileSync(join(import.meta.dir,'../.github/workflows/release.yml'),'utf8')) as any;
+  expect(workflow.on.workflow_dispatch.inputs.commit.required).toBe(false);
+  expect(workflow.jobs.draft.if).toBe("${{ needs.preflight.outputs.tag != '' }}");
+  expect(workflow.jobs.preflight.steps.find((s:any)=>s.id==='version').run).toContain('candidate --commit "$CANDIDATE_COMMIT"');
+  expect(workflow.jobs.windows.needs).toContain('security');
+  expect(workflow.jobs['installer-smoke'].strategy.matrix.installer).toEqual(['nsis','msi']);
+});
 test('installer assets are flattened, hashed and versioned, and corruption or stale files fail closed',()=>{
   const root=mkdtempSync(join(tmpdir(),'taskpulse-release-'));
   try {
@@ -118,6 +131,9 @@ test('installer assets are flattened, hashed and versioned, and corruption or st
     verifyChecksums(out,version);
     expect(readFileSync(join(out,'SHA256SUMS.txt'),'utf8')).not.toContain('./');
     expect(JSON.parse(readFileSync(join(out,'release-manifest.json'),'utf8')).commit).toBe('a'.repeat(40));
+    const candidate=join(root,'candidate');stageInstallers(bundle,candidate,version,'a'.repeat(40),{tagged:false});
+    const manifest=JSON.parse(readFileSync(join(candidate,'release-manifest.json'),'utf8'));
+    expect(manifest.tag).toBeNull();expect(manifest.build_kind).toBe('commit-candidate');verifyChecksums(candidate,version);
     expect(()=>stageInstallers(bundle,out,version,'a'.repeat(40))).toThrow('empty');
     const exe=join(out,installerNames(version)[0]);
     writeFileSync(exe,'corrupted');expect(()=>verifyChecksums(out,version)).toThrow('Checksum mismatch');
