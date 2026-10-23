@@ -80,6 +80,8 @@ EXACT > HOOK > INFERRED 是合并优先级，不是宿主官方保证。stale �
 
 ## TaskStore 与 Attention 边界
 
+本地 Worker 的独立接收通道同时界定采集 generation。来源 ID、类型、位置或 integration 策略变化会撤销旧通道、缓存和未提交批次；旧线程完成后不能写发现目录。catalog 只由主循环接收当前 Worker 结果后更新。有序事实仍留在 durable outbox，撤销通道不确认消费。native 项目筛选与显示重命名在消费时生效，不重建 WSL/Codex 增量解析器；Generic reducer 捕获的 fallback name 变化则重建该 Worker。
+
 [`TaskStore`](../src-tauri/src/store/mod.rs) 按稳定 ID 合并观测、置信度与来源实例，维护 active/recent。正常运行使用 merge_instances；早期 partition/source helper 仍供兼容、诊断和测试。Agent running 消失保留 stale；普通运行消失变 stale/unknown，不转成功。终态 recent 默认保留 30 分钟，由 [`HistoryStore`](../src-tauri/src/history.rs) 保存。
 
 [`AttentionTracker`](../src-tauri/src/attention.rs) 决定用户继续关注什么：新执行、running、未查看结果、待处理请求与 pin。启动用来源 baseline 避免导入完整 idle 历史。unread、hidden、ignored、manual pin 是 TaskPulse 用户状态。默认 7 天 execution-activity 窗口只改变主视图与 older attention，不删除记录或未读；running 和明确 manual pin 不过期。Legacy pin 保留，但不会自动获得永久豁免。轮询/重命名不续期执行活动。
