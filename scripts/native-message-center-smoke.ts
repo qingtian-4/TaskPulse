@@ -52,6 +52,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   const center=()=>root.invoke('get_message_center');
   const readDisplayedMessages=async()=>{
     for(const entry of (await center()).entries.filter((e:any)=>!e.seen)){
+      await root.wait(`!!document.querySelector('[data-message-id="${entry.id}"]')`);
       await root.evaluate(`document.querySelector('[data-message-id="${entry.id}"]').scrollIntoView({block:'center'})`);
       await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.find(e=>e.id==='${entry.id}')?.seen)`);
     }
