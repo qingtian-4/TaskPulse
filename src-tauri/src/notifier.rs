@@ -464,6 +464,7 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
             crate::notification_log::record(task, "all", "suppressed_scope", title, None, false);
             continue;
         }
+        crate::message_center::record(event);
         let notify_event = match event {
             TaskEvent::WaitingInput { task, .. } => {
                 NotifyEvent::WaitingInput { task: task.clone() }

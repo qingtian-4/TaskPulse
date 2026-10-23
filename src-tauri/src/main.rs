@@ -9,6 +9,7 @@ mod focusers;
 mod heuristics;
 mod history;
 mod integrations;
+mod message_center;
 mod monitoring;
 mod notification_log;
 mod notifier;
@@ -203,6 +204,8 @@ fn main() {
             notifier::test_notification,
             notifier::get_notification_error,
             notification_log::get_notification_log,
+            message_center::get_message_center,
+            message_center::mark_messages_seen,
             task_notice::get_task_notice,
             task_notice::get_pending_task_prompts,
             task_notice::reopen_task_prompt,

@@ -352,6 +352,7 @@ fn emit_agents(
         *cache = providers.to_vec();
     }
     crate::tray::update_icon(app, tasks, hosts);
+    crate::message_center::publish(app);
     let _ = app.emit(
         "pending-prompts-updated",
         crate::task_notice::get_pending_task_prompts(),
@@ -1197,6 +1198,7 @@ fn meaningful_file_event(event: &notify::Event) -> bool {
                     | "recent.json"
                     | "notifications.json"
                     | "notification-log.json"
+                    | "messages.json"
                     | "config.toml"
                     | "config.toml.pre-dashboard.bak"
             )
