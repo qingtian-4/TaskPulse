@@ -36,6 +36,12 @@ main SHA（40 位）；它优先于 `tag` 输入。preflight 必须确认 checko
 `build_kind=commit-candidate` 和完整源 SHA 区分同版本的开发构建。
 四处应用版本及 MSI 映射仍须一致；这不是新版本发布，也不证明旧 Alpha.7 的升级兼容。
 
+仅修复验收探针时，CI 附件模式可指定 `probe_commit`：必须是当前工作流自身的完整
+SHA，并同时提供有效的 main `commit`；标签发布拒绝该覆盖。产品构建仍使用 main SHA，
+只有安装验收脚本使用该探针提交，证据分别记录产品 manifest 与 `probe_commit`。
+NSIS/MSI 各运行两轮，每轮是独立 fresh runner，不能将重跑失败 job 计为连续通过。
+探针只在 IPC 前等待已复现的 CDP 导航上下文销毁；真实 IPC、JS 异常和业务断言失败不重试。
+
 ## 工作流交付
 
 `preflight → Rust/Git 安全检查 → Windows 完整质量门禁/MSVC 构建 → 每种安装格式独立 runner 验收 → 草稿预发布`。
