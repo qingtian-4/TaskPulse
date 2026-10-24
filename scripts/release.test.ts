@@ -3,6 +3,7 @@ import { mkdtempSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {windowsTestProcess} from './windows-test-process';
+import './installer-webview.test';
 import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, verifyChecksums } from './release';
 
 const version='0.2.0-alpha.1';
@@ -55,6 +56,7 @@ test('installer acceptance de-elevates only the app, keeps native checks mandato
   const workflow=Bun.YAML.parse(readFileSync(join(root,'.github/workflows/release.yml'),'utf8')) as any;
   const smoke=workflow.jobs['installer-smoke'];
   expect(smoke.strategy.matrix.installer).toEqual(['nsis','msi']);
+  expect(smoke.strategy.matrix.round).toEqual([1,2]);
   expect(smoke.strategy['fail-fast']).toBe(false);
   expect(smoke.steps.find((s:any)=>s.uses?.startsWith('actions/upload-artifact')).with.name).toContain('matrix.installer');
   expect(smoke.steps.some((s:any)=>s.run?.includes('gerardog.gsudo'))).toBe(true);
@@ -67,16 +69,17 @@ test('installer acceptance de-elevates only the app, keeps native checks mandato
   expect(helper).toContain('WindowsBuiltInRole]::Administrator');
   expect(helper).toContain('WaitForExit(10000)');
   expect(helper).toContain("@('first-launch','restart')");
-  expect(helper).toContain('get_pending_task_prompts');
+  const probe=readFileSync(join(root,'scripts/installer-webview.ps1'),'utf8');
+  expect(probe).toContain('get_pending_task_prompts');
   expect(helper).toContain('last_probe_error=$lastProbeError');
   expect(helper).toContain('-RedirectStandardError');
   expect(helper).toContain('Test-InstallerSameExecutable $live.Path $Exe');
-  expect(helper).toContain('[void]$socket.ConnectAsync');
-  expect(helper).toContain('[void]$socket.SendAsync');
+  expect(probe).toContain('[void]$socket.ConnectAsync');
+  expect(probe).toContain('[void]$Socket.SendAsync');
   expect(parent).toContain('$native.native_ipc -is [Array]');
   expect(parent).toContain("[ValidateSet('nsis','msi')]");
   expect(parent).toContain('foreach ($kind in @($InstallerKind))');
-  for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1','installer-process.ps1','installer-process.test.ps1'] : []) {
+  for(const name of process.platform==='win32' ? ['installer-smoke.ps1','installer-app-smoke.ps1','installer-process.ps1','installer-process.test.ps1','installer-webview.ps1'] : []) {
     const script=join(root,'scripts',name).replaceAll("'","''");
     const result=await windowsTestProcess('powershell.exe',['-NoProfile','-NonInteractive','-Command',`$parseErrors=$null;[void][System.Management.Automation.Language.Parser]::ParseFile('${script}',[ref]$null,[ref]$parseErrors);if($parseErrors){$parseErrors|Out-String|Write-Error;exit 1}`]);
     expect(result.exitCode, result.stderr).toBe(0);
@@ -119,6 +122,11 @@ test('untagged candidate pins the exact main SHA and cannot enter the Release jo
   expect(workflow.jobs.preflight.steps.find((s:any)=>s.id==='version').run).toContain('candidate --commit "$CANDIDATE_COMMIT"');
   expect(workflow.jobs.windows.needs).toContain('security');
   expect(workflow.jobs['installer-smoke'].strategy.matrix.installer).toEqual(['nsis','msi']);
+  const preflight=workflow.jobs.preflight.steps.find((s:any)=>s.id==='version').run;
+  expect(preflight).toContain('"$PROBE_COMMIT" != "$GITHUB_SHA"');
+  expect(preflight).toContain('-z "$CANDIDATE_COMMIT"');
+  expect(workflow.jobs.windows.steps[0].with.ref).toBe('${{ needs.preflight.outputs.commit }}');
+  expect(workflow.jobs['installer-smoke'].steps[0].with.ref).toBe('${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}');
 });
 test('installer assets are flattened, hashed and versioned, and corruption or stale files fail closed',()=>{
   const root=mkdtempSync(join(tmpdir(),'taskpulse-release-'));

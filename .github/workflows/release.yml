@@ -13,6 +13,10 @@ on:
         description: 'Optional full current main SHA: CI artifacts only, overrides tag; no Tag or Release created'
         required: false
         default: ''
+      probe_commit:
+        description: 'Optional exact workflow SHA for probe-only candidate regression; forbidden for tagged releases'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -31,6 +35,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       tag: ${{ steps.version.outputs.tag }}
       commit: ${{ steps.version.outputs.commit }}
+      probe_commit: ${{ steps.version.outputs.probe_commit }}
     steps:
       - uses: actions/checkout@v6
         with:
@@ -43,7 +48,15 @@ jobs:
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
           CANDIDATE_COMMIT: ${{ github.event.inputs.commit }}
+          PROBE_COMMIT: ${{ github.event.inputs.probe_commit }}
         run: |
+          if [ -n "$PROBE_COMMIT" ]; then
+            if [ -z "$CANDIDATE_COMMIT" ] || ! [[ "$PROBE_COMMIT" =~ ^[a-f0-9]{40}$ ]] || [ "$PROBE_COMMIT" != "$GITHUB_SHA" ]; then
+              echo 'Probe override requires an untagged main candidate and the exact workflow SHA' >&2
+              exit 1
+            fi
+            echo "probe_commit=$PROBE_COMMIT" >> "$GITHUB_OUTPUT"
+          fi
           if [ -n "$CANDIDATE_COMMIT" ]; then
             bun scripts/release.ts candidate --commit "$CANDIDATE_COMMIT"
           else
@@ -125,7 +138,7 @@ jobs:
           if-no-files-found: error
 
   installer-smoke:
-    name: Verify ${{ matrix.installer }} on a fresh Windows runner
+    name: Verify ${{ matrix.installer }} on a fresh Windows runner (round ${{ matrix.round }})
     needs: [preflight, windows]
     runs-on: windows-latest
     timeout-minutes: 15
@@ -133,10 +146,11 @@ jobs:
       fail-fast: false
       matrix:
         installer: [nsis, msi]
+        round: [1, 2]
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ needs.preflight.outputs.commit }}
+          ref: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
           persist-credentials: false
       - uses: actions/download-artifact@v8
         with:
@@ -160,11 +174,12 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           INSTALLER_KIND: ${{ matrix.installer }}
+          TASKPULSE_PROBE_COMMIT: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND"
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: windows-installer-evidence-${{ matrix.installer }}
+          name: windows-installer-evidence-${{ matrix.installer }}-${{ matrix.round }}
           path: dist/installer-smoke/
           if-no-files-found: warn
 
