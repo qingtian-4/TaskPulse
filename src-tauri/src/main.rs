@@ -9,11 +9,14 @@ mod focusers;
 mod heuristics;
 mod history;
 mod integrations;
+mod message_center;
 mod monitoring;
 mod notification_log;
 mod notifier;
+mod privacy;
 mod providers;
 mod scanner;
+mod state_file;
 mod store;
 mod task_notice;
 mod transition;
@@ -201,6 +204,8 @@ fn main() {
             notifier::test_notification,
             notifier::get_notification_error,
             notification_log::get_notification_log,
+            message_center::get_message_center,
+            message_center::mark_messages_seen,
             task_notice::get_task_notice,
             task_notice::get_pending_task_prompts,
             task_notice::reopen_task_prompt,
@@ -210,6 +215,7 @@ fn main() {
             task_notice::open_task_notice,
             tray::toggle_pin,
             tray::get_pinned,
+            tray::resize_dashboard,
             tray::open_management,
             tray::close_popup
         ])

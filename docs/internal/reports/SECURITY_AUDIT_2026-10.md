@@ -1,3 +1,5 @@
+> Historical record: retained for provenance, not current implementation or release guidance. See [architecture](../../ARCHITECTURE.md) and [releasing](../../RELEASING.md).
+
 # Alpha.7 候选安全检查记录
 
 日期：2026-10-19（Asia/Shanghai）。适用本地候选分支，不适用 Alpha.6 的旧安装器。
@@ -66,7 +68,7 @@ Gitleaks 在完整非浅克隆上使用 `--all --full-history --diff-merges=firs
 必须再次扫描。它不覆盖未知凭据格式、不可达对象、所有私人数据或未跟踪文件。
 
 前端上轮 32 条告警已降为 1 条 low：Kit 2 → cookie 0.6.0，详见
-[开源交付清单](OPEN_SOURCE_CHECKLIST.md#安全审查记录)。本轮不掩盖该项，也不把
+[开源交付清单](../../OPEN_SOURCE_CHECKLIST.md#安全审查记录)。本轮不掩盖该项，也不把
 原生静态应用没有 Cookie 服务端等同于漏洞修复。公开下一候选前重审，最晚
 2026-11-19；若增加 SSR 或服务器功能，立即重评。
 
@@ -76,4 +78,4 @@ Gitleaks 在完整非浅克隆上使用 `--all --full-history --diff-merges=firs
 quality、Security checks 及独立 NSIS/MSI 安装验收；旧标签不移动。新安全工作流
 仅 contents:read，不创建 Issue、不上传扫描报告，也不会自动 Publish。
 干净 Windows/WebView2、跨版本/格式迁移、真实 Agent 新事件、编辑器焦点和长时间
-时延仍应按[发布门禁](RELEASING.md)验收。
+时延仍应按[发布门禁](../../RELEASING.md)验收。

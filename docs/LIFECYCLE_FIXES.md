@@ -22,7 +22,7 @@
 - Rust：284 通过、5 项 opt-in 活体测试默认忽略；Clippy `-D warnings`、fmt、隔离构建通过。
 - UI：10 项纯模型测试通过，Svelte 0 错误/警告，生产前端构建通过。沙箱内 Vite 子进程曾报 EPERM，放行构建后通过；并非代码构建错误。
 - 只读真实 Claude 数据：审查对话 WaitingInput，两个不同 hello 会话分别 Failed 和 WaitingInput。没有安装 Hook、改代理或发送测试 Agent 提示。
-- 真实 SSH：Server1_wanghy、Server3 连接成功，发现 149 条原生目录记录，Server1 的 YOLO-RDD 会话标题与 WaitingInput 正常；不等于把 149 条历史导入关注。
+- 真实 SSH（公开记录已脱敏）：两个已配置测试主机连接成功，发现 149 条原生目录记录，测试项目的会话标题与 WaitingInput 正常；不等于把 149 条历史导入关注。主机别名与项目名称不进入公开验收记录。
 - 真实托盘 IPC 连续 30 秒 / 60 次采样：当前 Codex turn 覆盖 Tool、AwaitingModel、Thinking 三种阶段，列表实际渲染模型/思考阶段，非工具阶段没有残留命令，没有 Agent 推断完成弹窗。
 - 实际 attention 升级到 v4，迁移备份存在；旧 hello 错误归档，未读仍为 true，手动固定未丢失。
 - 原生提醒窗验收：320×132 深色、不溢出、焦点保持、队列/迟到回调/悬停/约 15 秒收起均通过。只使用明确标注的通知测试，不导入虚假任务。

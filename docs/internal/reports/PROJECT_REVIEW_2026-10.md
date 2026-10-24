@@ -1,3 +1,5 @@
+> Historical record: retained for provenance, not current implementation or release guidance. See [architecture](../../ARCHITECTURE.md) and [releasing](../../RELEASING.md).
+
 # TaskPulse 功能改进与实施交接文档
 
 更新日期：2026-10-19（Asia/Shanghai）。当前实施分支：`codex/desktop-discovery-visibility`，版本 `0.2.0-alpha.7`（候选，未发布；本地安全/原生测试通过，远端 CI 和新安装器待验收）。Alpha.6 的旧草稿安装通过但不包含后续依赖修复；旧标签未改写。初次审查为 2026-10-12，基线 `f3aca96`；禁用推测批准的基线为 `ef52b0f`。
@@ -13,7 +15,7 @@
 | T08 | 配置保留与 DSH WSL 防唤醒已完成 | Claude WSL/SSH、Hermes WSL 未新增 |
 | T09/T10 | 未实施 | 通用外部事件契约／新 Agent、额度独立开关 |
 
-开源准备：Alpha.6 的两个独立安装器及草稿已通过；本地后续安全修复与实机门禁仍需完成，不等于安装包已公开或干净系统验收通过。当前行动入口为 [开源交付清单](OPEN_SOURCE_CHECKLIST.md)，流程见 [发布文档](RELEASING.md)。
+开源准备：Alpha.6 的两个独立安装器及草稿已通过；本地后续安全修复与实机门禁仍需完成，不等于安装包已公开或干净系统验收通过。当前行动入口为 [开源交付清单](../../OPEN_SOURCE_CHECKLIST.md)，流程见 [发布文档](../../RELEASING.md)。
 
 以下“已实现”指源码中已有入口，不等于已在全部真实环境验收；静态审查发现应先核对最新代码并复现，再修改。执行时以仓库最新 `AGENTS.md` 和用户要求为准。
 
@@ -42,7 +44,7 @@
 | Gemini CLI | 兼容 Hook 与扫描 | 没有专用原生会话适配 | 没有专用原生会话适配 | `scanner/strategies/gemini.rs`、旧 Hook |
 | ZCode／Trae／WorkBuddy | 未实现专用适配 | 未实现 | 未实现 | Provider 模块与来源注册表无对应项 |
 
-入口核对：[SourceKind](../src-tauri/src/monitoring.rs#L15)、[worker 构造](../src-tauri/src/watcher.rs#L668)、[管理窗口来源选项](../src/routes/manage/+page.svelte#L36)。
+入口核对：[SourceKind](../../../src-tauri/src/monitoring.rs#L15)、[worker 构造](../../../src-tauri/src/watcher.rs#L668)、[管理窗口来源选项](../../../src/routes/manage/+page.svelte#L36)。
 
 **不能因为提供了一个目录输入框，就宣称支持 WSL。** Claude 的存活证据涉及本机进程，Hermes 涉及 SQLite/WAL；手填 UNC 路径不等于完成发行版发现、Linux PID、权限、故障和路径语义适配。更不能通过 Windows UNC 打开正在使用的 WSL SQLite 来代替 Linux 内只读查询。
 
@@ -64,7 +66,7 @@ CC Switch 的职责是管理／切换配置，不是新的 Agent 执行器。其
 
 ### P1：Hermes 把 lease 过期当成本轮结束
 
-证据：[hermes.rs](../src-tauri/src/providers/hermes.rs#L109) 的 `row_to_snapshot` 在没有 live lease 且没有明确 session end 时，仍设为 `WAITING_INPUT / TurnEnded`；`expired_lease_is_waiting_input` 测试固化了该行为。[TransitionEngine](../src-tauri/src/transition/mod.rs#L205) 随后可产生本轮结束提醒。
+证据：[hermes.rs](../../../src-tauri/src/providers/hermes.rs#L109) 的 `row_to_snapshot` 在没有 live lease 且没有明确 session end 时，仍设为 `WAITING_INPUT / TurnEnded`；`expired_lease_is_waiting_input` 测试固化了该行为。[TransitionEngine](../../../src-tauri/src/transition/mod.rs#L205) 随后可产生本轮结束提醒。
 
 触发：Agent 仍等待模型／工具，但 lease 续期延迟或丢失。影响：用户收到错误的结束提醒。
 
@@ -72,7 +74,7 @@ CC Switch 的职责是管理／切换配置，不是新的 Agent 执行器。其
 
 ### P1：Claude 同一轮第二次批准可能不再提醒
 
-证据：[apply_hook](../src-tauri/src/providers/claude_code.rs#L524) 只从 `PermissionRequest.tool_use_id` 生成请求 ID；官方说明该事件 **不包含 `tool_use_id`**。[Claude PermissionRequest 输入](https://code.claude.com/docs/en/hooks#permissionrequest-input)
+证据：[apply_hook](../../../src-tauri/src/providers/claude_code.rs#L524) 只从 `PermissionRequest.tool_use_id` 生成请求 ID；官方说明该事件 **不包含 `tool_use_id`**。[Claude PermissionRequest 输入](https://code.claude.com/docs/en/hooks#permissionrequest-input)
 
 缺少 ID 时，同轮多个批准会落到 TransitionEngine 的 `(task_id, WaitingInput)` 去重；第一次已提醒后，后面的独立批准不能可靠区分。`Notification.permission_prompt` 路径同样没有创建独立 ID。Codex 已有较完整的 request-level 去重，Claude 尚未一致。
 
@@ -82,25 +84,25 @@ CC Switch 的职责是管理／切换配置，不是新的 Agent 执行器。其
 
 ### P1：长时间运行的代码缺少可靠保活
 
-证据：[远端快照](../src-tauri/src/providers/remote_tmux/mod.rs#L128) 只读取 `-mmin -180` 的 run 文件；[tp-run](../scripts/tp-run#L88) 在开始、结束或信号处理时写入，运行期间没有心跳。
+证据：[远端快照](../../../src-tauri/src/providers/remote_tmux/mod.rs#L128) 只读取 `-mmin -180` 的 run 文件；[tp-run](../../../scripts/tp-run#L88) 在开始、结束或信号处理时写入，运行期间没有心跳。
 
 触发：运行超过三小时。影响：精确记录暂时从采集中消失；在 tmux 中可能退回推断，在 tmux 外缺少其他证据。完成时重新写入会再次可见，但不能保证期间监控连续。
 
-本地也有类似边界：[LocalFileProvider](../src-tauri/src/providers/local_file.rs#L346) 按文件修改时间清理，旧格式 10 分钟、v2 30 分钟，运行状态没有豁免。输出安静的旧 wrapper 不会持续更新状态。
+本地也有类似边界：[LocalFileProvider](../../../src-tauri/src/providers/local_file.rs#L346) 按文件修改时间清理，旧格式 10 分钟、v2 30 分钟，运行状态没有豁免。输出安静的旧 wrapper 不会持续更新状态。
 
 修复：活跃运行使用 heartbeat／进程身份核对，不受“最近结果”窗口限制；只对结束记录应用保留时间。心跳丢失应变为状态待确认，而不是完成。区分 `observed_at`、`heartbeat_at`、`execution_activity_at`，避免轮询／心跳把旧任务永远留在近期活动里。
 
 ### P1：旧本地 wrapper 不是可靠的通用代码监控方案
 
-证据：[wrap.ps1](../scripts/wrap.ps1#L78) 同时重定向 stdout/stderr，却先同步读完 stdout 才 drain stderr；大量 stderr 可填满管道并卡住程序。参数用空格拼接，复杂引号／空格参数也可能改变。
+证据：[wrap.ps1](../../../scripts/wrap.ps1#L78) 同时重定向 stdout/stderr，却先同步读完 stdout 才 drain stderr；大量 stderr 可填满管道并卡住程序。参数用空格拼接，复杂引号／空格参数也可能改变。
 
-[成功分支](../scripts/wrap.ps1#L104) 直接删除状态文件；`wrap.sh` 成功时也删除。现有 Store／Transition 正确地不把“文件消失”当完成，因此成功任务可能没有可查看的明确结果。旧脚本没有统一的精确退出码数据契约。
+[成功分支](../../../scripts/wrap.ps1#L104) 直接删除状态文件；`wrap.sh` 成功时也删除。现有 Store／Transition 正确地不把“文件消失”当完成，因此成功任务可能没有可查看的明确结果。旧脚本没有统一的精确退出码数据契约。
 
 修复：用专门的运行监督器记录 child exit status，默认继承 stdio；如需日志，应并发排空两个流。保留终态、原样传播退出码、正确处理参数及取消，退出前停止心跳。不能仅给旧 wrapper 增加一个 UI 按钮就宣称功能完成。
 
 ### P1：同一 tmux pane 的旧 run 记录可覆盖新运行
 
-证据：[run_file_to_task](../src-tauri/src/providers/remote_tmux/runfile.rs#L120) 在有 pane 时使用 `ssh:<host>:<pane>` 作为 ID；[tasks_from_run_files](../src-tauri/src/providers/remote_tmux/runfile.rs#L215) 输出全部近期文件，没有按 pane 选取最新运行；快照 `find` 未按开始时间排序。Store 同来源同置信度合并时接受后来的快照。
+证据：[run_file_to_task](../../../src-tauri/src/providers/remote_tmux/runfile.rs#L120) 在有 pane 时使用 `ssh:<host>:<pane>` 作为 ID；[tasks_from_run_files](../../../src-tauri/src/providers/remote_tmux/runfile.rs#L215) 输出全部近期文件，没有按 pane 选取最新运行；快照 `find` 未按开始时间排序。Store 同来源同置信度合并时接受后来的快照。
 
 触发：同一 pane 连续执行 A、B，或者 A 使用 `tp-run`、B 直接执行。影响：历史 A 的 Exact 终态可能盖住正在运行的 B，或同 pane 多个 run 最后由文件遍历顺序决定。
 
@@ -108,7 +110,7 @@ CC Switch 的职责是管理／切换配置，不是新的 Agent 执行器。其
 
 ### P1：SSH 成功不代表每个采集段成功
 
-证据：[snapshot_command](../src-tauri/src/providers/remote_tmux/mod.rs#L128) 将 tmux、ps、run files、Codex 拼在一条命令里，结尾 `true`；解析器跳过非结构化行。`process_snapshot` 会把成功快照中消失的 pane 标成推断结束。
+证据：[snapshot_command](../../../src-tauri/src/providers/remote_tmux/mod.rs#L128) 将 tmux、ps、run files、Codex 拼在一条命令里，结尾 `true`；解析器跳过非结构化行。`process_snapshot` 会把成功快照中消失的 pane 标成推断结束。
 
 触发：SSH 本身连通，但 tmux socket 权限／命令执行失败，返回错误文本而非 pane 列表。影响：错误可能变成空列表并产生错误的结束判断。
 
@@ -116,8 +118,8 @@ CC Switch 的职责是管理／切换配置，不是新的 Agent 执行器。其
 
 ### P2：配置保留、提醒恢复与来源能力描述
 
-- [write_settings](../src-tauri/src/monitoring.rs#L360) 保留顶层未知 TOML 字段，但整个替换 `[dashboard]`；其内部与 source 内未知字段仍可能丢失。应递归保留未知键，并覆盖旧版本编辑新配置的测试。
-- [NoticeQueue](../src-tauri/src/task_notice.rs#L119) 是内存队列，通知去重则持久化；重启后未解决提醒的恢复语义需要定义。这也是不能把待处理信息仅放在弹窗里的原因。
+- [write_settings](../../../src-tauri/src/monitoring.rs#L360) 保留顶层未知 TOML 字段，但整个替换 `[dashboard]`；其内部与 source 内未知字段仍可能丢失。应递归保留未知键，并覆盖旧版本编辑新配置的测试。
+- [NoticeQueue](../../../src-tauri/src/task_notice.rs#L119) 是内存队列，通知去重则持久化；重启后未解决提醒的恢复语义需要定义。这也是不能把待处理信息仅放在弹窗里的原因。
 - 当前“需处理”混合失败、源过期和真正阻塞，不是单纯的“批准请求”。需要分别展示证据与动作；推测授权已在 `ef52b0f` 中移除，不得重新加入。
 
 ## 4. 代码运行监控：现在怎么用，下一步怎么补
@@ -189,7 +191,7 @@ agent-tray attach --pid <PID>
 
 **赞成把运行放到首位，也赞成减少“需处理”对主列表的割裂；不赞成让批准信息只存在于弹窗。** 弹窗会被错过、关闭，或者应用重启后丢失；失败和采集异常也不都是批准请求。
 
-当前实现是：[taskSection](../src/lib/dashboard.ts#L55) 先把 stale、failed、真正阻塞放进第 0 组，之后才判断 running。原有 approval-check 分类已移除；接手 Agent 应调整分组展示，而非恢复这一推测分支。
+当前实现是：[taskSection](../../../src/lib/dashboard.ts#L55) 先把 stale、failed、真正阻塞放进第 0 组，之后才判断 running。原有 approval-check 分类已移除；接手 Agent 应调整分组展示，而非恢复这一推测分支。
 
 建议主导航为：
 
@@ -225,7 +227,7 @@ agent-tray attach --pid <PID>
 
 现有视觉方向可以保留。本次读到的逻辑优点包括：非激活窗口、任务上下文独立字段、独立队列、15 秒普通提醒与悬停暂停、阻塞不自动关闭、旧 ID 不关闭下一条、关闭不标已读、投递记录有界。
 
-证据：[task_notice.rs](../src-tauri/src/task_notice.rs)、[提醒界面](../src/routes/notice/+page.svelte)、[notice.test.ts](../scripts/notice.test.ts)。
+证据：[task_notice.rs](../../../src-tauri/src/task_notice.rs)、[提醒界面](../../../src/routes/notice/+page.svelte)、[notice.test.ts](../../../scripts/notice.test.ts)。
 
 建议先改行为而非重画：未解决请求可从面板重新打开；普通完成提醒不要因一条长期批准永远排在后面（当前可手动“下一条”）；定义提醒队列上限、重启恢复、突发多任务轮转。保留“不抢焦点”。将“稍后处理”明确成收起，若未来实现 snooze 再显示具体提醒时间。
 
@@ -233,7 +235,7 @@ agent-tray attach --pid <PID>
 
 ### Codex 额度
 
-赞成做成设置中的可选项，优先级低于代码监控。[Dashboard.svelte](../src/lib/components/Dashboard.svelte#L221) 当前非 demo 时固定渲染额度区，[DashboardSettings](../src-tauri/src/monitoring.rs#L57) 没有额度字段；[Codex app-server 查询](../src-tauri/src/providers/codex.rs#L615) 同时请求线程与额度。
+赞成做成设置中的可选项，优先级低于代码监控。[Dashboard.svelte](../../../src/lib/components/Dashboard.svelte#L221) 当前非 demo 时固定渲染额度区，[DashboardSettings](../../../src-tauri/src/monitoring.rs#L57) 没有额度字段；[Codex app-server 查询](../../../src-tauri/src/providers/codex.rs#L615) 同时请求线程与额度。
 
 后续拆成 `quota.enabled`（是否采集）与 `quota.show_in_dashboard`（是否展示），名字仅为建议。关闭采集必须停止额度请求，而不只是隐藏 footer；线程元数据仍可继续读取。初装默认关闭或按用户明确选择开启。额度明确标注账号／来源，缺失显示未知，不能混用本机、WSL 和 SSH 的账号额度。
 
@@ -529,7 +531,7 @@ bun run test:ui-model
 - Svelte check：0 errors、0 warnings；`bun run test:ui-model`：16 通过；前端生产构建通过。沙箱下 Vite spawn EPERM 属环境限制，经审批在正常环境重跑通过。
 - Windows `bun scripts/run-wrapper-smoke.ts`：空字符串、引号、尾反斜杠、Unicode、重定向 stdin、250 KB stderr、非零退出、静默心跳、启动失败通过；状态全部在 target/wrapper-smoke 内，未写真实监控目录。
 - 已运行 Ubuntu 的 `python3 scripts/run-wrapper-smoke.py`：参数、大输出、静默、成功、失败、SIGTERM、SIGKILL、旧 wrap.sh 兼容入口通过。长于 3 小时、PID 复用／重启由 Rust 模拟时间测试覆盖，不宣称连续运行了三小时。
-- 真实 SSH：`live_remote_snapshot`，Server1_wanghy／Server3 的四类分段全部健康；154 个原生会话目录；确认 YOLO-RDD 的“梳理 YOLO-RDD 项目流程”和目录里的 HyperMem。HyperMem 本次无近期执行任务，未批量导入空闲历史。用 EXPECT_REMOTE_CATALOG_PROJECT 与 EXPECT_REMOTE_PROJECT 分别验收目录发现／活跃结果。
+- 真实 SSH：`live_remote_snapshot`，两个测试主机的四类分段全部健康；154 个原生会话目录；确认项目 A 的原生任务标题及项目 B 的目录记录。项目 B 本次无近期执行任务，未批量导入空闲历史。主机别名、项目名称与任务标题已从公开记录脱敏；用 EXPECT_REMOTE_CATALOG_PROJECT 与 EXPECT_REMOTE_PROJECT 分别验收目录发现／活跃结果。
 - 真实只读来源：`live_hermes_snapshot`、`live_claude_snapshot`、`live_wsl_codex_snapshot`、`live_desktop_snapshot`、`live_desktop_schema` 通过。Claude 已安装 VSCode 扩展 2.1.296；DSH 读取 v4 事件和原生标题；WSL Codex 冷采集约 1.2 秒、下一次约 0.4 秒。本次没有发起真实 Agent 任务，也未自动安装 Hook。
 - 原生 WebView2 `native-notice-smoke.ts` 两轮通过：深色 320×132、长标题和按钮、悬停、批准超过 15 秒仍保留、普通结果约 15 秒隐藏、多条队列、旧回调、点击详情、总开关和无假任务／已查看变更。结果及 PNG 在 `src-tauri/target/ui-smoke/`。第二轮因屏保跳过编辑器焦点验证；新真实 Agent 完成／批准、OS 系统横幅和编辑器真实焦点仍未验收。不能把测试提醒通过说成真实批准全链路通过。
 - 没有更改现有项目白名单、代理、statusLine、批准策略；测试后 config.toml SHA256 与执行前相同。`docs/REVIEW_HANDOFF.md` 是用户已有未跟踪文件，保持原样，不提交。
@@ -855,7 +857,7 @@ GitHub 连接器仍有 transport error，匿名 API 受到限流；公开工作�
 浏览器的隔离 mocked IPC 冒烟通过：28 任务、440×720、滚动/筛选/新项目/管理
 交互正常，无运行时异常；不是新的原生安装器或真实 Agent 通知验收。
 
-README、发布状态、贡献说明与 Bug 模板已同步；[开源交付清单](OPEN_SOURCE_CHECKLIST.md)
+README、发布状态、贡献说明与 Bug 模板已同步；[开源交付清单](../../OPEN_SOURCE_CHECKLIST.md)
 将已有证据、剩余安全审查、候选重建、干净系统、实机事件和长期验证分开。常见
 凭据/私钥正则初筛无匹配，但 cargo-audit 与专用历史泄密审查仍未完成。未修改
 产品状态机、真实监控范围或 Agent 配置，测试用进程已按路径核对后关闭。

@@ -1,11 +1,54 @@
 //! Bounded, payload-free runtime evidence. Buffer estimates are not RSS.
 use serde_json::{json, Value};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, VecDeque},
     path::Path,
     sync::{Mutex, OnceLock},
 };
 static PARSERS: OnceLock<Mutex<BTreeMap<String, Value>>> = OnceLock::new();
+static CONTINUITY: OnceLock<Mutex<VecDeque<Value>>> = OnceLock::new();
+/// In-memory, bounded diagnostics. Never journal prompts, titles, paths, tool
+/// parameters or replies. Export via get_resource_diagnostics / --diagnose.
+pub fn continuity(
+    stage: &str,
+    source: &str,
+    tasks: &[crate::domain::TaskSnapshot],
+    metrics: Value,
+) {
+    use crate::domain::{TaskStatus, WaitingReason};
+    let safe_tasks:Vec<_> = tasks.iter().take(128).map(|t| {
+        let section = if t.stale {"uncertain"} else if t.status == TaskStatus::Running || t.requires_action() {"ongoing"}
+            else if t.unread && (t.status.is_terminal() || t.waiting_reason==Some(WaitingReason::TurnEnded)) {"results"}
+            else if matches!(t.status,TaskStatus::Unknown|TaskStatus::Disconnected|TaskStatus::WaitingInput) {"uncertain"} else {"pinned"};
+        json!({"task_hash":&crate::integrations::key(&t.id)[..16],
+            "session_hash":t.session_id.as_ref().map(|s|crate::integrations::key(s)[..16].to_string()),
+            "turn_hash":t.turn_key.as_ref().map(|s|crate::integrations::key(s)[..16].to_string()),
+            "status":t.status,"phase":t.phase,"stale":t.stale,"section":section,"unread":t.unread,"pinned":t.pinned})
+    }).collect();
+    let mut ring = CONTINUITY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    if ring.len() == 512 {
+        ring.pop_front();
+    }
+    ring.push_back(
+        json!({"at_ms":epoch_ms(std::time::SystemTime::now()),"stage":stage,"source_hash":crate::privacy::fingerprint(source),
+        "count":tasks.len(),"truncated":tasks.len()>128,"tasks":safe_tasks,"metrics":metrics}),
+    );
+}
+pub fn epoch_ms(now: std::time::SystemTime) -> u64 {
+    now.duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+pub fn continuity_snapshot() -> Value {
+    json!(CONTINUITY
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .clone())
+}
 pub fn record(kind: &str, root: &Path, metrics: Value) {
     let id = format!(
         "{}:{}",
@@ -19,6 +62,19 @@ pub fn record(kind: &str, root: &Path, metrics: Value) {
     if map.len() < 128 || map.contains_key(&id) {
         map.insert(id, metrics);
     }
+}
+pub fn parser_metrics(kind: &str, root: &Path) -> Option<Value> {
+    let id = format!(
+        "{}:{}",
+        kind,
+        &crate::integrations::key(&root.to_string_lossy())[..12]
+    );
+    PARSERS
+        .get_or_init(Default::default)
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .get(&id)
+        .cloned()
 }
 fn is_link(m: &std::fs::Metadata) -> bool {
     #[cfg(windows)]
@@ -186,7 +242,7 @@ pub fn snapshot() -> Value {
         .clone();
     let (writes, bytes) = crate::integrations::journal::checkpoint_stats();
     let usage = directory_usage(&crate::integrations::home());
-    json!({"parser_instances":parsers,"checkpoint_writes":writes,"checkpoint_bytes":bytes,"integration_disk":usage,
+    json!({"parser_instances":parsers,"collection_continuity":continuity_snapshot(),"checkpoint_writes":writes,"checkpoint_bytes":bytes,"integration_disk":usage,
         "source_journal_budget_bytes":crate::integrations::journal::SOURCE_DISK_LIMIT,"session_journal_budget_bytes":crate::integrations::journal::SESSION_DISK_LIMIT,
         "quota_pressure":quota_pressure(&crate::integrations::home()),"process_memory":process_memory(),"note":"Current process counters only. Buffer estimates are not process RSS. Disk scan is bounded; source-level receive/gap diagnoses remain in integration_diagnose."})
 }
@@ -199,6 +255,35 @@ pub async fn get_resource_diagnostics() -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn continuity_is_bounded_and_excludes_all_user_payload_fields() {
+        use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
+        let secret = "do-not-log-payload-or-title";
+        let mut task = TaskSnapshot::new(
+            secret,
+            secret,
+            TaskSource::Codex,
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            std::time::SystemTime::now(),
+        );
+        task.session_id = Some(secret.into());
+        task.turn_key = Some(secret.into());
+        task.activity = Some(secret.into());
+        task.message = Some(secret.into());
+        task.project_path = Some(secret.into());
+        for _ in 0..520 {
+            continuity(
+                "privacy_test",
+                secret,
+                std::slice::from_ref(&task),
+                json!({}),
+            );
+        }
+        let snapshot = continuity_snapshot();
+        assert!(snapshot.as_array().unwrap().len() <= 512);
+        assert!(!snapshot.to_string().contains(secret));
+    }
     #[test]
     fn quota_scan_never_claims_completeness_after_an_entry_budget_cutoff() {
         let dir = tempfile::tempdir().unwrap();

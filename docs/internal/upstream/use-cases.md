@@ -1,3 +1,5 @@
+> Historical record: retained for provenance, not current implementation or release guidance. See [architecture](../../ARCHITECTURE.md) and [releasing](../../RELEASING.md).
+
 # AgentTray Use Cases
 
 These are the situations AgentTray is meant to help with. If your use case looks very different, the project probably still needs work.

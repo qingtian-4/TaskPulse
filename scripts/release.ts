@@ -15,6 +15,11 @@ export function validateRelease(tag: string, versions: string[]) {
   return version;
 }
 
+export function validateCandidateCommit(expected:string,head:string,main:string):void {
+  if(!/^[a-f0-9]{40}$/.test(expected)||head!==expected||main!==expected)
+    throw new Error('Candidate requires a full SHA matching both checkout HEAD and current origin/main');
+}
+
 export function projectVersions(root: string): string[] {
   const cargo = Bun.TOML.parse(readFileSync(join(root, 'src-tauri/Cargo.toml'), 'utf8')) as { package: {version:string} };
   const lock = Bun.TOML.parse(readFileSync(join(root, 'src-tauri/Cargo.lock'), 'utf8')) as {package:Array<{name:string;version:string}>};
@@ -63,7 +68,7 @@ export function verifyChecksums(directory: string, version: string): void {
   }
 }
 
-export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string): void {
+export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string, options:{tagged?:boolean}={}): void {
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('A full source commit SHA is required');
   if (existsSync(out) && readdirSync(out).length) throw new Error('Output directory must be empty; refusing stale assets');
   const names = installerNames(version);
@@ -80,7 +85,7 @@ export function stageInstallers(bundleRoot: string, out: string, version: string
   mkdirSync(out, {recursive:true});
   sources.forEach((file, index) => copyFileSync(file, join(out, names[index])));
   writeFileSync(join(out, 'SHA256SUMS.txt'), names.map(name => `${sha256(readFileSync(join(out, name)))}  ${name}\n`).join(''));
-  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:`v${version}`, msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
+  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:options.tagged===false?null:`v${version}`, ...(options.tagged===false?{build_kind:'commit-candidate'}:{}), msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
   verifyChecksums(out, version);
 }
 
@@ -104,6 +109,13 @@ if (import.meta.main) {
       const version = validateRelease(`v${versions[0]}`, versions);
       validateMsiVersion(root,version);
       console.log(`Release versions consistent: ${version}`);
+    } else if (command === 'candidate') {
+      const commit=argument('--commit');
+      validateCandidateCommit(commit,git(root,['rev-parse','HEAD']),git(root,['rev-parse','refs/remotes/origin/main']));
+      const version=validateRelease(`v${projectVersions(root)[0]}`,projectVersions(root));
+      validateMsiVersion(root,version);
+      if(process.env.GITHUB_OUTPUT)appendFileSync(process.env.GITHUB_OUTPUT,`version=${version}\ntag=\ncommit=${commit}\n`);
+      console.log(`Validated untagged main candidate at ${commit}; CI artifacts only, no Release`);
     } else if (command === 'preflight') {
       const tag = argument('--tag');
       const version = validateRelease(tag, projectVersions(root));
@@ -116,11 +128,11 @@ if (import.meta.main) {
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\ncommit=${commit}\n`);
       console.log(`Validated ${tag} at ${commit}`);
     } else if (command === 'stage') {
-      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'));
+      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'),{tagged:!args.includes('--untagged')});
     } else if (command === 'verify') {
       verifyChecksums(resolve(argument('--out')), argument('--version'));
     } else {
-      throw new Error('Usage: bun scripts/release.ts check | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA | verify --out DIR --version VERSION');
+      throw new Error('Usage: bun scripts/release.ts check | candidate --commit MAIN_SHA | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA [--untagged] | verify --out DIR --version VERSION');
     }
   } catch (error) { console.error(String(error)); process.exit(1); }
 }

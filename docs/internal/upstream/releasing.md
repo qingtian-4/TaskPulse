@@ -1,3 +1,5 @@
+> Historical record: retained for provenance, not current implementation or release guidance. See [architecture](../../ARCHITECTURE.md) and [releasing](../../RELEASING.md).
+
 # Releasing AgentTray
 
 This document is for maintainers. It covers version bumps, tagging, CI release builds, and required signing secrets.
@@ -29,7 +31,7 @@ The GitHub Actions workflow builds:
 - Windows: `.msi`, `.exe`
 - macOS: `.dmg` for arm64 and x86_64
 
-The workflow lives in [../../.github/workflows/release.yml](../../.github/workflows/release.yml).
+The workflow lives in [../../.github/workflows/release.yml](../../../.github/workflows/release.yml).
 
 ## Required GitHub Secrets
 

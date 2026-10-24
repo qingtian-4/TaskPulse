@@ -2,7 +2,29 @@
 
 公开素材来自当前 TaskPulse 原生 WebView2，不拼接或重绘。原生截图代表真实应用渲染；使用隔离合成事件时必须注明，不能作为 Agent 宿主实机支持证据。
 
-## 当前 Alpha.7 原生素材
+## 下一候选源码预览（2026-10-24）
+
+以下 PNG 由隔离的真实 Tauri / Windows WebView2 直接输出，输入均为公开合成事件；未拼接、重绘或替换文字。截图不是实际 Agent 新任务或宿主兼容性证据。
+
+| 文件 | 逻辑尺寸 | 输入 / 证据边界 |
+|---|---|---|
+| [dashboard-current.png](screenshots/dashboard-current.png) | 412 × 620 | 合成审批与已结束未查看结果；底部状态区保留来源和额度入口 |
+| [message-center-current.png](screenshots/message-center-current.png) | 412 × 620 | 合成审批、明确失败与完成；消息已读不解除待处理请求 |
+| [sources-current.png](screenshots/sources-current.png) | 1040 × 900 | 隔离来源管理，未安装真实 Hook |
+| [notice-current.png](screenshots/notice-current.png) | 320 × 132 | 独立原生测试提醒，不创建监控任务 |
+
+先执行 `scripts/verify.ps1 -Frontend`，再依次运行（端口不能并用）：
+
+```powershell
+bun scripts/native-product-smoke.ts --exe src-tauri/target/codex-check/debug/agent-tray.exe --capture
+bun scripts/native-message-center-smoke.ts --exe src-tauri/target/codex-check/debug/agent-tray.exe --capture
+```
+
+只有全部检查通过才更新公开图片；每次输入与结果留在忽略提交的 `src-tauri/target/ui-smoke/evidence/`。
+检查覆盖 412×620、380×640、320×480、440×720，WebView2 DPR 1 / 1.5 / 2，以及消息已读、请求解除、结果未查看和重启恢复。
+这不等同 Windows 实际改变显示比例、混合 DPI 显示器迁移或真实 Agent 生命周期验收。
+
+## 历史 Alpha.7 原生素材
 
 2026-10-21 视觉升级后重新捕获：统一青绿色桌面主题、语义状态卡片与紧凑通知，仍为真实 Tauri / WebView2 渲染和公开合成输入。没有为截图提高任何 Agent 的支持等级。
 
@@ -22,6 +44,12 @@
 - [taskpulse-overview.svg](diagrams/taskpulse-overview.svg)：早期示意图，不是真实采集或原生截图，不用于当前产品展示。
 
 缺少新画面时不以历史或示意素材代替。
+
+## 当前架构示意
+
+[taskpulse-architecture.svg](diagrams/taskpulse-architecture.svg) 来自 PR #10，2026-10-23 按源码修正：native/WSL Worker、远端独立线程、watcher 内兼容文件采集分别标明；Journal/Checkpoint/Outbox 只适用于 Generic Event，ack 不等于可见投递。它是说明图，不是应用截图。详细事实与限制见 [架构](../docs/ARCHITECTURE.md)。
+
+2026-10-23 人工检查的三张 Alpha.7 PNG 继续保留原文件，尺寸分别为 440×720、1040×900、320×132；不覆盖其历史证据。当前 UI 为中文。没有新 MP4/GIF 成品，复现命令、storyboard、字幕及 Release 附件方案见 [演示计划](../docs/DEMO_RECORDING_PLAN.md)。
 
 ## 安全录制
 

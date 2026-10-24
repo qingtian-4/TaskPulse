@@ -313,9 +313,8 @@ impl RemoteTmuxProvider {
                         self.detected
                             .remove(&(host_id.to_string(), pane.pane_id.clone()));
                         log::info!(
-                            "Remote pane {} on {} finished (inferred, no exit code)",
-                            pane.pane_id,
-                            ssh_host
+                            "Remote pane finished (inferred, no exit code); host={}",
+                            crate::privacy::fingerprint(host_id)
                         );
                     }
                 }
@@ -391,7 +390,11 @@ impl RemoteTmuxProvider {
             });
         }
         if !exact.is_empty() {
-            log::debug!("{}: {} exact tp-run task(s)", ssh_host, exact.len());
+            log::debug!(
+                "{}: {} exact tp-run task(s)",
+                crate::privacy::fingerprint(host_id),
+                exact.len()
+            );
         }
         tasks.extend(exact);
 
@@ -407,7 +410,7 @@ impl RemoteTmuxProvider {
         if !remote_codex.is_empty() {
             log::debug!(
                 "{}: {} remote Codex session(s)",
-                ssh_host,
+                crate::privacy::fingerprint(host_id),
                 remote_codex.len()
             );
         }
@@ -514,19 +517,23 @@ impl RemoteTmuxProvider {
         &mut self,
         host_id: &str,
         ssh_host: &str,
-        err: String,
+        _err: String,
         now: SystemTime,
         output: &mut ProviderOutput,
     ) {
         let state = self.hosts.entry(host_id.to_string()).or_default();
         let crossed = state.record_failure(now);
         log::warn!(
-            "Remote host {host_id} ({ssh_host}) poll failed ({}/{}): {err}",
+            "Remote host {} poll failed ({}/{})",
+            crate::privacy::fingerprint(host_id),
             state.consecutive_failures,
             state::DISCONNECT_THRESHOLD
         );
         if crossed {
-            log::error!("Remote host {host_id} ({ssh_host}) DISCONNECTED");
+            log::error!(
+                "Remote host {} disconnected",
+                crate::privacy::fingerprint(host_id)
+            );
         }
         // Preserve last known tasks with stale=true; an SSH timeout is not
         // task completion.
@@ -627,7 +634,7 @@ impl Provider for RemoteTmuxProvider {
                     let just_recovered = state.status == crate::providers::HostStatus::Disconnected;
                     state.record_success(now);
                     if just_recovered {
-                        log::info!("Remote host {id} ({}) recovered", r.ssh_host);
+                        log::info!("Remote host {} recovered", crate::privacy::fingerprint(&id));
                     }
                     let host_out = self.process_segments(&r.ssh_host, &id, snapshot, now);
                     output.authoritative &= host_out.authoritative;

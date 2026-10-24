@@ -35,6 +35,15 @@ try {
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run test:docs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:repo
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        # sqlite3 context managers commit/rollback but do not close handles;
+        # these offline helpers must also pass on Windows file locking.
+        $taskPulsePython = if (Get-Command python3.11.exe -ErrorAction SilentlyContinue) { 'python3.11.exe' } else { 'python' }
+        foreach ($fixture in @('scripts/test-wsl-discovery.py', 'scripts/test-codex-metadata.py', 'scripts/wsl-metadata.test.py')) {
+            & $taskPulsePython $fixture
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        }
         & $bun run test:ui-model
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run release:check
@@ -44,6 +53,8 @@ try {
         & $bun run test:security
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run test:integration-contract
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:smoke-cleanup
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run build
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

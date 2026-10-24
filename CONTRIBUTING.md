@@ -9,8 +9,8 @@ platforms where practical, but do not claim untested paths are supported.
 
 ## Local setup
 
-Install Rust, Bun, [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)
-and Windows WebView2:
+Install Rust 1.89+, Bun, Python 3 for the offline metadata fixture suites,
+[Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) and Windows WebView2:
 
 ```powershell
 bun install --frozen-lockfile
@@ -51,11 +51,13 @@ framework upgrade or hide an advisory to make a release pass.
 Windows/Linux x64 tools under ignored target directories, with no global install.
 They require network access; a timeout is not a clean scan. Git scanning requires
 full history and never publishes raw reports. Run `bun run test:security` for the
-report/workflow regressions. See [audit boundaries](docs/SECURITY_AUDIT_2026-10.md).
+report/workflow regressions. See [audit boundaries](docs/internal/reports/SECURITY_AUDIT_2026-10.md).
 
 ## Adding an Agent adapter
 
-- Implement a Provider and a source-registry kind.
+- Prefer [Standard Events v1 / declarative mappings](docs/AGENT_INTEGRATION_GUIDE.md)
+  when a host exposes explicit events. For a native collector, implement a Provider
+  and the appropriate source-registry kind.
 - Discover an actual installed/data-backed candidate; require confirmation to enable.
 - Use stable session IDs; keep project, native/manual title and reported model separate.
 - Add file watches where supported and independent polling fallback.
@@ -67,7 +69,7 @@ report/workflow regressions. See [audit boundaries](docs/SECURITY_AUDIT_2026-10.
 
 Pipeline: Provider → TaskStore → AttentionTracker → TransitionEngine → UI/alerts.
 The dashboard is an attention list, not a historical-session browser. Unknown
-Agents may use the generic wrapper/status protocol; detecting a process alone
+Agents may use the local Standard Events v1 contract or legacy wrapper/status input; detecting a process alone
 cannot supply reliable task titles or lifecycle boundaries.
 
 ## Changes and license

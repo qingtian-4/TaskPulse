@@ -1,6 +1,7 @@
 # Contributing an Agent adapter
 
-TaskPulse currently uses built-in Rust providers, not an executable plugin marketplace.
+TaskPulse uses built-in Rust providers and local Standard Events v1 / declarative
+Manifest integrations. There is no executable plugin marketplace or general dynamic loader.
 Finding an installed Agent does not prove that its titles, turns or approvals are observable.
 The independent desktop app observes supported sources; optional IDE bridges are future work.
 
@@ -38,9 +39,18 @@ Official hooks require explicit reversible confirmation. Never auto-install them
 overwrite proxy/statusLine/other hooks, read credential files or run an untrusted
 third-party adapter with the user's privileges automatically.
 
-## Future external contract (not implemented)
+## Implemented local event contract
 
-T09 proposes a versioned minimal event envelope with source instance, session/run,
-turn, request/call IDs, sequence and occurred/observed timestamps. Establish fixtures,
-capability negotiation and failure isolation before adding dynamic loading. Do not
-advertise this proposed protocol or unsupported brands as shipped functionality.
+For a host that can emit explicit lifecycle facts, first consider the
+[Standard Events v1 protocol](AGENT_INTEGRATION_PROTOCOL.md) and
+[integration guide](AGENT_INTEGRATION_GUIDE.md). A declarative manifest can map
+bounded host events into stable session/turn/request/call identities without
+adding a Rust source-kind enum for every brand. The CLI Bridge validates facts,
+writes a locked journal, and GenericEventProvider consumes ordered durable
+outboxes through the same Store/Attention/Transition boundary.
+
+Local transport is implemented. Generic WSL/SSH transports and arbitrary
+third-party executable loading are not implemented. Built-in mappings and fixture
+tests do not certify a host version; see the [capability matrix](AGENT_COMPATIBILITY.md).
+Configuration previews and explicit confirmation apply to supported host recipes;
+imported manifests do not gain installation or execution privileges.

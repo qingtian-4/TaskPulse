@@ -9,12 +9,16 @@ on:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
         default: 'v0.2.0-alpha.7'
+      commit:
+        description: 'Optional full current main SHA: CI artifacts only, overrides tag; no Tag or Release created'
+        required: false
+        default: ''
 
 permissions:
   contents: read
 
 concurrency:
-  group: release-${{ github.event.inputs.tag || github.ref_name }}
+  group: release-${{ github.event.inputs.commit || github.event.inputs.tag || github.ref_name }}
   cancel-in-progress: false
 
 env:
@@ -30,15 +34,21 @@ jobs:
     steps:
       - uses: actions/checkout@v6
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.commit || github.event.inputs.tag || github.ref }}
           fetch-depth: 0
           persist-credentials: false
       - uses: oven-sh/setup-bun@v2
-      - name: Verify tag and all application versions before building
+      - name: Verify exact main candidate or existing tag and all application versions
         id: version
         env:
           RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
-        run: bun scripts/release.ts preflight --tag "$RELEASE_TAG"
+          CANDIDATE_COMMIT: ${{ github.event.inputs.commit }}
+        run: |
+          if [ -n "$CANDIDATE_COMMIT" ]; then
+            bun scripts/release.ts candidate --commit "$CANDIDATE_COMMIT"
+          else
+            bun scripts/release.ts preflight --tag "$RELEASE_TAG"
+          fi
       - name: Test release validation and asset handling
         run: bun test scripts/release.test.ts
 
@@ -76,10 +86,20 @@ jobs:
         run: bun run check
       - name: Test documentation links and candidate source instructions
         run: bun run test:docs
+      - name: Audit tracked documentation, media and ignored outputs
+        run: bun run test:repo
+      - name: Test read-only WSL source detection (offline fixtures)
+        run: python scripts/test-wsl-discovery.py
+      - name: Test remote Codex metadata schemas (offline fixtures)
+        run: python scripts/test-codex-metadata.py
+      - name: Test WSL metadata freshness and read failures (offline fixtures)
+        run: python scripts/wsl-metadata.test.py
       - name: Test frontend models
         run: bun run test:ui-model
       - name: Test integration contracts
         run: bun run test:integration-contract
+      - name: Test smoke evidence and bounded owned-directory cleanup
+        run: bun run test:smoke-cleanup
       - name: Check Rust formatting
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Lint Rust
@@ -97,7 +117,7 @@ jobs:
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
-        run: bun scripts/release.ts stage --bundle-root src-tauri/target/x86_64-pc-windows-msvc/ci-release/bundle --out dist/release --version "$env:RELEASE_VERSION" --commit "$env:RELEASE_COMMIT"
+        run: bun scripts/release.ts stage --bundle-root src-tauri/target/x86_64-pc-windows-msvc/ci-release/bundle --out dist/release --version "$env:RELEASE_VERSION" --commit "$env:RELEASE_COMMIT" ${{ needs.preflight.outputs.tag == '' && '--untagged' || '' }}
       - uses: actions/upload-artifact@v7
         with:
           name: windows-installers
@@ -150,6 +170,7 @@ jobs:
 
   draft:
     name: Create a draft pre-release only
+    if: ${{ needs.preflight.outputs.tag != '' }}
     needs: [preflight, windows, installer-smoke]
     runs-on: ubuntu-latest
     permissions:

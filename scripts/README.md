@@ -1,5 +1,11 @@
 # Scripts
 
+`bun run test:repo` checks all Git-tracked Markdown links/anchors, SVG references,
+ignored tracked outputs and disposable media. It skips fenced code examples and
+does not fetch external URLs. New documentation must be staged to enter this inventory.
+`verify.ps1 -Frontend` also requires Python 3 for the three isolated Codex/WSL
+metadata fixture suites; it prefers `python3.11.exe` when available, otherwise `python`.
+
 ## Generic Agent integration acceptance
 
 `bun run test:integration-contract` checks the public schema/manifests; Rust
@@ -146,4 +152,20 @@ Adding a new terminal type usually means:
 
 ## Maintainer Docs
 
-- Release process: [../docs/maintainers/releasing.md](../docs/maintainers/releasing.md)
+`bun scripts/native-message-center-smoke.ts --exe <isolated-custom-protocol-exe>`
+runs the message-center acceptance in an owned Windows WebView2 instance with a
+temporary `TASKPULSE_HOME`. It checks visible reading, hidden-window delivery,
+parallel request IDs, source failure/recovery, restart persistence and 412×620 /
+380×640 / 320×480 / 440×720 layouts. Inputs are synthetic; this does not certify real Agent behavior
+or installers. Screenshots, assertions and cleanup evidence stay under ignored
+`src-tauri/target/ui-smoke/evidence/`. It never changes real Agent configuration.
+
+- Release process: [../docs/maintainers/releasing.md](../docs/RELEASING.md)
+
+`native-product-smoke.ts` exercises empty/one-result 412×400 and standard 412×620,
+long Chinese/English tasks, details, composed filters, quota, pin/reopen and native
+work-area bounds. Four viewport sizes (412×620, 380×640, 320×480, 440×720) at DPR
+1/1.5/2 check control hit targets, title/status overlap, scrolling and screenshots.
+DPR emulation does not certify Windows display scaling or mixed-DPI monitors.
+`--capture` exports `*-current.png` after all checks; historical `*-alpha7.png`
+assets stay unchanged. All normal-run evidence remains in the ignored target tree.

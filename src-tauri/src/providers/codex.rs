@@ -32,6 +32,8 @@ use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use crate::providers::{Provider, ProviderOutput};
 use std::collections::HashMap;
 
+mod questions;
+
 /// A session whose last event is `task_complete` is WAITING_INPUT for this
 /// long before we consider it dormant/uninteresting.
 const WAITING_TTL: Duration = Duration::from_secs(24 * 3600);
@@ -120,6 +122,7 @@ pub struct CodexProvider {
     identity_prefix: String,
     linux_share: Option<PathBuf>,
     external_metadata: Option<HashMap<String, ThreadMeta>>,
+    linux_rollouts: Option<HashMap<PathBuf, super::jsonl_tail::LinuxFileStamp>>,
     state_db: Option<PathBuf>,
     native_rx: Option<mpsc::Receiver<Result<NativeCodexSnapshot, String>>>,
     /// session id → last-seen mtime, so we can emit a terminal snapshot when a
@@ -136,13 +139,31 @@ pub struct CodexProvider {
     last_tasks: Vec<TaskSnapshot>,
 }
 
-#[derive(Default)]
 struct RolloutCache {
     tail: super::jsonl_tail::JsonlTail,
     state: Option<SessionState>,
 }
+impl Default for RolloutCache {
+    fn default() -> Self {
+        Self {
+            tail: super::jsonl_tail::JsonlTail::ignoring_envelopes(&["compacted", "world_state"]),
+            state: None,
+        }
+    }
+}
 
 impl CodexProvider {
+    pub(super) fn diagnostics(&self) -> Option<serde_json::Value> {
+        super::resources::parser_metrics("codex", &self.sessions_root)
+    }
+    pub(super) fn set_linux_rollouts(&mut self, rows: Vec<super::codex_wsl::LinuxRollout>) {
+        self.linux_rollouts = Some(
+            rows.into_iter()
+                .filter(|r| r.path.starts_with('/') && !r.path.split('/').any(|s| s == ".."))
+                .map(|r| (self.resolve_rollout_path(&r.path), r.stamp))
+                .collect(),
+        );
+    }
     /// WSL transport supplies metadata/path mapping, not a second lifecycle.
     pub(super) fn with_wsl_root(root: PathBuf, share: PathBuf, instance: &str) -> Self {
         let mut provider = Self::with_root(root.join("sessions"));
@@ -167,7 +188,7 @@ impl CodexProvider {
                             rollout_path: row.rollout_path.clone(),
                             updated_at: row.updated_at,
                             pinned: row.is_pinned,
-                            internal: internal_guardian(&row.source),
+                            internal: internal_codex_source(&row.source),
                         },
                     )
                 })
@@ -243,6 +264,7 @@ impl CodexProvider {
             identity_prefix: "codex".into(),
             linux_share: None,
             external_metadata: None,
+            linux_rollouts: None,
             state_db: None,
             native_rx: None,
             seen: Default::default(),
@@ -292,7 +314,7 @@ impl CodexProvider {
                     rollout_path: row.get(5)?,
                     updated_at: row.get(6)?,
                     pinned: row.get(7)?,
-                    internal: internal_guardian(
+                    internal: internal_codex_source(
                         &serde_json::from_str::<serde_json::Value>(&row.get::<_, String>(8)?)
                             .unwrap_or_default(),
                     ),
@@ -333,10 +355,10 @@ impl CodexProvider {
                             .collect();
                     }
                 }
-                Err(error) => {
+                Err(_) => {
                     // app-server is optional. Keep the last successful title map,
                     // then fall back through state DB and rollout metadata.
-                    log::debug!("codex: native app-server metadata unavailable: {error}");
+                    log::debug!("codex: native app-server metadata unavailable");
                 }
             }
         }
@@ -374,6 +396,20 @@ impl CodexProvider {
     }
 
     fn discover(&self) -> std::io::Result<Vec<PathBuf>> {
+        if let Some(rows) = &self.linux_rollouts {
+            // Linux already enumerated and stat'ed these files. Avoid an
+            // additional slow/inconsistent UNC recursive directory snapshot.
+            let mut files: Vec<_> = rows
+                .keys()
+                .filter(|p| {
+                    p.file_name()
+                        .is_some_and(|n| n.to_string_lossy().starts_with("rollout-"))
+                })
+                .cloned()
+                .collect();
+            files.sort_by(|a, b| rows[b].modified_ns.cmp(&rows[a].modified_ns).then(a.cmp(b)));
+            return Ok(files);
+        }
         let mut files = Vec::new();
         for path in walk(&self.sessions_root)? {
             if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
@@ -406,19 +442,23 @@ impl CodexProvider {
 
     fn cached_session_state(&mut self, path: &Path, now: SystemTime) -> Option<SessionState> {
         let cache = self.cache.entry(path.to_path_buf()).or_default();
-        let trusted = cache
-            .tail
-            .drain(path, |batch| {
-                self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
-                if batch.reset {
-                    cache.state = None;
-                }
-                if !batch.body.trim().is_empty() {
-                    let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
-                    cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
-                }
-            })
-            .ok()?;
+        if let Some(stamp) = self.linux_rollouts.as_ref().and_then(|rows| rows.get(path)) {
+            cache.tail.set_linux_stamp(stamp.clone());
+        }
+        let before_read = cache.tail.bytes_read_total;
+        let trusted = cache.tail.drain(path, |batch| {
+            if batch.reset {
+                cache.state = None;
+            }
+            if !batch.body.trim().is_empty() {
+                let sid = path.file_stem().and_then(|s| s.to_str()).unwrap_or("");
+                cache.state = apply_codex_rollout(&batch.body, now, sid, cache.state.take());
+            }
+        });
+        self.read_bytes = self
+            .read_bytes
+            .saturating_add(cache.tail.bytes_read_total - before_read);
+        let trusted = trusted.ok()?;
         trusted.then(|| cache.state.clone()).flatten()
     }
 
@@ -466,6 +506,7 @@ impl CodexProvider {
         task.turn_key = host.turn_key.clone();
         task.waiting_reason = host.waiting_reason;
         task.input_request_id = host.input_request_id.clone();
+        task.input_request_ids = host.pending_input_ids();
         task.pinned = meta.is_some_and(|meta| meta.pinned);
         task.internal = host.internal || meta.is_some_and(|meta| meta.internal);
         // A completed turn means the agent is waiting on the user — keep the
@@ -516,13 +557,36 @@ pub struct SessionState {
     pub phase: Option<crate::domain::ExecutionPhase>,
     active_tools: std::collections::BTreeMap<String, String>,
     confirmed_approvals: std::collections::BTreeMap<String, Option<String>>,
+    questions: questions::Questions,
+    turn_completed: bool,
     pub session_id: String,
+    /// The first native header owns this rollout. Forked transcripts can embed
+    /// another session_meta from the parent; that is history, not a new owner.
+    metadata_session_id: Option<String>,
     pub turn_key: Option<String>,
     pub first_user_message: Option<String>,
     pub quota_5h_used_pct: Option<f64>,
     pub quota_5h_resets_at: Option<i64>,
     pub quota_1w_used_pct: Option<f64>,
     pub quota_1w_resets_at: Option<i64>,
+}
+
+impl SessionState {
+    fn parser_protected(&self) -> bool {
+        self.status == TaskStatus::Running
+            || !self.confirmed_approvals.is_empty()
+            || !self.internal && self.questions.has_active()
+    }
+
+    fn pending_input_ids(&self) -> Vec<String> {
+        match self.waiting_reason {
+            Some(crate::domain::WaitingReason::Question) => self.questions.active_ids(),
+            Some(crate::domain::WaitingReason::Approval) => {
+                self.confirmed_approvals.keys().cloned().collect()
+            }
+            _ => Vec::new(),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -559,7 +623,7 @@ struct AppThreadMeta {
     source: serde_json::Value,
 }
 
-fn internal_guardian(source: &serde_json::Value) -> bool {
+fn internal_codex_source(source: &serde_json::Value) -> bool {
     // SQLite may carry JSON text while app-server / rollout carry an object.
     // Classify the native origin, never a task name or prompt substring.
     let parsed;
@@ -570,6 +634,10 @@ fn internal_guardian(source: &serde_json::Value) -> bool {
         source
     };
     source.pointer("/subagent/other").and_then(|v| v.as_str()) == Some("guardian")
+        || source
+            .pointer("/subagent/thread_spawn/parent_thread_id")
+            .and_then(|v| v.as_str())
+            .is_some_and(|parent| !parent.trim().is_empty())
 }
 
 #[derive(Debug)]
@@ -792,7 +860,7 @@ impl ThreadMeta {
             rollout_path: meta.path.clone(),
             updated_at: meta.updated_at,
             pinned: false,
-            internal: internal_guardian(&meta.source),
+            internal: internal_codex_source(&meta.source),
         }
     }
 }
@@ -918,7 +986,10 @@ fn apply_codex_rollout(
         mut phase,
         mut active_tools,
         mut confirmed_approvals,
+        mut questions,
+        mut turn_completed,
         mut session_id,
+        mut metadata_session_id,
         mut turn_key,
         mut first_user_message,
         mut quota_5h_used_pct,
@@ -939,7 +1010,10 @@ fn apply_codex_rollout(
         phase: None,
         active_tools: Default::default(),
         confirmed_approvals: Default::default(),
+        questions: Default::default(),
+        turn_completed: false,
         session_id: default_session_id.into(),
+        metadata_session_id: None,
         turn_key: None,
         first_user_message: None,
         quota_5h_used_pct: None,
@@ -963,12 +1037,32 @@ fn apply_codex_rollout(
             value.get("params"),
         ) {
             if params.get("threadId").and_then(|v| v.as_str()) == Some(session_id.as_str()) {
+                if params
+                    .get("turnId")
+                    .and_then(|v| v.as_str())
+                    .zip(turn_key.as_deref())
+                    .is_some_and(|(event, current)| event != current)
+                {
+                    continue;
+                }
                 let request = |v: &serde_json::Value| {
                     v.as_str()
                         .map(str::to_owned)
                         .or_else(|| v.as_i64().map(|n| n.to_string()))
                 };
                 match method {
+                    "error" if explicit_quota_error(params) => {
+                        status = TaskStatus::WaitingInput;
+                        waiting_reason = Some(crate::domain::WaitingReason::QuotaExhausted);
+                        input_request_id = turn_key.as_ref().map(|turn| format!("quota:{turn}"));
+                        last_message = Some("额度已用完，请在原 Agent 检查额度后继续".into());
+                        activity = None;
+                        active_tools.clear();
+                        phase = None;
+                        if let Some(t) = ts {
+                            updated_at = t;
+                        }
+                    }
                     "item/commandExecution/requestApproval"
                     | "item/fileChange/requestApproval"
                     | "item/permissions/requestApproval" => {
@@ -1019,6 +1113,30 @@ fn apply_codex_rollout(
             continue;
         };
 
+        // A fork's first header describes the child, followed by a copied
+        // parent header/history. Never let the latter re-key this file, replace
+        // its project or classify a normal user fork as a parent's service.
+        // A genuine file replacement resets SessionState in cached_session_state.
+        let is_session_meta = value.get("type").and_then(|v| v.as_str()) == Some("session_meta")
+            || payload.get("type").and_then(|v| v.as_str()) == Some("session_meta");
+        if is_session_meta {
+            if let Some(id) = payload
+                .get("id")
+                .and_then(|v| v.as_str())
+                .filter(|id| !id.is_empty())
+            {
+                if metadata_session_id
+                    .as_deref()
+                    .is_some_and(|owner| owner != id)
+                {
+                    continue;
+                }
+                metadata_session_id = Some(id.to_owned());
+                session_id = id.to_owned();
+            }
+            internal |= payload.get("source").is_some_and(internal_codex_source);
+        }
+
         // Extract project (cwd) + session id on ANY line that carries them
         // — session_meta / turn_context have no `payload.type`, so this
         // must run before the type guard below.
@@ -1037,24 +1155,26 @@ fn apply_codex_rollout(
                 .and_then(|v| v.as_str())
                 .map(str::to_owned);
         }
-        // Codex emits session_meta with `type` in different places depending
-        // on host form: local Desktop puts it in payload.type, headless
-        // app-server (Server3) puts it at the top level. Accept both.
-        let is_session_meta = value.get("type").and_then(|v| v.as_str()) == Some("session_meta")
-            || payload.get("type").and_then(|v| v.as_str()) == Some("session_meta");
-        if is_session_meta {
-            if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
-                session_id = id.to_string();
-            }
-            internal |= payload.get("source").is_some_and(internal_guardian);
-        }
-
         let Some(ptype) = payload.get("type").and_then(|v| v.as_str()) else {
             continue;
         };
 
+        // Asynchronous callbacks belong to their original turn. Never let an
+        // old completion/abort/approval mutate whichever turn is now active.
+        if ptype != "task_started"
+            && payload
+                .get("turn_id")
+                .and_then(|v| v.as_str())
+                .zip(turn_key.as_deref())
+                .is_some_and(|(event, current)| event != current)
+        {
+            continue;
+        }
+
         match ptype {
             "task_started" => {
+                questions.clear();
+                turn_completed = false;
                 status = TaskStatus::Running;
                 waiting_reason = None;
                 input_request_id = None;
@@ -1072,12 +1192,54 @@ fn apply_codex_rollout(
                     .map(str::to_string)
                     .or_else(|| value_timestamp_key(ts));
             }
-            "user_message" => {
-                if status != TaskStatus::Running && status != TaskStatus::WaitingInput {
+            "user_message" | "message"
+                if ptype == "user_message"
+                    || payload.get("role").and_then(|v| v.as_str()) == Some("user") =>
+            {
+                if let Some(changed) = questions.replied(payload) {
+                    if changed {
+                        if waiting_reason == Some(crate::domain::WaitingReason::Question) {
+                            status = if turn_completed {
+                                TaskStatus::WaitingInput
+                            } else {
+                                TaskStatus::Running
+                            };
+                            waiting_reason =
+                                turn_completed.then_some(crate::domain::WaitingReason::TurnEnded);
+                            input_request_id = None;
+                            phase = (!turn_completed).then_some(if active_tools.is_empty() {
+                                crate::domain::ExecutionPhase::AwaitingModel
+                            } else {
+                                crate::domain::ExecutionPhase::Tool
+                            });
+                        }
+                        if let Some(t) = ts {
+                            updated_at = t;
+                        }
+                    }
+                    continue;
+                }
+                if status != TaskStatus::Running
+                    && confirmed_approvals.is_empty()
+                    && !questions.has_active()
+                    && !matches!(
+                        waiting_reason,
+                        Some(
+                            crate::domain::WaitingReason::Approval
+                                | crate::domain::WaitingReason::Question
+                                | crate::domain::WaitingReason::QuotaExhausted
+                        )
+                    )
+                {
                     started_at = ts;
                     turn_key = value_timestamp_key(ts);
+                    waiting_reason = None;
+                    input_request_id = None;
+                    status = TaskStatus::Running;
                     activity = None;
                     active_tools.clear();
+                    questions.clear();
+                    turn_completed = false;
                     phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 }
                 if status != TaskStatus::WaitingInput {
@@ -1174,19 +1336,11 @@ fn apply_codex_rollout(
                     );
                 }
                 phase = Some(crate::domain::ExecutionPhase::Tool);
-                if payload
-                    .get("name")
-                    .and_then(|v| v.as_str())
-                    .is_some_and(|name| {
-                        name == "request_user_input" || name.ends_with(".request_user_input")
-                    })
-                {
+                questions.called(payload);
+                if let Some(id) = questions.active_ids().first() {
                     status = TaskStatus::WaitingInput;
                     waiting_reason = Some(crate::domain::WaitingReason::Question);
-                    input_request_id = payload
-                        .get("call_id")
-                        .and_then(|v| v.as_str())
-                        .map(str::to_string);
+                    input_request_id = Some(id.clone());
                 }
             }
             "function_call_output" | "custom_tool_call_output" => {
@@ -1202,14 +1356,19 @@ fn apply_codex_rollout(
                 if let Some(t) = ts {
                     updated_at = t;
                 }
-                if input_request_id.is_some()
-                    && payload.get("call_id").and_then(|v| v.as_str())
-                        == input_request_id.as_deref()
+                questions.returned(payload);
+                if waiting_reason == Some(crate::domain::WaitingReason::Question)
+                    && !questions.has_active()
                 {
-                    status = TaskStatus::Running;
-                    waiting_reason = None;
+                    status = if turn_completed {
+                        TaskStatus::WaitingInput
+                    } else {
+                        TaskStatus::Running
+                    };
+                    waiting_reason =
+                        turn_completed.then_some(crate::domain::WaitingReason::TurnEnded);
                     input_request_id = None;
-                    phase = Some(if active_tools.is_empty() {
+                    phase = (!turn_completed).then_some(if active_tools.is_empty() {
                         crate::domain::ExecutionPhase::AwaitingModel
                     } else {
                         crate::domain::ExecutionPhase::Tool
@@ -1217,6 +1376,11 @@ fn apply_codex_rollout(
                 }
             }
             "task_complete" => {
+                questions.finish_turn();
+                turn_completed = true;
+                if waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted) {
+                    continue;
+                }
                 status = TaskStatus::WaitingInput;
                 waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
                 input_request_id = None;
@@ -1236,6 +1400,7 @@ fn apply_codex_rollout(
                 }
             }
             "turn_aborted" | "thread_rolled_back" => {
+                questions.clear();
                 status = TaskStatus::WaitingInput;
                 waiting_reason = Some(crate::domain::WaitingReason::Unknown);
                 input_request_id = None;
@@ -1247,11 +1412,38 @@ fn apply_codex_rollout(
                     updated_at = t;
                 }
             }
+            "error" if explicit_quota_error(payload) => {
+                status = TaskStatus::WaitingInput;
+                waiting_reason = Some(crate::domain::WaitingReason::QuotaExhausted);
+                input_request_id = turn_key.as_ref().map(|turn| format!("quota:{turn}"));
+                last_message =
+                    Some("额度已用完，请在原 Agent 检查账号、重置时间或切换可用额度后继续".into());
+                activity = None;
+                active_tools.clear();
+                phase = None;
+                if let Some(t) = ts {
+                    updated_at = t;
+                }
+            }
             _ => {}
         }
         if let Some(id) = confirmed_approvals.keys().next() {
             status = TaskStatus::WaitingInput;
             waiting_reason = Some(crate::domain::WaitingReason::Approval);
+            input_request_id = Some(id.clone());
+            phase = None;
+        }
+    }
+
+    // Human requests are independent of tool execution / dispatch success.
+    // In particular an accepted async question can coexist with ongoing work
+    // or an ordinary completed turn, and must never become a green end notice.
+    if confirmed_approvals.is_empty()
+        && waiting_reason != Some(crate::domain::WaitingReason::QuotaExhausted)
+    {
+        if let Some(id) = questions.active_ids().first() {
+            status = TaskStatus::WaitingInput;
+            waiting_reason = Some(crate::domain::WaitingReason::Question);
             input_request_id = Some(id.clone());
             phase = None;
         }
@@ -1271,7 +1463,10 @@ fn apply_codex_rollout(
         phase,
         active_tools,
         confirmed_approvals,
+        questions,
+        turn_completed,
         session_id,
+        metadata_session_id,
         turn_key,
         first_user_message,
         quota_5h_used_pct,
@@ -1280,6 +1475,45 @@ fn apply_codex_rollout(
         quota_1w_resets_at,
     };
     Some(state)
+}
+
+fn explicit_quota_error(value: &serde_json::Value) -> bool {
+    if value
+        .get("will_retry")
+        .or_else(|| value.get("willRetry"))
+        .and_then(|v| v.as_bool())
+        == Some(true)
+    {
+        return false;
+    }
+    let known = |v: &serde_json::Value| {
+        v.as_str().is_some_and(|code| {
+            matches!(
+                code,
+                "usage_limit_reached"
+                    | "insufficient_quota"
+                    | "usageLimitExceeded"
+                    | "UsageLimitExceeded"
+            )
+        })
+    };
+    [
+        value,
+        value.get("error").unwrap_or(&serde_json::Value::Null),
+    ]
+    .iter()
+    .any(|v| {
+        ["code", "codex_error_info", "codexErrorInfo"]
+            .iter()
+            .any(|key| v.get(*key).is_some_and(known))
+            || v.get("message")
+                .and_then(|v| v.as_str())
+                .is_some_and(|message| {
+                    let message = message.to_ascii_lowercase();
+                    message.starts_with("you've hit your usage limit")
+                        || message.starts_with("you have hit your usage limit")
+                })
+    })
 }
 
 fn summarize_tool_activity(payload: &serde_json::Value) -> Option<String> {
@@ -1376,20 +1610,29 @@ struct RemoteThreadMeta {
 fn remote_thread_metadata(section: &str) -> HashMap<String, RemoteThreadMeta> {
     let mut metadata = HashMap::new();
     let mut internal_origins = std::collections::HashSet::new();
+    let mut rollout_owner: Option<String> = None;
     for line in section.lines() {
-        if let Some(raw) = line.strip_prefix("META\t") {
+        if line.starts_with("===S:") {
+            rollout_owner = None;
+        } else if let Some(raw) = line.strip_prefix("META\t") {
             if let Ok(mut meta) = serde_json::from_str::<RemoteThreadMeta>(raw) {
                 if !meta.id.trim().is_empty() {
-                    meta.internal = internal_guardian(&meta.source);
+                    meta.internal = internal_codex_source(&meta.source);
                     // Retain origin even if the native title is unavailable.
                     metadata.insert(meta.id.clone(), meta);
                 }
             }
         } else if let Ok(row) = serde_json::from_str::<serde_json::Value>(line) {
-            if row.get("type").and_then(|v| v.as_str()) == Some("session_meta") {
+            if row.get("type").and_then(|v| v.as_str()) == Some("session_meta")
+                || row.pointer("/payload/type").and_then(|v| v.as_str()) == Some("session_meta")
+            {
                 if let Some(payload) = row.get("payload") {
-                    if payload.get("source").is_some_and(internal_guardian) {
-                        if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                    if let Some(id) = payload.get("id").and_then(|v| v.as_str()) {
+                        if rollout_owner.as_deref().is_some_and(|owner| owner != id) {
+                            continue;
+                        }
+                        rollout_owner = Some(id.to_owned());
+                        if payload.get("source").is_some_and(internal_codex_source) {
                             internal_origins.insert(id.to_owned());
                         }
                     }
@@ -1575,6 +1818,7 @@ fn flush_codex(
     }
     let Some(slug) = slug else { return };
     if let Some(state) = parse_codex_rollout(buf, now, slug) {
+        let pending_input_ids = state.pending_input_ids();
         // The tail we read may not carry session_meta (it's at the top of the
         // file), so prefer the thread id extracted from the rollout filename.
         let sid = uuid
@@ -1619,6 +1863,7 @@ fn flush_codex(
             .filter(|cwd| !cwd.is_empty())
             .or(state.cwd);
         t.waiting_reason = state.waiting_reason;
+        t.input_request_ids = pending_input_ids;
         t.input_request_id = state.input_request_id;
         t.started_at = state.started_at;
         t.message = state.last_message;
@@ -1644,12 +1889,13 @@ impl Provider for CodexProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
+        let poll_read_before = self.read_bytes;
         self.refresh_title_index();
         let discovered = match self.discover() {
             Ok(files) => files,
             Err(error) => {
                 let message = format!("session discovery failed: {error}");
-                log::warn!("codex: {message}");
+                log::warn!("codex: session discovery failed; preserving previous tasks");
                 let tasks = self
                     .last_tasks
                     .iter()
@@ -1664,8 +1910,8 @@ impl Provider for CodexProvider {
         };
         let mut metadata = match self.thread_metadata(now) {
             Ok(metadata) => metadata,
-            Err(error) => {
-                log::warn!("codex: {error}; falling back to rollout metadata");
+            Err(_) => {
+                log::warn!("codex: metadata unavailable; falling back to rollout metadata");
                 self.native_metadata
                     .values()
                     .map(ThreadMeta::from_app_server)
@@ -1706,21 +1952,31 @@ impl Provider for CodexProvider {
         let files: Vec<PathBuf> = discovered
             .into_iter()
             .filter(|path| {
-                let protected = self.cache.get(path).is_some_and(|c| {
-                    c.state.as_ref().is_some_and(|s| {
-                        s.status == TaskStatus::Running || !s.confirmed_approvals.is_empty()
-                    })
-                });
-                self.cache_policy
-                    .eligible(path, protected, self.cache.contains_key(path))
+                let protected = self
+                    .cache
+                    .get(path)
+                    .is_some_and(|c| c.state.as_ref().is_some_and(SessionState::parser_protected));
+                let stamp = self.linux_rollouts.as_ref().and_then(|rows| rows.get(path));
+                let eligible = if let Some(s) = stamp {
+                    self.cache_policy.eligible_observed(
+                        UNIX_EPOCH + Duration::from_nanos(s.modified_ns),
+                        UNIX_EPOCH + Duration::from_nanos(s.changed_ns),
+                        protected,
+                        self.cache.contains_key(path),
+                    )
+                } else {
+                    self.cache_policy
+                        .eligible(path, protected, self.cache.contains_key(path))
+                };
+                let modified = stamp
+                    .map(|s| UNIX_EPOCH + Duration::from_nanos(s.modified_ns))
+                    .or_else(|| path.metadata().and_then(|m| m.modified()).ok());
+                eligible
                     && (eligible_paths.contains(path)
                         || protected
-                        || path
-                            .metadata()
-                            .and_then(|m| m.modified())
-                            .is_ok_and(|modified| {
-                                now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
-                            }))
+                        || modified.is_some_and(|modified| {
+                            now.duration_since(modified).unwrap_or_default() <= DISCOVERY_TTL
+                        }))
             })
             .collect();
         let mut tasks = Vec::new();
@@ -1772,6 +2028,22 @@ impl Provider for CodexProvider {
             }
         }
         for (_, state) in sessions.into_values() {
+            // A complete OLD rollout is not a complete observation of a
+            // resumed session whose other rollout is still catching up or
+            // unreadable. Partial evidence for another session is independent.
+            if self.cache.iter().any(|(path, cache)| {
+                !cache.tail.trusted()
+                    && (cache
+                        .state
+                        .as_ref()
+                        .is_some_and(|partial| partial.session_id == state.session_id)
+                        || metadata
+                            .get(&state.session_id)
+                            .and_then(|m| m.rollout_path.as_deref())
+                            .is_some_and(|p| self.resolve_rollout_path(p) == *path))
+            }) {
+                continue;
+            }
             live.insert(state.session_id.clone(), state.updated_at);
             let mut task = self.session_to_task(&state, metadata.get(&state.session_id), now);
             if state.status == TaskStatus::Running
@@ -1786,7 +2058,12 @@ impl Provider for CodexProvider {
             .filter_map(|task| task.session_id.clone())
             .collect();
         for meta in metadata.values().filter(|meta| meta.pinned) {
-            if emitted.contains(&meta.id) {
+            if emitted.contains(&meta.id)
+                || self
+                    .last_tasks
+                    .iter()
+                    .any(|t| t.session_id.as_deref() == Some(&meta.id) && parser_protected(t))
+            {
                 continue;
             }
             let mut task = TaskSnapshot::new(
@@ -1805,28 +2082,40 @@ impl Provider for CodexProvider {
         }
         let selected: std::collections::HashSet<PathBuf> = files.into_iter().collect();
         self.cache.retain(|path, _| selected.contains(path));
-        let keep = self.cache_policy.keep(
-            self.cache
-                .iter()
-                .map(|(p, c)| {
-                    let protected = !c.tail.trusted()
-                        || c.state.as_ref().is_some_and(|s| {
-                            s.status == TaskStatus::Running || !s.confirmed_approvals.is_empty()
+        let items = self
+            .cache
+            .iter()
+            .map(|(p, c)| {
+                let protected = !c.tail.trusted()
+                    || c.state.as_ref().is_some_and(SessionState::parser_protected);
+                let bytes = c.tail.retained_bytes()
+                    + c.state.as_ref().map_or(0, |s| {
+                        s.active_tools
+                            .iter()
+                            .map(|(k, v)| k.len() + v.len())
+                            .sum::<usize>()
+                            + s.first_user_message.as_ref().map_or(0, String::len)
+                            + 2048
+                    });
+                (p.clone(), protected, bytes)
+            })
+            .collect::<Vec<_>>();
+        let keep = if let Some(rows) = &self.linux_rollouts {
+            self.cache_policy.keep_observed(
+                items
+                    .into_iter()
+                    .map(|(p, protected, bytes)| {
+                        let at = rows.get(&p).map_or(UNIX_EPOCH, |s| {
+                            UNIX_EPOCH + Duration::from_nanos(s.modified_ns.max(s.changed_ns))
                         });
-                    let bytes = c.tail.retained_bytes()
-                        + c.state.as_ref().map_or(0, |s| {
-                            s.active_tools
-                                .iter()
-                                .map(|(k, v)| k.len() + v.len())
-                                .sum::<usize>()
-                                + s.first_user_message.as_ref().map_or(0, String::len)
-                                + 2048
-                        });
-                    (p.clone(), protected, bytes)
-                })
-                .collect(),
-            now,
-        );
+                        (p, protected, bytes, at)
+                    })
+                    .collect(),
+                now,
+            )
+        } else {
+            self.cache_policy.keep(items, now)
+        };
         self.cache.retain(|p, _| keep.contains(p));
 
         // Sessions we previously knew but that vanished / went stale → no
@@ -1838,13 +2127,21 @@ impl Provider for CodexProvider {
         for previous in &self.last_tasks {
             if !tasks.iter().any(|t| t.id == previous.id) && !parser_protected(previous) {
                 let mut previous = previous.clone();
+                if self.linux_rollouts.is_some() {
+                    previous.stale = true;
+                }
                 if let Some(meta) = previous.session_id.as_ref().and_then(|id| metadata.get(id)) {
                     previous.name = thread_task_name(meta);
                 }
                 tasks.push(previous);
             }
         }
-        let incomplete = self.cache.values().any(|cache| !cache.tail.trusted());
+        let missing_protected = self.linux_rollouts.is_some()
+            && self.last_tasks.iter().any(|t| {
+                parser_protected(t) && !tasks.iter().any(|new| new.id == t.id && !new.stale)
+            });
+        let incomplete =
+            missing_protected || self.cache.values().any(|cache| !cache.tail.trusted());
         if incomplete {
             for previous in &self.last_tasks {
                 if !tasks.iter().any(|t| t.id == previous.id) {
@@ -1863,10 +2160,16 @@ impl Provider for CodexProvider {
                 .sum::<usize>()
         );
         self.last_tasks = tasks.clone();
+        let tails:Vec<_> = self.cache.iter().take(128).map(|(p,c)| serde_json::json!({
+            "file_hash": &crate::integrations::key(&p.to_string_lossy())[..16],
+            "session_hash": c.state.as_ref().map(|s|crate::integrations::key(&s.session_id)[..16].to_string()),
+            "turn_hash": c.state.as_ref().and_then(|s|s.turn_key.as_ref()).map(|s|crate::integrations::key(s)[..16].to_string()),
+            "cursor": c.tail.diagnostics()
+        })).collect();
         super::resources::record(
             "codex",
             &self.sessions_root,
-            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(|s|s.status==TaskStatus::Running || !s.confirmed_approvals.is_empty())).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES}),
+            serde_json::json!({"entries":self.cache.len(),"protected_entries":self.cache.values().filter(|c|!c.tail.trusted() || c.state.as_ref().is_some_and(SessionState::parser_protected)).count(),"tail_capacity_bytes":self.cache.values().map(|c|c.tail.retained_bytes()).sum::<usize>(),"cumulative_rollout_bytes_read":self.read_bytes,"poll_rollout_bytes_read":self.read_bytes-poll_read_before,"reset_count":self.cache.values().map(|c|c.tail.resets).sum::<u64>(),"validation_bytes":self.cache.values().map(|c|c.tail.validation_bytes_total).sum::<u64>(),"inactive_entry_budget":super::parser_cache::INACTIVE_ENTRIES,"inactive_estimated_byte_budget":super::parser_cache::INACTIVE_BYTES,"tails_truncated":self.cache.len()>128,"tails":tails}),
         );
         let catalog = metadata
             .values()
@@ -1889,7 +2192,24 @@ impl Provider for CodexProvider {
         ProviderOutput {
             catalog,
             authoritative: !incomplete,
-            error: incomplete.then(|| "Codex 日志追赶中或存在坏行；不发布中间终态".into()),
+            error: incomplete.then(|| {
+                if self.linux_rollouts.is_some() {
+                    if self.cache.values().any(|c| c.tail.size_raced()) {
+                        "[wsl:rollout_read:size_race] 文件正在追加；等待一致长度的观测"
+                    } else if self.cache.values().any(|c| c.tail.read_failed()) {
+                        "[wsl:rollout_read:io] 读取失败；保留上次观测"
+                    } else if self.cache.values().any(|c| c.tail.has_gap()) {
+                        "[wsl:rollout_decode:gap] 日志存在坏行；保留上次观测"
+                    } else if missing_protected && self.cache.values().all(|c| c.tail.trusted()) {
+                        "[wsl:rollout_discovery:missing_session] 已知会话日志缺失；保留上次观测"
+                    } else {
+                        "[wsl:rollout_read:catch_up] 日志追赶中；不发布中间终态"
+                    }
+                } else {
+                    "Codex 日志追赶中或存在坏行；不发布中间终态"
+                }
+                .into()
+            }),
             ..ProviderOutput::tasks(tasks)
         }
     }
@@ -1976,6 +2296,658 @@ fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn question_call(name: &str, id: &str, count: usize) -> String {
+        let questions: Vec<_> = (0..count)
+            .map(|i| serde_json::json!({"title":format!("Question {i}"),"options":["Yes","No"]}))
+            .collect();
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item",
+            "payload":{"type":"function_call","name":name,"call_id":id,"arguments":serde_json::json!({"questions":questions}).to_string()}})
+        )
+    }
+
+    fn question_ack(id: &str, accepted: bool) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item",
+            "payload":{"type":"function_call_output","call_id":id,"output":[{"type":"input_text","text":serde_json::json!({"accepted":accepted}).to_string()}]}})
+        )
+    }
+
+    fn question_reply(id: &str, index: usize, role: &str) -> String {
+        let item_id = serde_json::json!(["request_user_input_async", id, index]).to_string();
+        let answers =
+            serde_json::json!([{"questionItemId":item_id,"question":"Question","answer":"Yes"}]);
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item",
+            "payload":{"type":"message","role":role,"content":[{"type":"input_text","text":format!("<send_user_message_question_reply>\n{answers}\n</send_user_message_question_reply>")}]}})
+        )
+    }
+
+    #[test]
+    fn async_question_acknowledgement_is_not_an_answer_or_turn_end() {
+        use crate::domain::{ExecutionPhase, WaitingReason};
+        let now = SystemTime::now();
+        let mut state = parse_codex_rollout_unfiltered(
+            &format!(
+                "{}{}",
+                header("/project"),
+                turn_event("task_started", "current", 1)
+            ),
+            now,
+            "s",
+        )
+        .unwrap();
+        for line in [
+            question_call("request_user_input_async", "question", 1),
+            question_ack("question", true),
+        ] {
+            state = apply_codex_rollout(&line, now, "s", Some(state)).unwrap();
+        }
+        assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        assert_eq!(state.input_request_id.as_deref(), Some("question"));
+        let started = state.started_at;
+        for line in [
+            serde_json::json!({"payload":{"type":"function_call","name":"exec_command","call_id":"work","arguments":"{\"cmd\":\"read-only-check\"}"}}).to_string(),
+            serde_json::json!({"payload":{"type":"token_count"}}).to_string(),
+            question_reply("unrelated",0,"user"), question_reply("question",0,"assistant"),
+        ] {
+            state = apply_codex_rollout(&line,now,"s",Some(state)).unwrap();
+            assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        }
+        state = apply_codex_rollout(
+            &question_reply("question", 0, "user"),
+            now,
+            "s",
+            Some(state),
+        )
+        .unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.phase, Some(ExecutionPhase::Tool));
+        assert_eq!(state.waiting_reason, None);
+        assert_eq!(state.turn_key.as_deref(), Some("current"));
+        assert_eq!(state.started_at, started);
+    }
+
+    #[test]
+    fn async_question_end_does_not_hide_unanswered_items_or_parallel_requests() {
+        use crate::domain::WaitingReason;
+        let now = SystemTime::now();
+        let body = format!(
+            "{}{}{}{}{}{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 1),
+            question_call("functions.request_user_input_async", "a", 2),
+            question_ack("a", true),
+            question_call("request_user_input_async", "b", 1),
+            question_ack("b", true),
+            turn_event("task_complete", "current", 0)
+        );
+        let mut state = parse_codex_rollout_unfiltered(&body, now, "s").unwrap();
+        let provider = CodexProvider::with_root(PathBuf::new());
+        assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        assert_eq!(
+            provider
+                .session_to_task(&state, None, now)
+                .input_request_ids,
+            vec!["a", "b"]
+        );
+        for (id, index, left) in [("a", 0, 2), ("b", 0, 1)] {
+            state = apply_codex_rollout(&question_reply(id, index, "user"), now, "s", Some(state))
+                .unwrap();
+            assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+            assert_eq!(
+                provider
+                    .session_to_task(&state, None, now)
+                    .input_request_ids
+                    .len(),
+                left
+            );
+        }
+        state =
+            apply_codex_rollout(&question_reply("a", 1, "user"), now, "s", Some(state)).unwrap();
+        assert_eq!(state.waiting_reason, Some(WaitingReason::TurnEnded));
+        assert_eq!(state.status, TaskStatus::WaitingInput);
+        assert!(!provider
+            .session_to_task(&state, None, now)
+            .requires_action());
+    }
+
+    #[test]
+    fn async_question_rejected_dispatch_and_old_replies_do_not_block_new_turns() {
+        use crate::domain::WaitingReason;
+        let now = SystemTime::now();
+        let start = format!(
+            "{}{}",
+            header("/project"),
+            turn_event("task_started", "old", 1)
+        );
+        let failed = format!(
+            "{start}{}{}",
+            question_call("request_user_input_async", "rejected", 1),
+            question_ack("rejected", false)
+        );
+        let mut state = parse_codex_rollout_unfiltered(&failed, now, "s").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.waiting_reason, None);
+        let next = format!(
+            "{}{}{}{}",
+            turn_event("task_started", "new", 0),
+            question_call("request_user_input_async", "new-question", 1),
+            question_ack("new-question", true),
+            question_reply("rejected", 0, "user")
+        );
+        state = apply_codex_rollout(&next, now, "s", Some(state)).unwrap();
+        assert_eq!(state.waiting_reason, Some(WaitingReason::Question));
+        assert_eq!(state.input_request_id.as_deref(), Some("new-question"));
+        assert_eq!(state.turn_key.as_deref(), Some("new"));
+    }
+
+    #[test]
+    fn async_question_pipeline_notifies_once_then_resumes_and_notifies_real_end() {
+        use crate::{attention::AttentionTracker, store::TaskStore, transition::TransitionEngine};
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("rollout-question.jsonl");
+        let ledger = root.path().join("notifications.json");
+        let now = SystemTime::now();
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}",
+                header("/project"),
+                turn_event("task_started", "current", 1)
+            ),
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(root.path().into());
+        let mut engine = TransitionEngine::open(ledger.clone());
+        let mut store = TaskStore::default();
+        let mut attention = AttentionTracker::open(root.path().join("attention.json"));
+        let initial = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(engine.apply(&initial, &[], now).is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(
+                format!(
+                    "{}{}",
+                    question_call("request_user_input_async", "q", 1),
+                    question_ack("q", true)
+                )
+                .as_bytes(),
+            )
+            .unwrap();
+        let pending = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(pending[0].requires_action());
+        assert_eq!(engine.apply(&pending, &[], now).len(), 1);
+        engine = TransitionEngine::open(ledger.clone());
+        provider = CodexProvider::with_root(root.path().into());
+        let replay = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(replay[0].requires_action());
+        assert!(engine.apply(&replay, &[], now).is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(question_reply("q", 0, "user").as_bytes())
+            .unwrap();
+        let answered = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert_eq!(answered[0].status, TaskStatus::Running);
+        assert!(engine.apply(&answered, &[], now).is_empty());
+        std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(turn_event("task_complete", "current", 0).as_bytes())
+            .unwrap();
+        let completed = attention.reconcile(store.merge(provider.poll(now).tasks, now));
+        assert!(!completed[0].requires_action());
+        assert_eq!(engine.apply(&completed, &[], now).len(), 1);
+        engine = TransitionEngine::open(ledger);
+        assert!(engine.apply(&completed, &[], now).is_empty());
+    }
+
+    #[test]
+    #[ignore = "read-only native async question replay; explicit file and call ID required"]
+    fn live_codex_async_question_replay() {
+        let file = std::env::var("TASKPULSE_CODEX_QUESTION_REPLAY_FILE")
+            .expect("explicit rollout file required");
+        let request = std::env::var("TASKPULSE_CODEX_QUESTION_CALL_ID")
+            .expect("explicit request call ID required");
+        let body = std::fs::read_to_string(file).unwrap();
+        let mut state = None;
+        let mut accepted = false;
+        let mut answered = false;
+        let mut pending_observations = 0;
+        let mut identity = None;
+        let mut started = None;
+        for line in body.lines() {
+            let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+                continue;
+            };
+            let before = state.clone();
+            state = apply_codex_rollout(line, SystemTime::now(), "replay", state);
+            let current = state.as_ref().unwrap();
+            if current.questions.active_ids().contains(&request) {
+                accepted = true;
+                assert_eq!(
+                    current.waiting_reason,
+                    Some(crate::domain::WaitingReason::Question)
+                );
+                if identity.is_none() {
+                    identity = current.turn_key.clone();
+                    started = current.started_at;
+                }
+                assert_eq!(current.turn_key, identity);
+                pending_observations += 1;
+            } else if accepted {
+                // Confirm an actual structured user reply resolved the known
+                // request, not a tool result, timeout, reasoning or completion.
+                let mut questions = before.unwrap().questions;
+                assert_eq!(questions.replied(&value["payload"]), Some(true));
+                assert_eq!(current.status, TaskStatus::Running);
+                assert_eq!(current.turn_key, identity);
+                assert_eq!(current.started_at, started);
+                answered = true;
+                break;
+            }
+        }
+        assert!(
+            accepted && answered && pending_observations > 1,
+            "real accepted request plus matching reply required"
+        );
+        println!("read_only_async_replay: pending_observations={pending_observations}; accepted ACK remains Question, matching user reply resumes RUNNING; no host/state writes");
+    }
+
+    fn fork_meta(id: &str, source: serde_json::Value, cwd: &str) -> String {
+        format!(
+            "{}\n",
+            serde_json::json!({"timestamp":recent_rfc3339(5),
+            "type":"session_meta","payload":{"id":id,"cwd":cwd,"source":source}})
+        )
+    }
+
+    fn spawned_source(parent: &str) -> serde_json::Value {
+        serde_json::json!({"subagent":{"thread_spawn":{"parent_thread_id":parent,
+            "depth":1,"agent_path":"/root/worker"}}})
+    }
+
+    #[test]
+    fn fork_identity_cannot_be_overwritten_by_inherited_metadata_across_batches() {
+        let now = SystemTime::now();
+        for source in [spawned_source("parent"), serde_json::json!("vscode")] {
+            let own = fork_meta("child", source.clone(), "/child-project");
+            let state = apply_codex_rollout(&own, now, "filename-fallback", None).unwrap();
+            let history = fork_meta("parent", serde_json::json!("vscode"), "/parent-project");
+            let state =
+                apply_codex_rollout(&history, now, "filename-fallback", Some(state)).unwrap();
+            assert_eq!(
+                state.session_id, "child",
+                "copied parent metadata is not the file owner"
+            );
+            assert_eq!(state.cwd.as_deref(), Some("/child-project"));
+            assert_eq!(state.internal, source != serde_json::json!("vscode"));
+            // Repeated metadata for the actual owner remains compatible.
+            let same = apply_codex_rollout(&own, now, "filename-fallback", Some(state)).unwrap();
+            assert_eq!(same.session_id, "child");
+        }
+    }
+
+    #[test]
+    fn forked_workers_cannot_end_running_parent_through_store_attention_and_restart() {
+        use crate::attention::AttentionTracker;
+        use crate::store::TaskStore;
+        use crate::transition::TransitionEngine;
+        for wsl in [false, true] {
+            let dir = tempfile::tempdir().unwrap();
+            let sessions = dir.path().join("sessions");
+            std::fs::create_dir(&sessions).unwrap();
+            let parent_path = sessions.join("rollout-parent.jsonl");
+            let parent_header = fork_meta("parent", serde_json::json!("vscode"), "/project");
+            std::fs::write(
+                &parent_path,
+                format!(
+                    "{parent_header}{}",
+                    turn_event("task_started", "parent-turn", 4)
+                ),
+            )
+            .unwrap();
+            let mut provider = if wsl {
+                CodexProvider::with_wsl_root(
+                    dir.path().into(),
+                    dir.path().into(),
+                    "codex-wsl:ubuntu",
+                )
+            } else {
+                CodexProvider::with_root(sessions.clone())
+            };
+            let ledger = dir.path().join("notifications.json");
+            let mut engine = TransitionEngine::open(ledger.clone());
+            let mut store = TaskStore::default();
+            let mut attention = AttentionTracker::open(dir.path().join("attention.json"));
+            let now = SystemTime::now();
+            let initial = provider.poll(now);
+            let merged = store.merge(initial.tasks, now);
+            assert!(engine.apply(&merged, &[], now).is_empty());
+            attention.reconcile(merged);
+            let parent_id = provider.task_id("parent");
+            // Native thread_spawn rollouts begin with their own metadata and
+            // then replay a parent's metadata/history before their own turn.
+            for i in 0..2 {
+                let child = format!("child-{i}");
+                let child_turn = format!("child-turn-{i}");
+                let path = sessions.join(format!("rollout-{child}.jsonl"));
+                let prefix = format!(
+                    "{}{}{}{}",
+                    fork_meta(&child, spawned_source("parent"), "/project"),
+                    parent_header,
+                    turn_event("task_complete", "old-parent-turn", 3),
+                    turn_event("task_started", "parent-turn", 2)
+                );
+                std::fs::write(&path, &prefix).unwrap();
+                for suffix in [
+                    turn_event("task_started", &child_turn, 1),
+                    turn_event("task_complete", &child_turn, 0),
+                ] {
+                    std::fs::OpenOptions::new()
+                        .append(true)
+                        .open(&path)
+                        .unwrap()
+                        .write_all(suffix.as_bytes())
+                        .unwrap();
+                    let output = provider.poll(now);
+                    let parent = output.tasks.iter().find(|t| t.id == parent_id).unwrap();
+                    assert_eq!(
+                        parent.status,
+                        TaskStatus::Running,
+                        "a child must never replace its parent (WSL={wsl})"
+                    );
+                    assert_eq!(parent.turn_key.as_deref(), Some("parent-turn"));
+                    let child_task = output
+                        .tasks
+                        .iter()
+                        .find(|t| t.session_id.as_deref() == Some(&child))
+                        .unwrap();
+                    assert!(
+                        child_task.internal,
+                        "native spawned workers are not independent user turns"
+                    );
+                    let merged = store.merge(
+                        output.tasks.into_iter().filter(|t| !t.internal).collect(),
+                        now,
+                    );
+                    assert!(engine.apply(&merged, &[], now).is_empty());
+                    let visible = attention.reconcile(merged);
+                    assert_eq!(visible.len(), 1);
+                    assert_eq!(visible[0].status, TaskStatus::Running);
+                    engine = TransitionEngine::open(ledger.clone());
+                }
+            }
+            // Real parent completion must still notify once, including after
+            // restart; do not reset the persisted notification ledger to fix it.
+            std::fs::OpenOptions::new()
+                .append(true)
+                .open(&parent_path)
+                .unwrap()
+                .write_all(turn_event("task_complete", "parent-turn", 0).as_bytes())
+                .unwrap();
+            let tasks = provider
+                .poll(now)
+                .tasks
+                .into_iter()
+                .filter(|t| !t.internal)
+                .collect();
+            let merged = store.merge(tasks, now);
+            assert_eq!(engine.apply(&merged, &[], now).len(), 1);
+            engine = TransitionEngine::open(ledger);
+            assert!(engine.apply(&merged, &[], now).is_empty());
+            assert!(attention.reconcile(merged)[0].unread);
+        }
+    }
+
+    #[test]
+    fn fork_spawn_origin_survives_remote_full_and_truncated_rollouts() {
+        let child = "11111111-1111-7111-8111-111111111111";
+        for source in [
+            spawned_source("parent"),
+            serde_json::Value::String(spawned_source("parent").to_string()),
+        ] {
+            for with_header in [false, true] {
+                let inherited = if with_header {
+                    format!(
+                        "{}{}",
+                        fork_meta(child, source.clone(), "/project"),
+                        fork_meta("parent", serde_json::json!("vscode"), "/parent-project")
+                    )
+                } else {
+                    String::new()
+                };
+                let section = format!("META\t{}\n===S:10===F:rollout-2026-10-22T12-00-00-{child}.jsonl===\n{inherited}{}",
+                    serde_json::json!({"id":child,"t":"Worker","cwd":"/project","source":source}),
+                    turn_event("task_complete", "worker-turn", 0));
+                let tasks =
+                    tasks_from_codex_section(&section, "Server", "server", SystemTime::now());
+                assert_eq!(tasks.len(), 1);
+                assert_eq!(tasks[0].session_id.as_deref(), Some(child));
+                assert!(tasks[0].internal);
+                assert!(catalog_from_codex_section(&section, "Server", "server")[0].internal);
+                assert!(crate::transition::TransitionEngine::new()
+                    .apply(&tasks, &[], SystemTime::now())
+                    .is_empty());
+            }
+        }
+        assert!(
+            !internal_codex_source(&serde_json::json!({"subagent":{"thread_spawn":{}}})),
+            "unknown origin is not proof of a spawned worker"
+        );
+    }
+
+    #[test]
+    fn user_fork_does_not_inherit_service_classification_from_copied_history() {
+        let body = format!(
+            "{}{}{}",
+            fork_meta("user", serde_json::json!("vscode"), "/project"),
+            fork_meta(
+                "service",
+                serde_json::json!({"subagent":{"other":"guardian"}}),
+                "/service"
+            ),
+            turn_event("task_started", "user-turn", 0)
+        );
+        let state = parse_codex_rollout(&body, SystemTime::now(), "fallback").unwrap();
+        assert_eq!(state.session_id, "user");
+        assert!(!state.internal);
+        let section = format!("META\t{{\"id\":\"service\",\"t\":\"User title\",\"source\":\"vscode\"}}\n===S:10===F:rollout.jsonl===\n{body}");
+        assert!(!remote_thread_metadata(&section)["service"].internal);
+    }
+
+    #[test]
+    #[ignore = "read-only real rollout replay; requires TASKPULSE_CODEX_REPLAY_ROOT"]
+    fn live_codex_fork_identity_replay() {
+        let root = PathBuf::from(
+            std::env::var("TASKPULSE_CODEX_REPLAY_ROOT").expect("explicit sessions root required"),
+        );
+        let now = SystemTime::now();
+        let mut files = 0;
+        let mut spawned = 0;
+        let mut provider = CodexProvider::with_root(root.clone());
+        for path in walk(&root)
+            .unwrap()
+            .into_iter()
+            .filter(|p| p.extension().is_some_and(|s| s == "jsonl"))
+        {
+            let body = std::fs::read_to_string(&path).unwrap();
+            let first: serde_json::Value =
+                serde_json::from_str(body.lines().next().unwrap()).unwrap();
+            let Some(owner) = first.pointer("/payload/id").and_then(|v| v.as_str()) else {
+                continue;
+            };
+            let state = parse_codex_rollout_unfiltered(&body, now, "fallback").unwrap();
+            assert_eq!(state.session_id, owner, "rollout header identity changed");
+            if first
+                .pointer("/payload/source/subagent/thread_spawn/parent_thread_id")
+                .is_some()
+            {
+                spawned += 1;
+                assert!(state.internal);
+            }
+            // The same native file must keep its identity in the bounded
+            // incremental path too, not just when parsed as one string.
+            let mut caught = None;
+            for _ in 0..30 {
+                caught = provider.cached_session_state(&path, now);
+                if caught.is_some() {
+                    break;
+                }
+            }
+            let caught = caught.expect("bounded reader did not catch up");
+            assert_eq!(caught.session_id, owner);
+            assert_eq!(caught.internal, state.internal);
+            assert_eq!(caught.turn_key, state.turn_key);
+            if std::env::var("TASKPULSE_CODEX_REPLAY_SESSION")
+                .ok()
+                .as_deref()
+                == Some(owner)
+            {
+                println!(
+                    "target_session={owner} status={:?} phase={:?} turn={:?}",
+                    caught.status, caught.phase, caught.turn_key
+                );
+            }
+            files += 1;
+        }
+        assert!(
+            files > 0 && spawned > 0,
+            "real spawned rollout evidence required"
+        );
+        println!("read_only_replay: files={files} native_spawned_workers={spawned}; no Agent tasks or notification state changed");
+    }
+
+    #[test]
+    fn lifecycle_schema_error_is_scoped_and_retry_or_rate_limit_is_not_exhaustion() {
+        let now = SystemTime::now();
+        let body = format!(
+            "{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 1)
+        );
+        let original = parse_codex_rollout_unfiltered(&body, now, "s").unwrap();
+        for (turn, info, retry, expected) in [
+            ("current", "usageLimitExceeded", false, true),
+            ("old", "usageLimitExceeded", false, false),
+            ("current", "usageLimitExceeded", true, false),
+            ("current", "rateLimitExceeded", false, false),
+            ("current", "serverOverloaded", false, false),
+        ] {
+            let event = serde_json::json!({"timestamp":recent_rfc3339(0),"method":"error","params":{"threadId":"sess-1","turnId":turn,"willRetry":retry,"error":{"codexErrorInfo":info}}}).to_string();
+            let state = apply_codex_rollout(&event, now, "s", Some(original.clone())).unwrap();
+            assert_eq!(
+                state.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted),
+                expected
+            );
+        }
+    }
+    #[test]
+    fn lifecycle_large_compaction_does_not_poison_new_running_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("rollout-large.jsonl");
+        let compacted = serde_json::json!({"type":"compacted","payload":{"replacement_history":"x".repeat(super::super::jsonl_tail::LINE_BUDGET + 1024)}});
+        std::fs::write(
+            &path,
+            format!(
+                "{}{}\n{}",
+                header("/project"),
+                compacted,
+                turn_event("task_started", "current", 0)
+            ),
+        )
+        .unwrap();
+        let mut provider = CodexProvider::with_root(dir.path().into());
+        let mut parsed = None;
+        for _ in 0..30 {
+            parsed = provider.cached_session_state(&path, SystemTime::now());
+            if parsed.is_some() {
+                break;
+            }
+        }
+        let parsed = parsed
+            .expect("irrelevant oversized compaction must not permanently hide lifecycle events");
+        assert_eq!(parsed.status, TaskStatus::Running);
+        assert_eq!(parsed.turn_key.as_deref(), Some("current"));
+        assert!(provider.cache[&path].tail.retained_bytes() < 1024);
+    }
+
+    #[test]
+    fn lifecycle_late_old_turn_end_cannot_end_current_turn() {
+        let body = format!(
+            "{}{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 2),
+            turn_event("task_complete", "previous", 0)
+        );
+        let state = parse_codex_rollout_unfiltered(&body, SystemTime::now(), "s").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+        assert_eq!(state.turn_key.as_deref(), Some("current"));
+    }
+
+    #[test]
+    fn lifecycle_new_user_message_reopens_ended_but_not_an_explicit_gate() {
+        let now = SystemTime::now();
+        let body = format!(
+            "{}{}{}",
+            header("/project"),
+            turn_event("task_started", "old", 3),
+            turn_event("task_complete", "old", 2)
+        );
+        let old = parse_codex_rollout_unfiltered(&body, now, "s").unwrap();
+        let message = serde_json::json!({"timestamp":recent_rfc3339(0),"type":"response_item","payload":{"type":"message","role":"user","content":[{"type":"input_text","text":"continue"}]}}).to_string();
+        let next = apply_codex_rollout(&message, now, "s", Some(old.clone())).unwrap();
+        assert_eq!(next.status, TaskStatus::Running);
+        assert_ne!(next.turn_key, old.turn_key);
+        let mut blocked = old;
+        blocked.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        blocked
+            .confirmed_approvals
+            .insert("request".into(), Some("call".into()));
+        assert_eq!(
+            apply_codex_rollout(&message, now, "s", Some(blocked))
+                .unwrap()
+                .waiting_reason,
+            Some(crate::domain::WaitingReason::Approval)
+        );
+    }
+
+    #[test]
+    fn lifecycle_explicit_quota_error_is_actionable_not_a_successful_end() {
+        let now = SystemTime::now();
+        let start = format!(
+            "{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 1)
+        );
+        let error = serde_json::json!({"timestamp":recent_rfc3339(0),"payload":{"type":"error","turn_id":"current","code":"usage_limit_reached","will_retry":false}}).to_string();
+        let state = parse_codex_rollout_unfiltered(
+            &format!(
+                "{start}{error}\n{}",
+                turn_event("task_complete", "current", 0)
+            ),
+            now,
+            "s",
+        )
+        .unwrap();
+        assert_eq!(state.status, TaskStatus::WaitingInput);
+        assert_eq!(
+            serde_json::to_value(state.waiting_reason).unwrap(),
+            "quota_exhausted"
+        );
+        let retry = error.replace("false", "true");
+        let state = parse_codex_rollout_unfiltered(&format!("{start}{retry}"), now, "s").unwrap();
+        assert_eq!(state.status, TaskStatus::Running);
+    }
     use std::io::Write;
 
     fn escalation_log(id: &str) -> String {

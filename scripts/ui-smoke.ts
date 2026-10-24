@@ -20,12 +20,17 @@ const fixture=String.raw`
 const now=Date.now();
 let settings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[{id:'codex',name:'Codex · 本机',kind:'codex',enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000},{id:'deepseek_harness_desktop',name:'DeepSeek · Windows',kind:'deepseek_desktop',enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000}]};
 let tasks=Array.from({length:28},(_,i)=>({id:'test-'+i,name:i===0?'验收：授权阻塞':i===1?'验收：已结束':'验收任务 '+i,source:'codex',source_instance:'codex',project:'test-project',project_path:'D:/test/project',status:i<2?'waiting_input':'running',waiting_reason:i===0?'approval':i===1?'turn_ended':null,updated_at:now,started_at:now-60000,confidence:'hook',remote:false,unread:true,activity:'cargo test --bin agent-tray'}));
+tasks[0].input_request_id='request-a';tasks[0].turn_key='turn-a';
+let center={revision:1,unread:1,error:null,entries:[{id:'message-a',at:now,seen:false,kind:'approval',task_id:'test-0',task_name:tasks[0].name,source:'codex',state:'pending',request_id:'request-a',turn_key:'turn-a',can_reopen:true}]};
 globalThis.isTauri=true;
 const callbacks=new Map();const listeners=[];let cb=0;globalThis.__smokeCalls=[];
 globalThis.__TAURI_INTERNALS__={metadata:{currentWindow:{label:location.pathname.startsWith('/manage')?'management':'popup'},currentWebview:{label:'popup'}},transformCallback(fn){callbacks.set(++cb,fn);return cb;},unregisterCallback(id){callbacks.delete(id);},async invoke(cmd,args={}){globalThis.__smokeCalls.push({cmd,args});
 if(cmd==='get_agents')return tasks;if(cmd==='get_pending_task_prompts')return tasks.filter(t=>t.waiting_reason==='approval');if(cmd==='reopen_task_prompt')return {current:null,pending:0};if(cmd==='get_archived_attention')return [];if(cmd==='request_refresh')return Date.now();if(cmd==='get_providers')return settings.sources.filter(s=>s.enabled).map(s=>({provider:s.id,status:'connected',last_success:Date.now(),last_attempt:Date.now()}));if(cmd==='get_monitoring_settings')return settings;if(cmd==='get_selected_task'||cmd==='get_notification_error')return null;if(cmd==='get_codex_quota')return {quota:null,observed_at:null,stale:true,error:null,refreshing:false};if(cmd==='discover_sources')return settings.sources.map(s=>({id:s.id,available:true,detail:'Read-only test fixture'}));
 if(cmd==='save_monitoring_settings'){settings=structuredClone(args.settings);return settings;}if(cmd==='list_discovered_sessions')return {total:1,items:[{task:tasks[1],reason:'历史会话，尚未加入关注'}]};if(cmd==='update_task_attention'){if(args.action==='viewed'||args.action==='hide'||args.action==='ignore')tasks=tasks.filter(t=>t.id!==args.id);return tasks;}if(cmd==='open_task')return 'details';
 if(cmd==='get_notification_log')return [];
+if(cmd==='get_message_center')return center;
+if(cmd==='plugin:window|is_visible')return true;
+if(cmd==='mark_messages_seen'){center={...center,revision:center.revision+1,unread:0,entries:center.entries.map(e=>({...e,seen:true}))};return center;}
 if(cmd==='plugin:event|listen'){listeners.push({id:listeners.length+1,...args});return listeners.length;}return null;}};
 globalThis.__TAURI_EVENT_PLUGIN_INTERNALS__={unregisterListener(){}};
 globalThis.__smokeEmit=(event,payload)=>listeners.filter(l=>l.event===event).forEach(l=>callbacks.get(l.handler)?.({event,id:l.id,payload}));
@@ -41,12 +46,12 @@ try {
   const layout=await evaluate(`(()=>{const p=document.querySelector('.dashboard'),m=document.querySelector('main');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,scroll:m.scrollHeight>m.clientHeight,overflow:document.documentElement.scrollWidth>440,errors:[...document.querySelectorAll('[role=alert]')].map(n=>n.textContent),rows:document.querySelectorAll('.task-row').length};})()`);
   if(layout.width>440||layout.height>720||!layout.scroll||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
   if(!await evaluate(`document.querySelector('main h2')?.textContent.startsWith('进行中')`))throw Error('Ongoing tasks are not first');
-  await evaluate(`document.querySelector('[aria-label="查看未解决请求：1"]').click()`);
-  await waitFor(`document.querySelector('.prompt-inbox')?.textContent.includes('验收：授权阻塞')`);
-  await evaluate(`[...document.querySelectorAll('.prompt-item button')].find(b=>b.textContent==='重新打开提醒').click()`);
+  await evaluate(`document.querySelector('[aria-label^="消息中心："]').click()`);
+  await waitFor(`document.querySelector('.message-center')?.textContent.includes('验收：授权阻塞')`);
+  await evaluate(`[...document.querySelectorAll('.message-center button')].find(b=>b.textContent==='重新打开提醒').click()`);
   await waitFor(`__smokeCalls.some(c=>c.cmd==='reopen_task_prompt')`);
   if(await evaluate(`__smokeCalls.some(c=>c.cmd==='update_task_attention')`))throw Error('Reopening marked a request viewed');
-  await evaluate(`document.querySelector('[aria-label="查看未解决请求：1"]').click()`);
+  await evaluate(`document.querySelector('[aria-label="关闭消息中心"]').click()`);
   await evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('筛选 / 分组')).click()`);
   await evaluate(`(()=>{const s=document.querySelector('[aria-label="筛选项目"]');s.value=[...s.options].find(o=>o.value)?.value;s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await evaluate(`__smokeStartProject()`);
@@ -54,7 +59,7 @@ try {
   await waitFor(`document.querySelector('.filter-note')?.textContent.includes('项目：test-project')`);
   await evaluate(`[...document.querySelectorAll('.counts button')].find(b=>b.textContent.trim().startsWith('进行中')).click()`);
   await waitFor(`document.querySelector('[data-task-id="test-new-project"]') && document.querySelectorAll('.task-row').length===28`);
-  await evaluate(`document.querySelector('.counts .total').click()`);
+  await evaluate(`document.querySelector('.all-tasks').click()`);
   await waitFor(`document.querySelectorAll('.task-row').length===29`);
   await evaluate(`[...document.querySelectorAll('.task-row')].find(row=>row.textContent.includes('验收：已结束')).click()`);
   await waitFor(`document.querySelector('.detail')?.textContent.includes('本轮结束')`);

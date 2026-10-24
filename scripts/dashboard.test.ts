@@ -1,9 +1,95 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
+import {observedDashboardTasks} from '../src/lib/dashboard';
+import {acceptMessageState,unreadMessageIds,messageStatus} from '../src/lib/messages';
+import type {MessageCenterState} from '../src/lib/types';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
-import {taskTone} from '../src/lib/dashboard';
+import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('three headline counts retain task evidence while fresh blockers are an ongoing subset',()=>{
+  const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[{
+    id:'codex',name:'Local',kind:'codex',enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000}]};
+  const blocker={...base,id:'gate',source_instance:'codex',status:'waiting_input' as const,waiting_reason:'approval' as const,input_request_id:'q'};
+  const done={...base,id:'done',status:'failed' as const};
+  const health=[{provider:'codex',status:'connected' as const,last_success:100}];
+  const initial=observedDashboardTasks([base,blocker,done],health,settings,100);
+  expect(initial.filter(t=>taskSection(t)==='ongoing')).toHaveLength(2);
+  expect(initial.filter(t=>matchesSignal(t,'action'))).toHaveLength(1);
+  expect(initial.filter(isEndedResult)).toHaveLength(1);
+  const failed=observedDashboardTasks([base,blocker,done],[{...health[0],status:'degraded'}],settings,200);
+  expect(failed.filter(t=>taskSection(t)==='ongoing')).toHaveLength(0);
+  expect(failed.filter(t=>matchesSignal(t,'action'))).toHaveLength(0);
+  expect(failed[0].status).toBe('running');expect(failed).toHaveLength(3);
+  expect(filterTasks(failed,{...EMPTY_FILTERS,query:'Native'})).toHaveLength(3);
+  expect(observedDashboardTasks([blocker],health,settings,40000)[0].stale).toBe(true);
+  expect(observedDashboardTasks([{...blocker,confidence:'inferred'}],health,settings,100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([{...blocker,input_request_id:undefined}],health,settings,100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([base,blocker],health,settings,100).every(t=>!t.stale)).toBe(true);
+  expect(base.unread&&blocker.unread).toBe(true);
+});
+
+test('message revisions and exact read snapshot IDs preserve concurrent unseen arrivals',()=>{
+  const entry={id:'a',at:100,seen:false,kind:'approval' as const,task_id:'task',task_name:'native',source:'codex' as const,state:'pending' as const,can_reopen:true};
+  const current:MessageCenterState={revision:2,unread:1,entries:[entry],error:null};
+  const rendered=unreadMessageIds(current);
+  const incoming={...current,revision:3,unread:2,entries:[{...entry,id:'b'},entry]};
+  expect(rendered).toEqual(['a']);expect(unreadMessageIds(incoming)).toEqual(['b','a']);
+  expect(acceptMessageState(incoming,current)).toBe(incoming);
+  expect(messageStatus({...entry,seen:true})).toContain('仍待处理');
+  expect(messageStatus({...entry,state:'unconfirmed',can_reopen:false})).toContain('待确认');
+});
+
+test('WSL fresh ongoing 1 → 0 → 1 is uncertainty, not a vanished or ended task',()=>{
+  const running={...base,source_instance:'codex-wsl:ubuntu',session_id:'stable',turn_key:'one',pinned:true};
+  const stale={...running,stale:true};
+  const samples=[running,stale,stale,running];
+  expect(samples.map(t=>Number(taskSection(t)==='ongoing'))).toEqual([1,0,0,1]);
+  expect(samples.map(t=>unconfirmedRunning([t]).length)).toEqual([0,1,1,0]);
+  expect(taskSummary(stale)).toBe('上次确认为运行中，当前采集待更新');
+  expect(isEndedResult(stale)).toBe(false);
+  const other={...base,id:'claude',source:'claude_code' as const};
+  const list=[stale,other];
+  const hidden=filterTasks(list,{...EMPTY_FILTERS,section:'ongoing',query:'nonexistent'});
+  expect(hidden).toEqual([]);
+  const diagnostics=dashboardContinuity(list,hidden);
+  expect(diagnostics.global.ongoing).toBe(1);expect(diagnostics.global.uncertain).toBe(1);
+  expect(diagnostics.visible.total).toBe(0);expect(diagnostics.global.unconfirmed_running).toBe(1);
+  expect(JSON.stringify(diagnostics)).not.toContain('Native title');expect(JSON.stringify(diagnostics)).not.toContain('stable');
+  expect(unconfirmedRunning(list)).toEqual([stale]);
+  expect(filterTasks(list,overviewFilters('uncertain',null))).toEqual([stale]);
+  expect(stale.unread && stale.pinned).toBe(true);
+  const ended={...running,status:'waiting_input' as const,waiting_reason:'turn_ended' as const};
+  expect(unconfirmedRunning([ended])).toEqual([]);
+  expect(taskSection(ended)).toBe('results');
+});
+
+test('refresh collection fault reflects recovery instead of persisting a historical failure',()=>{
+  expect(refreshResultMessage(['WSL'],['WSL'])).toContain('不代表任务结束');
+  expect(refreshResultMessage(['WSL'],[])).toBe('已收到全部启用来源的新采集结果');
+  expect(refreshResultMessage(['wsl-id'],['wsl-id'],{'wsl-id':'重命名后的 Ubuntu'})).toContain('重命名后的 Ubuntu');
+  expect(refreshResultMessage(['other-id'],['wsl-id'],{'other-id':'WSL'})).not.toContain('仍待更新');
+});
+
+test('explicit pending question is waiting input, never a completed result',()=>{
+  const question={...base,status:'waiting_input' as const,waiting_reason:'question' as const,input_request_id:'q1'};
+  expect(taskLabel(question)).toBe('等待输入');
+  expect(taskSection(question)).toBe('ongoing');
+  expect(taskTone(question)).toBe('action');
+  expect(isEndedResult(question)).toBe(false);
+  expect(taskLabel({...question,stale:true})).toBe('状态待更新');
+});
+test('explicit exhausted quota is actionable and thinking is never a blocking request',()=>{
+  const quota:TaskSnapshot={...base,status:'waiting_input',waiting_reason:'quota_exhausted'};
+  expect(matchesSignal(quota,'action')).toBe(true);
+  expect(taskLabel(quota)).toBe('额度已用完');
+  expect(taskSection(quota)).toBe('ongoing');
+  expect(taskTone(quota)).toBe('action');
+  expect(isEndedResult(quota)).toBe(false);
+  expect(matchesSignal({...base,phase:'thinking'},'action')).toBe(false);
+  expect(matchesSignal({...quota,stale:true},'action')).toBe(false);
+});
 
 test('visual tones prioritize uncertainty without inventing completion or human blockers',()=>{
   expect(taskTone({...base,phase:'thinking'})).toBe('running');

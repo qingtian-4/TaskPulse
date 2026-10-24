@@ -15,7 +15,6 @@ use crate::transition::TaskEvent;
 pub enum NotifyEvent {
     WaitingInput {
         task: TaskSnapshot,
-        reason: Option<String>,
     },
     Succeeded {
         task: TaskSnapshot,
@@ -51,30 +50,22 @@ impl Notifier for SystemBeepNotifier {
         if !settings.sound || (cfg!(target_os = "windows") && settings.desktop_notifications()) {
             return;
         }
-        match event {
-            NotifyEvent::WaitingInput { task, reason } => {
-                log::info!(
-                    "'{}' needs input ({}) — playing alert",
-                    task.name,
-                    reason.as_deref().unwrap_or("unknown")
-                );
-                play_system_beep();
-            }
-            NotifyEvent::Succeeded { task } | NotifyEvent::InferredFinished { task } => {
-                log::info!("'{}' finished — playing alert", task.name);
-                play_system_beep();
-            }
-            NotifyEvent::Failed { task } => {
-                log::info!("'{}' FAILED — playing alert", task.name);
-                play_system_beep();
-            }
-            NotifyEvent::HostDisconnected { host, .. } => {
-                log::info!("Host {host} disconnected — playing alert");
-                play_system_beep();
-            }
-            NotifyEvent::Test => play_system_beep(),
-            _ => {}
+        if let Some(kind) = beep_kind(event) {
+            log::info!("notification sound: {kind}");
+            play_system_beep();
         }
+    }
+}
+
+fn beep_kind(event: &NotifyEvent) -> Option<&'static str> {
+    match event {
+        NotifyEvent::WaitingInput { .. } => Some("waiting_input"),
+        NotifyEvent::Succeeded { .. } => Some("succeeded"),
+        NotifyEvent::InferredFinished { .. } => Some("inferred_finished"),
+        NotifyEvent::Failed { .. } => Some("failed"),
+        NotifyEvent::HostDisconnected { .. } => Some("host_disconnected"),
+        NotifyEvent::Test => Some("test"),
+        _ => None,
     }
 }
 
@@ -156,7 +147,7 @@ fn send_desktop_notification(title: &str, body: &str, identifier: &str) -> Resul
 static LAST_NOTIFICATION_ERROR: Mutex<Option<String>> = Mutex::new(None);
 
 pub fn report_notification_error(app: &AppHandle, error: String) {
-    log::error!("Task notification failed: {error}");
+    log::error!("Task notification failed; details available in local application state");
     *LAST_NOTIFICATION_ERROR
         .lock()
         .unwrap_or_else(|e| e.into_inner()) = Some(error.clone());
@@ -244,28 +235,26 @@ fn send_actionable_notification(
 
 fn notification_copy(event: &NotifyEvent) -> (String, String) {
     match event {
-        NotifyEvent::WaitingInput { task, reason } => {
-            if let Some(reason) = reason {
-                log::debug!("Waiting-input reason for '{}': {reason}", task.name);
-            }
-            (
-                match task.waiting_reason {
-                    Some(crate::domain::WaitingReason::TurnEnded)
-                        if task.outcome.as_deref() == Some("interrupted") =>
-                    {
-                        "TaskPulse · 本轮已中断，非成功"
-                    }
-                    Some(crate::domain::WaitingReason::TurnEnded) => {
-                        "TaskPulse · 本轮结束，等待后续输入"
-                    }
-                    Some(crate::domain::WaitingReason::Approval) => "TaskPulse · 需要授权",
-                    Some(crate::domain::WaitingReason::Question) => "TaskPulse · 需要你确认",
-                    _ => "TaskPulse · 等待输入",
+        NotifyEvent::WaitingInput { task, .. } => (
+            match task.waiting_reason {
+                Some(crate::domain::WaitingReason::TurnEnded)
+                    if task.outcome.as_deref() == Some("interrupted") =>
+                {
+                    "TaskPulse · 本轮已中断，非成功"
                 }
-                .to_string(),
-                task_notification_label(task),
-            )
-        }
+                Some(crate::domain::WaitingReason::TurnEnded) => {
+                    "TaskPulse · 本轮结束，等待后续输入"
+                }
+                Some(crate::domain::WaitingReason::Approval) => "TaskPulse · 需处理：需要授权",
+                Some(crate::domain::WaitingReason::Question) => "TaskPulse · 需处理：等待输入",
+                Some(crate::domain::WaitingReason::QuotaExhausted) => {
+                    "TaskPulse · 需处理：额度已用完"
+                }
+                _ => "TaskPulse · 等待输入",
+            }
+            .to_string(),
+            task_notification_label(task),
+        ),
         NotifyEvent::Succeeded { task } => (
             "TaskPulse · 任务已完成".to_string(),
             task_notification_label(task),
@@ -453,6 +442,11 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
             {
                 "本轮结束"
             }
+            TaskEvent::WaitingInput { task, .. }
+                if task.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted) =>
+            {
+                "额度已用完"
+            }
             TaskEvent::WaitingInput { .. } => "等待输入/授权",
             TaskEvent::Succeeded { .. } => "任务已完成",
             TaskEvent::Failed { .. } => "任务失败",
@@ -470,11 +464,11 @@ pub fn handle_events(app: &AppHandle, events: &[TaskEvent], _tasks: &[TaskSnapsh
             crate::notification_log::record(task, "all", "suppressed_scope", title, None, false);
             continue;
         }
+        crate::message_center::record(event);
         let notify_event = match event {
-            TaskEvent::WaitingInput { task, reason } => NotifyEvent::WaitingInput {
-                task: task.clone(),
-                reason: reason.clone(),
-            },
+            TaskEvent::WaitingInput { task, .. } => {
+                NotifyEvent::WaitingInput { task: task.clone() }
+            }
             TaskEvent::Succeeded { task } => NotifyEvent::Succeeded { task: task.clone() },
             TaskEvent::Failed { task } => NotifyEvent::Failed { task: task.clone() },
             TaskEvent::InferredFinished { task } => {
@@ -539,13 +533,17 @@ fn test_event(kind: &str) -> Result<NotifyEvent, String> {
         std::time::SystemTime::now(),
     );
     match kind {
+        "quota_exhausted" => {
+            task.waiting_reason = Some(WaitingReason::QuotaExhausted);
+            Ok(NotifyEvent::WaitingInput { task })
+        }
         "turn_ended" => {
             task.waiting_reason = Some(WaitingReason::TurnEnded);
-            Ok(NotifyEvent::WaitingInput { task, reason: None })
+            Ok(NotifyEvent::WaitingInput { task })
         }
         "approval" => {
             task.waiting_reason = Some(WaitingReason::Approval);
-            Ok(NotifyEvent::WaitingInput { task, reason: None })
+            Ok(NotifyEvent::WaitingInput { task })
         }
         "failed" => {
             task.status = TaskStatus::Failed;
@@ -557,7 +555,7 @@ fn test_event(kind: &str) -> Result<NotifyEvent, String> {
             task.project = Some("长项目名称排版验收（测试）· Native project".into());
             task.host = Some("Test-server".into());
             task.waiting_reason = Some(WaitingReason::TurnEnded);
-            Ok(NotifyEvent::WaitingInput { task, reason: None })
+            Ok(NotifyEvent::WaitingInput { task })
         }
         _ => Err("无效的提醒测试类型".into()),
     }
@@ -590,6 +588,27 @@ fn fmt_last_seen(t: std::time::SystemTime) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r04_notification_log_labels_do_not_include_task_reason_or_host_payloads() {
+        let secret = "private-notification-sentinel";
+        let task = crate::domain::TaskSnapshot::new(
+            secret,
+            secret,
+            crate::domain::TaskSource::Codex,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Hook,
+            std::time::SystemTime::now(),
+        );
+        let event = NotifyEvent::WaitingInput { task };
+        assert_eq!(beep_kind(&event), Some("waiting_input"));
+        assert_eq!(
+            beep_kind(&NotifyEvent::HostDisconnected {
+                host: secret.into(),
+                last_seen_label: Some(secret.into())
+            }),
+            Some("host_disconnected")
+        );
+    }
     use crate::domain::{DetectionConfidence, TaskSource, TaskStatus};
     use std::time::{Duration, SystemTime};
 
@@ -614,11 +633,9 @@ mod tests {
         task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
         let events = engine.apply(&[task.clone()], &[], SystemTime::now());
         assert_eq!(events.len(), 1);
-        if let TaskEvent::WaitingInput { task, reason } = &events[0] {
-            let (title, body) = notification_copy(&NotifyEvent::WaitingInput {
-                task: task.clone(),
-                reason: reason.clone(),
-            });
+        if let TaskEvent::WaitingInput { task, .. } = &events[0] {
+            let (title, body) =
+                notification_copy(&NotifyEvent::WaitingInput { task: task.clone() });
             assert_eq!(title, "TaskPulse · 本轮结束，等待后续输入");
             assert_eq!(body, "Codex · real-project · Native renamed task");
             assert_eq!(task.id, "codex:stable-id");
@@ -681,24 +698,17 @@ mod tests {
             DetectionConfidence::Exact,
             SystemTime::now(),
         );
-        let (title, body) = notification_copy(&NotifyEvent::WaitingInput {
-            task: task.clone(),
-            reason: Some("provider event".into()),
-        });
+        let (title, body) = notification_copy(&NotifyEvent::WaitingInput { task: task.clone() });
         assert_eq!(title, "TaskPulse · 等待输入");
         assert_eq!(body, "Hermes · Install image-to-editable-ppt skill");
         task.waiting_reason = Some(crate::domain::WaitingReason::Question);
         assert_eq!(
-            notification_copy(&NotifyEvent::WaitingInput {
-                task: task.clone(),
-                reason: None
-            })
-            .0,
-            "TaskPulse · 需要你确认"
+            notification_copy(&NotifyEvent::WaitingInput { task: task.clone() }).0,
+            "TaskPulse · 需处理：等待输入"
         );
         task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
         assert_eq!(
-            notification_copy(&NotifyEvent::WaitingInput { task, reason: None }).0,
+            notification_copy(&NotifyEvent::WaitingInput { task }).0,
             "TaskPulse · 本轮结束，等待后续输入"
         );
     }

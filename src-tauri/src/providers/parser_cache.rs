@@ -15,6 +15,20 @@ pub struct Policy {
     cold_through: Option<SystemTime>,
 }
 impl Policy {
+    /// WSL supplies Linux stat; do not mix its watermark with UNC times.
+    pub fn eligible_observed(
+        &self,
+        modified: SystemTime,
+        changed: SystemTime,
+        protected: bool,
+        cached: bool,
+    ) -> bool {
+        protected
+            || cached
+            || self
+                .cold_through
+                .is_none_or(|cut| modified > cut || changed > cut)
+    }
     pub fn eligible(&self, path: &std::path::Path, protected: bool, cached: bool) -> bool {
         protected
             || cached
@@ -29,7 +43,7 @@ impl Policy {
         items: Vec<(PathBuf, bool, usize)>,
         now: SystemTime,
     ) -> HashSet<PathBuf> {
-        let mut items: Vec<_> = items
+        let items: Vec<_> = items
             .into_iter()
             .map(|(p, protected, bytes)| {
                 let at = p
@@ -39,6 +53,13 @@ impl Policy {
                 (p, protected, bytes, at)
             })
             .collect();
+        self.keep_observed(items, now)
+    }
+    pub fn keep_observed(
+        &mut self,
+        mut items: Vec<(PathBuf, bool, usize, SystemTime)>,
+        now: SystemTime,
+    ) -> HashSet<PathBuf> {
         items.sort_by_key(|(_, _, _, at)| std::cmp::Reverse(*at));
         let mut keep = HashSet::new();
         let mut count = 0;
@@ -64,6 +85,23 @@ impl Policy {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn wsl_continuity_watermark_uses_linux_times_not_unc_drift() {
+        let mut policy = Policy::default();
+        let at = SystemTime::UNIX_EPOCH + Duration::from_secs(100);
+        let path = PathBuf::from("not-an-actual-UNC-path");
+        assert!(policy
+            .keep_observed(
+                vec![(path.clone(), false, 1, at)],
+                at + HORIZON + Duration::from_secs(1)
+            )
+            .is_empty());
+        for _ in 0..10 {
+            assert!(!policy.eligible_observed(at, at, false, false));
+        }
+        assert!(policy.eligible_observed(at + Duration::from_secs(1), at, false, false));
+        assert!(policy.eligible_observed(at, at, true, false));
+    }
     #[test]
     fn budgets_preserve_active_and_do_not_reparse_evicted_unchanged_files() {
         let dir = tempfile::tempdir().unwrap();

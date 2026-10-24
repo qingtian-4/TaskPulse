@@ -1,4 +1,4 @@
-//! TaskStore — the single source of truth for what the UI shows.
+//! TaskStore — reconciled provider facts; AttentionTracker owns UI retention.
 //!
 //! Responsibilities:
 //! * Merge provider snapshots by stable task `id`.
@@ -40,6 +40,27 @@ impl TaskStore {
         authoritative: &HashSet<String>,
         now: SystemTime,
     ) -> Vec<TaskSnapshot> {
+        let wsl_sources: HashSet<_> = incoming
+            .iter()
+            .chain(self.active.values())
+            .chain(self.recent.iter())
+            .filter_map(|t| t.source_instance.as_ref())
+            .filter(|s| s.starts_with("codex-wsl:"))
+            .cloned()
+            .collect();
+        let before: HashMap<_, _> = wsl_sources
+            .iter()
+            .map(|s| {
+                (
+                    s.clone(),
+                    self.active
+                        .values()
+                        .chain(self.recent.iter())
+                        .filter(|t| t.source_instance.as_ref() == Some(s))
+                        .count(),
+                )
+            })
+            .collect();
         let ids: HashSet<_> = incoming.iter().map(|task| task.id.as_str()).collect();
         let vanished = self
             .active
@@ -51,7 +72,21 @@ impl TaskStore {
             .map(|(id, _)| id.clone())
             .collect();
         self.reconcile_vanished(vanished, now);
-        self.merge(incoming, now)
+        let merged = self.merge(incoming, now);
+        for source in wsl_sources {
+            let tasks: Vec<_> = merged
+                .iter()
+                .filter(|t| t.source_instance.as_ref() == Some(&source))
+                .cloned()
+                .collect();
+            crate::providers::resources::continuity(
+                "store_merge",
+                &source,
+                &tasks,
+                serde_json::json!({"before_count":before[&source],"after_count":tasks.len(),"authoritative":authoritative.contains(&source)}),
+            );
+        }
+        merged
     }
     pub fn new(recent_ttl: Duration) -> Self {
         Self {
@@ -129,8 +164,8 @@ impl TaskStore {
     ///
     /// A successful provider cycle is authoritative for its partition: tasks
     /// that were previously active but are absent now must not remain as
-    /// ghosts forever. A vanished RUNNING task is retained in RECENT as an
-    /// inferred finish; waiting/idle tasks simply disappear. Remote SSH
+    /// ghosts forever. A vanished RUNNING Agent stays stale; other running
+    /// tasks become stale/unknown without a completion. Remote SSH
     /// failures are safe because RemoteTmuxProvider re-emits its last tasks
     /// with `stale=true` rather than returning an empty successful snapshot.
     pub fn merge_partition(
@@ -233,6 +268,10 @@ impl TaskStore {
                 continue;
             }
             task.recent = true;
+            // A restart restores display history, not current source evidence.
+            // Otherwise the first merge could revalidate stale attention from
+            // the same disk cache before the provider has even responded.
+            task.stale = true;
             self.recent.retain(|existing| existing.id != task.id);
             self.recent.push(task);
         }
@@ -250,6 +289,17 @@ impl TaskStore {
 /// 3. A stale observation never replaces a non-stale one. Cross-source ties
 ///    still use the provider timestamp and prefer active state on an exact tie.
 fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot) {
+    if existing.is_agent_session()
+        && new.source == existing.source
+        && new.source_instance == existing.source_instance
+        && new.session_id == existing.session_id
+        && new.updated_at < existing.updated_at
+    {
+        if new.stale {
+            existing.stale = true;
+        }
+        return;
+    }
     // Native adapters already reconcile their event/lease/hook evidence. A
     // newer same-session observation must not be frozen behind the previous
     // turn's stronger hook confidence. Cross-provider/process guesses retain
@@ -323,6 +373,21 @@ fn confidence_cmp(a: DetectionConfidence, b: DetectionConfidence) -> std::cmp::O
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn lifecycle_old_native_turn_never_replaces_newer_running_observation() {
+        let mut current = t0("codex:s", TaskStatus::Running, DetectionConfidence::Hook);
+        current.source = TaskSource::Codex;
+        current.session_id = Some("s".into());
+        current.turn_key = Some("new".into());
+        let mut old = current.clone();
+        old.updated_at -= Duration::from_secs(10);
+        old.turn_key = Some("old".into());
+        old.status = TaskStatus::WaitingInput;
+        old.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        merge_into(&mut current, old);
+        assert_eq!(current.status, TaskStatus::Running);
+        assert_eq!(current.turn_key.as_deref(), Some("new"));
+    }
     #[test]
     fn native_retry_and_tool_phase_can_replace_prior_hook_evidence() {
         let now = SystemTime::now();

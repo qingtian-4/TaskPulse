@@ -42,8 +42,11 @@ Codex 的 app-server 只负责原生标题和重命名同步。运行状态仍�
 
 ### 状态边界
 
+- Codex 日志以该文件首个有效 `session_meta` 为会话身份；子 Agent／分支日志里复制的父会话元数据不能重置身份或归属。原生 `source.subagent.thread_spawn.parent_thread_id` 明确指向父会话的自动工作线程，与 guardian 一样不作为独立用户任务提醒；子线程的 `task_complete` 不能结束父任务。手动分支／普通会话不能仅因标题、目录或 `forked_from_id` 被排除。该规则由本地、WSL 与 SSH 共用的解析器执行。
 - `RUNNING`：存在明确的进行中 turn、有效运行租约、未结束的工具调用，或仍存活的受监控进程。仅仅“会话窗口仍打开”不算运行中。
 - `WAITING_INPUT`：明确的本轮结束，或来源明确请求用户批准／回答。Codex 的 `task_complete`、DSH 的 `turn/end`、Claude 的 `Stop`／原生 `end_turn` 属于本轮结束；不是项目完成。Hermes 仅在原生 `ended_at/end_reason` 明确结束时确认，租约释放或过期本身不属于结束事件。
+- Codex 的同步 `request_user_input` 调用按匹配工具结果解除；异步 `request_user_input_async` 只有原生返回 `accepted=true` 才确认待回答。这个返回仅表示问题已发送，不是用户回答。异步提问按 call ID 与问题编号关联原生 `send_user_message_question_reply` 用户回复；同批多个问题／多个请求必须分别处理，命令返回、思考和普通 turn 结束不能覆盖尚未回答的问题。显式新 turn／中断会清除旧 turn 的请求关联，旧回调不能解除新请求。待回答不代表后台工具一定已停止。
+- 明确提问的弹窗为“需处理：等待输入”，不会计时自动消失；普通完成仍为“本轮结束，等待后续输入”。不同任务的提醒按各自会话 ID 独立投递，不能根据相邻屏幕位置判断归属；请核对弹窗中的项目与任务名。
 - `SUCCEEDED`：有权威的成功结束信号，例如 wrapper 的退出码 0，或 Agent 原生的明确完成阶段。普通对话回复完成默认是 `WAITING_INPUT`，不是 `SUCCEEDED`。
 - `FAILED`：有权威失败信号，例如非零退出码、原生 failed/error/crash 状态。不能只根据文本中出现“失败”二字推断。
 - `IDLE`：没有正在执行的 turn，也没有一个需要用户继续响应的开放对话；常见于空闲 shell、正常关闭的会话或只有进程级推断的结束状态。

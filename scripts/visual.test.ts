@@ -1,6 +1,12 @@
 import {test,expect} from 'bun:test';
 import {readFileSync} from 'node:fs';
 const css=readFileSync('src/app.css','utf8');
+test('dashboard fills the native viewport without a self-referential resize observer',()=>{
+  const dashboard=readFileSync('src/lib/components/Dashboard.svelte','utf8');
+  expect(dashboard).toContain('height:100dvh');
+  expect(dashboard).not.toContain('new ResizeObserver');
+  expect(readFileSync('src-tauri/src/tray.rs','utf8')).toContain('.inner_size(412.0, 620.0)');
+});
 const hex=(token:string)=>{const value=css.match(new RegExp('--tp-'+token+': (#[0-9a-f]{6});'))?.[1];expect(value,'missing '+token).toBeDefined();return value!;};
 function luminance(hex:string){const [r,g,b]=[1,3,5].map(i=>{const v=parseInt(hex.slice(i,i+2),16)/255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return .2126*r+.7152*g+.0722*b;}
 function contrast(a:string,b:string){const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);}

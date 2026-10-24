@@ -31,6 +31,30 @@ TaskPulse 只检查已运行的发行版，不自动启动停止的 WSL。Python
 
 每个 WSL 来源独立 worker，目标轮询间隔约 2 秒，不阻塞其他来源。间隔不是端到端时延保证；WSL 停止与启动竞态、UNC 延迟、源日志落盘时间仍影响实际延迟。
 
+## 运行中、采集待更新与恢复
+
+- 正常采集确认的执行显示在“进行中”。思考、等待模型和工具调用都不是任务结束。
+- WSL 短暂失联、读取失败或日志追赶未完成时，保留稳定会话/turn 身份、未读、固定和通知去重；旧运行证据显示为“上次确认为运行中，当前采集待更新”。概览另列“上次运行 N”，可直接定位待确认任务，不把它计为新鲜运行，也不通知完成。
+- 恢复后必须用新鲜、完整的对应会话日志恢复状态。相同 turn 不重发结束提醒。明确结束进入结果待查看；丢失日志、坏行、静默和工具返回不能证明结束。
+- 日志游标使用 Linux 内的 dev/inode、长度、mtime_ns/ctime_ns，并校验文件头和游标内容锚点。UNC 创建/修改时间漂移不再重置 WSL 游标；真实截断、替换、同长度改写仍会重建解析状态。元数据与 UNC 长度不一致只进行一次有界重试，仍不一致则显示退化，不使用中间终态。
+- SQLite 忙、可恢复的 Linux I/O 错误最多重试一次。错误带有阶段码，例如 `[wsl:sqlite:sqlite_busy]`、`[wsl:rollout_read:catch_up]`、`[wsl:rollout_decode:gap]`。追赶未完成也是非权威观测，不等于 Python 或 WSL 已崩溃。
+
+高级资源诊断 `get_resource_diagnostics` 中的 `collection_continuity` 是最多 512 条的**进程内**采集流水线记录；`parser_instances` 包含游标、重置原因、正文/校验读取字节、完整性和安全的会话/turn hash。记录 Provider、Worker、来源范围筛选、Store 和 Attention 的数量与状态，不保存任务名称、prompt、思考文本、命令参数或回复。每条最多记录 128 个任务/游标，超出会显式标记截断；它不是生命周期或通知账本，重启不会保留诊断环，也不会重置真实账本。
+
+需要核对是否为前端搜索/分组筛选时，可检查 `.dashboard` 的只读 `data-continuity` JSON：它报告按来源划分的全局与当前可见分类计数，不含搜索文本或任务内容，不保存前端操作历史。
+
+只读复现现有日志（无需发起 Agent 任务，不启动停止的发行版）：
+
+```powershell
+$env:CARGO_TARGET_DIR = 'D:\Project\agenttray\src-tauri\target\codex-check'
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_wsl_continuity_diagnostics -- --ignored --nocapture
+# 输出脱敏摘要，完整证据位于该 target 的 ui-smoke/evidence/wsl-continuity-*.json。
+# 纯隔离元数据测试，在已有 Python 3 环境执行，不接触真实 Codex 目录：
+python3 scripts/wsl-metadata.test.py
+```
+
+详细根因、测量口径、故障注入与实机边界见 [连续性验证报告](WSL_CONTINUITY_VALIDATION_2026-10-23.md)。修复不会热替换运行中的旧托盘；正常退出并启动新构建后才会生效。
+
 ## 验证
 
 ```powershell

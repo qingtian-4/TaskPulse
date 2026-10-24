@@ -17,7 +17,7 @@ UI / 原生截图验收见 [第二轮验证报告](UI_UX_VALIDATION_2026-10-21.m
 | Gemini CLI | 兼容 Hook / 进程扫描 | 不能作为完整会话/阶段/审批验收 |
 | 远程普通代码 | SSH tmux / tp-run | wrapper 的前台退出码可靠性不扩展到 detached/container/Slurm 子任务 |
 
-第一轮只读与原生平台验证见 [可靠性记录](RELIABILITY_OPTIMIZATION_2026-10.md)。这些记录不替下面四款宿主 Hook 背书，也不证明所有内置来源的新任务端到端时延。
+第一轮只读与原生平台验证见 [可靠性记录](internal/reports/RELIABILITY_OPTIMIZATION_2026-10.md)。这些记录不替下面四款宿主 Hook 背书，也不证明所有内置来源的新任务端到端时延。
 
 ## 四款通用接入的验证等级
 

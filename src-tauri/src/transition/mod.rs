@@ -3,7 +3,7 @@
 //! Rule: never notify on every poll.  Notify only on meaningful transitions:
 //!   RUNNING → WAITING_INPUT
 //!   RUNNING → SUCCEEDED (exact)
-//!   RUNNING → FAILED (exact)
+//!   RUNNING → FAILED (explicit Agent failure or exact command exit)
 //!   RUNNING → IDLE with explicit tmux shell-return evidence (inferred finish)
 //!   CONNECTED → DISCONNECTED (already debounced by the provider)
 //!   DISCONNECTED → CONNECTED (recovery)
@@ -20,14 +20,14 @@ use crate::providers::{HostHealth, HostStatus};
 /// A meaningful change worth surfacing (notification + UI emphasis).
 #[derive(Debug, Clone, PartialEq)]
 pub enum TaskEvent {
-    /// Agent finished its turn and needs the user (local agents).
+    /// Explicit user gate or ended turn, distinguished by `waiting_reason`.
     WaitingInput {
         task: TaskSnapshot,
         reason: Option<String>,
     },
     /// Exact exit code 0.
     Succeeded { task: TaskSnapshot },
-    /// Exact non-zero exit code.
+    /// Explicit Agent failure or an exact non-zero command exit code.
     Failed { task: TaskSnapshot },
     /// Workload disappeared / shell returned — no exit code known.
     InferredFinished { task: TaskSnapshot },
@@ -69,6 +69,8 @@ pub struct TransitionEngine {
     input_notifications: HashSet<(String, String)>,
     #[serde(skip)]
     path: Option<std::path::PathBuf>,
+    #[serde(skip)]
+    load_error: Option<crate::state_file::StateError>,
 }
 
 impl TransitionEngine {
@@ -84,21 +86,42 @@ impl TransitionEngine {
     }
 
     pub fn open(path: std::path::PathBuf) -> Self {
-        let mut engine: Self = std::fs::read(&path)
-            .ok()
-            .and_then(|body| serde_json::from_slice(&body).ok())
-            .unwrap_or_default();
+        let loaded = crate::state_file::read(&path, 1, true).and_then(|loaded| {
+            loaded
+                .map(|(value, _)| {
+                    serde_json::from_value::<Self>(value)
+                        .map_err(|_| crate::state_file::StateError::Invalid)
+                })
+                .transpose()
+        });
+        let mut engine = match loaded {
+            Ok(Some(engine)) => engine,
+            Ok(None) => Self::default(),
+            Err(error) => Self {
+                load_error: Some(error),
+                ..Self::default()
+            },
+        };
         engine.path = Some(path);
         engine
     }
 
+    pub fn persistence_error(&self) -> Option<&'static str> {
+        self.load_error.map(|error| error.message())
+    }
+
     fn persist(&self) -> bool {
+        if self.load_error.is_some() {
+            return false;
+        }
         use std::io::Write;
         let Some(path) = &self.path else {
             return true;
         };
         let result = (|| -> std::io::Result<()> {
-            let body = serde_json::to_vec(&serde_json::to_value(self)?)?;
+            let mut value = serde_json::to_value(self)?;
+            value["version"] = 1.into();
+            let body = serde_json::to_vec(&value)?;
             if std::fs::read(path).ok().as_deref() == Some(body.as_slice()) {
                 return Ok(());
             }
@@ -131,6 +154,9 @@ impl TransitionEngine {
         hosts: &[HostHealth],
         _now: SystemTime,
     ) -> Vec<TaskEvent> {
+        if self.load_error.is_some() {
+            return vec![];
+        }
         let mut events = Vec::new();
 
         // ---- task transitions ----
@@ -146,6 +172,39 @@ impl TransitionEngine {
                 continue;
             }
             let id = task.id.clone();
+            if task.stale {
+                // Retain the last trustworthy transition baseline. A stale
+                // cache cannot advance it or consume a future fresh request.
+                if let Some(status) = self.prev.get(&id) {
+                    current.insert(id.clone(), *status);
+                }
+                if let Some(turn) = self.prev_turns.get(&id) {
+                    current_turns.insert(id.clone(), turn.clone());
+                }
+                if let Some(wait) = self.prev_waits.get(&id) {
+                    current_waits.insert(id, wait.clone());
+                }
+                continue;
+            }
+            // Preserve the existing ledger, including its last delivered turn,
+            // when upgrading from task-only keys. Historical turn replays must
+            // never clear another turn's delivery evidence.
+            let notification_id = if task.is_agent_session() && task.turn_key.is_some() {
+                if let Some(Some(previous)) = self.prev_turns.get(&id) {
+                    let legacy: Vec<_> = self
+                        .notified
+                        .iter()
+                        .filter(|(key, kind)| key == &id && *kind != EventKind::InferredFinished)
+                        .map(|(_, kind)| *kind)
+                        .collect();
+                    let key = turn_notification_key(&id, previous);
+                    self.notified
+                        .extend(legacy.into_iter().map(|kind| (key.clone(), kind)));
+                }
+                turn_notification_key(&id, task.turn_key.as_deref().unwrap())
+            } else {
+                id.clone()
+            };
             // Legacy pane-scoped exact results move to their own run identity.
             // Match the run key before transferring dedup, never apply A's
             // memory to a new B run in the same pane.
@@ -193,7 +252,8 @@ impl TransitionEngine {
                     .get(&id)
                     .is_some_and(|previous| previous != &wait);
             if wait_changed && task.requires_action() {
-                self.notified.remove(&(id.clone(), EventKind::WaitingInput));
+                self.notified
+                    .remove(&(notification_id.clone(), EventKind::WaitingInput));
             }
 
             // A poll may coalesce several concurrent explicit requests. Dedup
@@ -212,7 +272,8 @@ impl TransitionEngine {
                         });
                     }
                 }
-                self.notified.insert((id.clone(), EventKind::WaitingInput));
+                self.notified
+                    .insert((notification_id.clone(), EventKind::WaitingInput));
             }
 
             let prev_status = match self.prev.get(&id).copied() {
@@ -255,6 +316,10 @@ impl TransitionEngine {
 
             match status {
                 TaskStatus::WaitingInput => {
+                    if task.is_agent_session() && !task.requires_action()
+                        && task.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded) {
+                        continue; // Unknown state is not a confirmed human blocker or completion.
+                    }
                     let duplicate_request=task.input_request_id.as_ref().is_some_and(|request| {
                         let key=serde_json::to_string(&(&task.turn_key,task.waiting_reason,request)).unwrap_or_default();
                         !self.input_notifications.insert((id.clone(),key))
@@ -262,7 +327,7 @@ impl TransitionEngine {
                     let kind = if task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
                         EventKind::TurnEnded
                     } else { EventKind::WaitingInput };
-                    if !duplicate_request && !already(&mut self.notified, &id, kind) {
+                    if !duplicate_request && !already(&mut self.notified, &notification_id, kind) {
                         events.push(TaskEvent::WaitingInput {
                             task: task.clone(),
                             reason: task.hook_matcher.clone(),
@@ -272,14 +337,14 @@ impl TransitionEngine {
                 TaskStatus::Succeeded => {
                     // If we already announced an inferred finish for this
                     // task, silently upgrade (no double notification).
-                    if !already(&mut self.notified, &id, EventKind::InferredFinished)
-                        && !already(&mut self.notified, &id, EventKind::Succeeded) {
+                    if !already(&mut self.notified, &notification_id, EventKind::InferredFinished)
+                        && !already(&mut self.notified, &notification_id, EventKind::Succeeded) {
                             events.push(TaskEvent::Succeeded { task: task.clone() });
                         }
                 }
                 TaskStatus::Failed => {
-                    if !already(&mut self.notified, &id, EventKind::InferredFinished)
-                        && !already(&mut self.notified, &id, EventKind::Failed) {
+                    if !already(&mut self.notified, &notification_id, EventKind::InferredFinished)
+                        && !already(&mut self.notified, &notification_id, EventKind::Failed) {
                             events.push(TaskEvent::Failed { task: task.clone() });
                         }
                 }
@@ -489,6 +554,13 @@ impl TransitionEngine {
     }
 }
 
+fn turn_notification_key(id: &str, turn: &str) -> String {
+    format!(
+        "turn:{}",
+        serde_json::to_string(&(id, turn)).unwrap_or_default()
+    )
+}
+
 /// Returns true if this (id, kind) was ALREADY notified (dedup).
 fn already(notified: &mut HashSet<(String, EventKind)>, id: &str, kind: EventKind) -> bool {
     !notified.insert((id.to_string(), kind))
@@ -501,6 +573,141 @@ fn reset_task_notifications(notified: &mut HashSet<(String, EventKind)>, id: &st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn r02_invalid_future_or_unreadable_ledger_never_replays_or_overwrites() {
+        for original in [
+            Some(b"{truncated".as_slice()),
+            Some(b"{}".as_slice()),
+            Some(b"{\"version\":99}".as_slice()),
+            None,
+        ] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("notifications.json");
+            if let Some(bytes) = original {
+                std::fs::write(&path, bytes).unwrap();
+            } else {
+                std::fs::create_dir(&path).unwrap();
+            }
+            for _ in 0..2 {
+                let mut engine = TransitionEngine::open(path.clone());
+                assert!(engine.persistence_error().is_some());
+                let mut task = task_turn("codex:s", TaskStatus::Running, "turn");
+                assert!(engine
+                    .apply(&[task.clone()], &[], SystemTime::now())
+                    .is_empty());
+                task.status = TaskStatus::Succeeded;
+                assert!(engine
+                    .apply_snapshots(&[task], &[], SystemTime::now())
+                    .is_empty());
+                assert!(!engine.flush());
+                if let Some(bytes) = original {
+                    assert_eq!(std::fs::read(&path).unwrap(), bytes);
+                } else {
+                    assert!(path.is_dir());
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn r02_unversioned_ledger_preserves_dedup_when_upgraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut task = task_turn("codex:s", TaskStatus::Running, "turn");
+        engine.apply_snapshots(&[task.clone()], &[], SystemTime::now());
+        task.status = TaskStatus::Succeeded;
+        assert_eq!(
+            engine
+                .apply_snapshots(&[task.clone()], &[], SystemTime::now())
+                .len(),
+            1
+        );
+        let mut value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        value.as_object_mut().unwrap().remove("version");
+        std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+        let mut restored = TransitionEngine::open(path.clone());
+        assert!(restored.persistence_error().is_none());
+        assert!(restored
+            .apply_snapshots(&[task], &[], SystemTime::now())
+            .is_empty());
+        let value: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(value["version"], 1);
+    }
+    #[test]
+    fn lifecycle_legacy_ledger_migration_keeps_completion_but_not_false_inferred_finish() {
+        for kind in [EventKind::TurnEnded, EventKind::InferredFinished] {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("notifications.json");
+            let mut engine = TransitionEngine::open(path.clone());
+            let mut task = task_turn("codex:s", TaskStatus::Running, "same");
+            task.source = TaskSource::Codex;
+            task.session_id = Some("s".into());
+            apply_once(&mut engine, &[task.clone()]);
+            engine.notified.insert((task.id.clone(), kind));
+            assert!(engine.flush());
+            let mut restored = TransitionEngine::open(path);
+            task.status = TaskStatus::WaitingInput;
+            task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+            assert_eq!(
+                apply_once(&mut restored, &[task]).len(),
+                usize::from(kind == EventKind::InferredFinished)
+            );
+        }
+    }
+    #[test]
+    fn lifecycle_unknown_native_wait_is_not_a_confirmed_input_notification() {
+        let mut engine = TransitionEngine::new();
+        let mut t = task_turn("codex:s", TaskStatus::Running, "same");
+        t.source = TaskSource::Codex;
+        t.session_id = Some("s".into());
+        apply_once(&mut engine, &[t.clone()]);
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::Unknown);
+        assert!(apply_once(&mut engine, &[t]).is_empty());
+    }
+    #[test]
+    fn lifecycle_stale_gate_cannot_consume_next_fresh_notification_or_baseline() {
+        let mut engine = TransitionEngine::new();
+        let mut current = task_turn("codex:s", TaskStatus::Running, "current");
+        current.source = TaskSource::Codex;
+        current.session_id = Some("s".into());
+        apply_once(&mut engine, &[current.clone()]);
+        let mut gate = current.clone();
+        gate.status = TaskStatus::WaitingInput;
+        gate.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        gate.input_request_id = Some("request".into());
+        gate.stale = true;
+        assert!(apply_once(&mut engine, &[gate.clone()]).is_empty());
+        assert_eq!(engine.prev.get(&current.id), Some(&TaskStatus::Running));
+        gate.stale = false;
+        assert_eq!(apply_once(&mut engine, &[gate.clone()]).len(), 1);
+        assert!(apply_once(&mut engine, &[gate]).is_empty());
+    }
+    #[test]
+    fn lifecycle_turn_rollback_never_replays_delivered_completion_even_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(path.clone());
+        let mut t = task_turn("codex:s", TaskStatus::Running, "a");
+        t.source = TaskSource::Codex;
+        t.session_id = Some("s".into());
+        apply_once(&mut engine, &[t.clone()]);
+        t.status = TaskStatus::WaitingInput;
+        t.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        assert_eq!(apply_once(&mut engine, &[t.clone()]).len(), 1);
+        let ended_a = t.clone();
+        t.status = TaskStatus::Running;
+        t.waiting_reason = None;
+        t.turn_key = Some("b".into());
+        apply_once(&mut engine, &[t.clone()]);
+        assert!(apply_once(&mut engine, &[ended_a.clone()]).is_empty());
+        let mut restored = TransitionEngine::open(path);
+        apply_once(&mut restored, &[t]);
+        assert!(apply_once(&mut restored, &[ended_a]).is_empty());
+    }
     #[test]
     fn reclassifying_a_previously_observed_service_never_emits_completion() {
         let dir = tempfile::tempdir().unwrap();

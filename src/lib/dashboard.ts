@@ -6,6 +6,24 @@ export interface DashboardFilters { source: string; project: string; location: s
 export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null,signal:null,query:'',unreadOnly:false};
 export const SECTION_ORDER: TaskSection[] = ['ongoing', 'results', 'uncertain', 'pinned'];
 export const SECTION_NAMES: Record<TaskSection,string> = {ongoing:'进行中',results:'结果待查看',uncertain:'状态待更新',pinned:'固定与已查看'};
+// Presentation freshness is stricter than a cached provider snapshot. Keep
+// every record reachable, but never count degraded-source work as confirmed.
+export function observedDashboardTasks(tasks:TaskSnapshot[], providers:ProviderHealth[], settings:DashboardSettings|null, now:number):TaskSnapshot[] {
+  return tasks.map(task=>{
+    if(task.status!=='running' && !needsAction(task))return task;
+    const source=taskSource(task,settings??undefined);
+    const health=providers.find(provider=>provider.provider===source?.id);
+    const fresh=source?.enabled && health?.status==='connected' && health.last_success!==undefined &&
+      now-health.last_success<=Math.max(30000,(source.poll_interval_ms??3000)*3);
+    const eventEvidence=task.confidence!=='inferred' || task.source==='generic_event' &&
+      task.evidence_channel==='self_reported' && !!task.integration_epoch && (task.integration_sequence??0)>0;
+    const explicit=!needsAction(task) || eventEvidence &&
+      (task.waiting_reason==='quota_exhausted' || !!task.input_request_id || !!task.input_request_ids?.length);
+    const confirmed=task.source!=='generic_event' || !needsAction(task) ||
+      task.pending_confirmed_at!==undefined && now-task.pending_confirmed_at<=30000;
+    return fresh&&explicit&&confirmed ? task : {...task,stale:true};
+  });
+}
 export function sectionRank(task: TaskSnapshot): number { return SECTION_ORDER.indexOf(taskSection(task)); }
 export function matchesSignal(task:TaskSnapshot, signal:TaskSignal):boolean {
   if(signal==='failed')return task.status==='failed' && isEndedResult(task);
@@ -35,7 +53,7 @@ export function taskTone(task:TaskSnapshot):'running'|'action'|'danger'|'unread'
   return 'neutral';
 }
 export function taskSummary(task:TaskSnapshot):string {
-  if(task.stale)return '上次观测 · 等待来源更新';
+  if(task.stale)return task.status==='running'?'上次确认为运行中，当前采集待更新':'上次观测 · 等待来源更新';
   if(needsAction(task))return task.waiting_reason==='approval'?'等待你在原 Agent 中批准':'等待你在原 Agent 中回答';
   if(task.status==='running')return taskActivity(task);
   if(isEndedResult(task))return task.message || (task.status==='failed'?'执行失败 · 结果尚未查看':'本轮结果尚未查看');
@@ -52,6 +70,26 @@ export function runningOutsideView(tasks: TaskSnapshot[], visible: TaskSnapshot[
   const ids=new Set(visible.map(t=>t.id));
   return tasks.filter(t=>t.status === 'running' && !t.stale && !ids.has(t.id));
 }
+// Keep uncertainty separate from fresh ongoing counts. The global hint remains
+// visible even when search/source/ongoing filters exclude the stale task.
+export function unconfirmedRunning(tasks:TaskSnapshot[]):TaskSnapshot[] {
+  return tasks.filter(t=>t.status==='running' && t.stale===true);
+}
+// Read-only DOM diagnostics: real frontend classification/filter counts, no
+// task titles, identifiers, search text, activity, paths or user responses.
+export function dashboardContinuity(tasks:TaskSnapshot[], visible:TaskSnapshot[]) {
+  const count=(list:TaskSnapshot[])=>{
+    const sections:Record<TaskSection,number>={ongoing:0,results:0,uncertain:0,pinned:0};
+    for(const task of list) sections[taskSection(task)]++;
+    return {...sections,total:list.length,unconfirmed_running:unconfirmedRunning(list).length};
+  };
+  const sources=[...new Set(tasks.map(t=>t.source_instance??t.source))];
+  return {global:count(tasks),visible:count(visible),sources:sources.slice(0,128).map(source=>({source_id:source,global:count(tasks.filter(t=>(t.source_instance??t.source)===source)),visible:count(visible.filter(t=>(t.source_instance??t.source)===source))})),sources_truncated:sources.length>128};
+}
+export function refreshResultMessage(ids:string[], failedIds:string[], labels:Record<string,string>={}):string {
+  const failed=ids.filter(id=>failedIds.includes(id));
+  return failed.length ? '本次刷新后仍待更新：'+failed.map(id=>labels[id]??id).join('、')+'；保留上次观测，不代表任务结束' : '已收到全部启用来源的新采集结果';
+}
 
 export function filterDescription(filters: DashboardFilters, tasks: TaskSnapshot[], settings?: DashboardSettings | null): string {
   return [filters.source && `来源：${settings?.sources.find(s=>s.id===filters.source)?.name ?? filters.source}`,
@@ -63,15 +101,15 @@ export function filterDescription(filters: DashboardFilters, tasks: TaskSnapshot
 }
 
 export function needsAction(task: TaskSnapshot): boolean {
-  return task.status === 'waiting_input' && (task.waiting_reason === 'approval' || task.waiting_reason === 'question');
+  return task.status === 'waiting_input' && (task.waiting_reason === 'approval' || task.waiting_reason === 'question' || task.waiting_reason === 'quota_exhausted');
 }
 export function taskLabel(task: TaskSnapshot): string {
   if (task.outcome === 'interrupted' && task.finished_at) return '已中断';
   if (task.stale) return '状态待更新';
-  if (needsAction(task)) return task.waiting_reason === 'approval' ? '需要授权' : '需要你确认';
+  if (needsAction(task)) return task.waiting_reason === 'quota_exhausted' ? '额度已用完' : task.waiting_reason === 'approval' ? '需要授权' : '等待输入';
   if (isInferredCommandEnd(task)) return '观察到结束 · 退出码未知';
   if (task.status === 'running') return '运行中';
-  if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '等待输入';
+  if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '状态待确认';
   return { succeeded: '已完成', failed: '失败', idle: '空闲', disconnected: '已断开', unknown: '状态未知' }[task.status];
 }
 // Subphase is presentation, never a lifecycle/notification heuristic. Missing

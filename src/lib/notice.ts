@@ -8,7 +8,7 @@ export function noticeContent(notice: TaskNotice) {
     ? [context.agent_name ?? SOURCE_LABEL[context.source], context.host, context.project].filter(Boolean).join(' · ')
     : 'TaskPulse';
   const tone = /失败|断开/.test(status) ? 'danger'
-    : /可能|授权|确认|中断/.test(status) ? 'attention'
+    : /可能|授权|确认|中断|额度|需处理/.test(status) ? 'attention'
     : /完成|本轮结束|恢复/.test(status) ? 'success'
     : /等待输入/.test(status) ? 'attention' : 'info';
   return {

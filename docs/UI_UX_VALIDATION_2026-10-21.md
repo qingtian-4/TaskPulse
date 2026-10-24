@@ -57,7 +57,7 @@ bun run audit:secrets
 ## 安全与未交付范围
 
 - 前端 moderate+ 门禁通过；完整 `bun audit` 仍有 **1 项 low：cookie 0.6.0 / GHSA-pxg6-pf52-xh8x**（SvelteKit 依赖链），没有以门禁通过宣称零风险。
-- cargo-audit 无阻断漏洞、无 yanked，registry 检查完整；RustSec DB `4b587f00996ebe5c05a73eaef105ef241e876414`，1348 条公告。保留 **10 unmaintained + 2 unsound** 警告，平台/feature 影响与上游跟进仍见 [安全记录](SECURITY_AUDIT_2026-10.md)。未使用忽略/baseline。
+- cargo-audit 无阻断漏洞、无 yanked，registry 检查完整；RustSec DB `4b587f00996ebe5c05a73eaef105ef241e876414`，1348 条公告。保留 **10 unmaintained + 2 unsound** 警告，平台/feature 影响与上游跟进仍见 [安全记录](internal/reports/SECURITY_AUDIT_2026-10.md)。未使用忽略/baseline。
 - Gitleaks 完整 Git 历史扫描通过、0 findings，最终提交后复扫同一门禁；不替代未跟踪文件或图片人工隐私审阅。
 - 未验收：Kimi/TRAE/ZCode/WorkBuddy 真实宿主 Hook、长期真实工作负载时延、锁屏环境下外部编辑器焦点保持、Windows MSVC 安装器与跨格式迁移、Linux/macOS GUI、系统通知横幅。四款仍按 fixture-tested / 候选能力标注。
 - 没有公开 Alpha.7 安装包；没有 push、PR、合并、tag 或发布；未安装真实 Hook、停止用户 Agent、清空用户状态、重置通知账本或修改代理/审批策略。

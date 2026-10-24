@@ -32,6 +32,7 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
     if tasks.iter().any(|t| {
         t.status == TaskStatus::WaitingInput
             && t.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded)
+            && (!t.is_agent_session() || t.requires_action())
     }) {
         return "needs-input";
     }
@@ -44,6 +45,11 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
     let Some(best) = tasks.iter().min_by_key(|t| {
         if t.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
             4
+        } else if t.is_agent_session()
+            && t.status == TaskStatus::WaitingInput
+            && !t.requires_action()
+        {
+            5
         } else {
             t.status.priority()
         }
@@ -57,6 +63,7 @@ fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str
         {
             "idle"
         }
+        TaskStatus::WaitingInput if best.is_agent_session() && !best.requires_action() => "offline",
         TaskStatus::WaitingInput => "needs-input",
         TaskStatus::Disconnected => "disconnected",
         TaskStatus::Running => "working",
@@ -150,6 +157,7 @@ pub fn toggle_popup(app: &AppHandle) {
             return;
         }
         let _ = win.show();
+        let _ = app.emit("popup-opened", ());
         let _ = win.set_focus();
         emit_current_state(app);
         return;
@@ -161,7 +169,11 @@ pub fn toggle_popup(app: &AppHandle) {
 /// Notification activation must show, never toggle/hide an existing popup.
 pub fn show_popup(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("popup") {
+        let was_hidden = !win.is_visible().unwrap_or(false);
         let _ = win.show();
+        if was_hidden {
+            let _ = app.emit("popup-opened", ());
+        }
         let _ = win.set_focus();
         emit_current_state(app);
         return;
@@ -196,8 +208,11 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title("TaskPulse")
-        .inner_size(440.0, 520.0)
+        .inner_size(412.0, 620.0)
         .decorations(false)
+        // Windows adds a white non-client frame when an undecorated window
+        // keeps its native shadow. The transparent dashboard draws its own edge.
+        .shadow(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
         .always_on_top(true)
@@ -207,8 +222,7 @@ fn create_popup(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            let (default_x, default_y) = compute_default_position(app);
-            let _ = win.set_position(tauri::PhysicalPosition::new(default_x, default_y));
+            let _ = fit_popup(&win, 620, false);
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
@@ -286,28 +300,88 @@ pub fn close_popup(app: AppHandle) {
     hide_popup(&app);
 }
 
-fn compute_default_position(app: &AppHandle) -> (i32, i32) {
-    app.primary_monitor()
+// Size in logical pixels, fit against the actual monitor work area in physical
+// pixels. This avoids WebView screen/ResizeObserver feedback and taskbar overlap.
+fn popup_geometry(
+    area: (i32, i32, u32, u32),
+    scale: f64,
+    height: u32,
+    current: Option<(i32, i32)>,
+) -> (u32, u32, i32, i32) {
+    let (left, top, available_width, available_height) = area;
+    let margin = (8.0 * scale).round() as i32;
+    let width = ((412.0 * scale).round() as u32)
+        .min(available_width.saturating_sub((margin * 2) as u32).max(1));
+    let height = ((f64::from(height.clamp(400, 620)) * scale).round() as u32)
+        .min(available_height.saturating_sub((margin * 2) as u32).max(1));
+    let min_x = left + margin.min(available_width.saturating_sub(width) as i32);
+    let min_y = top + margin.min(available_height.saturating_sub(height) as i32);
+    let max_x = (left + available_width as i32 - width as i32 - margin).max(min_x);
+    let max_y = (top + available_height as i32 - height as i32 - margin).max(min_y);
+    let (x, y) = current.unwrap_or((max_x, top + (24.0 * scale).round() as i32));
+    (width, height, x.clamp(min_x, max_x), y.clamp(min_y, max_y))
+}
+
+fn fit_popup(
+    window: &tauri::WebviewWindow,
+    height: u32,
+    keep_position: bool,
+) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
         .ok()
         .flatten()
-        .or_else(|| {
-            app.available_monitors()
-                .ok()
-                .and_then(|m| m.into_iter().next())
-        })
-        .map(|m| {
-            (
-                m.position().x + m.size().width as i32 - (450.0 * m.scale_factor()) as i32,
-                m.position().y + 32,
-            )
-        })
-        .unwrap_or((100, 32))
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or("无法读取窗口所在屏幕")?;
+    let area = monitor.work_area();
+    let current = keep_position
+        .then(|| window.outer_position().ok())
+        .flatten()
+        .map(|p| (p.x, p.y));
+    let (width, height, x, y) = popup_geometry(
+        (
+            area.position.x,
+            area.position.y,
+            area.size.width,
+            area.size.height,
+        ),
+        monitor.scale_factor(),
+        height,
+        current,
+    );
+    window
+        .set_size(tauri::PhysicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+pub async fn resize_dashboard(app: AppHandle, height: u32) -> Result<(), String> {
+    let window = app.get_webview_window("popup").ok_or("任务窗口尚未创建")?;
+    fit_popup(&window, height, true)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::time::SystemTime;
+
+    #[test]
+    fn popup_fits_work_area_at_scaled_and_negative_monitor_coordinates() {
+        for scale in [1.0, 1.5, 2.0] {
+            let (w, h, x, y) =
+                popup_geometry((-1920, 40, 1920, 1000), scale, 620, Some((-9999, 9999)));
+            assert_eq!(w, (412.0 * scale) as u32);
+            assert!(x >= -1920 && y >= 40);
+            assert!(x + w as i32 <= 0 && y + h as i32 <= 1040);
+        }
+        let (w, h, x, y) = popup_geometry((0, 0, 640, 480), 2.0, 620, None);
+        assert!(w <= 608 && h <= 448 && x >= 16 && y >= 16);
+        let (w, h, x, y) = popup_geometry((0, 0, 10, 10), 1.0, 0, None);
+        assert!(x >= 0 && y >= 0 && x + w as i32 <= 10 && y + h as i32 <= 10);
+    }
 
     fn task(status: TaskStatus) -> TaskSnapshot {
         TaskSnapshot::new(
