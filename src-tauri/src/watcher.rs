@@ -2010,9 +2010,15 @@ mod tests {
     #[test]
     #[ignore = "requires a real local Hermes database; read-only, counts only"]
     fn live_hermes_native_snapshots_survive_watcher_dedup() {
-        let mut provider = HermesProvider::new();
+        let db = crate::providers::hermes::discover_db()
+            .expect("Real Hermes database required for opt-in verification");
+        let mut provider = HermesProvider::with_db_path(db);
         let output = provider.poll(SystemTime::now());
         assert!(output.authoritative && output.error.is_none());
+        assert!(
+            !output.tasks.is_empty(),
+            "A recent real Hermes snapshot is required to verify dedup retention"
+        );
         let expected = output.tasks.clone();
         let mut tasks = output.tasks;
         dedup_hermes_over_scan(&mut tasks);
