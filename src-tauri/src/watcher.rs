@@ -600,8 +600,12 @@ fn dedup_codex_over_scan(tasks: &mut Vec<TaskSnapshot>) {
 fn dedup_hermes_over_scan(tasks: &mut Vec<TaskSnapshot>) {
     let has_session = tasks.iter().any(|t| t.source == TaskSource::Hermes);
     if has_session {
+        // Native Hermes leases also use Inferred confidence. Evidence strength
+        // does not identify a scanner row; only remove actual scanner output.
         tasks.retain(|t| {
-            !(t.cli.as_deref() == Some("hermes") && t.confidence == DetectionConfidence::Inferred)
+            !((t.source_instance.as_deref() == Some("scanner") || t.id.starts_with("scan:"))
+                && t.cli.as_deref() == Some("hermes")
+                && t.confidence == DetectionConfidence::Inferred)
         });
     }
 }
@@ -1910,6 +1914,117 @@ mod tests {
         });
         t.cli = cli.map(|s| s.to_string());
         t
+    }
+
+    #[test]
+    fn hermes_native_inferred_session_survives_without_scanner() {
+        let mut task = task_with_terminal(
+            "hermes:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("hermes"),
+        );
+        task.source = TaskSource::Hermes;
+        task.source_instance = Some("hermes".into());
+        task.session_id = Some("native".into());
+        let mut tasks = vec![task.clone()];
+        dedup_hermes_over_scan(&mut tasks);
+        assert_eq!(tasks, vec![task]);
+    }
+
+    #[test]
+    fn hermes_scan_dedup_preserves_parallel_native_and_hook_evidence() {
+        let mut expected = vec![];
+        for (id, status, stale) in [
+            ("hermes:running", TaskStatus::Running, false),
+            ("hermes:input", TaskStatus::WaitingInput, false),
+            ("hermes:uncertain", TaskStatus::Unknown, true),
+        ] {
+            let mut task = task_with_terminal(
+                id,
+                status,
+                DetectionConfidence::Inferred,
+                "123",
+                Some("hermes"),
+            );
+            task.source = TaskSource::Hermes;
+            task.source_instance = Some("hermes".into());
+            task.session_id = Some(id.into());
+            task.stale = stale;
+            task.turn_key = Some(format!("turn:{id}"));
+            if status == TaskStatus::WaitingInput {
+                task.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+                task.input_request_id = Some("request:approval".into());
+                task.input_request_ids = vec!["request:approval".into(), "request:parallel".into()];
+            }
+            expected.push(task);
+        }
+        expected.push(task_with_terminal(
+            "file:hermes",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("hermes"),
+        ));
+        expected.push(task_with_terminal(
+            "scan:other",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "456",
+            Some("gemini"),
+        ));
+        let mut tasks = expected.clone();
+        let mut scan = task_with_terminal(
+            "scan:hermes",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("hermes"),
+        );
+        scan.source_instance = Some("scanner".into());
+        tasks.push(scan.clone());
+        scan.id = "process:hermes".into();
+        tasks.push(scan.clone());
+        scan.id = "scan:legacy-hermes".into();
+        scan.source_instance = None;
+        tasks.push(scan);
+        dedup_hermes_over_scan(&mut tasks);
+        assert_eq!(tasks, expected);
+    }
+
+    #[test]
+    fn hermes_scan_stays_when_no_native_session_exists() {
+        let scan = task_with_terminal(
+            "scan:hermes",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("hermes"),
+        );
+        let mut tasks = vec![scan.clone()];
+        dedup_hermes_over_scan(&mut tasks);
+        assert_eq!(tasks, vec![scan]);
+    }
+
+    #[test]
+    #[ignore = "requires a real local Hermes database; read-only, counts only"]
+    fn live_hermes_native_snapshots_survive_watcher_dedup() {
+        let mut provider = HermesProvider::new();
+        let output = provider.poll(SystemTime::now());
+        assert!(output.authoritative && output.error.is_none());
+        let expected = output.tasks.clone();
+        let mut tasks = output.tasks;
+        dedup_hermes_over_scan(&mut tasks);
+        println!(
+            "Hermes read-only: provider_tasks={}, retained_tasks={}",
+            expected.len(),
+            tasks.len()
+        );
+        assert!(
+            tasks == expected,
+            "Native Hermes snapshots must remain unchanged"
+        );
     }
 
     #[test]
