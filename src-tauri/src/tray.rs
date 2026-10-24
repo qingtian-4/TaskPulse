@@ -131,6 +131,7 @@ pub fn update_icon(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]
 
 pub fn pin_popup(app: &AppHandle) {
     PINNED.store(true, Ordering::SeqCst);
+    set_popup_always_on_top(app, true);
     let _ = app.emit("pinned-changed", true);
 
     if let Some(win) = app.get_webview_window("popup") {
@@ -149,6 +150,7 @@ pub fn toggle_popup(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("popup") {
         if win.is_visible().unwrap_or(false) {
             PINNED.store(false, Ordering::SeqCst);
+            set_popup_always_on_top(app, false);
             let _ = app.emit("pinned-changed", false);
             if std::env::var_os("TASKPULSE_HOME").is_none() {
                 let _ = app.save_window_state(StateFlags::POSITION);
@@ -156,6 +158,7 @@ pub fn toggle_popup(app: &AppHandle) {
             let _ = win.hide();
             return;
         }
+        set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
         let _ = win.show();
         let _ = app.emit("popup-opened", ());
         let _ = win.set_focus();
@@ -169,6 +172,7 @@ pub fn toggle_popup(app: &AppHandle) {
 /// Notification activation must show, never toggle/hide an existing popup.
 pub fn show_popup(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("popup") {
+        set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
         let was_hidden = !win.is_visible().unwrap_or(false);
         let _ = win.show();
         if was_hidden {
@@ -215,7 +219,7 @@ fn create_popup(app: &AppHandle) {
         .shadow(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
-        .always_on_top(true)
+        .always_on_top(PINNED.load(Ordering::SeqCst))
         .skip_taskbar(true)
         .resizable(false)
         .visible(false)
@@ -270,17 +274,20 @@ fn emit_current_state(app: &AppHandle) {
 
 #[tauri::command]
 pub fn toggle_pin(app: AppHandle) {
-    if PINNED.load(Ordering::SeqCst) {
+    let pinned = if PINNED.load(Ordering::SeqCst) {
         PINNED.store(false, Ordering::SeqCst);
-        let _ = app.emit("pinned-changed", false);
+        false
     } else {
         PINNED.store(true, Ordering::SeqCst);
-        let _ = app.emit("pinned-changed", true);
-    }
+        true
+    };
+    set_popup_always_on_top(&app, pinned);
+    let _ = app.emit("pinned-changed", pinned);
 }
 
 pub fn hide_popup(app: &AppHandle) {
     PINNED.store(false, Ordering::SeqCst);
+    set_popup_always_on_top(app, false);
     let _ = app.emit("pinned-changed", false);
     if let Some(win) = app.get_webview_window("popup") {
         if std::env::var_os("TASKPULSE_HOME").is_none() {
@@ -293,6 +300,14 @@ pub fn hide_popup(app: &AppHandle) {
 #[tauri::command]
 pub fn get_pinned() -> bool {
     PINNED.load(Ordering::SeqCst)
+}
+
+fn set_popup_always_on_top(app: &AppHandle, pinned: bool) {
+    if let Some(win) = app.get_webview_window("popup") {
+        if let Err(error) = win.set_always_on_top(pinned) {
+            log::warn!("failed to synchronize popup pin state: {error}");
+        }
+    }
 }
 
 #[tauri::command]
