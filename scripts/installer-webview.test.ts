@@ -33,10 +33,12 @@ test('native installer probe waits only for reproduced navigation before invokin
 
 test('native installer probe never retries actual IPC failures, unexpected protocol errors or JS exceptions',async()=>{
   if(process.platform!=='win32')return;
-  for(const failure of [navigation,{error:{code:-32000,message:'IPC denied'}},{result:{exceptionDetails:{exception:{description:'Error: permission denied'}}}}]){
+  for(const failure of [navigation,{error:{code:-32000,message:'IPC denied'}},{result:{exceptionDetails:{exception:{description:'Error: permission denied'}}}},{result:{exceptionDetails:{text:'Uncaught (in promise)',exception:{value:'permission denied'}}}}]){
     const r=await probe([value(ready),failure]);
     expect(r.exitCode).not.toBe(0);expect(r.calls).toBe(2);expect(r.ipcCalls).toBe(1);
     expect(r.data.trace.some((e:any)=>e.stage==='ipc'&&(e.protocol_error||e.js_exception))).toBe(true);
+    const js=r.data.trace.find((e:any)=>e.js_exception)?.js_exception;
+    if(js)expect(js.description).toContain('permission denied');
   }
   const unknown=await probe([{error:{code:-32000,message:'Unknown browser error'}}]);
   expect(unknown.exitCode).not.toBe(0);expect(unknown.calls).toBe(1);expect(unknown.ipcCalls).toBe(0);

@@ -1,4 +1,11 @@
 # Read-only native IPC probe; importing this file never installs or launches software.
+function Get-InstallerProbeException($Details) {
+    $description = [string]$Details.exception.description
+    if (-not $description) { $description = [string]$Details.exception.value }
+    $text = [string]$Details.text
+    return @{text=$text.Substring(0,[Math]::Min(256,$text.Length));description=$description.Substring(0,[Math]::Min(1024,$description.Length))}
+}
+
 function Invoke-InstallerCDPEvaluate($Socket, $Token, [string]$Expression, [int]$Id) {
     $request = @{id=$Id;method='Runtime.evaluate';params=@{expression=$Expression;awaitPromise=$true;returnByValue=$true}} | ConvertTo-Json -Depth 10 -Compress
     $bytes = [Text.Encoding]::UTF8.GetBytes($request)
@@ -45,7 +52,7 @@ function Invoke-InstallerWebViewProbe {
                 # and only before any application IPC has been attempted.
                 if ($reply.error.code -ne -32000 -or $reply.error.message -ne 'Execution context was destroyed.') { throw 'Native CDP readiness failed' }
             } elseif ($reply.result.exceptionDetails) {
-                $entry.js_exception = ([string]$reply.result.exceptionDetails.exception.description).Substring(0,[Math]::Min(1024,([string]$reply.result.exceptionDetails.exception.description).Length))
+                $entry.js_exception = Get-InstallerProbeException $reply.result.exceptionDetails
                 $Trace.Add($entry); throw 'Native readiness JavaScript failed'
             } else {
                 $value = $reply.result.result.value
@@ -64,7 +71,7 @@ function Invoke-InstallerWebViewProbe {
             $Trace.Add($entry); throw 'Native CDP failed during IPC; not retried'
         }
         if ($reply.result.exceptionDetails) {
-            $entry.js_exception = ([string]$reply.result.exceptionDetails.exception.description).Substring(0,[Math]::Min(1024,([string]$reply.result.exceptionDetails.exception.description).Length))
+            $entry.js_exception = Get-InstallerProbeException $reply.result.exceptionDetails
             $Trace.Add($entry); throw 'Native WebView IPC JavaScript failed; not retried'
         }
         $value = $reply.result.result.value
