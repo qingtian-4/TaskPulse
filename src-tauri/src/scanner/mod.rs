@@ -1,4 +1,6 @@
 use std::collections::{HashMap, VecDeque};
+#[cfg(target_os = "windows")]
+use std::os::windows::process::CommandExt;
 use std::path::PathBuf;
 use std::time::Instant;
 
@@ -10,6 +12,16 @@ const CPU_ACTIVE_THRESHOLD: f64 = 2.0;
 use crate::watcher::AgentStatus;
 
 pub mod strategies;
+
+#[cfg(target_os = "windows")]
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+#[cfg(target_os = "windows")]
+fn hidden_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -378,7 +390,7 @@ fn count_children(pid: u32, excluded: &[&str]) -> u32 {
 fn count_children(pid: u32, _excluded: &[&str]) -> u32 {
     // wmic is removed in Windows 11 24H2+; use Get-CimInstance instead.
     let script = format!("(Get-CimInstance Win32_Process -Filter 'ParentProcessId={pid}').Count");
-    std::process::Command::new("powershell")
+    hidden_command("powershell")
         .args(["-NoProfile", "-Command", &script])
         .output()
         .ok()

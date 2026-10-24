@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
@@ -7,6 +8,16 @@ use crate::watcher::TerminalInfo;
 
 type StrategyMatch<'a> = (ProcInfo, &'a dyn CliStrategy);
 type ProcessScan<'a> = (Vec<StrategyMatch<'a>>, HashMap<u32, u32>);
+
+const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+
+fn hidden_command(program: &str) -> std::process::Command {
+    let mut command = std::process::Command::new(program);
+    // Scanner probes run in the background. A console child would flash over
+    // the tray popup on every polling cycle.
+    command.creation_flags(CREATE_NO_WINDOW);
+    command
+}
 
 /// Find CLI processes matching any registered strategy.
 pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_> {
@@ -27,7 +38,7 @@ pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_
         .collect::<Vec<_>>()
         .join(" or ");
 
-    let output = match std::process::Command::new("wmic")
+    let output = match hidden_command("wmic")
         .args([
             "process",
             "where",
@@ -150,7 +161,7 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
             break;
         }
 
-        let output = std::process::Command::new("wmic")
+        let output = hidden_command("wmic")
             .args([
                 "process",
                 "where",
@@ -213,7 +224,7 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
 /// We convert to CLK_TCK-equivalent ticks (divide by 100_000 to get ~10ms ticks)
 /// so the Scanner::cpu_pct delta math works the same as Linux.
 fn wmic_cpu_times(pid: u32) -> (u64, u64) {
-    let output = match std::process::Command::new("wmic")
+    let output = match hidden_command("wmic")
         .args([
             "process",
             "where",
@@ -244,7 +255,7 @@ fn wmic_cpu_times(pid: u32) -> (u64, u64) {
 
 fn powershell_window_title(pid: u32) -> Option<String> {
     let cmd = format!("(Get-Process -Id {}).MainWindowTitle", pid);
-    let output = std::process::Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-Command", &cmd])
         .output()
         .ok()?;
@@ -274,7 +285,7 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
     let script = PS_READ_ENV
         .replace("__PID__", &pid.to_string())
         .replace("__KEY__", key);
-    let output = std::process::Command::new("powershell")
+    let output = hidden_command("powershell")
         .args(["-NoProfile", "-NonInteractive", "-Command", &script])
         .output()
         .ok()?;
