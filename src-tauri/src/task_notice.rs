@@ -308,14 +308,30 @@ fn reopenable(task: &TaskSnapshot) -> bool {
 }
 
 #[tauri::command]
-pub async fn reopen_task_prompt(app: AppHandle, id: String) -> Result<NoticeState, String> {
+pub async fn reopen_task_prompt(
+    app: AppHandle,
+    id: String,
+    request_id: Option<String>,
+    turn_key: Option<String>,
+) -> Result<NoticeState, String> {
     if !crate::monitoring::get_monitoring_settings().popup_notifications() {
         return Err("请先启用 TaskPulse 弹窗提醒；请求仍可在面板查看".into());
     }
-    let task = get_pending_task_prompts()
+    let mut task = get_pending_task_prompts()
         .into_iter()
         .find(|t| t.id == id)
         .ok_or("该请求已处理或不在监控范围")?;
+    if turn_key.is_some() && turn_key != task.turn_key {
+        return Err("该消息所属轮次已变化，请查看当前任务".into());
+    }
+    if let Some(request) = request_id {
+        if !task.input_request_ids.contains(&request)
+            && task.input_request_id.as_ref() != Some(&request)
+        {
+            return Err("该消息的请求已处理，请查看当前任务".into());
+        }
+        task.input_request_id = Some(request);
+    }
     if !reopenable(&task) {
         return Err("来源尚未确认最新状态，请刷新或打开 Agent 核对；不会重发过期请求".into());
     }

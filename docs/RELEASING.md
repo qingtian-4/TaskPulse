@@ -26,8 +26,15 @@ git push origin refs/tags/<next-pre-release-tag>
 ```
 
 不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
-手动运行 Release 工作流也必须提供已经存在的标签，不能用 main 作为版本。
+生成 Release 的手动运行仍必须提供已经存在的标签，不能用 main 作为版本。
 `scripts/release.sh` 现在只是只读检查入口，不再替维护者提交/打标签/推送。
+
+仅构建 CI 附件时，在 `Windows Alpha release` 的 `commit` 输入填写完整的当前
+main SHA（40 位）；它优先于 `tag` 输入。preflight 必须确认 checkout、origin/main
+和输入完全一致，随后执行相同的安全检查、MSVC 构建及 NSIS/MSI 独立安装验收。
+该模式跳过 Draft job，不创建 Tag 或 Release；manifest 的 `tag=null`、
+`build_kind=commit-candidate` 和完整源 SHA 区分同版本的开发构建。
+四处应用版本及 MSI 映射仍须一致；这不是新版本发布，也不证明旧 Alpha.7 的升级兼容。
 
 ## 工作流交付
 

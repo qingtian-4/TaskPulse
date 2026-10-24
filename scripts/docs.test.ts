@@ -30,11 +30,16 @@ test('bilingual landing pages lead with the product and disclose alpha availabil
 });
 
 test('current product materials retain dimensions and explicit synthetic native provenance',()=>{
-  for(const [name,width,height] of [['dashboard-alpha7',440,720],['sources-alpha7',1040,900],['notice-alpha7',320,132]] as const){
+  for(const [name,width,height] of [['dashboard-current',412,620],['message-center-current',412,620],['sources-current',1040,900],['notice-current',320,132]] as const){
     const path=`assets/screenshots/${name}.png`,png=readFileSync(path);
     expect(png.subarray(1,4).toString()).toBe('PNG');
     expect(png.readUInt32BE(16)).toBe(width);expect(png.readUInt32BE(20)).toBe(height);
     for(const doc of ['README.md','README.en.md'])expect(readFileSync(doc,'utf8')).toContain(path);
+  }
+  for(const [name,width,height] of [['dashboard-alpha7',440,720],['sources-alpha7',1040,900],['notice-alpha7',320,132]] as const){
+    const png=readFileSync(`assets/screenshots/${name}.png`);
+    expect(png.readUInt32BE(16)).toBe(width);expect(png.readUInt32BE(20)).toBe(height);
+    expect(readFileSync('assets/README.md','utf8')).toContain(`screenshots/${name}.png`);
   }
   expect(readFileSync('assets/README.md','utf8')).toContain('合成');
   expect(readFileSync('README.en.md','utf8')).toContain('synthetic standard events');

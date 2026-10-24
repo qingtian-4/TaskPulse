@@ -66,7 +66,7 @@ function event(session:string,kind:string,payload:Record<string,string>={},extra
   if(r.error)throw r.error;assert.equal(r.status,0,r.stderr);
 }
 async function input(client:any,selector:string,value:string){await client.evaluate(`(()=>{const e=document.querySelector(${JSON.stringify(selector)});e.value=${JSON.stringify(value)};e.dispatchEvent(new Event('input',{bubbles:true}));})()`);}
-async function click(client:any,selector:string){await client.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);}
+async function click(client:any,selector:string){await client.wait(`!!document.querySelector(${JSON.stringify(selector)})`);await client.evaluate(`document.querySelector(${JSON.stringify(selector)}).click()`);}
 // Native WebView2 DPR emulation, not a claim that Windows display settings or
 // mixed-DPI monitor migration were changed/tested. Logical window sizes stay fixed.
 async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:number,height:number){
@@ -85,7 +85,7 @@ async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:
       });
       const occluded=buttons.filter(e=>{const r=e.getBoundingClientRect();const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return !hit||!(e===hit||e.contains(hit));}).map(e=>e.getAttribute('aria-label')||e.textContent?.trim());
       const titles=[...document.querySelectorAll('.row-title,.heading')].map(box);
-      const labels=[...document.querySelectorAll('.row-status')].map(box);
+      const labels=[...document.querySelectorAll('.status-label')].map(box);
       const overlapping=titles.some(t=>labels.some(s=>s.top<t.bottom&&s.bottom>t.top&&s.left<t.right&&s.right>t.left));
       const panel=document.querySelector('.dashboard,.notice-window,.manage');
       return {dpr:devicePixelRatio,bodyWidth:document.documentElement.scrollWidth,horizontal:document.documentElement.scrollWidth>innerWidth,panel:box(panel),occluded,overlapping,scrollbar:getComputedStyle(document.querySelector('.task-scroll')??document.body).overflowY};
@@ -95,7 +95,7 @@ async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:
     assert.deepEqual(layout.occluded,[],kind+' '+scale+' inaccessible controls');
     assert.ok(layout.panel.bottom<=height+1,kind+' '+scale+' panel outside logical window');
     if(kind==='notice')assert.ok(await client.evaluate(`document.querySelector('.summary').getBoundingClientRect().bottom<=document.querySelector('footer').getBoundingClientRect().top`),'Notice summary overlaps actions');
-    await Bun.write(join(owned,kind+'-'+Math.round(scale*100)+'.png'),Buffer.from((await client.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await Bun.write(join(owned,kind+'-'+width+'x'+height+'-'+Math.round(scale*100)+'.png'),Buffer.from((await client.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     scaleChecks.push({kind,scale,logicalSize:[width,height],...layout});
   }
   await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
@@ -111,24 +111,43 @@ async function screenshot(client:any,name:string,width:number,height:number){
 try{
   root=await page('');await root.wait(`!!document.querySelector('.dashboard')`);
   assert.equal((await root.invoke('integration_environment')).isolated,true);
-  // The generic adapter name is honest: these are NOT native Codex/Claude fixtures.
-  event('thinking','turn.started',{title:'示例：评审跨平台任务面板',project:'TaskPulse Demo'});
-  event('thinking','phase.changed',{phase:'thinking'});
-  event('tool','turn.started',{title:'示例：验证会话重命名与未读保留',project:'UI Sandbox'});
-  event('tool','tool.started',{activity:'运行回归测试（安全示例标签）'},{call_id:'test-call'});
+  if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
+  await root.wait(`innerWidth===412&&innerHeight===400`);
+  await Bun.write(join(owned,'empty-412x400.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   event('done','turn.started',{title:'示例：整理新用户快速开始指南',project:'Docs Demo'});
   event('done','turn.completed');
+  await root.wait(`document.querySelectorAll('.task-row').length===1&&innerHeight===400`);
+  await Bun.write(join(owned,'one-result-412x400.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  const firstResult=(await root.invoke('get_agents'))[0];
+  await root.invoke('update_task_attention',{id:firstResult.id,action:'hide'});
+  // The generic adapter name is honest: these are NOT native Codex/Claude fixtures.
+  event('thinking','turn.started',{title:'示例：评审跨平台任务面板与多来源项目通知消息的长中文标题排版稳定性',project:'TaskPulse Demo'});
+  event('thinking','phase.changed',{phase:'thinking'});
   event('question','turn.started',{title:'示例：确认下一轮迭代范围',project:'TaskPulse Demo'});
   event('question','input.requested',{request_kind:'question'},{request_id:'question-1'});
+  await root.wait(`document.querySelectorAll('.task-row').length===2&&innerHeight===620`);
+  await Bun.write(join(owned,'running-and-request-412x620.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  const requestTask=(await root.invoke('get_agents')).find((t:any)=>t.session_id==='question');
+  await root.invoke('update_task_attention',{id:requestTask.id,action:'hide'});
+  await root.wait(`document.querySelectorAll('.task-row').length===1`);
+  assert.equal(await root.evaluate('innerHeight'),620,'Pinned refresh must not shrink a grown window');
+  await root.invoke('update_task_attention',{id:requestTask.id,action:'restore'});
+  await root.invoke('update_task_attention',{id:firstResult.id,action:'restore'});
+  event('tool','turn.started',{title:'Example: verify-session-renaming-and-unread-result-preservation-with-a-long-English-title',project:'UI Sandbox / extremely-long-project-name-for-width-validation'});
+  event('tool','tool.started',{activity:'运行回归测试 · C:/public/examples/very-long-project-path/packages/integration/verify-taskpulse-notification-layout.test.ts'},{call_id:'test-call'});
   await root.wait(`document.querySelectorAll('.task-row').length===4`);
   const initial=await root.invoke('get_agents');
   const thinking=initial.find((t:any)=>t.session_id==='thinking'),done=initial.find((t:any)=>t.session_id==='done');
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
-  await checkScales(root,'dashboard',440,720);
-  await root.evaluate(`[...document.querySelectorAll('.counts .overview')].find(b=>b.textContent.includes('需处理')).click()`);
+  const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
+  assert.deepEqual(fontSizes,{title:'14px',context:'11px',activity:'12px',number:'24px'});
+  for(const [width,height] of [[412,620],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
+  await root.send('Emulation.setDeviceMetricsOverride',{width:412,height:620,deviceScaleFactor:1,mobile:false});
+  checks.push('empty and one-result use 400px; two tasks grow to 620px; long Chinese/English typography and all four sizes at DPR 1/1.5/2');
+  await root.evaluate(`[...document.querySelectorAll('.counts .overview')].find(b=>b.textContent.includes('待处理')).click()`);
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('等待输入')`);
-  await click(root,'.counts .total');
-  await screenshot(root,'dashboard-alpha7',440,720);
+  await click(root,'.all-tasks');
+  await screenshot(root,'dashboard-current',412,620);
   event('failed','turn.started',{title:'示例：失败结果展示回归',project:'State Demo'});
   event('failed','turn.failed');
   await root.wait(`document.querySelectorAll('.task-row').length===5&&!!document.querySelector('.task-item[data-tone="danger"] .status-label')`);
@@ -136,17 +155,17 @@ try{
   await click(root,'.signals [data-tone="danger"]');
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.status-label').textContent==='失败'`);
   await click(root,'[aria-label="标记已查看：示例：失败结果展示回归"]');
-  await click(root,'.counts .total');
+  await click(root,'.all-tasks');
   await root.wait(`document.querySelectorAll('.task-row').length===4`);
   checks.push('explicit failed-result chip/filter/viewed action remain separate from running and uncertainty');
   await input(root,'[aria-label="搜索任务"]','UI Sandbox');
   await root.wait(`document.querySelectorAll('.task-row').length===1`);
   assert.ok(await root.evaluate(`!!document.querySelector('.outside-running')`));
-  await click(root,'.counts .total');
+  await click(root,'.all-tasks');
   await root.wait(`document.querySelectorAll('.task-row').length===4`);
   await input(root,'[aria-label="搜索任务"]','no-such-public-task');
   await root.wait(`document.querySelector('.empty')?.textContent.includes('当前筛选没有任务')`);
-  await click(root,'.counts .total');
+  await click(root,'.all-tasks');
   assert.equal(await root.evaluate(`(()=>{const rows=document.querySelectorAll('.task-row');rows[0].focus();rows[0].dispatchEvent(new KeyboardEvent('keydown',{key:'ArrowDown',bubbles:true}));return document.activeElement===rows[1];})()`),true);
   await click(root,'[data-task-id="'+thinking.id+'"]');
   await root.wait(`document.querySelector('.command')?.textContent.includes('正在思考')`);
@@ -156,19 +175,26 @@ try{
   await input(root,'[aria-label="搜索任务"]','评审');
   await root.wait(`document.querySelectorAll('.task-row').length===1`);
   const compact=await root.evaluate(`({list:document.querySelector('.task-scroll').clientHeight,footer:document.querySelector('footer').getBoundingClientRect().bottom,height:innerHeight})`);
+  await Bun.write(join(owned,'search-detail-412x620.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   assert.ok(compact.list>=80 && compact.footer<=compact.height,'Search + details must retain a usable list and visible footer: '+JSON.stringify(compact));
   await click(root,'[aria-label="清除搜索"]');
-  await root.send('Emulation.setDeviceMetricsOverride',{width:440,height:480,deviceScaleFactor:2,mobile:false});
+  await root.send('Emulation.setDeviceMetricsOverride',{width:320,height:480,deviceScaleFactor:2,mobile:false});
   await Bun.sleep(150);
   const shortWindow=await root.evaluate(`({panel:document.querySelector('.dashboard').getBoundingClientRect().height,list:document.querySelector('.task-scroll').clientHeight,footer:document.querySelector('footer').getBoundingClientRect().bottom})`);
+  await Bun.write(join(owned,'search-detail-320x480.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   assert.ok(shortWindow.panel<=480&&shortWindow.list>=45&&shortWindow.footer<=480,'Compact logical-height window must retain visible tasks/footer: '+JSON.stringify(shortWindow));
-  await root.send('Emulation.setDeviceMetricsOverride',{width:440,height:720,deviceScaleFactor:1,mobile:false});
+  await root.send('Emulation.setDeviceMetricsOverride',{width:412,height:620,deviceScaleFactor:1,mobile:false});
   checks.push('native search, global reset, blockers first, thinking phase and selection never acknowledges');
   await click(root,'[aria-label="关闭详情"]');
+  await click(root,'.filter-toggle');
   await click(root,'.unread-filter');
   await root.wait(`document.querySelector('.unread-filter').getAttribute('aria-pressed')==='true'`);
   assert.ok(await root.evaluate(`[...document.querySelectorAll('.task-row')].every(r=>!!r.querySelector('.unread'))`));
-  await click(root,'.counts .total');
+  await input(root,'[aria-label="搜索任务"]','UI Sandbox');
+  await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.filter-note').textContent.includes('仅未查看')`);
+  await Bun.write(join(owned,'search-filter-412x620.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await click(root,'.all-tasks');
+  await click(root,'.filter-toggle');
   await click(root,'[aria-label="标记已查看：'+done.name+'"]');
   await root.wait(`!document.querySelector('[data-task-id="${done.id}"]')`);
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id===thinking.id && t.status==='running'));
@@ -176,7 +202,23 @@ try{
   for(let i=0;i<24;i++)event('scroll-'+i,'turn.started',{title:'示例长列表 '+i+'：标题不会隐藏其他任务，也不会截断实际采集结果',project:'Scroll Demo'});
   await root.wait(`document.querySelectorAll('.task-row').length===27`);
   const layout=await root.evaluate(`(()=>{const e=document.querySelector('.task-scroll');return {scroll:e.scrollHeight>e.clientHeight,height:document.querySelector('.dashboard').getBoundingClientRect().height,horizontal:document.documentElement.scrollWidth>innerWidth};})()`);
-  assert.equal(layout.scroll,true);assert.ok(layout.height<=720);assert.equal(layout.horizontal,false);
+  assert.equal(layout.scroll,true);assert.ok(layout.height<=620);assert.equal(layout.horizontal,false);
+  for(const [width,height] of [[412,620],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
+  await root.send('Emulation.clearDeviceMetricsOverride');
+  await root.wait(`innerWidth===412`);
+  const nativeBounds=await root.invoke('plugin:window|outer_size',{label:'popup'}),nativePosition=await root.invoke('plugin:window|outer_position',{label:'popup'}),monitor=await root.invoke('plugin:window|current_monitor',{label:'popup'});
+  assert.deepEqual(nativeBounds,await root.invoke('plugin:window|inner_size',{label:'popup'}));
+  assert.ok(nativePosition.x>=monitor.workArea.position.x&&nativePosition.y>=monitor.workArea.position.y&&nativePosition.x+nativeBounds.width<=monitor.workArea.position.x+monitor.workArea.size.width&&nativePosition.y+nativeBounds.height<=monitor.workArea.position.y+monitor.workArea.size.height);
+  await click(root,'.quota summary');await root.wait(`document.querySelector('.quota').open`);
+  const quotaBounds=await root.evaluate(`(()=>{const r=document.querySelector('.quota p').getBoundingClientRect();return {top:r.top,bottom:r.bottom,right:r.right,left:r.left,height:innerHeight};})()`);
+  assert.ok(quotaBounds.top>=0&&quotaBounds.bottom<=quotaBounds.height&&quotaBounds.left>=0&&quotaBounds.right<=412);
+  await Bun.write(join(owned,'quota-expanded-412x620.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await click(root,'.quota summary');
+  await root.invoke('toggle_pin');assert.equal(await root.invoke('get_pinned'),false);
+  await root.invoke('plugin:window|hide',{label:'popup'});await root.invoke('plugin:window|show',{label:'popup'});
+  await root.invoke('plugin:window|set_focus',{label:'popup'});await root.invoke('toggle_pin');
+  assert.equal(await root.invoke('get_pinned'),true);assert.deepEqual(await root.invoke('plugin:window|outer_size',{label:'popup'}),nativeBounds);
+  checks.push('pin/grow-only refresh, unpin/hide/reopen; real native work-area bounds/client equality; quota expansion within panel');
   checks.push('27 native tasks remain rendered with bounded vertical scrolling and no horizontal overflow');
   await root.invoke('open_management');management=await page('/manage');
   await management.wait(`!!document.querySelector('.setup-flow')`);
@@ -202,21 +244,21 @@ try{
   await Bun.sleep(150);
   assert.ok(await management.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.querySelector('main').scrollHeight>document.querySelector('main').clientHeight`),'Compact source manager must scroll without horizontal overflow');
   checks.push('compact logical windows at DPR 2 retain usable Dashboard and source manager');
-  await screenshot(management,'sources-alpha7',1040,900);
+  await screenshot(management,'sources-current',1040,900);
   checks.push('native source workflow/save/read test/event channel test; advanced Hook controls folded and no lifecycle overclaim');
   // Separate test notice is real renderer delivery, never a monitored Agent completion.
   const config=await root.invoke('get_monitoring_settings');config.notifications=true;await root.invoke('save_monitoring_settings',{settings:config});
   await root.invoke('test_notification');notice=await page('/notice');
   await notice.wait(`document.body.innerText.includes('测试')`);
   await checkScales(notice,'notice',320,132);
-  await screenshot(notice,'notice-alpha7',320,132);
+  await screenshot(notice,'notice-current',320,132);
   await root.wait(`__TAURI_INTERNALS__.invoke('get_notification_log').then(r=>r.some(r=>r.test&&r.stage==='rendered'))`);
   assert.equal((await root.invoke('get_agents')).length,count);
   checks.push('real native test-notice rendering/delivery evidence without task import');
   assert.equal(errors.length,0,JSON.stringify(errors));
   if(process.argv.includes('--capture')){
     await mkdir('assets/screenshots',{recursive:true});
-    for(const name of ['dashboard-alpha7','sources-alpha7','notice-alpha7'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
+    for(const name of ['dashboard-current','sources-current','notice-current'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
   }
   const report={passed:true,checks,layout,scaleChecks,scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));

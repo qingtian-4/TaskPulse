@@ -94,7 +94,9 @@ Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前必须确�
 
 [`notifier.rs`](../src-tauri/src/notifier.rs) 根据总开关、popup/system/both 和 sound 分发，默认独立 popup。notice 队列最多 128 项；普通结果可自动收起，明确 blocker 没有自动关闭 timer，可轮换。每次 presentation 有独立 notice ID，旧 callback 不能关闭下一条。dismiss、详情、focus 不等于已读或批准。
 
-铃铛 inbox 从 durable Attention 恢复 unresolved requests，不重放旧生命周期通知。重新弹出要求匹配 source、fresh health、明确 pending ID 与 scope，stale/inferred 请求不可重开。`notification-log.json` 最多 500 条，只表示 queued/rendered/api_accepted 等投递阶段，不证明用户已读，不保存通知 body/命令/prompt。
+铃铛消息中心由独立 `message_center` 保存 Notification Seen，与 Attention 的 Task Unread、来源的 Request Pending 分开。明确 Transition 事件经设置/scope 过滤后生成稳定的 task/turn/request/category hash；同目录原子保存 200 条/256 KiB 的有界历史。阅读只确认实际可见行 ID 或显式全读快照 ID；后到消息不被之前的确认吞掉。初次升级不从 Attention 或 delivery log 生成历史新消息，重启阅读状态不复活。上下文临时关联当前 scope 内的 Attention，不持久化标题/参数/回复。读取失败保留原文件并写保护；写入失败可见错误，内存新事件可重试，已读写入失败回滚。
+
+Attention 仍提供折叠的历史待核对请求；重新弹出要求匹配 source、fresh health、明确 pending ID、turn 与 scope，stale/inferred 请求不可重开。手动重开不经过新消息记录。`notification-log.json` 最多 500 条，只表示 queued/rendered/api_accepted 等投递阶段，不证明用户已读，不保存通知 body/命令/prompt。
 
 **投递边界**：ledger 落盘到弹窗/系统 API 接收之间仍有崩溃窗口；Outbox ack 不证明用户看到提醒，没有端到端 exactly-once 可见投递保证。持久未读和请求 inbox 是恢复依据。
 
@@ -109,6 +111,7 @@ Attention v4 对可疑 v3 Claude 假历史作保守归档，迁移前必须确�
 | recent.json | HistoryStore 短期终态快照 | Store 30 分钟 TTL，重启 stale |
 | notifications.json | Transition ledger | native 集合可增长；integration ledger 100,000 项后阻止继续确认 |
 | notification-log.json | 投递证据 | 500 条，UI 最近 100 条，排除采集/监听触发 |
+| messages.json | 独立消息阅读状态，哈希身份与类别 | 200 条 / 256 KiB；不重建历史未读；排除监听触发，生命周期去重仍由 notifications.json 保证 |
 | integrations / source hash / events / session hash.jsonl | OS 锁 journal，epoch/sequence | session 32 MiB、source 128 MiB；超额明确拒绝 |
 | integrations / source hash / state / session hash.json | cursor/reducer/outbox checkpoint | checkpoint 16 MiB，outbox 4 MiB；每 journal 批次 128 facts / 256 KiB |
 | claude-events / session.jsonl 与 .json | Claude 独立 journal + compatibility checkpoint | 不属于 Generic Outbox；新 v3 activity 仅保留工具类别、root 用 hash；本地 cwd 用于项目范围，仍没有等价总磁盘预算 |

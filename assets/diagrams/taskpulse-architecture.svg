@@ -67,8 +67,8 @@
 <text x="87" y="675" font-size="14" fill="#acbfd7">CLI → Journal → reducer / Checkpoint / Outbox</text>
 <text x="87" y="695" font-size="12" fill="#88a0ba">Ordered facts enter above; ack after durable state flush</text>
 <rect x="541" y="655" width="673" height="86" rx="15" fill="#142e34" stroke="#328f92"/>
-<text x="563" y="690" font-size="20" fill="#e5fafa" font-weight="750">Tauri tray · Svelte dashboard · reminders</text>
-<text x="563" y="715" font-size="14" fill="#9ad0cb">Running · needs input · unread results · collection uncertainty</text>
+<text x="563" y="690" font-size="20" fill="#e5fafa" font-weight="750">Tray · dashboard · message center · reminders</text>
+<text x="563" y="715" font-size="14" fill="#9ad0cb">Message seen ≠ result viewed ≠ request resolved · stale stays uncertain</text>
 <text x="66" y="771" font-size="13" fill="#8fa8b1">Illustrative architecture — not a live screen or proof of host support. Upstream: sprklai/agenttray · MIT</text>
 </g>
 </svg>

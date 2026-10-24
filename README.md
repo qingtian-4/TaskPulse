@@ -6,11 +6,11 @@ Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex�
 
 [English](README.en.md) · [使用指南](docs/INSTALL.md) · [兼容性](docs/AGENT_COMPATIBILITY.md) · [架构](docs/ARCHITECTURE.md) · [提交问题](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **当前版本：0.2.0-alpha.7 · Windows 优先。** 已构建并通过 CI 测试的 Alpha.7 候选安装包，尚无公开可下载的 Alpha.7 安装包。下方源码安装指向默认分支 `main`；最新 WSL 连续性修复目前仍在开发分支，尚未包含在 Alpha.7 候选包中。[版本与发布验收](docs/OPEN_SOURCE_CHECKLIST.md)。
+> **Windows 优先 · 下一候选源码预览。** 应用版本号仍为 0.2.0-alpha.7，尚无公开可下载的 Alpha.7 安装包。下方源码安装指向默认分支 `main`；新版面板、消息中心和 Runtime 修复不在历史 Alpha.7 候选包内。按 main SHA 构建的 CI 附件与历史候选分开识别，不代表新版本已发布。[构建与发布规则](docs/RELEASING.md)。
 
 ## 一眼了解
 
-![TaskPulse Windows 原生任务面板](assets/screenshots/dashboard-alpha7.png)
+![TaskPulse Windows 原生任务面板](assets/screenshots/dashboard-current.png)
 
 *真实 Tauri/WebView2 窗口截图，使用隔离合成任务输入；不是实际 Agent 运行截图，也不代表所有适配器均通过宿主验收。*
 
@@ -19,14 +19,18 @@ Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex�
 | 按 Agent、项目与来源查看运行中的任务 | 区分需要授权、等待回答和普通工具调用 | 独立提醒、未读、固定和重启恢复 |
 | 思考、等待模型和工具执行仍算运行 | 不把日志静默、工具完成或断连猜成结束 | 采集失败时保留上次状态，标记待更新 |
 
+首页聚焦**进行中、待处理、待查看**；待处理属于进行中的一部分，计数不能相加。铃铛只统计未读消息；读消息不会解除原 Agent 的请求，也不会把任务结果标为已查看。
+
 <details>
-<summary>查看更多：来源管理与独立提醒（原生截图）</summary>
+<summary>查看更多：消息中心、来源管理与独立提醒（原生截图）</summary>
 
-![来源管理](assets/screenshots/sources-alpha7.png)
+![消息中心：消息已读与任务待处理相互独立](assets/screenshots/message-center-current.png)
 
-![独立测试提醒](assets/screenshots/notice-alpha7.png)
+![来源管理](assets/screenshots/sources-current.png)
 
-截图均为真实 WebView2 渲染；来源与任务来自**隔离合成输入**，提醒为明确标注的测试提醒。[素材与复现说明](assets/README.md)。
+![独立测试提醒](assets/screenshots/notice-current.png)
+
+截图均为真实 WebView2 渲染；来源与任务来自**隔离合成输入**，提醒为明确标注的测试提醒。旧 Alpha.7 截图保留为历史材料。[素材与复现说明](assets/README.md)。
 
 </details>
 
@@ -53,7 +57,7 @@ bun run tauri dev
 
 | 来源 | 已有能力 | 限制 |
 |---|---|---|
-| **Codex** | 本机原生会话；独立 WSL 来源；SSH 会话采集 | 大历史日志首次追赶可能需要时间；最新 WSL 修复尚未进入 main |
+| **Codex** | 本机原生会话；独立 WSL 来源；SSH 会话采集 | 大历史日志首次追赶可能需要时间；WSL 需 Python 3，且仅采集已运行的发行版 |
 | **Claude Code** | 本机记录；可选、经用户确认的 Hook | WSL/SSH 无专用 Provider |
 | **Hermes** | 本机 SQLite 与运行租约 | 租约消失不等于任务完成 |
 | **DeepSeek Harness** | Desktop/CLI，及独立 WSL 来源 | 本机账号额度不代表远程额度 |
@@ -72,7 +76,7 @@ bun run tauri dev
 1. **Provider 采集**：独立 Worker 获取各来源的日志、Hook、SQLite 或远程只读证据，保留来源身份、采集健康和新鲜度。
 2. **统一状态与关注**：通过来源/项目过滤、TaskStore、AttentionTracker 管理 Session/Turn、待处理请求、未读与固定。
 3. **可信通知**：TransitionEngine 只对可信的状态迁移产生提醒；标准事件通道使用 Journal、Checkpoint、Outbox 支撑有序恢复与去重。
-4. **桌面展示**：Rust / Tauri 2 + Svelte 5 显示任务面板、托盘状态和独立提醒；stale 不冒充新的运行或完成事实。
+4. **桌面展示**：Rust / Tauri 2 + Svelte 5 显示任务面板、独立消息中心、托盘状态和提醒；消息已读、结果待查看与请求待处理各自独立，stale 不冒充新的运行或完成事实。
 
 没有 TaskPulse 云账号或遥测服务。设置与关注通常保存在 `~/.taskpulse/`；本地活动和诊断可能包含路径、命令片段，请脱敏后分享。TaskPulse 不自动安装真实 Hook 或放宽审批策略。截图复现与录屏方案见 [演示说明](docs/DEMO_RECORDING_PLAN.md)。
 

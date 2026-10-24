@@ -1,10 +1,12 @@
-/** Read-only native WebView2 acceptance at CDP 9337. Never creates tasks,
- * changes scopes, acknowledges results or reopens a real user's prompt. */
+/** Isolated native WebView2 acceptance at CDP 9337. Reading the center
+ * persists notification seen; never acknowledges results or resolves requests. */
 import assert from 'node:assert/strict';
 import { createHash } from 'node:crypto';
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
-import { join } from 'node:path';
-const config=join(process.env.USERPROFILE!,'.taskpulse','config.toml');
+import { join, resolve } from 'node:path';
+assert.ok(process.env.TASKPULSE_HOME,'Use an isolated TASKPULSE_HOME, never the live profile');
+assert.notEqual(resolve(process.env.TASKPULSE_HOME).toLowerCase(),resolve(process.env.USERPROFILE!,'.taskpulse').toLowerCase());
+const config=join(process.env.TASKPULSE_HOME,'config.toml');
 const hash=async()=>createHash('sha256').update(await readFile(config)).digest('hex');
 const before=await hash();
 type Tab={url:string;webSocketDebuggerUrl:string};
@@ -19,24 +21,26 @@ const send=(method:string,params:any)=>new Promise<any>((ok,fail)=>{const n=++id
 const evaluate=async(expression:string)=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true});if(r.exceptionDetails)throw Error('Native evaluation failed');return r.result.value;};
 try {
   for(let n=0;n<100;n++){if(await evaluate(`!!document.querySelector('.dashboard')&&!!globalThis.__TAURI_INTERNALS__`))break;await Bun.sleep(100);}
+  const environment=await evaluate(`__TAURI_INTERNALS__.invoke('integration_environment')`);
+  assert.equal(resolve(environment.state_directory).toLowerCase(),resolve(process.env.TASKPULSE_HOME!).toLowerCase());
   const tasks=await evaluate(`__TAURI_INTERNALS__.invoke('get_agents')`);
   const prompts=await evaluate(`__TAURI_INTERNALS__.invoke('get_pending_task_prompts')`);
   assert.ok(Array.isArray(tasks)&&Array.isArray(prompts));
-  assert.ok(prompts.every((t:any)=>!t.internal&&t.status==='waiting_input'&&['approval','question'].includes(t.waiting_reason)));
-  await evaluate(`document.querySelector('.counts .total').click()`);
+  assert.ok(prompts.every((t:any)=>!t.internal&&t.status==='waiting_input'&&['approval','question','quota_exhausted'].includes(t.waiting_reason)));
+  await evaluate(`document.querySelector('.all-tasks').click()`);
   await Bun.sleep(300);
   const sections=await evaluate(`[...document.querySelectorAll('main section h2')].map(e=>e.firstChild.textContent.trim())`);
   const order=['进行中','结果待查看','状态待更新','固定与已查看'];
   assert.ok(sections.every((name:string)=>order.includes(name)));
   assert.deepEqual(sections,[...sections].sort((a:string,b:string)=>order.indexOf(a)-order.indexOf(b)));
-  await evaluate(`document.querySelector('[aria-label^="查看未解决请求："]').click()`);
+  await evaluate(`document.querySelector('[aria-label^="消息中心："]').click()`);
   await Bun.sleep(200);
-  const rows=await evaluate(`document.querySelectorAll('.prompt-item').length`);
+  const rows=await evaluate(`document.querySelectorAll('.pending-item').length`);
   assert.equal(rows,prompts.length);
-  assert.ok(await evaluate(`document.querySelector('.prompt-inbox')?.textContent.includes('重启后从关注记录恢复')`));
+  assert.ok(await evaluate(`document.querySelector('.message-center')?.textContent.includes('不会批准或解除请求')`));
   const layout=await evaluate(`({width:document.querySelector('.dashboard').getBoundingClientRect().width,height:document.querySelector('.dashboard').getBoundingClientRect().height,overflow:document.documentElement.scrollWidth>innerWidth,errors:[...document.querySelectorAll('[role=alert]')].length})`);
   assert.ok(layout.width<=440.1&&layout.height<=720.1&&!layout.overflow&&!layout.errors);
-  await evaluate(`document.querySelector('[aria-label^="查看未解决请求："]').click()`);
+  await evaluate(`document.querySelector('[aria-label="关闭消息中心"]').click()`);
   assert.equal(await hash(),before,'Read-only inbox acceptance changed config');
   const result={passed:true,taskCount:tasks.length,promptCount:prompts.length,sections,layout,checks:['actual native IPC','semantic section ordering','persistent prompt catalog','inbox rendering','bounded native panel','config unchanged'],notVerified:['real fresh Hook approval/reopen/resolution','editor focus','cross-version installer upgrade','long-run P95 latency']};
   await mkdir('src-tauri/target/ui-smoke',{recursive:true});
