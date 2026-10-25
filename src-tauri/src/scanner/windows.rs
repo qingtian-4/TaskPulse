@@ -1,7 +1,8 @@
 use std::collections::HashMap;
+use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Output, Stdio};
+use std::process::{ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -23,6 +24,7 @@ $ErrorActionPreference = 'Stop'
 "#;
 
 const MAX_PROCESS_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+const MAX_AUXILIARY_OUTPUT_BYTES: usize = 64 * 1024;
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "PascalCase")]
@@ -53,6 +55,7 @@ fn process_snapshot() -> Option<HashMap<u32, ProcessRecord>> {
             PROCESS_SNAPSHOT_SCRIPT,
         ],
         Duration::from_secs(2),
+        MAX_PROCESS_SNAPSHOT_BYTES,
     )?;
     if !output.status.success() || output.stdout.len() > MAX_PROCESS_SNAPSHOT_BYTES {
         return None;
@@ -76,24 +79,95 @@ fn hidden_command(program: &str) -> std::process::Command {
     command
 }
 
-fn hidden_output(program: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+fn hidden_output(
+    program: &str,
+    args: &[&str],
+    timeout: Duration,
+    max_output_bytes: usize,
+) -> Option<Output> {
     let mut child = hidden_command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
         .ok()?;
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return child.wait_with_output().ok(),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
-            _ => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
+    let mut stdout = child.stdout.take()?;
+    let (output_tx, output_rx) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let mut output = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stdout.read(&mut chunk) {
+                Ok(0) => {
+                    let _ = output_tx.send(Ok(output));
+                    return;
+                }
+                Ok(read) => {
+                    if output.len().saturating_add(read) > max_output_bytes {
+                        let _ = output_tx.send(Err(()));
+                        return;
+                    }
+                    output.extend_from_slice(&chunk[..read]);
+                }
+                Err(_) => {
+                    let _ = output_tx.send(Err(()));
+                    return;
+                }
             }
         }
+    });
+    let deadline = Instant::now() + timeout;
+    let mut status: Option<ExitStatus> = None;
+    let mut stdout_result = None;
+    loop {
+        if status.is_none() {
+            match child.try_wait() {
+                Ok(Some(exit)) => status = Some(exit),
+                Ok(None) => {}
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = reader.join();
+                    return None;
+                }
+            }
+        }
+        if stdout_result.is_none() {
+            match output_rx.try_recv() {
+                Ok(result) => stdout_result = Some(result),
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    let _ = reader.join();
+                    return None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+            }
+        }
+        if matches!(stdout_result, Some(Err(()))) {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return None;
+        }
+        if let Some(Ok(stdout)) = stdout_result.take() {
+            if let Some(status) = status.take() {
+                let _ = reader.join();
+                return status.success().then_some(Output {
+                    status,
+                    stdout,
+                    stderr: Vec::new(),
+                });
+            }
+            stdout_result = Some(Ok(stdout));
+        }
+        if Instant::now() >= deadline {
+            let _ = child.kill();
+            let _ = child.wait();
+            let _ = reader.join();
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(10));
     }
 }
 
@@ -284,6 +358,7 @@ fn powershell_window_title(pid: u32) -> Option<String> {
         "powershell",
         &["-NoProfile", "-Command", &cmd],
         Duration::from_secs(1),
+        MAX_AUXILIARY_OUTPUT_BYTES,
     )?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if name.is_empty() {
@@ -315,6 +390,7 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
         "powershell",
         &["-NoProfile", "-NonInteractive", "-Command", &script],
         Duration::from_secs(2),
+        MAX_AUXILIARY_OUTPUT_BYTES,
     )?;
     let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if val.is_empty() {
@@ -329,7 +405,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn cim_snapshot_parses_command_lines_and_cpu_times_without_csv_splitting() {
+    fn cim_snapshot_parses_single_and_multi_process_json_without_csv_splitting() {
         let json = r#"[{"Name":"codex.exe","ProcessId":42,"ParentProcessId":7,"CommandLine":"codex --project C:\\work,中文","UserModeTime":1200000,"KernelModeTime":3400000}]"#
             .as_bytes();
         let rows: Vec<ProcessRecord> = serde_json::from_slice(json).unwrap();
@@ -342,13 +418,16 @@ mod tests {
         );
         assert_eq!(rows[0].user_mode_time, Some(1_200_000));
         assert_eq!(rows[0].kernel_mode_time, Some(3_400_000));
+        let multi = br#"[{"Name":"one.exe","ProcessId":1},{"Name":"two.exe","ProcessId":2}]"#;
+        let rows: Vec<ProcessRecord> = serde_json::from_slice(multi).unwrap();
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[1].process_id, Some(2));
     }
 
     #[test]
-    fn empty_or_malformed_cim_output_is_not_a_successful_snapshot() {
-        assert!(serde_json::from_slice::<Vec<ProcessRecord>>(b"[]")
-            .unwrap()
-            .is_empty());
+    fn empty_json_is_distinct_from_malformed_cim_output() {
+        let empty = serde_json::from_slice::<Vec<ProcessRecord>>(b"[]").unwrap();
+        assert!(empty.is_empty());
         assert!(serde_json::from_slice::<Vec<ProcessRecord>>(b"not-json").is_err());
     }
 }
