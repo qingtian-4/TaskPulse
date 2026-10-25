@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use tauri::Manager;
@@ -161,11 +161,7 @@ pub fn status_dir() -> Option<PathBuf> {
 }
 
 /// Cached latest merged task list for on-demand popup refresh.
-static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
 static SELECTED_TASK: Mutex<Option<TaskSnapshot>> = Mutex::new(None);
-static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
-static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
-static LATEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
 static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
 
@@ -175,6 +171,26 @@ pub struct DashboardSnapshot {
     pub tasks: Vec<TaskSnapshot>,
     pub hosts: Vec<HostHealth>,
     pub providers: Vec<ProviderHealth>,
+}
+
+static LATEST_DASHBOARD: Mutex<DashboardSnapshot> = Mutex::new(DashboardSnapshot {
+    revision: 0,
+    tasks: Vec::new(),
+    hosts: Vec::new(),
+    providers: Vec::new(),
+});
+
+fn commit_dashboard_snapshot(
+    latest: &mut DashboardSnapshot,
+    tasks: &[TaskSnapshot],
+    hosts: &[HostHealth],
+    providers: &[ProviderHealth],
+) -> DashboardSnapshot {
+    latest.revision = latest.revision.saturating_add(1);
+    latest.tasks = tasks.to_vec();
+    latest.hosts = hosts.to_vec();
+    latest.providers = providers.to_vec();
+    latest.clone()
 }
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
@@ -339,28 +355,13 @@ fn emit_agents(
     providers: &[ProviderHealth],
 ) {
     log::info!("emit_agents: {} tasks, {} hosts", tasks.len(), hosts.len());
-    {
-        let mut cache = LATEST_TASKS.lock().unwrap_or_else(|e| {
-            log::warn!("LATEST_TASKS mutex poisoned, recovering");
+    let snapshot = {
+        let mut latest = LATEST_DASHBOARD.lock().unwrap_or_else(|e| {
+            log::warn!("LATEST_DASHBOARD mutex poisoned, recovering");
             e.into_inner()
         });
-        *cache = tasks.to_vec();
-    }
-    {
-        let mut cache = LATEST_HOSTS.lock().unwrap_or_else(|e| {
-            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
-            e.into_inner()
-        });
-        *cache = hosts.to_vec();
-    }
-    {
-        let mut cache = LATEST_PROVIDERS.lock().unwrap_or_else(|e| {
-            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
-            e.into_inner()
-        });
-        *cache = providers.to_vec();
-    }
-    let revision = LATEST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
+        commit_dashboard_snapshot(&mut latest, tasks, hosts, providers)
+    };
     crate::tray::update_icon(app, tasks, hosts);
     crate::message_center::publish(app);
     let _ = app.emit(
@@ -368,15 +369,7 @@ fn emit_agents(
         crate::task_notice::get_pending_task_prompts(),
     );
     let _ = app.emit("agents-updated", tasks);
-    let _ = app.emit(
-        "dashboard-snapshot-updated",
-        DashboardSnapshot {
-            revision,
-            tasks: tasks.to_vec(),
-            hosts: hosts.to_vec(),
-            providers: providers.to_vec(),
-        },
-    );
+    let _ = app.emit("dashboard-snapshot-updated", &snapshot);
     static ARCHIVED: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
     let archived = get_archived_attention();
     let mut previous = ARCHIVED.lock().unwrap_or_else(|e| e.into_inner());
@@ -394,41 +387,22 @@ fn emit_agents(
 
 /// Re-emit the last known task list (used when popup opens).
 pub fn emit_latest(app: &AppHandle) {
-    let tasks = LATEST_TASKS
+    let snapshot = latest_dashboard_snapshot();
+    crate::tray::update_icon(app, &snapshot.tasks, &snapshot.hosts);
+    let _ = app.emit("agents-updated", &snapshot.tasks);
+    let _ = app.emit("dashboard-snapshot-updated", &snapshot);
+    let _ = app.emit("hosts-updated", &snapshot.hosts);
+    let _ = app.emit("providers-updated", &snapshot.providers);
+}
+
+fn latest_dashboard_snapshot() -> DashboardSnapshot {
+    LATEST_DASHBOARD
         .lock()
         .unwrap_or_else(|e| {
-            log::warn!("LATEST_TASKS mutex poisoned, recovering");
+            log::warn!("LATEST_DASHBOARD mutex poisoned, recovering");
             e.into_inner()
         })
-        .clone();
-    let hosts = LATEST_HOSTS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone();
-    let providers = LATEST_PROVIDERS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone();
-    let revision = LATEST_GENERATION.load(Ordering::Acquire);
-    crate::tray::update_icon(app, &tasks, &hosts);
-    let _ = app.emit("agents-updated", &tasks);
-    let _ = app.emit(
-        "dashboard-snapshot-updated",
-        DashboardSnapshot {
-            revision,
-            tasks: tasks.clone(),
-            hosts: hosts.clone(),
-            providers: providers.clone(),
-        },
-    );
-    let _ = app.emit("hosts-updated", &hosts);
-    let _ = app.emit("providers-updated", &providers);
+        .clone()
 }
 
 /// Tauri command: return the platform-appropriate status directory path.
@@ -442,85 +416,26 @@ pub fn get_status_dir() -> String {
 /// Tauri command: return cached tasks (called by frontend on mount).
 #[tauri::command]
 pub fn get_agents() -> Vec<TaskSnapshot> {
-    let tasks = LATEST_TASKS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_TASKS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone();
+    let tasks = latest_dashboard_snapshot().tasks;
     log::info!("get_agents: returning {} tasks", tasks.len());
     tasks
 }
 
 #[tauri::command]
 pub fn get_dashboard_snapshot() -> DashboardSnapshot {
-    // Read a coherent generation. A watcher update can replace the three
-    // caches between individual locks; retrying when the generation changes
-    // prevents an older task list from being paired with newer provider health.
-    for _ in 0..3 {
-        let before = LATEST_GENERATION.load(Ordering::Acquire);
-        let tasks = LATEST_TASKS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let hosts = LATEST_HOSTS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let providers = LATEST_PROVIDERS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone();
-        let after = LATEST_GENERATION.load(Ordering::Acquire);
-        if before == after {
-            return DashboardSnapshot {
-                revision: after,
-                tasks,
-                hosts,
-                providers,
-            };
-        }
-    }
-    DashboardSnapshot {
-        revision: LATEST_GENERATION.load(Ordering::Acquire),
-        tasks: LATEST_TASKS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
-        hosts: LATEST_HOSTS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
-        providers: LATEST_PROVIDERS
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .clone(),
-    }
+    latest_dashboard_snapshot()
 }
 
 /// Tauri command: return cached remote-host health with the cached tasks.
 #[tauri::command]
 pub fn get_hosts() -> Vec<HostHealth> {
-    LATEST_HOSTS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone()
+    latest_dashboard_snapshot().hosts
 }
 
 /// Tauri command: return cached local-provider health.
 #[tauri::command]
 pub fn get_providers() -> Vec<ProviderHealth> {
-    LATEST_PROVIDERS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone()
+    latest_dashboard_snapshot().providers
 }
 
 /// Tauri command: ask every provider to poll again instead of merely returning
@@ -1826,6 +1741,84 @@ mod tests {
             .all(|item| item.status == ProviderStatus::Degraded && item.last_success.is_none()));
         assert_eq!(health[0].provider, "state:attention");
         assert_eq!(health[1].provider, "state:notifications");
+    }
+
+    #[test]
+    fn dashboard_snapshot_competes_without_mixed_batches_and_reopens_consistently() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let store = Arc::new(Mutex::new(DashboardSnapshot {
+            revision: 0,
+            tasks: Vec::new(),
+            hosts: Vec::new(),
+            providers: Vec::new(),
+        }));
+        let start = Arc::new(Barrier::new(3));
+        let mut producers = Vec::new();
+        for prefix in ["producer-a", "producer-b"] {
+            let store = Arc::clone(&store);
+            let start = Arc::clone(&start);
+            producers.push(thread::spawn(move || {
+                start.wait();
+                for n in 0..25 {
+                    let task_id = format!("{prefix}-{n}");
+                    let host_id = format!("host-{prefix}-{n}");
+                    let provider_id = format!("provider-{prefix}-{n}");
+                    let task = TaskSnapshot::new(
+                        task_id,
+                        "snapshot",
+                        TaskSource::GenericEvent,
+                        TaskStatus::Running,
+                        DetectionConfidence::Hook,
+                        SystemTime::now(),
+                    );
+                    let host = HostHealth::connected(host_id, SystemTime::now());
+                    let provider = ProviderHealth {
+                        provider: provider_id,
+                        status: ProviderStatus::Connected,
+                        last_success: Some(SystemTime::now()),
+                        last_attempt: Some(SystemTime::now()),
+                        message: None,
+                    };
+                    let mut latest = store.lock().unwrap();
+                    commit_dashboard_snapshot(&mut latest, &[task], &[host], &[provider]);
+                }
+            }));
+        }
+        let reader_store = Arc::clone(&store);
+        let reader_start = Arc::clone(&start);
+        let reader = thread::spawn(move || {
+            reader_start.wait();
+            let mut seen = Vec::new();
+            for _ in 0..200 {
+                let snapshot = reader_store.lock().unwrap().clone();
+                if snapshot.revision > 0 {
+                    let task = &snapshot.tasks[0].id;
+                    let host = &snapshot.hosts[0].host;
+                    let provider = &snapshot.providers[0].provider;
+                    let marker = task.strip_prefix("producer-").unwrap();
+                    assert_eq!(host.strip_prefix("host-producer-").unwrap(), marker);
+                    assert_eq!(provider.strip_prefix("provider-producer-").unwrap(), marker);
+                    seen.push(snapshot);
+                }
+                thread::yield_now();
+            }
+            seen
+        });
+        let snapshots = reader.join().unwrap();
+        for producer in producers {
+            producer.join().unwrap();
+        }
+        let final_snapshot = store.lock().unwrap().clone();
+        assert_eq!(final_snapshot.revision, 50);
+        assert_eq!(final_snapshot.tasks.len(), 1);
+        assert!(!snapshots.is_empty());
+        let reopened = final_snapshot.clone();
+        assert_eq!(reopened.revision, final_snapshot.revision);
+        assert_eq!(reopened.tasks, final_snapshot.tasks);
+        assert_eq!(reopened.hosts, final_snapshot.hosts);
+        assert_eq!(reopened.providers, final_snapshot.providers);
     }
 
     fn r03_source() -> crate::monitoring::SourceConfig {

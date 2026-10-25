@@ -197,7 +197,6 @@
       try {
         await subscribe(listen<DashboardSnapshot>('dashboard-snapshot-updated',e=>{if(e.payload.revision>=dashboardRevision){dashboardRevision=e.payload.revision;tasks=e.payload.tasks;providers=e.payload.providers;}}));
         await subscribe(listen<TaskSnapshot[]>('archived-attention-updated',e=>archived=e.payload));
-        await subscribe(listen<ProviderHealth[]>('providers-updated',e=>providers=e.payload));
         await subscribe(listen<TaskSnapshot[]>('pending-prompts-updated',e=>pendingPrompts=e.payload));
         await subscribe(listen<MessageCenterState>('messages-updated',e=>{messagesEpoch++;messages=acceptMessageState(messages,e.payload);}));
         await subscribe(listen<CodexAccountQuota>('codex-quota-updated',e=>quota=e.payload));

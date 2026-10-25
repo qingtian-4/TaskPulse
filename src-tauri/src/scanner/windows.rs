@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{ExitStatus, Output, Stdio};
+use std::process::{Child, ExitStatus, Output, Stdio};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
@@ -40,6 +40,16 @@ struct ProcessRecord {
 static PROCESS_SNAPSHOT: OnceLock<Mutex<HashMap<u32, ProcessRecord>>> = OnceLock::new();
 static LAST_SCAN_SUCCEEDED: AtomicBool = AtomicBool::new(true);
 
+#[derive(Debug, PartialEq, Eq)]
+enum ProbeError {
+    Spawn,
+    Read,
+    OutputLimit,
+    Timeout,
+    Kill,
+    Wait,
+}
+
 pub fn last_scan_succeeded() -> bool {
     LAST_SCAN_SUCCEEDED.load(Ordering::Relaxed)
 }
@@ -56,7 +66,8 @@ fn process_snapshot() -> Option<HashMap<u32, ProcessRecord>> {
         ],
         Duration::from_secs(2),
         MAX_PROCESS_SNAPSHOT_BYTES,
-    )?;
+    )
+    .ok()?;
     if !output.status.success() || output.stdout.len() > MAX_PROCESS_SNAPSHOT_BYTES {
         return None;
     }
@@ -79,42 +90,75 @@ fn hidden_command(program: &str) -> std::process::Command {
     command
 }
 
+fn read_bounded<R: Read>(mut reader: R, max_output_bytes: usize) -> Result<Vec<u8>, ProbeError> {
+    let mut output = Vec::new();
+    let mut chunk = [0u8; 8192];
+    loop {
+        match reader.read(&mut chunk) {
+            Ok(0) => return Ok(output),
+            Ok(read) => {
+                if output.len().saturating_add(read) > max_output_bytes {
+                    return Err(ProbeError::OutputLimit);
+                }
+                output.extend_from_slice(&chunk[..read]);
+            }
+            Err(_) => return Err(ProbeError::Read),
+        }
+    }
+}
+
+fn terminate_process_tree(child: &mut Child, wait_budget: Duration) -> Result<(), ProbeError> {
+    let pid = child.id().to_string();
+    let direct_kill = child.kill().is_ok();
+    let mut tree_kill = hidden_command("taskkill")
+        .args(["/PID", &pid, "/T", "/F"])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .spawn()
+        .map_err(|_| ProbeError::Kill)?;
+    let tree_deadline = Instant::now() + wait_budget.min(Duration::from_millis(500));
+    loop {
+        match tree_kill.try_wait() {
+            Ok(Some(_)) => break,
+            Ok(None) if Instant::now() < tree_deadline => {
+                std::thread::sleep(Duration::from_millis(5))
+            }
+            Ok(None) => {
+                let _ = tree_kill.kill();
+                let _ = tree_kill.wait();
+                break;
+            }
+            Err(_) => break,
+        }
+    }
+    let deadline = Instant::now() + wait_budget;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return Ok(()),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
+            Ok(None) => return Err(ProbeError::Wait),
+            Err(_) if direct_kill => return Err(ProbeError::Wait),
+            Err(_) => return Err(ProbeError::Kill),
+        }
+    }
+}
+
 fn hidden_output(
     program: &str,
     args: &[&str],
     timeout: Duration,
     max_output_bytes: usize,
-) -> Option<Output> {
+) -> Result<Output, ProbeError> {
     let mut child = hidden_command(program)
         .args(args)
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
         .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
+        .map_err(|_| ProbeError::Spawn)?;
+    let stdout = child.stdout.take().ok_or(ProbeError::Read)?;
     let (output_tx, output_rx) = std::sync::mpsc::channel();
     let reader = std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let mut chunk = [0u8; 8192];
-        loop {
-            match stdout.read(&mut chunk) {
-                Ok(0) => {
-                    let _ = output_tx.send(Ok(output));
-                    return;
-                }
-                Ok(read) => {
-                    if output.len().saturating_add(read) > max_output_bytes {
-                        let _ = output_tx.send(Err(()));
-                        return;
-                    }
-                    output.extend_from_slice(&chunk[..read]);
-                }
-                Err(_) => {
-                    let _ = output_tx.send(Err(()));
-                    return;
-                }
-            }
-        }
+        let _ = output_tx.send(read_bounded(stdout, max_output_bytes));
     });
     let deadline = Instant::now() + timeout;
     let mut status: Option<ExitStatus> = None;
@@ -125,10 +169,9 @@ fn hidden_output(
                 Ok(Some(exit)) => status = Some(exit),
                 Ok(None) => {}
                 Err(_) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    let _ = terminate_process_tree(&mut child, Duration::from_millis(500));
                     let _ = reader.join();
-                    return None;
+                    return Err(ProbeError::Wait);
                 }
             }
         }
@@ -136,36 +179,37 @@ fn hidden_output(
             match output_rx.try_recv() {
                 Ok(result) => stdout_result = Some(result),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    let _ = child.kill();
-                    let _ = child.wait();
+                    let _ = terminate_process_tree(&mut child, Duration::from_millis(500));
                     let _ = reader.join();
-                    return None;
+                    return Err(ProbeError::Read);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
-        if matches!(stdout_result, Some(Err(()))) {
-            let _ = child.kill();
-            let _ = child.wait();
+        if let Some(Err(error)) = stdout_result {
+            let _ = terminate_process_tree(&mut child, Duration::from_millis(500));
             let _ = reader.join();
-            return None;
+            return Err(error);
         }
         if let Some(Ok(stdout)) = stdout_result.take() {
             if let Some(status) = status.take() {
                 let _ = reader.join();
-                return status.success().then_some(Output {
-                    status,
-                    stdout,
-                    stderr: Vec::new(),
-                });
+                return if status.success() {
+                    Ok(Output {
+                        status,
+                        stdout,
+                        stderr: Vec::new(),
+                    })
+                } else {
+                    Err(ProbeError::Wait)
+                };
             }
             stdout_result = Some(Ok(stdout));
         }
         if Instant::now() >= deadline {
-            let _ = child.kill();
-            let _ = child.wait();
+            let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
             let _ = reader.join();
-            return None;
+            return Err(reap.err().unwrap_or(ProbeError::Timeout));
         }
         std::thread::sleep(Duration::from_millis(10));
     }
@@ -359,7 +403,8 @@ fn powershell_window_title(pid: u32) -> Option<String> {
         &["-NoProfile", "-Command", &cmd],
         Duration::from_secs(1),
         MAX_AUXILIARY_OUTPUT_BYTES,
-    )?;
+    )
+    .ok()?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if name.is_empty() {
         None
@@ -391,7 +436,8 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
         &["-NoProfile", "-NonInteractive", "-Command", &script],
         Duration::from_secs(2),
         MAX_AUXILIARY_OUTPUT_BYTES,
-    )?;
+    )
+    .ok()?;
     let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if val.is_empty() {
         None
@@ -403,6 +449,7 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Cursor;
 
     #[test]
     fn cim_snapshot_parses_single_and_multi_process_json_without_csv_splitting() {
@@ -429,6 +476,121 @@ mod tests {
         let empty = serde_json::from_slice::<Vec<ProcessRecord>>(b"[]").unwrap();
         assert!(empty.is_empty());
         assert!(serde_json::from_slice::<Vec<ProcessRecord>>(b"not-json").is_err());
+    }
+
+    #[test]
+    fn bounded_probe_reader_rejects_output_and_io_failures() {
+        assert_eq!(
+            read_bounded(Cursor::new(vec![b'x'; 9]), 8),
+            Err(ProbeError::OutputLimit)
+        );
+        struct FailingReader;
+        impl Read for FailingReader {
+            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
+                Err(std::io::Error::other("injected reader failure"))
+            }
+        }
+        assert_eq!(read_bounded(FailingReader, 8), Err(ProbeError::Read));
+    }
+
+    #[test]
+    fn powershell_timeout_has_a_bounded_reap() {
+        let started = Instant::now();
+        let result = hidden_output(
+            "powershell",
+            &[
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Sleep -Seconds 10",
+            ],
+            Duration::from_millis(200),
+            MAX_PROCESS_SNAPSHOT_BYTES,
+        );
+        assert!(matches!(
+            result,
+            Err(ProbeError::Timeout | ProbeError::Wait)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn oversized_snapshot_is_rejected_before_process_exit() {
+        let result = hidden_output(
+            "powershell",
+            &[
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "$b=New-Object byte[] 9000000; [Console]::OpenStandardOutput().Write($b,0,$b.Length)",
+            ],
+            Duration::from_secs(5),
+            MAX_PROCESS_SNAPSHOT_BYTES,
+        );
+        assert_eq!(result, Err(ProbeError::OutputLimit));
+    }
+
+    #[test]
+    fn descendant_stdout_handle_is_reaped_with_the_parent_tree() {
+        let started = Instant::now();
+        let result = hidden_output(
+            "powershell",
+            &[
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 10' -NoNewWindow; Start-Sleep -Seconds 10",
+            ],
+            Duration::from_millis(200),
+            MAX_PROCESS_SNAPSHOT_BYTES,
+        );
+        assert!(matches!(
+            result,
+            Err(ProbeError::Timeout | ProbeError::Wait)
+        ));
+        assert!(started.elapsed() < Duration::from_secs(3));
+    }
+
+    #[test]
+    fn repeated_probe_failures_recover_without_poisoning_the_next_sample() {
+        for _ in 0..3 {
+            let result = hidden_output(
+                "powershell",
+                &[
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Start-Sleep -Seconds 10",
+                ],
+                Duration::from_millis(100),
+                MAX_PROCESS_SNAPSHOT_BYTES,
+            );
+            assert!(matches!(
+                result,
+                Err(ProbeError::Timeout | ProbeError::Wait)
+            ));
+        }
+        let recovered = hidden_output(
+            "powershell",
+            &[
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Write-Output recovered",
+            ],
+            Duration::from_secs(2),
+            MAX_PROCESS_SNAPSHOT_BYTES,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&recovered.stdout).trim(),
+            "recovered"
+        );
     }
 }
 
