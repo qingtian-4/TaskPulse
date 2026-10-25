@@ -1,15 +1,66 @@
 use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
+use std::process::{Output, Stdio};
+use std::sync::{Mutex, OnceLock};
+use std::time::{Duration, Instant};
 
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 use super::{known_terminal, ProcInfo, WindowCache};
 use crate::watcher::TerminalInfo;
+use serde::Deserialize;
 
 type StrategyMatch<'a> = (ProcInfo, &'a dyn CliStrategy);
 type ProcessScan<'a> = (Vec<StrategyMatch<'a>>, HashMap<u32, u32>);
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+const PROCESS_SNAPSHOT_SCRIPT: &str = r#"
+$ErrorActionPreference = 'Stop'
+@(Get-CimInstance -ClassName Win32_Process |
+  Select-Object Name,ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime) |
+  ConvertTo-Json -Compress -Depth 2
+"#;
+
+const MAX_PROCESS_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Clone, Debug, Deserialize)]
+#[serde(rename_all = "PascalCase")]
+struct ProcessRecord {
+    name: Option<String>,
+    process_id: Option<u32>,
+    parent_process_id: Option<u32>,
+    command_line: Option<String>,
+    user_mode_time: Option<u64>,
+    kernel_mode_time: Option<u64>,
+}
+
+static PROCESS_SNAPSHOT: OnceLock<Mutex<HashMap<u32, ProcessRecord>>> = OnceLock::new();
+
+fn process_snapshot() -> Option<HashMap<u32, ProcessRecord>> {
+    let output = hidden_output(
+        "powershell",
+        &[
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            PROCESS_SNAPSHOT_SCRIPT,
+        ],
+        Duration::from_secs(2),
+    )?;
+    if !output.status.success() || output.stdout.len() > MAX_PROCESS_SNAPSHOT_BYTES {
+        return None;
+    }
+    let rows: Vec<ProcessRecord> = serde_json::from_slice(&output.stdout).ok()?;
+    let snapshot = rows
+        .into_iter()
+        .filter_map(|row| row.process_id.map(|pid| (pid, row)))
+        .collect::<HashMap<_, _>>();
+    if snapshot.is_empty() {
+        return None;
+    }
+    Some(snapshot)
+}
 
 fn hidden_command(program: &str) -> std::process::Command {
     let mut command = std::process::Command::new(program);
@@ -19,61 +70,64 @@ fn hidden_command(program: &str) -> std::process::Command {
     command
 }
 
+fn hidden_output(program: &str, args: &[&str], timeout: Duration) -> Option<Output> {
+    let mut child = hidden_command(program)
+        .args(args)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    let deadline = Instant::now() + timeout;
+    loop {
+        match child.try_wait() {
+            Ok(Some(_)) => return child.wait_with_output().ok(),
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(10)),
+            _ => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return None;
+            }
+        }
+    }
+}
+
 /// Find CLI processes matching any registered strategy.
 pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_> {
-    // Build wmic filter for all strategy process names + script runtimes
-    let all_names: Vec<&str> = strategies
-        .iter()
-        .flat_map(|s| s.process_names().iter().copied())
-        .chain(SCRIPT_RUNTIMES.iter().copied())
-        .collect();
-    if all_names.is_empty() {
+    if strategies.is_empty() {
         return (Vec::new(), HashMap::new());
     }
 
-    // Query all potential agent processes in one wmic call
-    let name_filter = all_names
-        .iter()
-        .map(|n| format!("name='{}.exe'", n))
-        .collect::<Vec<_>>()
-        .join(" or ");
-
-    let output = match hidden_command("wmic")
-        .args([
-            "process",
-            "where",
-            &name_filter,
-            "get",
-            "ProcessId,ParentProcessId,CommandLine,Name",
-            "/FORMAT:CSV",
-        ])
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return (Vec::new(), HashMap::new()),
+    let Some(snapshot) = process_snapshot() else {
+        return (Vec::new(), HashMap::new());
     };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
+    let cache = PROCESS_SNAPSHOT.get_or_init(|| Mutex::new(HashMap::new()));
+    *cache.lock().unwrap_or_else(|error| error.into_inner()) = snapshot.clone();
     let mut out = Vec::new();
-    let mut ppid_map = HashMap::new();
+    let ppid_map = snapshot
+        .iter()
+        .filter_map(|(pid, row)| row.parent_process_id.map(|parent| (*pid, parent)))
+        .collect::<HashMap<_, _>>();
 
-    for line in stdout.lines().skip(1) {
-        let cols: Vec<&str> = line.split(',').collect();
-        // CSV format: Node,CommandLine,Name,ParentProcessId,ProcessId
-        if cols.len() < 5 {
+    for row in snapshot.values() {
+        let Some(pid) = row.process_id else { continue };
+        let cmd_line = row.command_line.as_deref().unwrap_or("");
+        let proc_name = row
+            .name
+            .as_deref()
+            .unwrap_or("")
+            .trim()
+            .strip_suffix(".exe")
+            .unwrap_or(row.name.as_deref().unwrap_or("").trim());
+        if proc_name.is_empty() {
             continue;
         }
 
-        let cmd_line = cols[1];
-        let proc_name = cols[2]
-            .trim()
-            .strip_suffix(".exe")
-            .unwrap_or(cols[2].trim());
-
         // Phase 1: Direct process name match (native binaries)
-        let strategy = strategies
-            .iter()
-            .find(|s| s.process_names().contains(&proc_name));
+        let strategy = strategies.iter().find(|s| {
+            s.process_names()
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(proc_name))
+        });
 
         // Phase 2: If process is a script runtime, check CommandLine for script names
         let strategy = match strategy {
@@ -108,18 +162,14 @@ pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_
             continue;
         }
 
-        let pid: u32 = match cols[4].trim().parse() {
-            Ok(p) => p,
-            Err(_) => continue,
-        };
-        let ppid: u32 = cols[3].trim().parse().unwrap_or(0);
-        ppid_map.insert(pid, ppid);
+        let ppid = row.parent_process_id.unwrap_or(0);
 
         // CWD is hard to get on Windows without elevated privileges
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("C:\\"));
 
-        // Get CPU times (100-nanosecond units) via wmic
-        let (utime, stime) = wmic_cpu_times(pid);
+        // Get CPU times from the same CIM snapshot (100-nanosecond units).
+        let utime = row.user_mode_time.unwrap_or(0) / 100_000;
+        let stime = row.kernel_mode_time.unwrap_or(0) / 100_000;
 
         out.push((
             ProcInfo {
@@ -149,6 +199,9 @@ fn is_console_shell(label: &str) -> bool {
 }
 
 pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {
+    let snapshot = PROCESS_SNAPSHOT
+        .get()
+        .and_then(|cache| cache.lock().ok().map(|snapshot| snapshot.clone()))?;
     let mut cur = p.ppid;
     let mut term_label = String::new();
     let mut term_pid: u32 = 0;
@@ -161,29 +214,8 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
             break;
         }
 
-        let output = hidden_command("wmic")
-            .args([
-                "process",
-                "where",
-                &format!("ProcessId={}", cur),
-                "get",
-                "ParentProcessId,Name",
-                "/FORMAT:CSV",
-            ])
-            .output()
-            .ok()?;
-
-        let stdout = String::from_utf8_lossy(&output.stdout);
-        // CSV: Node,Name,ParentProcessId
-        let line = stdout
-            .lines()
-            .find(|l| !l.trim().is_empty() && !l.contains("Node"))?;
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() < 3 {
-            break;
-        }
-
-        let exe_name = cols[1].trim();
+        let record = snapshot.get(&cur)?;
+        let exe_name = record.name.as_deref().unwrap_or("").trim();
         if let Some(label) = known_terminal(exe_name) {
             if is_console_shell(label) {
                 // Keep this as a fallback but continue walking for a GUI host
@@ -199,7 +231,7 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
             }
         }
 
-        cur = cols[2].trim().parse().unwrap_or(0);
+        cur = record.parent_process_id.unwrap_or(0);
     }
 
     if term_pid == 0 {
@@ -220,45 +252,30 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
     })
 }
 
-/// Returns (user_time, kernel_time) in 100-nanosecond units.
-/// We convert to CLK_TCK-equivalent ticks (divide by 100_000 to get ~10ms ticks)
-/// so the Scanner::cpu_pct delta math works the same as Linux.
-fn wmic_cpu_times(pid: u32) -> (u64, u64) {
-    let output = match hidden_command("wmic")
-        .args([
-            "process",
-            "where",
-            &format!("ProcessId={}", pid),
-            "get",
-            "UserModeTime,KernelModeTime",
-            "/FORMAT:CSV",
-        ])
-        .output()
-    {
-        Ok(o) => o,
-        Err(_) => return (0, 0),
+pub fn count_children(pid: u32, excluded: &[&str]) -> u32 {
+    let Some(cache) = PROCESS_SNAPSHOT.get() else {
+        return 0;
     };
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    // CSV: Node,KernelModeTime,UserModeTime
-    for line in stdout.lines().skip(1) {
-        let cols: Vec<&str> = line.split(',').collect();
-        if cols.len() >= 3 {
-            let kernel: u64 = cols[1].trim().parse().unwrap_or(0);
-            let user: u64 = cols[2].trim().parse().unwrap_or(0);
-            // Convert 100ns units to ~10ms ticks (CLK_TCK=100 equivalent)
-            return (user / 100_000, kernel / 100_000);
-        }
-    }
-    (0, 0)
+    let snapshot = cache.lock().unwrap_or_else(|error| error.into_inner());
+    snapshot
+        .values()
+        .filter(|record| record.parent_process_id == Some(pid))
+        .filter(|record| {
+            let command_line = record.command_line.as_deref().unwrap_or("");
+            !excluded
+                .iter()
+                .any(|excluded| command_line.contains(excluded))
+        })
+        .count() as u32
 }
 
 fn powershell_window_title(pid: u32) -> Option<String> {
     let cmd = format!("(Get-Process -Id {}).MainWindowTitle", pid);
-    let output = hidden_command("powershell")
-        .args(["-NoProfile", "-Command", &cmd])
-        .output()
-        .ok()?;
+    let output = hidden_output(
+        "powershell",
+        &["-NoProfile", "-Command", &cmd],
+        Duration::from_secs(1),
+    )?;
     let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if name.is_empty() {
         None
@@ -285,15 +302,45 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
     let script = PS_READ_ENV
         .replace("__PID__", &pid.to_string())
         .replace("__KEY__", key);
-    let output = hidden_command("powershell")
-        .args(["-NoProfile", "-NonInteractive", "-Command", &script])
-        .output()
-        .ok()?;
+    let output = hidden_output(
+        "powershell",
+        &["-NoProfile", "-NonInteractive", "-Command", &script],
+        Duration::from_secs(2),
+    )?;
     let val = String::from_utf8_lossy(&output.stdout).trim().to_string();
     if val.is_empty() {
         None
     } else {
         Some(val)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn cim_snapshot_parses_command_lines_and_cpu_times_without_csv_splitting() {
+        let json = r#"[{"Name":"codex.exe","ProcessId":42,"ParentProcessId":7,"CommandLine":"codex --project C:\\work,中文","UserModeTime":1200000,"KernelModeTime":3400000}]"#
+            .as_bytes();
+        let rows: Vec<ProcessRecord> = serde_json::from_slice(json).unwrap();
+        assert_eq!(rows[0].name.as_deref(), Some("codex.exe"));
+        assert_eq!(rows[0].process_id, Some(42));
+        assert_eq!(rows[0].parent_process_id, Some(7));
+        assert_eq!(
+            rows[0].command_line.as_deref(),
+            Some("codex --project C:\\work,中文")
+        );
+        assert_eq!(rows[0].user_mode_time, Some(1_200_000));
+        assert_eq!(rows[0].kernel_mode_time, Some(3_400_000));
+    }
+
+    #[test]
+    fn empty_or_malformed_cim_output_is_not_a_successful_snapshot() {
+        assert!(serde_json::from_slice::<Vec<ProcessRecord>>(b"[]")
+            .unwrap()
+            .is_empty());
+        assert!(serde_json::from_slice::<Vec<ProcessRecord>>(b"not-json").is_err());
     }
 }
 
