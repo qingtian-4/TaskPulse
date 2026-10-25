@@ -115,20 +115,22 @@ fn terminate_process_tree(child: &mut Child, wait_budget: Duration) -> Result<()
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .spawn()
-        .map_err(|_| ProbeError::Kill)?;
+        .ok();
     let tree_deadline = Instant::now() + wait_budget.min(Duration::from_millis(500));
-    loop {
-        match tree_kill.try_wait() {
-            Ok(Some(_)) => break,
-            Ok(None) if Instant::now() < tree_deadline => {
-                std::thread::sleep(Duration::from_millis(5))
+    if let Some(tree_kill) = tree_kill.as_mut() {
+        loop {
+            match tree_kill.try_wait() {
+                Ok(Some(_)) => break,
+                Ok(None) if Instant::now() < tree_deadline => {
+                    std::thread::sleep(Duration::from_millis(5))
+                }
+                Ok(None) => {
+                    let _ = tree_kill.kill();
+                    let _ = tree_kill.wait();
+                    break;
+                }
+                Err(_) => break,
             }
-            Ok(None) => {
-                let _ = tree_kill.kill();
-                let _ = tree_kill.wait();
-                break;
-            }
-            Err(_) => break,
         }
     }
     let deadline = Instant::now() + wait_budget;
@@ -140,6 +142,17 @@ fn terminate_process_tree(child: &mut Child, wait_budget: Duration) -> Result<()
             Err(_) if direct_kill => return Err(ProbeError::Wait),
             Err(_) => return Err(ProbeError::Kill),
         }
+    }
+}
+
+fn finish_reader(reader: std::thread::JoinHandle<()>, reap: Result<(), ProbeError>) {
+    if reap.is_ok() {
+        let _ = reader.join();
+    } else {
+        // A failed kill/wait must still return within the probe budget. The
+        // taskkill tree path normally closes stdout; detach only when the OS
+        // refused reaping so the caller cannot block indefinitely on Read.
+        std::mem::forget(reader);
     }
 }
 
@@ -169,8 +182,8 @@ fn hidden_output(
                 Ok(Some(exit)) => status = Some(exit),
                 Ok(None) => {}
                 Err(_) => {
-                    let _ = terminate_process_tree(&mut child, Duration::from_millis(500));
-                    let _ = reader.join();
+                    let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
+                    finish_reader(reader, reap);
                     return Err(ProbeError::Wait);
                 }
             }
@@ -179,16 +192,16 @@ fn hidden_output(
             match output_rx.try_recv() {
                 Ok(result) => stdout_result = Some(result),
                 Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    let _ = terminate_process_tree(&mut child, Duration::from_millis(500));
-                    let _ = reader.join();
+                    let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
+                    finish_reader(reader, reap);
                     return Err(ProbeError::Read);
                 }
                 Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
         if let Some(Err(error)) = stdout_result {
-            let _ = terminate_process_tree(&mut child, Duration::from_millis(500));
-            let _ = reader.join();
+            let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
+            finish_reader(reader, reap);
             return Err(error);
         }
         if let Some(Ok(stdout)) = stdout_result.take() {
@@ -208,7 +221,10 @@ fn hidden_output(
         }
         if Instant::now() >= deadline {
             let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
-            let _ = reader.join();
+            finish_reader(
+                reader,
+                reap.as_ref().map(|_| ()).map_err(|_| ProbeError::Wait),
+            );
             return Err(reap.err().unwrap_or(ProbeError::Timeout));
         }
         std::thread::sleep(Duration::from_millis(10));
