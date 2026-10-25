@@ -2,25 +2,28 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
-use super::{known_terminal, ProcInfo, WindowCache};
+use super::{known_terminal, PlatformScan, ProcInfo, ProcessSnapshot, WindowCache};
 use crate::watcher::TerminalInfo;
-
-pub fn last_scan_succeeded() -> bool {
-    true
-}
 
 /// Find CLI processes matching any registered strategy.
 /// Also returns a pid→ppid map for ALL processes (used for transitive
 /// ancestor filtering of subagent processes).
-pub fn find_cli_processes<'a>(
-    strategies: &'a [Box<dyn CliStrategy>],
-) -> (Vec<(ProcInfo, &'a dyn CliStrategy)>, HashMap<u32, u32>) {
+pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> PlatformScan<'a> {
     let output = match std::process::Command::new("ps")
         .args(["-eo", "pid,ppid,pcpu,tty,command"])
         .output()
     {
         Ok(o) => o,
-        Err(_) => return (Vec::new(), HashMap::new()),
+        Err(_) => {
+            return PlatformScan {
+                matched: Vec::new(),
+                snapshot: ProcessSnapshot {
+                    ppid_map: HashMap::new(),
+                    processes: HashMap::new(),
+                    succeeded: false,
+                },
+            }
+        }
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -109,6 +112,7 @@ pub fn find_cli_processes<'a>(
             ProcInfo {
                 pid,
                 ppid,
+                process_instance: None,
                 cwd,
                 tty_label,
                 utime: 0,
@@ -121,10 +125,21 @@ pub fn find_cli_processes<'a>(
         ));
     }
 
-    (out, ppid_map)
+    PlatformScan {
+        matched: out,
+        snapshot: ProcessSnapshot {
+            ppid_map,
+            processes: HashMap::new(),
+            succeeded: output.status.success(),
+        },
+    }
 }
 
-pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {
+pub fn terminal_info(
+    cache: &mut WindowCache,
+    p: &ProcInfo,
+    _snapshot: &ProcessSnapshot,
+) -> Option<TerminalInfo> {
     let mut cur = p.ppid;
     let mut term_app = String::new();
     let mut term_pid: u32 = 0;

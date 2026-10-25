@@ -7,9 +7,30 @@ const CPU_SMOOTHING_WINDOW: usize = 4;
 /// CPU% threshold for marking a process as recently active (used for `last_active` tracking).
 const CPU_ACTIVE_THRESHOLD: f64 = 2.0;
 
-use crate::watcher::AgentStatus;
+use crate::watcher::{AgentStatus, TerminalInfo};
 
 pub mod strategies;
+
+pub(crate) struct ProcessEntry {
+    pub pid: u32,
+    pub ppid: u32,
+    pub name: String,
+    pub command_line: String,
+    pub process_instance: Option<String>,
+    pub user_mode_time: u64,
+    pub kernel_mode_time: u64,
+}
+
+pub(crate) struct ProcessSnapshot {
+    pub ppid_map: HashMap<u32, u32>,
+    pub processes: HashMap<u32, ProcessEntry>,
+    pub succeeded: bool,
+}
+
+pub(crate) struct PlatformScan<'a> {
+    pub matched: Vec<(ProcInfo, &'a dyn strategies::CliStrategy)>,
+    pub snapshot: ProcessSnapshot,
+}
 
 #[cfg(target_os = "linux")]
 mod linux;
@@ -57,6 +78,10 @@ pub struct Scanner {
 pub struct ProcInfo {
     pub pid: u32,
     pub ppid: u32,
+    /// Platform-provided process instance identity when available. This is
+    /// intentionally opaque to the common scanner (for example, Windows
+    /// CIM creation time), so PID reuse cannot silently reuse a task ID.
+    pub process_instance: Option<String>,
     pub cwd: PathBuf,
     pub tty_label: String,
     pub utime: u64,
@@ -97,10 +122,12 @@ impl Scanner {
     /// separately from a successful scan with no matching agents so callers
     /// can preserve the last authoritative observation.
     pub fn scan_result(&mut self) -> Result<Vec<AgentStatus>, String> {
-        let (procs, ppid_map) = platform::find_cli_processes(&self.strategies);
-        if !platform::last_scan_succeeded() {
+        let batch = platform::find_cli_processes(&self.strategies);
+        if !batch.snapshot.succeeded {
             return Err("local process snapshot unavailable".to_string());
         }
+        let ppid_map = &batch.snapshot.ppid_map;
+        let procs = batch.matched;
 
         // Filter out subprocess agents: if ANY ancestor of a matched process
         // is also a matched CLI process, it's a subagent — not a user-level
@@ -111,13 +138,14 @@ impl Scanner {
             procs.iter().map(|(p, _)| p.pid).collect();
         let procs: Vec<_> = procs
             .into_iter()
-            .filter(|(p, _)| !has_matched_ancestor(p.ppid, &matched_pids, &ppid_map))
+            .filter(|(p, _)| !has_matched_ancestor(p.ppid, &matched_pids, ppid_map))
             .collect();
 
         let mut agents: Vec<AgentStatus> = Vec::new();
         let mut seen = std::collections::HashSet::new();
-        // Track which tty_labels we've already emitted to avoid duplicate IDs
-        let mut seen_ttys: HashMap<String, usize> = HashMap::new();
+        // Track only identities proven to represent the same scanner session.
+        // A missing tty or terminal must never collapse independent agents.
+        let mut seen_ids: HashMap<String, usize> = HashMap::new();
 
         for (mut p, strategy) in procs {
             seen.insert(p.pid);
@@ -156,7 +184,7 @@ impl Scanner {
                 .unwrap_or("unknown");
 
             // Get terminal info and populate window_title on ProcInfo
-            let mut terminal = platform::terminal_info(&mut self.window_cache, &p);
+            let mut terminal = platform::terminal_info(&mut self.window_cache, &p, &batch.snapshot);
             if let Some(ref t) = terminal {
                 if p.window_title.is_none() {
                     p.window_title = t.window_title.clone();
@@ -193,7 +221,8 @@ impl Scanner {
 
             // Count direct child processes, excluding known background services
             // (MCP servers, worker services) that are always present.
-            let child_count = count_children(p.pid, strategy.excluded_substrings());
+            let child_count =
+                count_children(p.pid, strategy.excluded_substrings(), &batch.snapshot);
 
             // Delegate state detection to the strategy
             let detected = strategy.detect_state(&p, cpu_pct, child_count);
@@ -223,8 +252,6 @@ impl Scanner {
                 .map(|t| !t.focus_id.is_empty())
                 .unwrap_or(false);
 
-            let id = format!("scan:{}", p.tty_label);
-
             // Read session ID from the process environment when the strategy
             // exposes an env var name (e.g. CLAUDE_SESSION_ID for Claude Code).
             // Cached per-PID: session IDs are stable for a process's lifetime,
@@ -235,9 +262,15 @@ impl Scanner {
                     .or_insert_with(|| platform::read_proc_env(p.pid, key))
                     .clone()
             });
+            let id = scanner_identity(
+                &p,
+                strategy.cli_name(),
+                terminal.as_ref(),
+                session_id.as_deref(),
+            );
 
             let agent = AgentStatus {
-                id,
+                id: id.clone(),
                 name,
                 status: detected.status,
                 message: detected.message,
@@ -252,15 +285,17 @@ impl Scanner {
                 mtime: None,
             };
 
-            // Dedup by tty: keep the higher-priority (lower numeric) status
-            if let Some(&prev_idx) = seen_ttys.get(&p.tty_label) {
+            // Dedup only by stable session/process identity; keep the higher
+            // priority (lower numeric) status for multiple records of one
+            // confirmed Agent.
+            if let Some(&prev_idx) = seen_ids.get(&id) {
                 let prev_prio = crate::watcher::status_priority_num(&agents[prev_idx].status);
                 let cur_prio = crate::watcher::status_priority_num(&agent.status);
                 if cur_prio < prev_prio {
                     agents[prev_idx] = agent;
                 }
             } else {
-                seen_ttys.insert(p.tty_label.clone(), agents.len());
+                seen_ids.insert(id, agents.len());
                 agents.push(agent);
             }
 
@@ -308,12 +343,42 @@ impl Scanner {
     }
 }
 
+fn scanner_identity(
+    process: &ProcInfo,
+    cli: &str,
+    terminal: Option<&TerminalInfo>,
+    session_id: Option<&str>,
+) -> String {
+    if let Some(session) = session_id.filter(|value| !value.is_empty()) {
+        return format!("scan:{cli}:session:{session}");
+    }
+    if let Some(instance) = process
+        .process_instance
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        return format!("scan:{cli}:process:{instance}");
+    }
+    if let Some(info) = terminal {
+        let focus = info.focus_id.trim();
+        if !focus.is_empty() {
+            return format!("scan:{cli}:terminal:{}:{focus}", info.kind);
+        }
+    }
+    format!(
+        "scan:{cli}:pid:{}:ppid:{}:cwd:{}",
+        process.pid,
+        process.ppid,
+        process.cwd.display()
+    )
+}
+
 /// Count direct child processes of a given PID, excluding children whose
 /// command line contains any of the `excluded` substrings (e.g. "mcp-server",
 /// "worker-service"). This prevents persistent background services from
 /// inflating the child count and causing false "working" status.
 #[cfg(target_os = "linux")]
-fn count_children(pid: u32, excluded: &[&str]) -> u32 {
+fn count_children(pid: u32, excluded: &[&str], _snapshot: &ProcessSnapshot) -> u32 {
     let task_dir = format!("/proc/{}/task/{}/children", pid, pid);
     let children_str = match std::fs::read_to_string(&task_dir) {
         Ok(s) => s,
@@ -341,7 +406,7 @@ fn count_children(pid: u32, excluded: &[&str]) -> u32 {
 }
 
 #[cfg(target_os = "macos")]
-fn count_children(pid: u32, excluded: &[&str]) -> u32 {
+fn count_children(pid: u32, excluded: &[&str], _snapshot: &ProcessSnapshot) -> u32 {
     let output = match std::process::Command::new("pgrep")
         .args(["-P", &pid.to_string()])
         .output()
@@ -389,8 +454,8 @@ fn count_children(pid: u32, excluded: &[&str]) -> u32 {
 }
 
 #[cfg(target_os = "windows")]
-fn count_children(pid: u32, excluded: &[&str]) -> u32 {
-    platform::count_children(pid, excluded)
+fn count_children(pid: u32, excluded: &[&str], snapshot: &ProcessSnapshot) -> u32 {
+    platform::count_children(pid, excluded, snapshot)
 }
 
 /// Walk up the process ancestor chain via ppid_map. Returns true if any
@@ -556,6 +621,67 @@ mod tests {
     fn scanner_returns_vec() {
         let mut s = Scanner::new();
         let _agents = s.scan();
+    }
+
+    fn identity_process(pid: u32, instance: &str) -> ProcInfo {
+        ProcInfo {
+            pid,
+            ppid: 1,
+            process_instance: Some(instance.into()),
+            cwd: PathBuf::from(r"C:\project"),
+            tty_label: String::new(),
+            utime: 0,
+            stime: 0,
+            instant_cpu: Some(0.0),
+            window_title: None,
+            last_active: None,
+        }
+    }
+
+    fn identity_terminal(focus_id: &str) -> TerminalInfo {
+        TerminalInfo {
+            kind: "windows_native".into(),
+            focus_id: focus_id.into(),
+            outer_id: String::new(),
+            label: "Windows Terminal".into(),
+            window_title: None,
+        }
+    }
+
+    #[test]
+    fn scanner_identity_is_scoped_and_does_not_collapse_ambiguous_processes() {
+        let first = identity_process(10, "start-a");
+        let second = identity_process(11, "start-b");
+        assert_ne!(
+            scanner_identity(&first, "codex", Some(&identity_terminal("term-a")), None),
+            scanner_identity(&second, "codex", Some(&identity_terminal("term-b")), None)
+        );
+
+        let mut session_a = identity_process(12, "start-c");
+        session_a.process_instance = None;
+        let mut session_b = identity_process(13, "start-d");
+        session_b.process_instance = None;
+        let terminal = identity_terminal("term-shared");
+        assert_ne!(
+            scanner_identity(&session_a, "codex", Some(&terminal), Some("session-a")),
+            scanner_identity(&session_b, "codex", Some(&terminal), Some("session-b"))
+        );
+
+        assert_eq!(
+            scanner_identity(&session_a, "codex", Some(&terminal), Some("session-a")),
+            scanner_identity(&session_b, "codex", Some(&terminal), Some("session-a"))
+        );
+        assert_ne!(
+            scanner_identity(&session_a, "codex", None, None),
+            scanner_identity(&session_a, "claude-code", None, None)
+        );
+
+        let mut reused = identity_process(12, "start-new");
+        reused.process_instance = Some("start-new".into());
+        assert_ne!(
+            scanner_identity(&first, "codex", None, None),
+            scanner_identity(&reused, "codex", None, None)
+        );
     }
 
     #[test]

@@ -3,23 +3,18 @@ use std::io::Read;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ExitStatus, Output, Stdio};
-use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
-use super::{known_terminal, ProcInfo, WindowCache};
+use super::{known_terminal, PlatformScan, ProcInfo, ProcessEntry, ProcessSnapshot, WindowCache};
 use crate::watcher::TerminalInfo;
 use serde::Deserialize;
-
-type StrategyMatch<'a> = (ProcInfo, &'a dyn CliStrategy);
-type ProcessScan<'a> = (Vec<StrategyMatch<'a>>, HashMap<u32, u32>);
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
 const PROCESS_SNAPSHOT_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
 @(Get-CimInstance -ClassName Win32_Process |
-  Select-Object Name,ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime) |
+  Select-Object Name,ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,CreationDate) |
   ConvertTo-Json -Compress -Depth 2
 "#;
 
@@ -35,10 +30,8 @@ struct ProcessRecord {
     command_line: Option<String>,
     user_mode_time: Option<u64>,
     kernel_mode_time: Option<u64>,
+    creation_date: Option<String>,
 }
-
-static PROCESS_SNAPSHOT: OnceLock<Mutex<HashMap<u32, ProcessRecord>>> = OnceLock::new();
-static LAST_SCAN_SUCCEEDED: AtomicBool = AtomicBool::new(true);
 
 #[derive(Debug, PartialEq, Eq)]
 enum ProbeError {
@@ -48,10 +41,6 @@ enum ProbeError {
     Timeout,
     Kill,
     Wait,
-}
-
-pub fn last_scan_succeeded() -> bool {
-    LAST_SCAN_SUCCEEDED.load(Ordering::Relaxed)
 }
 
 fn process_snapshot() -> Option<HashMap<u32, ProcessRecord>> {
@@ -232,35 +221,55 @@ fn hidden_output(
 }
 
 /// Find CLI processes matching any registered strategy.
-pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_> {
-    if strategies.is_empty() {
-        LAST_SCAN_SUCCEEDED.store(true, Ordering::Relaxed);
-        return (Vec::new(), HashMap::new());
-    }
-
+pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> PlatformScan<'_> {
     let Some(snapshot) = process_snapshot() else {
-        LAST_SCAN_SUCCEEDED.store(false, Ordering::Relaxed);
-        return (Vec::new(), HashMap::new());
+        return PlatformScan {
+            matched: Vec::new(),
+            snapshot: ProcessSnapshot {
+                ppid_map: HashMap::new(),
+                processes: HashMap::new(),
+                succeeded: false,
+            },
+        };
     };
-    LAST_SCAN_SUCCEEDED.store(true, Ordering::Relaxed);
-    let cache = PROCESS_SNAPSHOT.get_or_init(|| Mutex::new(HashMap::new()));
-    *cache.lock().unwrap_or_else(|error| error.into_inner()) = snapshot.clone();
-    let mut out = Vec::new();
-    let ppid_map = snapshot
-        .iter()
-        .filter_map(|(pid, row)| row.parent_process_id.map(|parent| (*pid, parent)))
+    let processes = snapshot
+        .into_iter()
+        .map(|(pid, row)| {
+            let ppid = row.parent_process_id.unwrap_or(0);
+            (
+                pid,
+                ProcessEntry {
+                    pid,
+                    ppid,
+                    name: row.name.unwrap_or_default(),
+                    command_line: row.command_line.unwrap_or_default(),
+                    process_instance: row.creation_date,
+                    user_mode_time: row.user_mode_time.unwrap_or(0),
+                    kernel_mode_time: row.kernel_mode_time.unwrap_or(0),
+                },
+            )
+        })
         .collect::<HashMap<_, _>>();
+    let ppid_map = processes
+        .iter()
+        .map(|(pid, row)| (*pid, row.ppid))
+        .collect::<HashMap<_, _>>();
+    let snapshot = ProcessSnapshot {
+        ppid_map,
+        processes,
+        succeeded: true,
+    };
+    let mut out = Vec::new();
 
-    for row in snapshot.values() {
-        let Some(pid) = row.process_id else { continue };
-        let cmd_line = row.command_line.as_deref().unwrap_or("");
+    for row in snapshot.processes.values() {
+        let pid = row.pid;
+        let cmd_line = row.command_line.as_str();
         let proc_name = row
             .name
-            .as_deref()
-            .unwrap_or("")
+            .as_str()
             .trim()
             .strip_suffix(".exe")
-            .unwrap_or(row.name.as_deref().unwrap_or("").trim());
+            .unwrap_or(row.name.trim());
         if proc_name.is_empty() {
             continue;
         }
@@ -305,19 +314,20 @@ pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_
             continue;
         }
 
-        let ppid = row.parent_process_id.unwrap_or(0);
+        let ppid = row.ppid;
 
         // CWD is hard to get on Windows without elevated privileges
         let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("C:\\"));
 
         // Get CPU times from the same CIM snapshot (100-nanosecond units).
-        let utime = row.user_mode_time.unwrap_or(0) / 100_000;
-        let stime = row.kernel_mode_time.unwrap_or(0) / 100_000;
+        let utime = row.user_mode_time / 100_000;
+        let stime = row.kernel_mode_time / 100_000;
 
         out.push((
             ProcInfo {
                 pid,
                 ppid,
+                process_instance: row.process_instance.clone(),
                 cwd,
                 tty_label: String::new(),
                 utime,
@@ -330,7 +340,10 @@ pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_
         ));
     }
 
-    (out, ppid_map)
+    PlatformScan {
+        matched: out,
+        snapshot,
+    }
 }
 
 /// Console-subsystem processes (shells) that may appear in the parent chain
@@ -341,10 +354,11 @@ fn is_console_shell(label: &str) -> bool {
     matches!(label, "PowerShell" | "CMD")
 }
 
-pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {
-    let snapshot = PROCESS_SNAPSHOT
-        .get()
-        .and_then(|cache| cache.lock().ok().map(|snapshot| snapshot.clone()))?;
+pub fn terminal_info(
+    cache: &mut WindowCache,
+    p: &ProcInfo,
+    snapshot: &ProcessSnapshot,
+) -> Option<TerminalInfo> {
     let mut cur = p.ppid;
     let mut term_label = String::new();
     let mut term_pid: u32 = 0;
@@ -357,8 +371,8 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
             break;
         }
 
-        let record = snapshot.get(&cur)?;
-        let exe_name = record.name.as_deref().unwrap_or("").trim();
+        let record = snapshot.processes.get(&cur)?;
+        let exe_name = record.name.trim();
         if let Some(label) = known_terminal(exe_name) {
             if is_console_shell(label) {
                 // Keep this as a fallback but continue walking for a GUI host
@@ -374,7 +388,7 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
             }
         }
 
-        cur = record.parent_process_id.unwrap_or(0);
+        cur = record.ppid;
     }
 
     if term_pid == 0 {
@@ -395,19 +409,15 @@ pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalIn
     })
 }
 
-pub fn count_children(pid: u32, excluded: &[&str]) -> u32 {
-    let Some(cache) = PROCESS_SNAPSHOT.get() else {
-        return 0;
-    };
-    let snapshot = cache.lock().unwrap_or_else(|error| error.into_inner());
+pub fn count_children(pid: u32, excluded: &[&str], snapshot: &ProcessSnapshot) -> u32 {
     snapshot
+        .processes
         .values()
-        .filter(|record| record.parent_process_id == Some(pid))
+        .filter(|record| record.ppid == pid)
         .filter(|record| {
-            let command_line = record.command_line.as_deref().unwrap_or("");
             !excluded
                 .iter()
-                .any(|excluded| command_line.contains(excluded))
+                .any(|excluded| record.command_line.contains(excluded))
         })
         .count() as u32
 }
@@ -607,6 +617,90 @@ mod tests {
             String::from_utf8_lossy(&recovered.stdout).trim(),
             "recovered"
         );
+    }
+
+    #[test]
+    fn repeated_timeout_probes_have_a_bounded_resource_budget() {
+        let started = Instant::now();
+        for _ in 0..50 {
+            let result = hidden_output(
+                "powershell",
+                &[
+                    "-NoLogo",
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    "Start-Sleep -Seconds 10",
+                ],
+                Duration::from_millis(25),
+                MAX_PROCESS_SNAPSHOT_BYTES,
+            );
+            assert!(matches!(
+                result,
+                Err(ProbeError::Timeout | ProbeError::Wait)
+            ));
+        }
+        assert!(started.elapsed() < Duration::from_secs(30));
+        let recovered = hidden_output(
+            "powershell",
+            &[
+                "-NoLogo",
+                "-NoProfile",
+                "-NonInteractive",
+                "-Command",
+                "Write-Output recovered",
+            ],
+            Duration::from_secs(2),
+            MAX_PROCESS_SNAPSHOT_BYTES,
+        )
+        .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&recovered.stdout).trim(),
+            "recovered"
+        );
+    }
+
+    #[test]
+    fn process_batches_keep_terminal_trees_and_failure_state_isolated() {
+        let entry = |pid: u32, ppid: u32, name: &str| ProcessEntry {
+            pid,
+            ppid,
+            name: name.into(),
+            command_line: String::new(),
+            process_instance: None,
+            user_mode_time: 0,
+            kernel_mode_time: 0,
+        };
+        let batch_a = ProcessSnapshot {
+            ppid_map: [(10, 1), (20, 10)].into(),
+            processes: [(10, entry(10, 1, "WindowsTerminal.exe"))].into(),
+            succeeded: true,
+        };
+        let batch_b = ProcessSnapshot {
+            ppid_map: [(10, 1), (20, 10)].into(),
+            processes: [(10, entry(10, 1, "other.exe"))].into(),
+            succeeded: false,
+        };
+        let process = ProcInfo {
+            pid: 20,
+            ppid: 10,
+            process_instance: None,
+            cwd: PathBuf::from(r"C:\project"),
+            tty_label: String::new(),
+            utime: 0,
+            stime: 0,
+            instant_cpu: None,
+            window_title: None,
+            last_active: None,
+        };
+        assert!(batch_a.succeeded);
+        assert!(!batch_b.succeeded);
+        let mut cache = HashMap::new();
+        assert_eq!(
+            terminal_info(&mut cache, &process, &batch_a).unwrap().label,
+            "Windows Terminal"
+        );
+        assert!(terminal_info(&mut cache, &process, &batch_b).is_none());
     }
 }
 
