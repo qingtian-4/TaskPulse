@@ -5,6 +5,10 @@ use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 use super::{known_terminal, ProcInfo, WindowCache};
 use crate::watcher::TerminalInfo;
 
+pub fn last_scan_succeeded() -> bool {
+    true
+}
+
 /// Find CLI processes matching any registered strategy.
 /// Also returns a pid→ppid map for ALL processes (used for transitive
 /// ancestor filtering of subagent processes).

@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Mutex, OnceLock};
 use std::time::{Duration, Instant};
 
@@ -35,6 +36,11 @@ struct ProcessRecord {
 }
 
 static PROCESS_SNAPSHOT: OnceLock<Mutex<HashMap<u32, ProcessRecord>>> = OnceLock::new();
+static LAST_SCAN_SUCCEEDED: AtomicBool = AtomicBool::new(true);
+
+pub fn last_scan_succeeded() -> bool {
+    LAST_SCAN_SUCCEEDED.load(Ordering::Relaxed)
+}
 
 fn process_snapshot() -> Option<HashMap<u32, ProcessRecord>> {
     let output = hidden_output(
@@ -94,12 +100,15 @@ fn hidden_output(program: &str, args: &[&str], timeout: Duration) -> Option<Outp
 /// Find CLI processes matching any registered strategy.
 pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> ProcessScan<'_> {
     if strategies.is_empty() {
+        LAST_SCAN_SUCCEEDED.store(true, Ordering::Relaxed);
         return (Vec::new(), HashMap::new());
     }
 
     let Some(snapshot) = process_snapshot() else {
+        LAST_SCAN_SUCCEEDED.store(false, Ordering::Relaxed);
         return (Vec::new(), HashMap::new());
     };
+    LAST_SCAN_SUCCEEDED.store(true, Ordering::Relaxed);
     let cache = PROCESS_SNAPSHOT.get_or_init(|| Mutex::new(HashMap::new()));
     *cache.lock().unwrap_or_else(|error| error.into_inner()) = snapshot.clone();
     let mut out = Vec::new();
