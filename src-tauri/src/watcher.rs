@@ -664,14 +664,7 @@ fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
 /// session task exists, drop the scanner's inferred scan entry for the same
 /// CLI so we never show the same agent twice.
 fn dedup_codex_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    let has_session = tasks.iter().any(|t| t.source == TaskSource::Codex);
-    if has_session {
-        tasks.retain(|t| {
-            !(is_scanner_observation(t)
-                && t.cli.as_deref() == Some("codex")
-                && t.confidence == DetectionConfidence::Inferred)
-        });
-    }
+    dedup_scanner_observations(tasks, TaskSource::Codex, Some("codex"));
 }
 
 fn is_scanner_observation(task: &TaskSnapshot) -> bool {
@@ -679,41 +672,76 @@ fn is_scanner_observation(task: &TaskSnapshot) -> bool {
 }
 
 fn dedup_hermes_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    let has_session = tasks.iter().any(|t| t.source == TaskSource::Hermes);
-    if has_session {
-        // Native Hermes leases also use Inferred confidence. Evidence strength
-        // does not identify a scanner row; only remove actual scanner output.
-        tasks.retain(|t| {
-            !(is_scanner_observation(t)
-                && t.cli.as_deref() == Some("hermes")
-                && t.confidence == DetectionConfidence::Inferred)
-        });
-    }
+    // Native Hermes leases also use Inferred confidence. Evidence strength
+    // does not identify a scanner row; only remove actual scanner output with
+    // a matching stable identity.
+    dedup_scanner_observations(tasks, TaskSource::Hermes, Some("hermes"));
 }
 
 fn dedup_dsh_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    let has_session = tasks
+    dedup_scanner_observations(tasks, TaskSource::DeepSeekHarness, Some("dsh"));
+}
+
+fn dedup_scanner_observations(
+    tasks: &mut Vec<TaskSnapshot>,
+    source: TaskSource,
+    cli: Option<&str>,
+) {
+    let native: Vec<TaskSnapshot> = tasks
         .iter()
-        .any(|t| t.source == TaskSource::DeepSeekHarness);
-    if has_session {
-        tasks.retain(|t| {
-            !(is_scanner_observation(t)
-                && t.cli.as_deref() == Some("dsh")
-                && t.confidence == DetectionConfidence::Inferred)
-        });
+        .filter(|task| task.source == source && !is_scanner_observation(task))
+        .cloned()
+        .collect();
+    if native.is_empty() {
+        return;
     }
+    tasks.retain(|task| {
+        let scanner = is_scanner_observation(task)
+            && cli.is_none_or(|name| task.cli.as_deref() == Some(name))
+            && task.confidence == DetectionConfidence::Inferred;
+        !(scanner
+            && native
+                .iter()
+                .any(|candidate| same_observed_identity(candidate, task)))
+    });
+}
+
+/// Only merge a scanner row when a stable identity proves it is the same
+/// session. Ambiguous rows remain visible instead of deleting an independent
+/// scanner observation from another Agent or terminal.
+fn same_observed_identity(a: &TaskSnapshot, b: &TaskSnapshot) -> bool {
+    if let (Some(a_id), Some(b_id)) = (&a.session_id, &b.session_id) {
+        return !a_id.is_empty() && a_id == b_id;
+    }
+    fn focus_id(task: &TaskSnapshot) -> Option<&str> {
+        task.terminal
+            .as_ref()
+            .map(|terminal| terminal.focus_id.trim())
+            .filter(|id| !id.is_empty())
+    }
+    matches!((focus_id(a), focus_id(b)), (Some(a_id), Some(b_id)) if a_id == b_id)
 }
 
 fn dedup_claude_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    if tasks.iter().any(|t| {
-        t.source == TaskSource::ClaudeCode
-            && (t.id.starts_with("claude:") || t.id.contains(":claude:"))
-    }) {
-        tasks.retain(|t| {
-            !((t.source_instance.as_deref() == Some("scanner") || t.id.starts_with("scan:"))
-                && t.source == TaskSource::ClaudeCode)
-        });
+    let native: Vec<TaskSnapshot> = tasks
+        .iter()
+        .filter(|task| {
+            task.source == TaskSource::ClaudeCode
+                && !is_scanner_observation(task)
+                && (task.id.starts_with("claude:") || task.id.contains(":claude:"))
+        })
+        .cloned()
+        .collect();
+    if native.is_empty() {
+        return;
     }
+    tasks.retain(|task| {
+        !(task.source == TaskSource::ClaudeCode
+            && is_scanner_observation(task)
+            && native
+                .iter()
+                .any(|candidate| same_observed_identity(candidate, task)))
+    });
 }
 
 struct LocalBatch {
@@ -2159,7 +2187,7 @@ mod tests {
                 id,
                 TaskStatus::Running,
                 DetectionConfidence::Inferred,
-                "456",
+                "123",
                 Some(cli),
             );
             scan.source = source;
@@ -2169,6 +2197,48 @@ mod tests {
         dedup_codex_over_scan(&mut tasks);
         dedup_dsh_over_scan(&mut tasks);
         assert_eq!(tasks, expected);
+    }
+
+    #[test]
+    fn independent_scanner_identity_survives_native_dedup() {
+        let mut native = task_with_terminal(
+            "codex:native-a",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "terminal-a",
+            Some("codex"),
+        );
+        native.source = TaskSource::Codex;
+        native.source_instance = Some("codex".into());
+        native.session_id = Some("session-a".into());
+        let mut scanner_a = task_with_terminal(
+            "scan:terminal-a",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "terminal-a",
+            Some("codex"),
+        );
+        scanner_a.source = TaskSource::Codex;
+        scanner_a.source_instance = Some("scanner".into());
+        let mut scanner_b = task_with_terminal(
+            "scan:terminal-b",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "terminal-a",
+            Some("codex"),
+        );
+        scanner_b.source = TaskSource::Codex;
+        scanner_b.source_instance = Some("scanner".into());
+        scanner_b.session_id = Some("session-b".into());
+        let mut tasks = vec![native, scanner_a, scanner_b];
+        dedup_codex_over_scan(&mut tasks);
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex:native-a", "scan:terminal-b"]
+        );
     }
 
     #[test]
