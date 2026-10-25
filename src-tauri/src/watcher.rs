@@ -820,14 +820,21 @@ impl LocalProviders {
                 )),
                 SourceKind::Scanner => {
                     let mut scanner = Scanner::new();
+                    let mut last_tasks: Vec<TaskSnapshot> = Vec::new();
                     let id = source.id.clone();
                     self.workers.push((
                         id.clone(),
                         vec![TaskSource::ClaudeCode, TaskSource::Gemini],
                         Worker::spawn(Duration::from_secs(2), move |_| {
-                            ProviderOutput::tasks(
-                                scanner.scan().into_iter().map(Into::into).collect(),
-                            )
+                            match scanner.scan_result() {
+                                Ok(statuses) => {
+                                    let tasks: Vec<TaskSnapshot> =
+                                        statuses.into_iter().map(Into::into).collect();
+                                    last_tasks = tasks.clone();
+                                    ProviderOutput::tasks(tasks)
+                                }
+                                Err(error) => ProviderOutput::degraded(last_tasks.clone(), error),
+                            }
                         }),
                     ));
                     self.health.push(ProviderHealth {

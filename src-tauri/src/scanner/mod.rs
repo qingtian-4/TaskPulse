@@ -93,8 +93,14 @@ impl Scanner {
         }
     }
 
-    pub fn scan(&mut self) -> Vec<AgentStatus> {
+    /// Scan the local process table. A platform sampling failure is returned
+    /// separately from a successful scan with no matching agents so callers
+    /// can preserve the last authoritative observation.
+    pub fn scan_result(&mut self) -> Result<Vec<AgentStatus>, String> {
         let (procs, ppid_map) = platform::find_cli_processes(&self.strategies);
+        if !platform::last_scan_succeeded() {
+            return Err("local process snapshot unavailable".to_string());
+        }
 
         // Filter out subprocess agents: if ANY ancestor of a matched process
         // is also a matched CLI process, it's a subagent — not a user-level
@@ -273,7 +279,15 @@ impl Scanner {
         self.session_id_cache.retain(|pid, _| seen.contains(pid));
         self.multiplexer_cache.retain(|pid, _| seen.contains(pid));
         self.window_cache.retain(|pid, _| seen.contains(pid));
-        agents
+        Ok(agents)
+    }
+
+    /// Compatibility wrapper for callers that only need a best-effort list.
+    /// Provider workers use `scan_result` so a failed sample cannot reconcile
+    /// away tasks that were observed by the previous successful sample.
+    #[allow(dead_code)]
+    pub fn scan(&mut self) -> Vec<AgentStatus> {
+        self.scan_result().unwrap_or_default()
     }
 
     fn cpu_pct(&self, p: &ProcInfo) -> f64 {
