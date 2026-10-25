@@ -37,6 +37,13 @@ winrt-notification = { package = "tauri-winrt-notification", version = "0.8.1" }
 [build-dependencies]
 tauri-build = { version = "2", features = [] }
 
+# Dev builds keep debug assertions and overflow checks but drop DWARF debuginfo.
+# Full debuginfo was the single largest disk consumer: ~28.65 GB per target dir
+# and a 345 MB executable, versus 1.60 GB / 11.7 MB for the same code in release.
+# Flip back to `debug = 1` locally if you need line numbers in backtraces.
+[profile.dev]
+debug = 0
+
 [profile.release]
 opt-level     = "z"
 lto           = "thin"
