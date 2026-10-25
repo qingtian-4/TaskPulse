@@ -184,6 +184,7 @@ fn main() {
             integrations::api::integration_export,
             focus::focus_terminal,
             watcher::get_agents,
+            watcher::get_dashboard_snapshot,
             watcher::get_archived_attention,
             watcher::get_hosts,
             watcher::get_providers,

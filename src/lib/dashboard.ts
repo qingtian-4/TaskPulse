@@ -4,6 +4,9 @@ export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
 export type TaskSignal = 'approval' | 'question' | 'failed' | 'action';
 export interface DashboardFilters { source: string; project: string; location: string; section: TaskSection | null; signal?: TaskSignal | null; query?:string; unreadOnly?:boolean }
 export const EMPTY_FILTERS: DashboardFilters = {source:'',project:'',location:'',section:null,signal:null,query:'',unreadOnly:false};
+export function shouldApplyDashboardSnapshot(currentRevision:number,incomingRevision:number,requestGeneration:number,currentRequestGeneration:number):boolean {
+  return requestGeneration===currentRequestGeneration && incomingRevision>=currentRevision;
+}
 export const SECTION_ORDER: TaskSection[] = ['ongoing', 'results', 'uncertain', 'pinned'];
 export const SECTION_NAMES: Record<TaskSection,string> = {ongoing:'进行中',results:'结果待查看',uncertain:'状态待更新',pinned:'固定与已查看'};
 // Presentation freshness is stricter than a cached provider snapshot. Keep

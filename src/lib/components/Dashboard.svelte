@@ -4,7 +4,7 @@
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { SOURCE_LABEL, CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type CodexAccountQuota, type SourceDiscovery } from '$lib/types';
-  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, unconfirmedRunning, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, type TaskSection, type TaskSignal } from '$lib/dashboard';
+  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, unconfirmedRunning, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import MessageCenter from './MessageCenter.svelte';
   import {observedDashboardTasks} from '$lib/dashboard';
@@ -47,6 +47,9 @@
   let pendingPrompts = $state<TaskSnapshot[]>([]);
   let showPrompts = $state(false);
   let messages = $state<MessageCenterState>({revision:0,unread:0,entries:[],error:null});
+  type DashboardSnapshot={revision:number;tasks:TaskSnapshot[];hosts:unknown[];providers:ProviderHealth[]};
+  let dashboardRevision=$state(0);
+  let snapshotRequestGeneration=0;
   let messagesEpoch=0;
   let panel = $state<HTMLDivElement | null>(null);
   let demo = $state(false);
@@ -75,11 +78,13 @@
   const degraded = $derived(providers.filter(p => p.status === 'degraded'));
 
   async function snapshots() {
+    const requestGeneration=++snapshotRequestGeneration;
     const epoch=messagesEpoch;
-    const [nextTasks,nextProviders,nextSettings,nextQuota,nextArchived,nextPrompts] = await Promise.all([
-      invoke<TaskSnapshot[]>('get_agents'), invoke<ProviderHealth[]>('get_providers'), invoke<DashboardSettings>('get_monitoring_settings'), invoke<CodexAccountQuota>('get_codex_quota'), invoke<TaskSnapshot[]>('get_archived_attention'), invoke<TaskSnapshot[]>('get_pending_task_prompts')
+    const [snapshot,nextSettings,nextQuota,nextArchived,nextPrompts] = await Promise.all([
+      invoke<DashboardSnapshot>('get_dashboard_snapshot'), invoke<DashboardSettings>('get_monitoring_settings'), invoke<CodexAccountQuota>('get_codex_quota'), invoke<TaskSnapshot[]>('get_archived_attention'), invoke<TaskSnapshot[]>('get_pending_task_prompts')
     ]);
-    tasks=nextTasks; providers=nextProviders; settings=nextSettings; quota=nextQuota; archived=nextArchived; pendingPrompts=nextPrompts;
+    if(!shouldApplyDashboardSnapshot(dashboardRevision,snapshot.revision,requestGeneration,snapshotRequestGeneration))return;
+    dashboardRevision=snapshot.revision; tasks=snapshot.tasks; providers=snapshot.providers; settings=nextSettings; quota=nextQuota; archived=nextArchived; pendingPrompts=nextPrompts;
     const center=await invoke<MessageCenterState>('get_message_center');
     if(epoch===messagesEpoch)messages=acceptMessageState(messages,center);
   }
@@ -190,7 +195,7 @@
     async function subscribe(promise:Promise<()=>void>) { const cleanup=await promise; if(mounted)cleanups.push(cleanup);else cleanup(); }
     void (async()=>{
       try {
-        await subscribe(listen<TaskSnapshot[]>('agents-updated',e=>tasks=e.payload));
+        await subscribe(listen<DashboardSnapshot>('dashboard-snapshot-updated',e=>{if(e.payload.revision>=dashboardRevision){dashboardRevision=e.payload.revision;tasks=e.payload.tasks;providers=e.payload.providers;}}));
         await subscribe(listen<TaskSnapshot[]>('archived-attention-updated',e=>archived=e.payload));
         await subscribe(listen<ProviderHealth[]>('providers-updated',e=>providers=e.payload));
         await subscribe(listen<TaskSnapshot[]>('pending-prompts-updated',e=>pendingPrompts=e.payload));
