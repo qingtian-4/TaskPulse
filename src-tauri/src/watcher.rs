@@ -13,7 +13,7 @@
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
 use tauri::Manager;
@@ -165,8 +165,17 @@ static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
 static SELECTED_TASK: Mutex<Option<TaskSnapshot>> = Mutex::new(None);
 static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
 static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
+static LATEST_GENERATION: AtomicU64 = AtomicU64::new(0);
 static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
 static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Serialize)]
+pub struct DashboardSnapshot {
+    pub revision: u64,
+    pub tasks: Vec<TaskSnapshot>,
+    pub hosts: Vec<HostHealth>,
+    pub providers: Vec<ProviderHealth>,
+}
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     reconcile_attention_with_persistence(tasks, true)
@@ -351,6 +360,7 @@ fn emit_agents(
         });
         *cache = providers.to_vec();
     }
+    let revision = LATEST_GENERATION.fetch_add(1, Ordering::AcqRel) + 1;
     crate::tray::update_icon(app, tasks, hosts);
     crate::message_center::publish(app);
     let _ = app.emit(
@@ -358,6 +368,15 @@ fn emit_agents(
         crate::task_notice::get_pending_task_prompts(),
     );
     let _ = app.emit("agents-updated", tasks);
+    let _ = app.emit(
+        "dashboard-snapshot-updated",
+        DashboardSnapshot {
+            revision,
+            tasks: tasks.to_vec(),
+            hosts: hosts.to_vec(),
+            providers: providers.to_vec(),
+        },
+    );
     static ARCHIVED: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
     let archived = get_archived_attention();
     let mut previous = ARCHIVED.lock().unwrap_or_else(|e| e.into_inner());
@@ -396,8 +415,18 @@ pub fn emit_latest(app: &AppHandle) {
             e.into_inner()
         })
         .clone();
+    let revision = LATEST_GENERATION.load(Ordering::Acquire);
     crate::tray::update_icon(app, &tasks, &hosts);
     let _ = app.emit("agents-updated", &tasks);
+    let _ = app.emit(
+        "dashboard-snapshot-updated",
+        DashboardSnapshot {
+            revision,
+            tasks: tasks.clone(),
+            hosts: hosts.clone(),
+            providers: providers.clone(),
+        },
+    );
     let _ = app.emit("hosts-updated", &hosts);
     let _ = app.emit("providers-updated", &providers);
 }
@@ -422,6 +451,52 @@ pub fn get_agents() -> Vec<TaskSnapshot> {
         .clone();
     log::info!("get_agents: returning {} tasks", tasks.len());
     tasks
+}
+
+#[tauri::command]
+pub fn get_dashboard_snapshot() -> DashboardSnapshot {
+    // Read a coherent generation. A watcher update can replace the three
+    // caches between individual locks; retrying when the generation changes
+    // prevents an older task list from being paired with newer provider health.
+    for _ in 0..3 {
+        let before = LATEST_GENERATION.load(Ordering::Acquire);
+        let tasks = LATEST_TASKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let hosts = LATEST_HOSTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let providers = LATEST_PROVIDERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone();
+        let after = LATEST_GENERATION.load(Ordering::Acquire);
+        if before == after {
+            return DashboardSnapshot {
+                revision: after,
+                tasks,
+                hosts,
+                providers,
+            };
+        }
+    }
+    DashboardSnapshot {
+        revision: LATEST_GENERATION.load(Ordering::Acquire),
+        tasks: LATEST_TASKS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        hosts: LATEST_HOSTS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+        providers: LATEST_PROVIDERS
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone(),
+    }
 }
 
 /// Tauri command: return cached remote-host health with the cached tasks.
@@ -592,9 +667,15 @@ fn dedup_codex_over_scan(tasks: &mut Vec<TaskSnapshot>) {
     let has_session = tasks.iter().any(|t| t.source == TaskSource::Codex);
     if has_session {
         tasks.retain(|t| {
-            !(t.cli.as_deref() == Some("codex") && t.confidence == DetectionConfidence::Inferred)
+            !(is_scanner_observation(t)
+                && t.cli.as_deref() == Some("codex")
+                && t.confidence == DetectionConfidence::Inferred)
         });
     }
+}
+
+fn is_scanner_observation(task: &TaskSnapshot) -> bool {
+    task.source_instance.as_deref() == Some("scanner") || task.id.starts_with("scan:")
 }
 
 fn dedup_hermes_over_scan(tasks: &mut Vec<TaskSnapshot>) {
@@ -603,7 +684,7 @@ fn dedup_hermes_over_scan(tasks: &mut Vec<TaskSnapshot>) {
         // Native Hermes leases also use Inferred confidence. Evidence strength
         // does not identify a scanner row; only remove actual scanner output.
         tasks.retain(|t| {
-            !((t.source_instance.as_deref() == Some("scanner") || t.id.starts_with("scan:"))
+            !(is_scanner_observation(t)
                 && t.cli.as_deref() == Some("hermes")
                 && t.confidence == DetectionConfidence::Inferred)
         });
@@ -616,7 +697,9 @@ fn dedup_dsh_over_scan(tasks: &mut Vec<TaskSnapshot>) {
         .any(|t| t.source == TaskSource::DeepSeekHarness);
     if has_session {
         tasks.retain(|t| {
-            !(t.cli.as_deref() == Some("dsh") && t.confidence == DetectionConfidence::Inferred)
+            !(is_scanner_observation(t)
+                && t.cli.as_deref() == Some("dsh")
+                && t.confidence == DetectionConfidence::Inferred)
         });
     }
 }
@@ -2005,6 +2088,80 @@ mod tests {
         let mut tasks = vec![scan.clone()];
         dedup_hermes_over_scan(&mut tasks);
         assert_eq!(tasks, vec![scan]);
+    }
+
+    #[test]
+    fn codex_native_inferred_session_is_not_removed_as_scanner_duplicate() {
+        let mut native = task_with_terminal(
+            "codex:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("codex"),
+        );
+        native.source = TaskSource::Codex;
+        native.source_instance = Some("codex".into());
+        native.session_id = Some("native".into());
+        let mut tasks = vec![native.clone()];
+        dedup_codex_over_scan(&mut tasks);
+        assert_eq!(tasks, vec![native]);
+    }
+
+    #[test]
+    fn deepseek_native_inferred_session_is_not_removed_as_scanner_duplicate() {
+        let mut native = task_with_terminal(
+            "dsh-native:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("dsh"),
+        );
+        native.source = TaskSource::DeepSeekHarness;
+        native.source_instance = Some("deepseek_harness_desktop".into());
+        native.session_id = Some("native".into());
+        let mut tasks = vec![native.clone()];
+        dedup_dsh_over_scan(&mut tasks);
+        assert_eq!(tasks, vec![native]);
+    }
+
+    #[test]
+    fn codex_and_deepseek_scanner_duplicates_still_drop_when_native_exists() {
+        let mut expected = vec![];
+        for (id, source, cli) in [
+            ("codex:native", TaskSource::Codex, "codex"),
+            ("dsh-native:native", TaskSource::DeepSeekHarness, "dsh"),
+        ] {
+            let mut native = task_with_terminal(
+                id,
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "123",
+                Some(cli),
+            );
+            native.source = source;
+            native.source_instance = Some("native".into());
+            native.session_id = Some(id.into());
+            expected.push(native);
+        }
+        let mut tasks = expected.clone();
+        for (id, source, cli) in [
+            ("scan:codex", TaskSource::Codex, "codex"),
+            ("scan:dsh", TaskSource::DeepSeekHarness, "dsh"),
+        ] {
+            let mut scan = task_with_terminal(
+                id,
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "456",
+                Some(cli),
+            );
+            scan.source = source;
+            scan.source_instance = Some("scanner".into());
+            tasks.push(scan);
+        }
+        dedup_codex_over_scan(&mut tasks);
+        dedup_dsh_over_scan(&mut tasks);
+        assert_eq!(tasks, expected);
     }
 
     #[test]

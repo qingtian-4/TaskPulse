@@ -1,12 +1,19 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import {observedDashboardTasks} from '../src/lib/dashboard';
+import {observedDashboardTasks,shouldApplyDashboardSnapshot} from '../src/lib/dashboard';
 import {acceptMessageState,unreadMessageIds,messageStatus} from '../src/lib/messages';
 import type {MessageCenterState} from '../src/lib/types';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('dashboard snapshots reject late responses from an older request or revision',()=>{
+  expect(shouldApplyDashboardSnapshot(4,3,1,2)).toBe(false);
+  expect(shouldApplyDashboardSnapshot(4,5,1,2)).toBe(false);
+  expect(shouldApplyDashboardSnapshot(4,4,2,2)).toBe(true);
+  expect(shouldApplyDashboardSnapshot(4,5,2,2)).toBe(true);
+});
 
 test('three headline counts retain task evidence while fresh blockers are an ongoing subset',()=>{
   const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[{
