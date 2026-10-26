@@ -168,7 +168,8 @@ impl TaskStore {
     /// tasks become stale/unknown without a completion. Remote SSH
     /// failures are safe because RemoteTmuxProvider re-emits its last tasks
     /// with `stale=true` rather than returning an empty successful snapshot.
-    pub fn merge_partition(
+    #[cfg(test)]
+    fn merge_partition(
         &mut self,
         incoming: Vec<TaskSnapshot>,
         remote: bool,

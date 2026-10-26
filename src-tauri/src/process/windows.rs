@@ -15,7 +15,7 @@ use windows_sys::Win32::System::Threading::*;
 const REAP_BUDGET: Duration = Duration::from_millis(500);
 
 #[derive(Debug, PartialEq, Eq)]
-pub(super) enum ProbeError {
+pub(crate) enum ProbeError {
     Spawn,
     Read,
     OutputLimit,
@@ -361,7 +361,7 @@ fn wait_for_empty_job(
     }
 }
 
-pub(super) fn output(
+pub(crate) fn output(
     program: &str,
     args: &[&str],
     timeout: Duration,
@@ -378,17 +378,17 @@ pub(super) fn output(
 }
 
 #[cfg(test)]
-pub(super) struct Fixture(Probe);
+pub(crate) struct Fixture(Probe);
 #[cfg(test)]
 impl Fixture {
-    pub(super) fn start(program: &str) -> Self {
+    pub(crate) fn start(program: &str) -> Self {
         Self(
             Probe::spawn(
                 program,
                 &[
                     "--ignored",
                     "--exact",
-                    "scanner::windows::probe::tests::owned_leaf_fixture",
+                    "process::windows::tests::owned_leaf_fixture",
                 ],
             )
             .unwrap(),
@@ -411,9 +411,9 @@ mod tests {
     use std::io::Write;
     use windows_sys::Win32::System::Diagnostics::ToolHelp::*;
 
-    const LEAF: &str = "scanner::windows::probe::tests::owned_leaf_fixture";
-    const TREE: &str = "scanner::windows::probe::tests::owned_tree_fixture";
-    const STRESS: &str = "scanner::windows::probe::tests::owned_resource_worker";
+    const LEAF: &str = "process::windows::tests::owned_leaf_fixture";
+    const TREE: &str = "process::windows::tests::owned_tree_fixture";
+    const STRESS: &str = "process::windows::tests::owned_resource_worker";
 
     #[test]
     #[ignore = "isolated child fixture, never an Agent/model invocation"]

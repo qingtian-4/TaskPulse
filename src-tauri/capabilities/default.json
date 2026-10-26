@@ -1,7 +1,11 @@
 {
   "identifier": "default",
-  "description": "Default permissions for AgentTray",
-  "windows": ["popup", "management", "task-notice"],
+  "description": "TaskPulse window and shortcut permissions",
+  "windows": [
+    "popup",
+    "management",
+    "task-notice"
+  ],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -12,10 +16,8 @@
     "core:window:allow-is-visible",
     "core:window:allow-set-size",
     "core:window:allow-start-dragging",
-    "shell:allow-open",
     "core:event:default",
     "global-shortcut:allow-register",
-    "global-shortcut:allow-unregister",
-    "notification:default"
+    "global-shortcut:allow-unregister"
   ]
 }

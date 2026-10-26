@@ -74,7 +74,16 @@
   const sorted = $derived([...filtered].sort(compareTasks));
   const projects = $derived([...new Map(displayed.map(t => [projectKey(t,settings), { key:projectKey(t,settings), label:taskContext(t,settings), path:t.project_path }])).values()]);
   const locations = $derived([...new Set(displayed.map(t => t.host ?? '本机'))]);
-  const projectGroups = $derived([...new Map(sorted.map(t => [projectKey(t,settings), { title:taskContext(t,settings), tasks:sorted.filter(x => projectKey(x,settings) === projectKey(t,settings)) }])).values()]);
+  const projectGroups = $derived.by(() => {
+    const groups = new Map<string, {title:string;tasks:TaskSnapshot[]}>();
+    for (const task of sorted) {
+      const key = projectKey(task,settings);
+      let group = groups.get(key);
+      if (!group) { group = {title:taskContext(task,settings),tasks:[]}; groups.set(key,group); }
+      group.tasks.push(task);
+    }
+    return [...groups.values()];
+  });
   const degraded = $derived(providers.filter(p => p.status === 'degraded'));
 
   async function snapshots() {
@@ -125,10 +134,10 @@
   async function action(task: TaskSnapshot, name: string, value?: boolean) {
     if (!isTauri()) return;
     try {
-      tasks=await invoke<TaskSnapshot[]>('update_task_attention',{id:task.id,action:name,pinned:value});
+      await invoke('update_task_attention',{id:task.id,action:name,pinned:value});
+      await snapshots();
       if (name==='hide' || name==='ignore') { lastHidden={task,action:name==='hide'?'restore':'unignore'}; selected=null; }
-      else if (name==='ignore' || !tasks.some(t=>t.id===selected?.id)) selected=null;
-      archived=await invoke<TaskSnapshot[]>('get_archived_attention');
+      else if (!tasks.some(t=>t.id===selected?.id)) selected=null;
     } catch(e) { error=String(e); }
   }
   async function copy(task:TaskSnapshot) {
@@ -167,7 +176,7 @@
   onMount(()=>{
     const searchShortcut=(event:KeyboardEvent)=>{
       const target=event.target as HTMLElement;
-      if(event.key==='/' && !['INPUT','TEXTAREA','SELECT'].includes(target.tagName) && !target.isContentEditable){event.preventDefault();panel?.querySelector<HTMLInputElement>('[aria-label="搜索任务"]')?.focus();}
+      if(!showPrompts && event.key==='/' && !['INPUT','TEXTAREA','SELECT'].includes(target.tagName) && !target.isContentEditable){event.preventDefault();panel?.querySelector<HTMLInputElement>('[aria-label="搜索任务"]')?.focus();}
     };
     window.addEventListener('keydown',searchShortcut);
     const clock=setInterval(()=>now=Date.now(),1000);
@@ -235,7 +244,7 @@
   </header>
   <div class="counts" aria-label="任务概览" aria-describedby="count-help">
     <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title="来源新鲜的运行任务，包含明确待处理请求" onclick={()=>chooseSection('ongoing')}><span>进行中</span><b>{confirmedTasks.filter(t=>taskSection(t)==='ongoing').length}</b></button>
-    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="进行中的子集：明确待批准、待回答或额度耗尽" onclick={()=>chooseSignal('action')}><span>待处理</span><b>{confirmedTasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
+    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="进行中的子集：明确待批准、待回答或额度耗尽" onclick={()=>chooseSignal('action')}><span>其中待处理</span><b>{confirmedTasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
     <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title="尚未查看的本轮结果，包括失败" onclick={()=>chooseSection('results')}><span>待查看</span><b>{confirmedTasks.filter(t=>taskSection(t)==='results').length}</b></button>
   </div>
   <p id="count-help" class="sr-only">待处理包含在进行中，计数不相加。</p>

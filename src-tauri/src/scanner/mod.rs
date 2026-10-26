@@ -9,6 +9,7 @@ const CPU_ACTIVE_THRESHOLD: f64 = 2.0;
 
 use crate::watcher::{AgentStatus, TerminalInfo};
 
+mod services;
 pub mod strategies;
 
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
@@ -155,6 +156,9 @@ impl Scanner {
         let mut seen_ids: HashMap<String, usize> = HashMap::new();
 
         for (mut p, strategy) in procs {
+            if services::owned_descendant(p.pid, &batch.snapshot.ppid_map, std::process::id()) {
+                continue;
+            }
             p.ppid = batch
                 .snapshot
                 .ppid_map

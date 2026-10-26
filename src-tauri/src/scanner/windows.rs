@@ -7,7 +7,7 @@ use super::{known_terminal, PlatformScan, ProcInfo, ProcessEntry, ProcessSnapsho
 use crate::watcher::TerminalInfo;
 use serde::Deserialize;
 
-mod probe;
+use crate::process::windows as probe;
 use probe::output as hidden_output;
 const PROCESS_SNAPSHOT_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
@@ -195,10 +195,14 @@ fn match_snapshot(
             continue;
         }
 
+        if strategy.cli_name() == "codex" && super::services::codex_service(cmd_line) {
+            continue;
+        }
         let ppid = row.ppid;
 
         // CWD is hard to get on Windows without elevated privileges
-        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("C:\\"));
+        // Unknown target CWD is not the monitor's own working directory.
+        let cwd = PathBuf::new();
 
         // Get CPU times from the same CIM snapshot (100-nanosecond units).
         let utime = row.user_mode_time / 100_000;
@@ -596,6 +600,12 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "deterministic owned subprocess fixture, not an Agent invocation"]
+    fn recovery_fixture() {
+        println!("taskpulse-recovered");
+    }
+
+    #[test]
     fn repeated_probe_failures_recover_without_poisoning_the_next_sample() {
         for _ in 0..3 {
             let result = hidden_output(
@@ -616,22 +626,18 @@ mod tests {
             ));
         }
         let recovered = hidden_output(
-            "powershell",
+            std::env::current_exe().unwrap().to_str().unwrap(),
             &[
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Write-Output recovered",
+                "--ignored",
+                "--exact",
+                "scanner::windows::tests::recovery_fixture",
+                "--nocapture",
             ],
             Duration::from_secs(2),
             MAX_PROCESS_SNAPSHOT_BYTES,
         )
         .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&recovered.stdout).trim(),
-            "recovered"
-        );
+        assert!(String::from_utf8_lossy(&recovered.stdout).contains("taskpulse-recovered"));
     }
 
     #[test]
@@ -657,22 +663,18 @@ mod tests {
         }
         assert!(started.elapsed() < Duration::from_secs(30));
         let recovered = hidden_output(
-            "powershell",
+            std::env::current_exe().unwrap().to_str().unwrap(),
             &[
-                "-NoLogo",
-                "-NoProfile",
-                "-NonInteractive",
-                "-Command",
-                "Write-Output recovered",
+                "--ignored",
+                "--exact",
+                "scanner::windows::tests::recovery_fixture",
+                "--nocapture",
             ],
             Duration::from_secs(2),
             MAX_PROCESS_SNAPSHOT_BYTES,
         )
         .unwrap();
-        assert_eq!(
-            String::from_utf8_lossy(&recovered.stdout).trim(),
-            "recovered"
-        );
+        assert!(String::from_utf8_lossy(&recovered.stdout).contains("taskpulse-recovered"));
     }
 
     #[test]

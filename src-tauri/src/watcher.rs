@@ -304,7 +304,7 @@ pub fn update_task_attention(
     id: String,
     action: String,
     pinned: Option<bool>,
-) -> Result<Vec<TaskSnapshot>, String> {
+) -> Result<(), String> {
     // Resolve before locking the tracker: catalog fallback reads the same tracker.
     let discovered = crate::monitoring::find_session(&id);
     if matches!(action.as_str(), "follow" | "restore" | "pin") {
@@ -345,7 +345,7 @@ pub fn update_task_attention(
         crate::task_notice::remove_task(&app, &id);
     }
     emit_agents(&app, &tasks, &hosts, &providers);
-    Ok(tasks)
+    Ok(())
 }
 
 fn emit_agents(
@@ -1131,58 +1131,6 @@ fn update_provider_health(
     } else {
         health.push(next);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
-fn merge_and_emit(
-    app: &AppHandle,
-    store: &mut TaskStore,
-    engine: &mut TransitionEngine,
-    tasks: Vec<TaskSnapshot>,
-    hosts: &[HostHealth],
-    providers: &[ProviderHealth],
-    history: &mut HistoryStore,
-    now: SystemTime,
-    remote: bool,
-) {
-    let merged = store.merge_partition(tasks, remote, now);
-    let events = engine.apply(&merged, hosts, now);
-    for e in &events {
-        log::info!("transition event: {}", crate::privacy::event_kind(e));
-    }
-    crate::notifier::handle_events(app, &events, &merged);
-    if let Err(error) = history.save_if_changed(store.recent()) {
-        log::warn!("failed to persist recent task history: {error}");
-    }
-    let display = reconcile_attention(merged);
-    emit_agents(app, &display, hosts, providers);
-}
-
-/// Refresh local sources (file provider + Codex session metadata + scanner),
-/// dedup, and emit.
-#[allow(dead_code)]
-fn refresh_local(
-    app: &AppHandle,
-    store: &mut TaskStore,
-    engine: &mut TransitionEngine,
-    providers: &mut LocalProviders,
-    history: &mut HistoryStore,
-    hosts: &[HostHealth],
-    now: SystemTime,
-) {
-    let batch = providers.poll(now);
-    let merged = store.merge_sources(batch.tasks, &batch.authoritative_sources, now);
-    let events = engine.apply(&merged, hosts, now);
-    for event in &events {
-        log::info!("transition event: {}", crate::privacy::event_kind(event));
-    }
-    crate::notifier::handle_events(app, &events, &merged);
-    if let Err(error) = history.save_if_changed(store.recent()) {
-        log::warn!("failed to persist recent task history: {error}");
-    }
-    let display = reconcile_attention(merged);
-    emit_agents(app, &display, hosts, &providers.health);
 }
 
 fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {

@@ -31,8 +31,8 @@ export function readTestResult(id:string, health:ProviderHealth[], since:number)
 }
 
 const notes:Record<SourceKind,string>={
-  codex:'原生标题、项目与 rollout 执行阶段；仅明确结束事件提醒。没有明确审批事件时，不能识别待批准。',
-  codex_wsl:'独立读取已运行发行版的 Codex 数据；不唤醒 WSL，不借用 Windows 额度。',
+  codex:'原生标题、项目与 rollout 执行阶段；仅明确结束事件提醒。命令审批需可选的官方观察 Hook，安装后还需在 Codex /hooks 中信任。',
+  codex_wsl:'独立读取已运行发行版的 Codex 数据；不唤醒 WSL，不借用 Windows 额度。命令审批需在该发行版安装并信任观察 Hook。',
   remote_codex:'读取已配置 SSH 主机的 Codex 会话；依赖主机可达、权限与远端数据格式。',
   claude_code:'原生会话读取为尽力推断；精确生命周期需自愿配置官方 Hook，与代理模型无关。',
   hermes:'原生标题、项目和运行租约；没有明确结束证据时不猜测任务完成。',

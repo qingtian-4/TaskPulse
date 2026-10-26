@@ -176,7 +176,7 @@ impl AttentionTracker {
         F: FnMut(&TaskSnapshot) -> Option<String>,
     {
         for record in self.records.values_mut() {
-            if record.task.source_instance.is_none() {
+            if record.task.source_instance.is_none() || record.task.id.starts_with("scan:") {
                 record.task.source_instance = resolve(&record.task);
             }
         }
@@ -333,18 +333,21 @@ impl AttentionTracker {
 
     pub fn mark_viewed(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {
         self.writable()?;
+        let action_id = id.to_owned();
+        let previous = self.records.get(&action_id).cloned();
         let record = self
             .records
             .get_mut(id)
             .ok_or_else(|| format!("unknown task id: {id}"))?;
         record.unread = false;
         record.task.unread = false;
-        self.save_best_effort();
-        Ok(self.display())
+        self.persist_action(&action_id, previous)
     }
 
     pub fn hide(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {
         self.writable()?;
+        let action_id = id.to_owned();
+        let previous = self.records.get(&action_id).cloned();
         let record = self
             .records
             .get_mut(id)
@@ -358,12 +361,13 @@ impl AttentionTracker {
         record.hidden = true;
         record.task.unread = false;
         record.task.pinned = false;
-        self.save_best_effort();
-        Ok(self.display())
+        self.persist_action(&action_id, previous)
     }
 
     pub fn restore(&mut self, id: &str) -> Result<Vec<TaskSnapshot>, String> {
         self.writable()?;
+        let action_id = id.to_owned();
+        let previous = self.records.get(&action_id).cloned();
         let record = self
             .records
             .get_mut(id)
@@ -373,12 +377,13 @@ impl AttentionTracker {
         record.followed_at = millis(SystemTime::now());
         record.historical_import = false;
         record.task.unread = true;
-        self.save_best_effort();
-        Ok(self.display())
+        self.persist_action(&action_id, previous)
     }
 
     pub fn set_pinned(&mut self, id: &str, pinned: bool) -> Result<Vec<TaskSnapshot>, String> {
         self.writable()?;
+        let action_id = id.to_owned();
+        let previous = self.records.get(&action_id).cloned();
         let record = self
             .records
             .get_mut(id)
@@ -386,8 +391,7 @@ impl AttentionTracker {
         record.pinned = pinned;
         record.pin_override = Some(pinned);
         record.task.pinned = pinned;
-        self.save_best_effort();
-        Ok(self.display())
+        self.persist_action(&action_id, previous)
     }
 
     pub fn display(&self) -> Vec<TaskSnapshot> {
@@ -474,6 +478,8 @@ impl AttentionTracker {
 
     pub fn follow(&mut self, task: TaskSnapshot) -> Result<Vec<TaskSnapshot>, String> {
         self.writable()?;
+        let action_id = task.id.clone();
+        let previous = self.records.get(&action_id).cloned();
         let mut task = task;
         task.new_execution = false;
         let record = self
@@ -500,12 +506,13 @@ impl AttentionTracker {
         record.historical_import = false;
         record.task.unread = true;
         record.task.attention_since = millis(SystemTime::now());
-        self.save_best_effort();
-        Ok(self.display())
+        self.persist_action(&action_id, previous)
     }
 
     pub fn set_ignored(&mut self, id: &str, ignored: bool) -> Result<Vec<TaskSnapshot>, String> {
         self.writable()?;
+        let action_id = id.to_owned();
+        let previous = self.records.get(&action_id).cloned();
         let record = self
             .records
             .get_mut(id)
@@ -516,8 +523,7 @@ impl AttentionTracker {
             record.task.unread = true;
             record.followed_at = millis(SystemTime::now());
         }
-        self.save_best_effort();
-        Ok(self.display())
+        self.persist_action(&action_id, previous)
     }
 
     pub fn reset_baselines(&mut self, sources: &HashSet<String>) {
@@ -526,6 +532,28 @@ impl AttentionTracker {
             self.baselines.insert(source.clone(), now);
         }
         self.save_best_effort();
+    }
+
+    // User actions commit only after atomic replacement succeeds.
+    fn persist_action(
+        &mut self,
+        id: &str,
+        previous: Option<AttentionRecord>,
+    ) -> Result<Vec<TaskSnapshot>, String> {
+        if let Err(error) = self.save_if_changed() {
+            match previous {
+                Some(record) => {
+                    self.records.insert(id.to_owned(), record);
+                }
+                None => {
+                    self.records.remove(id);
+                }
+            }
+            return Err(format!(
+                "Failed to save attention state; please retry: {error}"
+            ));
+        }
+        Ok(self.display())
     }
 
     fn save_best_effort(&mut self) {
@@ -595,6 +623,32 @@ fn effective_turn_key(task: &TaskSnapshot) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn failed_manual_save_rolls_back_and_can_be_retried() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        tracker
+            .follow(task("a", TaskStatus::Succeeded, Some("turn")))
+            .unwrap();
+        let persisted = std::fs::read(&path).unwrap();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(tracker.mark_viewed("a").is_err());
+        assert!(tracker.set_pinned("a", true).is_err());
+        assert!(tracker.hide("a").is_err());
+        assert!(tracker.set_ignored("a", true).is_err());
+        assert!(tracker
+            .follow(task("b", TaskStatus::Running, Some("turn")))
+            .is_err());
+        assert_eq!(tracker.records.len(), 1);
+        let record = &tracker.records["a"];
+        assert!(record.unread && !record.hidden && !record.ignored && !record.pinned);
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, persisted).unwrap();
+        tracker.mark_viewed("a").unwrap();
+        assert!(!AttentionTracker::open(path).records["a"].unread);
+    }
     #[test]
     fn r02_invalid_or_future_attention_never_overwrites_original_across_restarts() {
         for original in [

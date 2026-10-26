@@ -56,6 +56,7 @@ impl HookLog {
                 now,
             );
             t.session_id = Some(id.into());
+            t.started_at = millis(event.get("turn_started_at"));
             t
         });
         apply_hook(task, &event);

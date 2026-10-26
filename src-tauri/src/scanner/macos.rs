@@ -88,6 +88,9 @@ pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> Platfor
             continue;
         }
 
+        if strategy.cli_name() == "codex" && super::services::codex_service(&full_cmd) {
+            continue;
+        }
         let pid: u32 = match parts[0].parse() {
             Ok(p) => p,
             Err(_) => continue,

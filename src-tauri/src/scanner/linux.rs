@@ -113,6 +113,10 @@ pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> Platfor
         }
 
         // Reuse stat already read for ppid_map above
+        if strategy.cli_name() == "codex" && super::services::codex_service(&full) {
+            continue;
+        }
+
         let stat = match stat_str {
             Some(ref s) => s,
             None => continue,
