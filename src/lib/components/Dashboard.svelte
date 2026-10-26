@@ -244,7 +244,7 @@
   </header>
   <div class="counts" aria-label="任务概览" aria-describedby="count-help">
     <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title="来源新鲜的运行任务，包含明确待处理请求" onclick={()=>chooseSection('ongoing')}><span>进行中</span><b>{confirmedTasks.filter(t=>taskSection(t)==='ongoing').length}</b></button>
-    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="进行中的子集：明确待批准、待回答或额度耗尽" onclick={()=>chooseSignal('action')}><span>其中待处理</span><b>{confirmedTasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
+    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="进行中的子集：明确待批准、待回答或额度耗尽" onclick={()=>chooseSignal('action')}><span>待处理</span><b>{confirmedTasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
     <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title="尚未查看的本轮结果，包括失败" onclick={()=>chooseSection('results')}><span>待查看</span><b>{confirmedTasks.filter(t=>taskSection(t)==='results').length}</b></button>
   </div>
   <p id="count-help" class="sr-only">待处理包含在进行中，计数不相加。</p>
