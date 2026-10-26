@@ -17,6 +17,7 @@ pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> Platfor
             return PlatformScan {
                 matched: out,
                 snapshot: ProcessSnapshot {
+                    collected_at: std::time::Instant::now(),
                     ppid_map,
                     processes: HashMap::new(),
                     succeeded: false,
@@ -167,6 +168,7 @@ pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> Platfor
     PlatformScan {
         matched: out,
         snapshot: ProcessSnapshot {
+            collected_at: std::time::Instant::now(),
             ppid_map,
             processes: HashMap::new(),
             succeeded: true,

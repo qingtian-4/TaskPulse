@@ -11,6 +11,7 @@ use crate::watcher::{AgentStatus, TerminalInfo};
 
 pub mod strategies;
 
+#[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub(crate) struct ProcessEntry {
     pub pid: u32,
     pub ppid: u32,
@@ -23,7 +24,9 @@ pub(crate) struct ProcessEntry {
 
 pub(crate) struct ProcessSnapshot {
     pub ppid_map: HashMap<u32, u32>,
+    #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
     pub processes: HashMap<u32, ProcessEntry>,
+    pub collected_at: Instant,
     pub succeeded: bool,
 }
 
@@ -72,6 +75,8 @@ pub struct Scanner {
     /// Cached because env vars are stable for a process's lifetime and
     /// reading them can be expensive (macOS spawns a `ps` process).
     multiplexer_cache: HashMap<u32, Option<(String, String, String)>>,
+    /// Opaque lifetime tokens prevent PID reuse from inheriting cached state.
+    process_lifetimes: HashMap<u32, Option<String>>,
     strategies: Vec<Box<dyn strategies::CliStrategy>>,
 }
 
@@ -114,6 +119,7 @@ impl Scanner {
             window_cache: HashMap::new(),
             session_id_cache: HashMap::new(),
             multiplexer_cache: HashMap::new(),
+            process_lifetimes: HashMap::new(),
             strategies: strategies::all_strategies(),
         }
     }
@@ -122,24 +128,25 @@ impl Scanner {
     /// separately from a successful scan with no matching agents so callers
     /// can preserve the last authoritative observation.
     pub fn scan_result(&mut self) -> Result<Vec<AgentStatus>, String> {
-        let batch = platform::find_cli_processes(&self.strategies);
+        self.scan_with(platform::find_cli_processes)
+    }
+
+    fn scan_with(
+        &mut self,
+        collect: impl for<'a> FnOnce(&'a [Box<dyn strategies::CliStrategy>]) -> PlatformScan<'a>,
+    ) -> Result<Vec<AgentStatus>, String> {
+        let batch = collect(&self.strategies);
+        log::trace!(
+            "scanner batch age: {:?}",
+            batch.snapshot.collected_at.elapsed()
+        );
         if !batch.snapshot.succeeded {
             return Err("local process snapshot unavailable".to_string());
         }
-        let ppid_map = &batch.snapshot.ppid_map;
         let procs = batch.matched;
-
-        // Filter out subprocess agents: if ANY ancestor of a matched process
-        // is also a matched CLI process, it's a subagent — not a user-level
-        // session. We walk the full ancestor chain via ppid_map to catch
-        // subagents spawned through intermediate processes (e.g.,
-        // claude → bash → claude subagent).
-        let matched_pids: std::collections::HashSet<u32> =
-            procs.iter().map(|(p, _)| p.pid).collect();
-        let procs: Vec<_> = procs
-            .into_iter()
-            .filter(|(p, _)| !has_matched_ancestor(p.ppid, &matched_pids, ppid_map))
-            .collect();
+        // Parentage and terminal sharing alone do not establish session identity.
+        // Only the exact scoped session/process key below may merge observations.
+        self.window_cache.clear();
 
         let mut agents: Vec<AgentStatus> = Vec::new();
         let mut seen = std::collections::HashSet::new();
@@ -148,7 +155,20 @@ impl Scanner {
         let mut seen_ids: HashMap<String, usize> = HashMap::new();
 
         for (mut p, strategy) in procs {
+            p.ppid = batch
+                .snapshot
+                .ppid_map
+                .get(&p.pid)
+                .copied()
+                .unwrap_or(p.ppid);
             seen.insert(p.pid);
+            let token = p.process_instance.clone();
+            if !same_process_lifetime(self.process_lifetimes.get(&p.pid), token.as_deref()) {
+                self.prev.remove(&p.pid);
+                self.session_id_cache.remove(&p.pid);
+                self.multiplexer_cache.remove(&p.pid);
+            }
+            self.process_lifetimes.insert(p.pid, token);
 
             // Compute raw instantaneous CPU%, then smooth with a rolling window
             // to avoid state flipping on transient spikes or dips.
@@ -310,6 +330,7 @@ impl Scanner {
             );
         }
 
+        self.process_lifetimes.retain(|pid, _| seen.contains(pid));
         self.prev.retain(|pid, _| seen.contains(pid));
         self.session_id_cache.retain(|pid, _| seen.contains(pid));
         self.multiplexer_cache.retain(|pid, _| seen.contains(pid));
@@ -343,33 +364,34 @@ impl Scanner {
     }
 }
 
+fn same_process_lifetime(previous: Option<&Option<String>>, current: Option<&str>) -> bool {
+    matches!((previous, current), (Some(Some(old)), Some(new)) if !new.is_empty() && old == new)
+}
+
 fn scanner_identity(
     process: &ProcInfo,
     cli: &str,
-    terminal: Option<&TerminalInfo>,
+    _terminal: Option<&TerminalInfo>,
     session_id: Option<&str>,
 ) -> String {
-    if let Some(session) = session_id.filter(|value| !value.is_empty()) {
-        return format!("scan:{cli}:session:{session}");
-    }
-    if let Some(instance) = process
-        .process_instance
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        return format!("scan:{cli}:process:{instance}");
-    }
-    if let Some(info) = terminal {
-        let focus = info.focus_id.trim();
-        if !focus.is_empty() {
-            return format!("scan:{cli}:terminal:{}:{focus}", info.kind);
-        }
-    }
+    use sha2::{Digest, Sha256};
+    // This scanner samples the local host. Provider workers namespace their
+    // observations separately; no Windows handles or CIM syntax enter this key.
+    // Hash structured components to avoid delimiter collisions and path disclosure.
+    let components = if let Some(session) = session_id.filter(|s| !s.is_empty()) {
+        serde_json::json!(["local", cli, "session", session])
+    } else {
+        serde_json::json!([
+            "local",
+            cli,
+            "process",
+            process.pid,
+            process.process_instance.as_deref().unwrap_or("")
+        ])
+    };
     format!(
-        "scan:{cli}:pid:{}:ppid:{}:cwd:{}",
-        process.pid,
-        process.ppid,
-        process.cwd.display()
+        "scan:{cli}:{:x}",
+        Sha256::digest(components.to_string().as_bytes())
     )
 }
 
@@ -456,30 +478,6 @@ fn count_children(pid: u32, excluded: &[&str], _snapshot: &ProcessSnapshot) -> u
 #[cfg(target_os = "windows")]
 fn count_children(pid: u32, excluded: &[&str], snapshot: &ProcessSnapshot) -> u32 {
     platform::count_children(pid, excluded, snapshot)
-}
-
-/// Walk up the process ancestor chain via ppid_map. Returns true if any
-/// ancestor PID is in the `matched` set (i.e., the process is a descendant
-/// of another matched CLI process — a subagent, not a user session).
-fn has_matched_ancestor(
-    ppid: u32,
-    matched: &std::collections::HashSet<u32>,
-    ppid_map: &HashMap<u32, u32>,
-) -> bool {
-    let mut cur = ppid;
-    for _ in 0..15 {
-        if cur <= 1 {
-            return false;
-        }
-        if matched.contains(&cur) {
-            return true;
-        }
-        cur = match ppid_map.get(&cur) {
-            Some(&p) => p,
-            None => return false,
-        };
-    }
-    false
 }
 
 /// Returns the kernel clock ticks per second (CLK_TCK).
@@ -676,7 +674,7 @@ mod tests {
             scanner_identity(&session_a, "claude-code", None, None)
         );
 
-        let mut reused = identity_process(12, "start-new");
+        let mut reused = identity_process(10, "start-new");
         reused.process_instance = Some("start-new".into());
         assert_ne!(
             scanner_identity(&first, "codex", None, None),
@@ -685,35 +683,136 @@ mod tests {
     }
 
     #[test]
-    fn ancestor_direct_parent_matched() {
-        // claude(100) → claude(200): ppid=100 is matched → filtered
-        let matched: std::collections::HashSet<u32> = [100, 200].into();
-        let ppid_map: HashMap<u32, u32> = [(200, 100)].into();
-        assert!(has_matched_ancestor(100, &matched, &ppid_map));
+    fn independent_processes_share_neither_terminal_nor_birth_identity() {
+        let mut first = identity_process(10, "same-start");
+        let mut second = identity_process(11, "same-start");
+        assert_ne!(
+            scanner_identity(&first, "codex", None, None),
+            scanner_identity(&second, "codex", None, None)
+        );
+        first.process_instance = None;
+        second.process_instance = None;
+        let terminal = identity_terminal("same-terminal");
+        assert_ne!(
+            scanner_identity(&first, "codex", Some(&terminal), None),
+            scanner_identity(&second, "codex", Some(&terminal), None)
+        );
     }
 
     #[test]
-    fn ancestor_through_intermediate() {
-        // claude(100) → bash(150) → claude(200): walk 200→150→100, 100 matched
-        let matched: std::collections::HashSet<u32> = [100, 200].into();
-        let ppid_map: HashMap<u32, u32> = [(200, 150), (150, 100), (100, 1)].into();
-        assert!(has_matched_ancestor(150, &matched, &ppid_map));
+    fn process_cache_requires_matching_lifetime_not_just_pid() {
+        let old = Some("old-start".to_string());
+        assert!(same_process_lifetime(Some(&old), Some("old-start")));
+        assert!(!same_process_lifetime(Some(&old), Some("new-start")));
+        assert!(!same_process_lifetime(Some(&None), None));
+        assert!(!same_process_lifetime(None, Some("old-start")));
     }
 
     #[test]
-    fn ancestor_no_match() {
-        // terminal(50) → bash(150) → claude(200): no matched ancestor
-        let matched: std::collections::HashSet<u32> = [200].into();
-        let ppid_map: HashMap<u32, u32> = [(200, 150), (150, 50), (50, 1)].into();
-        assert!(!has_matched_ancestor(150, &matched, &ppid_map));
+    fn identity_survives_scanner_restart_and_presentation_changes() {
+        let mut process = identity_process(10, "start");
+        let before = scanner_identity(&process, "codex", None, Some("session"));
+        process.window_title = Some("renamed title".into());
+        process.tty_label = "another label".into();
+        process.pid = 99;
+        assert_eq!(
+            before,
+            scanner_identity(&process, "codex", None, Some("session"))
+        );
+        assert_ne!(
+            before,
+            scanner_identity(&process, "claude-code", None, Some("session"))
+        );
     }
 
     #[test]
-    fn ancestor_stops_at_init() {
-        // Process with ppid=1 (init) — no ancestor match
-        let matched: std::collections::HashSet<u32> = [100].into();
-        let ppid_map: HashMap<u32, u32> = [(100, 1)].into();
-        assert!(!has_matched_ancestor(1, &matched, &ppid_map));
+    fn batch_identity_retains_independent_nested_sessions_and_survives_restart() {
+        fn collect(strategies: &[Box<dyn strategies::CliStrategy>]) -> PlatformScan<'_> {
+            let codex = strategies.iter().find(|s| s.cli_name() == "codex").unwrap();
+            let mut child = identity_process(11, "same-start");
+            child.ppid = 10;
+            PlatformScan {
+                matched: vec![
+                    (identity_process(10, "same-start"), codex.as_ref()),
+                    (child, codex.as_ref()),
+                    (identity_process(12, "same-start"), codex.as_ref()),
+                ],
+                snapshot: ProcessSnapshot {
+                    ppid_map: [(10, 1), (11, 10), (12, 1)].into(),
+                    processes: HashMap::new(),
+                    succeeded: true,
+                    collected_at: Instant::now(),
+                },
+            }
+        }
+        let first = Scanner::new().scan_with(collect).unwrap();
+        let second = Scanner::new().scan_with(collect).unwrap();
+        assert_eq!(first.len(), 3);
+        let ids: std::collections::HashSet<_> = first.iter().map(|a| &a.id).collect();
+        assert_eq!(ids.len(), 3);
+        assert_eq!(
+            first.iter().map(|a| &a.id).collect::<Vec<_>>(),
+            second.iter().map(|a| &a.id).collect::<Vec<_>>()
+        );
+        for agent in first {
+            let task: crate::domain::TaskSnapshot = agent.into();
+            assert_eq!(
+                task.confidence,
+                crate::domain::DetectionConfidence::Inferred
+            );
+            assert!(task.id.starts_with("scan:"));
+        }
+    }
+
+    #[test]
+    fn confirmed_session_records_merge_but_pid_reuse_drops_cached_session() {
+        fn collect(strategies: &[Box<dyn strategies::CliStrategy>]) -> PlatformScan<'_> {
+            let strategy = strategies
+                .iter()
+                .find(|s| s.cli_name() == "claude-code")
+                .unwrap();
+            PlatformScan {
+                matched: vec![
+                    (identity_process(10, "birth"), strategy.as_ref()),
+                    (identity_process(11, "birth"), strategy.as_ref()),
+                ],
+                snapshot: ProcessSnapshot {
+                    ppid_map: HashMap::new(),
+                    processes: HashMap::new(),
+                    succeeded: true,
+                    collected_at: Instant::now(),
+                },
+            }
+        }
+        let mut scanner = Scanner::new();
+        for pid in [10, 11] {
+            scanner.process_lifetimes.insert(pid, Some("birth".into()));
+            scanner
+                .session_id_cache
+                .insert(pid, Some("same-session".into()));
+        }
+        assert_eq!(scanner.scan_with(collect).unwrap().len(), 1);
+        // The production path must invalidate cached session/environment state
+        // even if no intervening scan observed a reused PID disappear.
+        let before = scanner.scan_with(collect).unwrap()[0].id.clone();
+        // Use Codex (no session-env lookup) for the reused process, avoiding any
+        // query against an unrelated host process at this synthetic PID.
+        let reused = scanner
+            .scan_with(|strategies| {
+                let strategy = strategies.iter().find(|s| s.cli_name() == "codex").unwrap();
+                PlatformScan {
+                    matched: vec![(identity_process(10, "new-birth"), strategy.as_ref())],
+                    snapshot: ProcessSnapshot {
+                        ppid_map: HashMap::new(),
+                        processes: HashMap::new(),
+                        succeeded: true,
+                        collected_at: Instant::now(),
+                    },
+                }
+            })
+            .unwrap();
+        assert_ne!(before, reused[0].id);
+        assert!(!scanner.session_id_cache.contains_key(&10));
     }
 
     #[test]

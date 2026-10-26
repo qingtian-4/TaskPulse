@@ -226,6 +226,7 @@ pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> PlatformScan<'
         return PlatformScan {
             matched: Vec::new(),
             snapshot: ProcessSnapshot {
+                collected_at: std::time::Instant::now(),
                 ppid_map: HashMap::new(),
                 processes: HashMap::new(),
                 succeeded: false,
@@ -255,6 +256,7 @@ pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> PlatformScan<'
         .map(|(pid, row)| (*pid, row.ppid))
         .collect::<HashMap<_, _>>();
     let snapshot = ProcessSnapshot {
+        collected_at: std::time::Instant::now(),
         ppid_map,
         processes,
         succeeded: true,
