@@ -51,14 +51,14 @@ pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> Platfor
         // Phase 1: Direct exe_name match (native binaries like "claude")
         let strategy = strategies
             .iter()
-            .find(|s| s.process_names().iter().any(|n| *n == exe_name));
+            .find(|s| s.process_names().contains(&exe_name));
 
         // Phase 2: If argv[0] is a script runtime (node, bun, etc.),
         // check remaining args for script names (e.g., "gemini", "codex")
         let strategy = match strategy {
             Some(s) => s.as_ref(),
             None => {
-                if !SCRIPT_RUNTIMES.iter().any(|r| *r == exe_name) {
+                if !SCRIPT_RUNTIMES.contains(&exe_name) {
                     continue;
                 }
                 match parts[5..].iter().find_map(|arg| {
@@ -71,7 +71,7 @@ pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> Platfor
                         .unwrap_or("");
                     strategies
                         .iter()
-                        .find(|s| s.script_names().iter().any(|n| *n == arg_name))
+                        .find(|s| s.script_names().contains(&arg_name))
                 }) {
                     Some(s) => s.as_ref(),
                     None => continue,

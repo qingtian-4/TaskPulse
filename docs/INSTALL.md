@@ -1,12 +1,13 @@
 # 安装与快速入门
 
-当前版本为 **0.2.0-alpha.7，尚无公开可下载的 Alpha.7 安装包**。请先使用
-[源码运行](../README.md#快速开始)。Windows Quality / Security CI 已通过不等于安装包已发布或真实宿主全面验收。
+当前候选为 **0.2.0-alpha.8，尚未公开发布**。维护者按[候选下载与测试](CANDIDATE_TESTING.md)
+取得 Windows EXE/MSI 或 Apple Silicon DMG。安装版无需 Rust/Bun/Node，也不用每次 clone 项目。
+Windows Quality / Security CI 已通过不等于安装包已发布或真实宿主全面验收。
 
-Alpha.7 源码已合入默认 `main`，请按 README 的 `--branch main` 命令克隆；
+源码开发按 README 的 `--branch main` 命令克隆；
 已有克隆先用 `git status` 检查本地修改，不要为升级覆盖工作区。用 `git rev-parse HEAD` 核对实际提交，
 旧提交的 CI 不覆盖新的文档修复或最终 main SHA，详见[候选状态](ALPHA7_CANDIDATE_STATUS.md)。
-源码合并、CI 通过、Draft pre-release 与公开可下载是四个不同状态；当前仍请从源码运行。
+源码合并、CI 通过、Draft pre-release 与公开可下载是四个不同状态；候选包的具体提交以 manifest 为准。
 
 未来在 [TaskPulse Releases](https://github.com/qingtian-4/TaskPulse/releases) 发布后，
 Windows 10/11 x64 可选择 `TaskPulse_<版本>_windows_x64_setup.exe`。
@@ -18,7 +19,7 @@ MSI 是可选安装格式，不要与 NSIS 同时安装。ZIP/Portable 尚未交
 
 ## 三步开始
 
-1. 从源码启动 TaskPulse，打开来源管理，发现或选择 Agent，先查看支持能力。
+1. 安装候选包或从源码启动 TaskPulse，打开来源管理，发现或选择 Agent，先查看支持能力。
 2. 配置来源，选择“所有项目的新执行”或设置项目白名单，再保存。WSL/SSH 独立添加，不会
    默认访问停止的发行版或所有服务器，也不自动修改 Agent 配置。
 3. 测试读取和提醒，然后在启用范围内执行真实任务。托盘或 `Ctrl+Shift+A` 打开面板。

@@ -38,7 +38,7 @@ pub fn focus(_focus_id: &str, _outer_id: &str) -> Result<(), String> {
         }
 
         // Last resort: try activating the generic process name
-        return Err("Could not identify running JetBrains IDE".to_string());
+        Err("Could not identify running JetBrains IDE".to_string())
     }
 
     #[cfg(target_os = "linux")]

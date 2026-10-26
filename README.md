@@ -6,7 +6,7 @@ Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex�
 
 [English](README.en.md) · [使用指南](docs/INSTALL.md) · [兼容性](docs/AGENT_COMPATIBILITY.md) · [架构](docs/ARCHITECTURE.md) · [提交问题](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **Windows 优先 · 下一候选源码预览。** 应用版本号仍为 0.2.0-alpha.7，尚无公开可下载的 Alpha.7 安装包。下方源码安装指向默认分支 `main`；新版面板、消息中心和 Runtime 修复不在历史 Alpha.7 候选包内。按 main SHA 构建的 CI 附件与历史候选分开识别，不代表新版本已发布。[构建与发布规则](docs/RELEASING.md)。
+> **Windows 优先 · Alpha.8 候选测试。** 当前应用版本为 0.2.0-alpha.8，尚未公开发布。Windows EXE/MSI 和 Apple Silicon DMG 通过独立 CI 生成候选安装包，供维护者按准确提交下载验收；历史 Alpha.7 草稿不包含本次修复。[候选下载与测试](docs/CANDIDATE_TESTING.md) · [构建与发布规则](docs/RELEASING.md)。
 
 ## 一眼了解
 
@@ -40,7 +40,7 @@ Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex�
 
 ## 快速开始
 
-目前没有公开的 Alpha.7 安装包。Windows x64 用户可以从源码运行；需要 Rust 1.89+、Bun、Microsoft C++ Build Tools 和 [Tauri 2 先决条件](https://v2.tauri.app/start/prerequisites/)（含 WebView2）。
+测试者按[候选下载说明](docs/CANDIDATE_TESTING.md)选择 Windows EXE 或 Mac arm64 DMG，无需安装开发工具。以下为 Windows 源码开发方式，需要 Rust 1.89+、Bun、Microsoft C++ Build Tools 和 [Tauri 2 先决条件](https://v2.tauri.app/start/prerequisites/)（含 WebView2）；Mac 开发见[专用指南](docs/MACOS_DEVELOPMENT.md)。
 
 ```powershell
 git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git

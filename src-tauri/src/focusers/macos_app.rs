@@ -1,6 +1,6 @@
-/// Activates a macOS terminal window using AppleScript.
-/// `focus_id` is the application name (e.g. "iTerm2", "Terminal").
-/// `outer_id` is the TTY name (e.g. "ttys000") for tab-specific focus.
+//! Activates a macOS terminal window using AppleScript.
+//! `focus_id` is the application name (e.g. "iTerm2", "Terminal").
+//! `outer_id` is the TTY name (e.g. "ttys000") for tab-specific focus.
 
 #[cfg(target_os = "macos")]
 fn escape_applescript(s: &str) -> String {

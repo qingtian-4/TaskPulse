@@ -473,7 +473,10 @@ fn count_children(pid: u32, excluded: &[&str], _snapshot: &ProcessSnapshot) -> u
                 return false;
             }
             // Skip the PID field; everything after the first whitespace is the command.
-            let cmd = line.splitn(2, char::is_whitespace).nth(1).unwrap_or(line);
+            let cmd = line
+                .split_once(char::is_whitespace)
+                .map(|(_, command)| command)
+                .unwrap_or(line);
             !excluded.iter().any(|exc| cmd.contains(exc))
         })
         .count() as u32
