@@ -1,9 +1,20 @@
 # TaskPulse 首次公开 Alpha 交付清单
 
-更新：2026-10-22（Asia/Shanghai）。这是发布决策入口，不是历史功能清单。
+更新：2026-10-27（Asia/Shanghai）。这是发布决策入口，不是历史功能清单。
 源码仓库已经公开；**源码公开、草稿生成、安装包公开、稳定支持是四件不同的事**。
 
 ## 当前结论
+
+Alpha.8 已在准确标签提交 `fe48e69b9864eeaddcd68e84a4928c6b4176500c` 完成 Windows
+NSIS/MSI 各两轮独立安装验收，以及 Apple Silicon DMG 原生启动/窗口/重启验收。
+两平台文件已汇总到 Draft pre-release `424516447`，供维护者下载实机测试，仍未公开发布。
+下载、校验和、原始 CI/证据索引和未完成门禁见
+[Alpha.8 验收记录](ALPHA8_CANDIDATE_VALIDATION_2026-10-27.md)与[测试指南](CANDIDATE_TESTING.md)。
+本次仍有 3 条前端 low 和 Rust maintenance/unsound 警告；Windows/Mac 许可证清单分别有
+29/38 项待复核。用户 Mac 的真实 Agent 交互、Gatekeeper、焦点、长期使用以及 Windows
+干净客户端/升级迁移仍待验证，不因自动测试通过而勾选完成。
+
+## Alpha.7 历史结论（不替代 Alpha.8）
 
 Alpha.7 已在准确源 SHA `b5dc64a760bae916c9d40b147616f9720405887b` 通过 main
 质量/安全 CI，并由[发布运行 39636404358](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)
