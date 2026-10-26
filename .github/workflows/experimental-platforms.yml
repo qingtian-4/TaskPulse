@@ -4,30 +4,73 @@ name: Experimental Linux and macOS bundles
 # a prerequisite of the Windows release. No Apple signing secrets are required.
 on:
   workflow_dispatch:
+    inputs:
+      platform:
+        description: 'Native runner and installer to test'
+        type: choice
+        options: [macos-arm64, macos-x64, linux, all]
+        default: macos-arm64
+      commit:
+        description: 'Optional full source SHA (empty uses the selected branch/tag)'
+        default: ''
+  push:
+    tags: ['v*']
 
 permissions:
   contents: read
 
 jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.source.outputs.matrix }}
+      commit: ${{ steps.source.outputs.commit }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ inputs.commit || github.sha }}
+          persist-credentials: false
+      - id: source
+        env:
+          PLATFORM: ${{ inputs.platform || 'macos-arm64' }}
+          SOURCE_COMMIT: ${{ inputs.commit }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, subprocess
+          commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          requested = os.environ['SOURCE_COMMIT']
+          if requested and (not re.fullmatch('[a-f0-9]{40}', requested) or requested != commit):
+              raise SystemExit('A full matching source SHA is required')
+          platforms = [
+              dict(os='macos-15', platform='macos-arm64', target='aarch64-apple-darwin', arch='arm64', bundles='app,dmg'),
+              dict(os='macos-15-intel', platform='macos-x64', target='x86_64-apple-darwin', arch='x64', bundles='app,dmg'),
+              dict(os='ubuntu-22.04', platform='linux', target='x86_64-unknown-linux-gnu', arch='x64', bundles='deb,rpm,appimage'),
+          ]
+          selected = [p for p in platforms if os.environ['PLATFORM'] in ('all', p['platform'])]
+          if not selected:
+              raise SystemExit('Unknown platform')
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('commit=' + commit + '\n')
+              output.write('matrix=' + json.dumps({'include': selected}) + '\n')
+          PY
+
+  security:
+    needs: prepare
+    uses: ./.github/workflows/security.yml
+    with:
+      ref: ${{ needs.prepare.outputs.commit }}
+
   build:
+    needs: [prepare, security]
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - os: ubuntu-22.04
-            platform: linux
-            args: --bundles deb,rpm,appimage
-          - os: macos-latest
-            platform: macos-arm64
-            args: --bundles app,dmg
-          - os: macos-latest
-            platform: macos-x64
-            args: --target x86_64-apple-darwin --bundles app,dmg
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
+          ref: ${{ needs.prepare.outputs.commit }}
           persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
@@ -36,7 +79,7 @@ jobs:
         with:
           toolchain: "1.98.0"
           components: rustfmt, clippy
-          targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
+          targets: ${{ matrix.target }}
       - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src-tauri
@@ -46,24 +89,46 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf libssl-dev clang lld rpm
       - run: bun install --frozen-lockfile
+      - run: bun run audit:frontend
+      - run: bun run release:check
       - run: bun run check
       - run: bun run test:ui-model
+      - run: bun run test:release
+      - run: python3 scripts/test-macos-package.py
+      - run: python3 scripts/test-codex-observer.py
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
-      - name: Build unsigned experimental bundles
+      - name: Build experimental bundles (ad-hoc signed on macOS)
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
+          APPLE_SIGNING_IDENTITY: ${{ startsWith(matrix.platform, 'macos') && '-' || '' }}
         with:
           tauriScript: bun run tauri
-          args: ${{ matrix.args }} --features custom-protocol -- --profile ci-release --locked
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --features custom-protocol -- --profile ci-release --locked
+      - name: Stage and verify macOS DMG, installed app and restart
+        if: startsWith(matrix.platform, 'macos')
+        env:
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          MAC_ARCH: ${{ matrix.arch }}
+          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/ci-release/bundle/dmg
+        run: python3 scripts/macos-package.py --bundle-root "$BUNDLE_ROOT" --arch "$MAC_ARCH" --commit "$SOURCE_COMMIT" --out dist/macos --smoke
+      - name: Export macOS dependency inventory and license texts
+        if: startsWith(matrix.platform, 'macos')
+        run: bun scripts/dependency-notices.ts dist/macos ${{ matrix.target }}
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
-          name: experimental-${{ matrix.platform }}-${{ github.sha }}
+          name: experimental-${{ matrix.platform }}-${{ needs.prepare.outputs.commit }}
           if-no-files-found: error
           path: |
             src-tauri/target/**/bundle/**/*.deb
             src-tauri/target/**/bundle/**/*.rpm
             src-tauri/target/**/bundle/**/*.AppImage
-            src-tauri/target/**/bundle/**/*.dmg
+            dist/macos/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always() && startsWith(matrix.platform, 'macos')
+        with:
+          name: evidence-${{ matrix.platform }}-${{ needs.prepare.outputs.commit }}
+          path: dist/macos-evidence/
+          if-no-files-found: warn

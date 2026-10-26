@@ -1,0 +1,49 @@
+"""Offline staging regressions; does not install or launch an application."""
+import importlib.util
+import json
+from pathlib import Path
+import tempfile
+import unittest
+
+spec = importlib.util.spec_from_file_location("macos_package", Path(__file__).with_name("macos-package.py"))
+package = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(package)
+
+
+class PackagingTests(unittest.TestCase):
+    def test_staging_and_stale_rejection(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            (bundle / "original.dmg").write_bytes(b"test payload" + b"koly" + bytes(508))
+            output = root / "output"
+            dmg = package.stage(bundle, output, "0.2.0-alpha.8", "a" * 40, "arm64")
+            manifest = json.loads((output / "macos-arm64-manifest.json").read_text())
+            self.assertEqual(manifest["commit"], "a" * 40)
+            self.assertEqual(manifest["assets"], [dmg.name])
+            self.assertFalse(manifest["notarized"])
+            self.assertEqual((output / "macos-arm64-SHA256SUMS.txt").read_text(),
+                             f"{package.hashlib.sha256(dmg.read_bytes()).hexdigest()}  {dmg.name}\n")
+            with self.assertRaisesRegex(ValueError, "stale"):
+                package.stage(bundle, output, "0.2.0-alpha.8", "a" * 40, "arm64")
+
+    def test_bad_identity_and_malformed_or_duplicate_images(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for version, commit, arch in [("0.2.0", "a" * 40, "arm64"),
+                                           ("0.2.0-alpha.8", "main", "arm64"),
+                                           ("0.2.0-alpha.8", "a" * 40, "../x")]:
+                with self.assertRaises(ValueError):
+                    package.stage(root, root / "out", version, commit, arch)
+            for body in (b"short", bytes(600)):
+                (root / "bad.dmg").write_bytes(body)
+                with self.assertRaisesRegex(ValueError, "trailer"):
+                    package.stage(root, root / "out", "0.2.0-alpha.8", "a" * 40, "arm64")
+            (root / "second.dmg").write_bytes(bytes(600))
+            with self.assertRaisesRegex(ValueError, "exactly one"):
+                package.stage(root, root / "out", "0.2.0-alpha.8", "a" * 40, "arm64")
+
+
+if __name__ == "__main__":
+    unittest.main()

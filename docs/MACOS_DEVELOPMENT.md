@@ -6,7 +6,7 @@
 
 TaskPulse 已有 macOS 扫描、AppleScript 聚焦、macOS 打包配置，以及[实验构建工作流](../.github/workflows/experimental-platforms.yml)。它可以手动选择分支，在 GitHub 的 macOS/Ubuntu runner 上尝试构建 macOS ARM/Intel、Linux 包。现有[macOS 检查](../.github/workflows/scanner-portability.yml)只编译，不证明应用可运行。
 
-2026-10-26 核对到的最新 Release 为 Windows Alpha.7 草稿，资产没有 DMG。本轮本地修复尚未推送，不能期待在 Mac 克隆默认 main 就获得这些修改。先同步明确的候选分支与提交，再启动对应构建；不要移动现有 Alpha.7 标签。
+2026-10-26 核对到的旧 Release 为 Windows Alpha.7 草稿，资产没有 DMG。本轮修复已同步至候选分支，并准备 Alpha.8 的独立安装包验收。以 Actions 对应的完整提交与最终证据为准；不要移动现有 Alpha.7 标签。
 
 推荐继续维护同一仓库、同一套任务状态模型和 Svelte UI，只把进程发现、聚焦、原生窗口、权限和通知等差异放在平台实现中。通用修改可在 Windows 上完成；Mac 打包在 macOS runner 完成，菜单栏和真实 Agent 体验在 Mac 实机确认。首轮故障密集时在 Mac 克隆一次、直接调试；之后测试者只下载安装包。
 
@@ -21,13 +21,17 @@ TaskPulse 已有 macOS 扫描、AppleScript 聚焦、macOS 打包配置，以及
 前提是候选代码已经同步至 GitHub，且该提交的 macOS 构建成功；目前不能把本地 Windows EXE 当成 Mac 安装包。
 
 1. 登录有仓库读取权限的 GitHub 账号，打开仓库 Actions。
-2. 选择 **Experimental Linux and macOS bundles**，在 Run workflow 中选择包含目标修复的分支。
+2. 选择 **Experimental Linux and macOS bundles**，在 Run workflow 中选择包含目标修复的分支，`platform` 选 `macos-arm64`。可用 `commit` 固定完整 SHA；预发布标签默认只构建 Apple Silicon，Intel/Linux 保持手动选择。
 3. 对照运行记录的完整提交 SHA，等待 `macos-arm64` 构建成功。
 4. 在该次运行的 Artifacts 下载 `experimental-macos-arm64-<SHA>`；解压后找到 DMG。
-5. 打开 DMG，把 TaskPulse 拖到 Applications，再从 Finder 启动。更换版本前用托盘菜单退出原实例，备份既有状态；不要为测试删除真实未读或来源配置。
+5. 用 `shasum -a 256 -c macos-arm64-SHA256SUMS.txt` 校验，再打开 DMG，把 TaskPulse 拖到 Applications，从 Finder 启动。更换版本前用托盘菜单退出原实例，备份既有状态；不要为测试删除真实未读或来源配置。
 6. 在“关于 TaskPulse”复制版本、SHA 和路径，确认确实运行了目标构建。
 
 Actions 附件要求登录并拥有读取权限，且有保留期限，不适合作为长期公开下载页。预览版经基本验收后可另行发布明确标记的 GitHub pre-release；尚未发布的 draft 不等于公众可下载。参见 [GitHub 附件下载](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/download-workflow-artifacts)和 [Tauri DMG](https://v2.tauri.app/distribute/dmg/)。
+
+新流程将 Apple Silicon 固定为 `macos-15` / `aarch64-apple-darwin`，Intel 为 `macos-15-intel` / `x86_64-apple-darwin`，均在相同架构执行测试。Mac 包使用 ad-hoc 签名，不含 Apple 公证。CI 验证 DMG 挂载、复制后的应用签名/架构/版本、资源、首次启动、二次激活和重启，证据单独下载；这些检查不证明 UI 点击、Gatekeeper、通知焦点或真实 Agent 审批通过。签名来源见 [Tauri 官方说明](https://v2.tauri.app/distribute/sign/macos/)。
+
+首次打开若提示开发者无法验证，在确认下载来源及校验和后，可按 [Apple 的单应用放行步骤](https://support.apple.com/en-us/102445)，到“系统设置 → 隐私与安全性 → 仍要打开”确认。不要全局关闭 Gatekeeper。若提示文件损坏或不出现放行入口，请保留提示并反馈，不用删除安全属性来冒充正常安装通过。
 
 首轮建议先输出经过验证的 ad-hoc 签名实验包，并明确未公证；当前工作流尚未显式配置这一签名步骤。它不等于 Apple 身份签名，仍可能出现系统确认。面对公众的顺畅下载体验应配置 Developer ID 签名和 notarization；不用关闭系统 Gatekeeper。证书通过受限 CI secrets 提供，不进入源码或聊天。参见 [Tauri macOS 签名说明](https://v2.tauri.app/distribute/sign/macos/)。
 
