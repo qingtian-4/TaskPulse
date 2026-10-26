@@ -9,7 +9,7 @@ Release 仍为 Draft pre-release，未公开发布，未宣称稳定支持或完
 - 不可变标签：`v0.2.0-alpha.8`。
 - 两平台源提交：`fe48e69b9864eeaddcd68e84a4928c6b4176500c`。
 - 四处应用版本：`0.2.0-alpha.8`；MSI ProductVersion：`0.2.0.1008`。
-- [Alpha.8 候选 Release](https://github.com/qingtian-4/TaskPulse/releases/tag/untagged-bd2771b9fa02f8dc065b)：
+- [Alpha.8 候选 Release](https://github.com/qingtian-4/TaskPulse/releases)：
   ID `424516447`，Draft / pre-release，13 项资产；需登录维护者账号查看草稿。
 - [Windows 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274223/artifacts/12668203350)：EXE/MSI 二选一。
 - [Apple Silicon 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274417/artifacts/12668502437)：

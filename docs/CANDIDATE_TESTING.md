@@ -6,7 +6,7 @@
 
 直接下载：[Windows EXE/MSI 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274223/artifacts/12668203350) ·
 [Apple Silicon DMG 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274417/artifacts/12668502437) ·
-[汇总草稿 Release](https://github.com/qingtian-4/TaskPulse/releases/tag/untagged-bd2771b9fa02f8dc065b)。
+[汇总草稿 Release](https://github.com/qingtian-4/TaskPulse/releases)（选择 Alpha.8）。
 Actions 附件解压后，Mac 文件位于 `dist/macos`；Release 中可以单独下载 DMG。
 
 ## 下载入口
