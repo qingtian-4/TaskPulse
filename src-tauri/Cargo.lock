@@ -33,6 +33,7 @@ dependencies = [
  "tempfile",
  "toml 0.8.2",
  "toml_edit 0.25.10+spec-1.1.0",
+ "windows-sys 0.61.2",
  "zstd",
 ]
 

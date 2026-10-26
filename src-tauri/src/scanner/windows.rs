@@ -1,21 +1,20 @@
 use std::collections::HashMap;
-use std::io::Read;
-use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Child, ExitStatus, Output, Stdio};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
 use super::{known_terminal, PlatformScan, ProcInfo, ProcessEntry, ProcessSnapshot, WindowCache};
 use crate::watcher::TerminalInfo;
 use serde::Deserialize;
 
-const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+mod probe;
+use probe::output as hidden_output;
 const PROCESS_SNAPSHOT_SCRIPT: &str = r#"
 $ErrorActionPreference = 'Stop'
-@(Get-CimInstance -ClassName Win32_Process |
-  Select-Object Name,ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,CreationDate) |
-  ConvertTo-Json -Compress -Depth 2
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding $false
+$rows = @(Get-CimInstance -ClassName Win32_Process |
+  Select-Object Name,ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,@{Name="CreationDate";Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().Ticks.ToString()}}})
+ConvertTo-Json -InputObject $rows -Compress -Depth 2
 "#;
 
 const MAX_PROCESS_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
@@ -33,17 +32,14 @@ struct ProcessRecord {
     creation_date: Option<String>,
 }
 
-#[derive(Debug, PartialEq, Eq)]
-enum ProbeError {
-    Spawn,
-    Read,
-    OutputLimit,
-    Timeout,
-    Kill,
-    Wait,
+#[derive(Debug)]
+enum SnapshotError {
+    Probe(probe::ProbeError),
+    InvalidJson,
 }
 
-fn process_snapshot() -> Option<HashMap<u32, ProcessRecord>> {
+fn process_snapshot() -> Result<HashMap<u32, ProcessRecord>, SnapshotError> {
+    let probe_started = std::time::Instant::now();
     let output = hidden_output(
         "powershell",
         &[
@@ -53,176 +49,52 @@ fn process_snapshot() -> Option<HashMap<u32, ProcessRecord>> {
             "-Command",
             PROCESS_SNAPSHOT_SCRIPT,
         ],
-        Duration::from_secs(2),
+        // A measured cold CIM query took 2.31 s on the validation host.
+        // Keep a fixed 3 s deadline, no retry or unbounded startup loop.
+        Duration::from_secs(3),
         MAX_PROCESS_SNAPSHOT_BYTES,
     )
-    .ok()?;
+    .map_err(SnapshotError::Probe)?;
     if !output.status.success() || output.stdout.len() > MAX_PROCESS_SNAPSHOT_BYTES {
-        return None;
+        return Err(SnapshotError::InvalidJson);
     }
-    let rows: Vec<ProcessRecord> = serde_json::from_slice(&output.stdout).ok()?;
-    let snapshot = rows
-        .into_iter()
-        .filter_map(|row| row.process_id.map(|pid| (pid, row)))
-        .collect::<HashMap<_, _>>();
-    if snapshot.is_empty() {
-        return None;
-    }
-    Some(snapshot)
-}
-
-fn hidden_command(program: &str) -> std::process::Command {
-    let mut command = std::process::Command::new(program);
-    // Scanner probes run in the background. A console child would flash over
-    // the tray popup on every polling cycle.
-    command.creation_flags(CREATE_NO_WINDOW);
-    command
-}
-
-fn read_bounded<R: Read>(mut reader: R, max_output_bytes: usize) -> Result<Vec<u8>, ProbeError> {
-    let mut output = Vec::new();
-    let mut chunk = [0u8; 8192];
-    loop {
-        match reader.read(&mut chunk) {
-            Ok(0) => return Ok(output),
-            Ok(read) => {
-                if output.len().saturating_add(read) > max_output_bytes {
-                    return Err(ProbeError::OutputLimit);
-                }
-                output.extend_from_slice(&chunk[..read]);
-            }
-            Err(_) => return Err(ProbeError::Read),
+    log::trace!(
+        "scanner CIM duration={:?}, bytes={}",
+        probe_started.elapsed(),
+        output.stdout.len()
+    );
+    let rows: Vec<ProcessRecord> =
+        serde_json::from_slice(&output.stdout).map_err(|_| SnapshotError::InvalidJson)?;
+    let mut snapshot = HashMap::new();
+    for row in rows {
+        let pid = row.process_id.ok_or(SnapshotError::InvalidJson)?;
+        if snapshot.insert(pid, row).is_some() {
+            return Err(SnapshotError::InvalidJson);
         }
     }
-}
-
-fn terminate_process_tree(child: &mut Child, wait_budget: Duration) -> Result<(), ProbeError> {
-    let pid = child.id().to_string();
-    let direct_kill = child.kill().is_ok();
-    let mut tree_kill = hidden_command("taskkill")
-        .args(["/PID", &pid, "/T", "/F"])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok();
-    let tree_deadline = Instant::now() + wait_budget.min(Duration::from_millis(500));
-    if let Some(tree_kill) = tree_kill.as_mut() {
-        loop {
-            match tree_kill.try_wait() {
-                Ok(Some(_)) => break,
-                Ok(None) if Instant::now() < tree_deadline => {
-                    std::thread::sleep(Duration::from_millis(5))
-                }
-                Ok(None) => {
-                    let _ = tree_kill.kill();
-                    let _ = tree_kill.wait();
-                    break;
-                }
-                Err(_) => break,
-            }
-        }
-    }
-    let deadline = Instant::now() + wait_budget;
-    loop {
-        match child.try_wait() {
-            Ok(Some(_)) => return Ok(()),
-            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(5)),
-            Ok(None) => return Err(ProbeError::Wait),
-            Err(_) if direct_kill => return Err(ProbeError::Wait),
-            Err(_) => return Err(ProbeError::Kill),
-        }
-    }
-}
-
-fn finish_reader(reader: std::thread::JoinHandle<()>, reap: Result<(), ProbeError>) {
-    if reap.is_ok() {
-        let _ = reader.join();
-    } else {
-        // A failed kill/wait must still return within the probe budget. The
-        // taskkill tree path normally closes stdout; detach only when the OS
-        // refused reaping so the caller cannot block indefinitely on Read.
-        std::mem::forget(reader);
-    }
-}
-
-fn hidden_output(
-    program: &str,
-    args: &[&str],
-    timeout: Duration,
-    max_output_bytes: usize,
-) -> Result<Output, ProbeError> {
-    let mut child = hidden_command(program)
-        .args(args)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|_| ProbeError::Spawn)?;
-    let stdout = child.stdout.take().ok_or(ProbeError::Read)?;
-    let (output_tx, output_rx) = std::sync::mpsc::channel();
-    let reader = std::thread::spawn(move || {
-        let _ = output_tx.send(read_bounded(stdout, max_output_bytes));
-    });
-    let deadline = Instant::now() + timeout;
-    let mut status: Option<ExitStatus> = None;
-    let mut stdout_result = None;
-    loop {
-        if status.is_none() {
-            match child.try_wait() {
-                Ok(Some(exit)) => status = Some(exit),
-                Ok(None) => {}
-                Err(_) => {
-                    let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
-                    finish_reader(reader, reap);
-                    return Err(ProbeError::Wait);
-                }
-            }
-        }
-        if stdout_result.is_none() {
-            match output_rx.try_recv() {
-                Ok(result) => stdout_result = Some(result),
-                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-                    let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
-                    finish_reader(reader, reap);
-                    return Err(ProbeError::Read);
-                }
-                Err(std::sync::mpsc::TryRecvError::Empty) => {}
-            }
-        }
-        if let Some(Err(error)) = stdout_result {
-            let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
-            finish_reader(reader, reap);
-            return Err(error);
-        }
-        if let Some(Ok(stdout)) = stdout_result.take() {
-            if let Some(status) = status.take() {
-                let _ = reader.join();
-                return if status.success() {
-                    Ok(Output {
-                        status,
-                        stdout,
-                        stderr: Vec::new(),
-                    })
-                } else {
-                    Err(ProbeError::Wait)
-                };
-            }
-            stdout_result = Some(Ok(stdout));
-        }
-        if Instant::now() >= deadline {
-            let reap = terminate_process_tree(&mut child, Duration::from_millis(500));
-            finish_reader(
-                reader,
-                reap.as_ref().map(|_| ()).map_err(|_| ProbeError::Wait),
-            );
-            return Err(reap.err().unwrap_or(ProbeError::Timeout));
-        }
-        std::thread::sleep(Duration::from_millis(10));
-    }
+    Ok(snapshot)
 }
 
 /// Find CLI processes matching any registered strategy.
 pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> PlatformScan<'_> {
-    let Some(snapshot) = process_snapshot() else {
+    collect_with(strategies, || match process_snapshot() {
+        Ok(rows) => Some(rows),
+        Err(SnapshotError::Probe(error)) => {
+            log::debug!("scanner probe unavailable: {error:?}");
+            None
+        }
+        Err(SnapshotError::InvalidJson) => {
+            log::debug!("scanner snapshot rejected: invalid JSON/schema");
+            None
+        }
+    })
+}
+
+fn collect_with(
+    strategies: &[Box<dyn CliStrategy>],
+    collect: impl FnOnce() -> Option<HashMap<u32, ProcessRecord>>,
+) -> PlatformScan<'_> {
+    let Some(snapshot) = collect() else {
         return PlatformScan {
             matched: Vec::new(),
             snapshot: ProcessSnapshot {
@@ -233,6 +105,13 @@ pub fn find_cli_processes(strategies: &[Box<dyn CliStrategy>]) -> PlatformScan<'
             },
         };
     };
+    match_snapshot(snapshot, strategies)
+}
+
+fn match_snapshot(
+    snapshot: HashMap<u32, ProcessRecord>,
+    strategies: &[Box<dyn CliStrategy>],
+) -> PlatformScan<'_> {
     let processes = snapshot
         .into_iter()
         .map(|(pid, row)| {
@@ -373,7 +252,9 @@ pub fn terminal_info(
             break;
         }
 
-        let record = snapshot.processes.get(&cur)?;
+        let Some(record) = snapshot.processes.get(&cur) else {
+            break;
+        };
         let exe_name = record.name.trim();
         if let Some(label) = known_terminal(exe_name) {
             if is_console_shell(label) {
@@ -476,8 +357,155 @@ pub fn read_proc_env(pid: u32, key: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
+    use super::probe::ProbeError;
     use super::*;
-    use std::io::Cursor;
+    use std::time::Instant;
+
+    #[test]
+    #[ignore = "real read-only CIM and three owned synthetic OS processes, not paid Agent tasks"]
+    fn native_windows_three_processes_keep_distinct_stable_scanner_tasks() {
+        use super::super::{strategies::DetectedState, Scanner};
+        struct FixtureStrategy;
+        impl CliStrategy for FixtureStrategy {
+            fn process_names(&self) -> &[&str] {
+                &["taskpulse-scanner-fixture"]
+            }
+            fn excluded_substrings(&self) -> &[&str] {
+                &[]
+            }
+            fn cli_name(&self) -> &str {
+                "scanner-fixture"
+            }
+            fn tool_label(&self) -> &str {
+                "synthetic OS fixture"
+            }
+            fn detect_state(&self, _: &ProcInfo, _: f64, _: u32) -> DetectedState {
+                DetectedState {
+                    status: "working".into(),
+                    message: "synthetic OS fixture".into(),
+                    confidence: 0.5,
+                }
+            }
+        }
+        let current_exe = std::env::current_exe().unwrap();
+        let root = tempfile::tempdir_in(current_exe.parent().unwrap()).unwrap();
+        let executable = root.path().join("taskpulse-scanner-fixture.exe");
+        std::fs::hard_link(&current_exe, &executable).unwrap();
+        let fixtures: Vec<_> = (0..3)
+            .map(|_| probe::Fixture::start(executable.to_str().unwrap()))
+            .collect();
+        let mut scanner = Scanner::new();
+        scanner.strategies = vec![Box::new(FixtureStrategy)];
+        let start = Instant::now();
+        let mut first: Vec<_> = scanner
+            .scan_with(|strategies| {
+                match_snapshot(
+                    process_snapshot().expect("native bounded CIM collection"),
+                    strategies,
+                )
+            })
+            .unwrap()
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        first.sort();
+        assert_eq!(
+            first.len(),
+            3,
+            "all three real OS fixture processes must be visible"
+        );
+        assert_eq!(
+            first.iter().collect::<std::collections::HashSet<_>>().len(),
+            3
+        );
+        // A new Scanner models application restart without changing processes.
+        let mut restarted = Scanner::new();
+        restarted.strategies = vec![Box::new(FixtureStrategy)];
+        let mut second: Vec<_> = restarted
+            .scan_with(|strategies| {
+                match_snapshot(
+                    process_snapshot().expect("second native bounded CIM collection"),
+                    strategies,
+                )
+            })
+            .unwrap()
+            .into_iter()
+            .map(|task| task.id)
+            .collect();
+        second.sort();
+        assert_eq!(first, second);
+        println!("native CIM + common scanner: 3/3 unique tasks, stable after Scanner restart, elapsed={:?}; synthetic processes only", start.elapsed());
+        drop(fixtures);
+    }
+
+    #[test]
+    fn empty_success_and_failed_batches_cannot_cross_parallel_collections() {
+        use std::sync::mpsc;
+        for (a_succeeds, b_succeeds) in [(true, false), (false, true), (true, true)] {
+            let (a_ready, a_started) = mpsc::channel();
+            let (release_a, a_release) = mpsc::channel();
+            std::thread::scope(|scope| {
+                let worker = scope.spawn(move || {
+                    let strategies = super::super::strategies::all_strategies();
+                    let batch = collect_with(&strategies, || {
+                        // Capture A, let B fully finish, then deliver older A.
+                        let rows = a_succeeds.then(|| serde_json::from_str::<Vec<ProcessRecord>>(r#"[{"Name":"WindowsTerminal.exe","ProcessId":10,"ParentProcessId":1},{"Name":"codex.exe","ProcessId":20,"ParentProcessId":10}]"#).unwrap().into_iter().map(|r| (r.process_id.unwrap(),r)).collect());
+                        a_ready.send(()).unwrap();
+                        a_release.recv().unwrap();
+                        rows
+                    });
+                    let mut cache = [(10, None)].into();
+                    let terminal = batch.matched.first().and_then(|(p,_)| terminal_info(&mut cache, p, &batch.snapshot));
+                    (batch.snapshot.succeeded, terminal.map(|t| t.label))
+                });
+                a_started.recv().unwrap();
+                let strategies = super::super::strategies::all_strategies();
+                let batch_b = collect_with(&strategies, || {
+                    b_succeeds.then(||
+                    serde_json::from_str::<Vec<ProcessRecord>>(r#"[{"Name":"ConEmu.exe","ProcessId":10,"ParentProcessId":1},{"Name":"codex.exe","ProcessId":20,"ParentProcessId":10}]"#)
+                        .unwrap().into_iter().map(|row| (row.process_id.unwrap(), row)).collect())
+                });
+                assert_eq!(batch_b.snapshot.succeeded, b_succeeds);
+                let mut cache = [(10, None)].into();
+                let b_terminal = batch_b
+                    .matched
+                    .first()
+                    .and_then(|(p, _)| terminal_info(&mut cache, p, &batch_b.snapshot));
+                assert_eq!(
+                    b_terminal.map(|t| t.label).as_deref(),
+                    b_succeeds.then_some("ConEmu")
+                );
+                release_a.send(()).unwrap();
+                let (success, label) = worker.join().unwrap();
+                assert_eq!(success, a_succeeds);
+                assert_eq!(label.as_deref(), a_succeeds.then_some("Windows Terminal"));
+                assert_eq!(batch_b.snapshot.succeeded, b_succeeds);
+                assert_eq!(batch_b.snapshot.processes.is_empty(), !b_succeeds);
+            });
+        }
+        let strategies = super::super::strategies::all_strategies();
+        let empty = collect_with(&strategies, || Some(HashMap::new()));
+        assert!(empty.snapshot.succeeded && empty.matched.is_empty());
+    }
+
+    #[test]
+    fn powershell_serializes_zero_one_many_rows_as_utf8_arrays() {
+        for count in 0..=2 {
+            let script = format!("[Console]::OutputEncoding=New-Object System.Text.UTF8Encoding $false; $rows=@(for($i=0;$i -lt {count};$i++){{[pscustomobject]@{{Name='中文.exe';ProcessId=($i+1)}}}}); ConvertTo-Json -InputObject $rows -Compress -Depth 2");
+            let result = hidden_output(
+                "powershell",
+                &["-NoProfile", "-Command", &script],
+                Duration::from_secs(5),
+                MAX_AUXILIARY_OUTPUT_BYTES,
+            )
+            .unwrap();
+            let rows: Vec<ProcessRecord> = serde_json::from_slice(&result.stdout).unwrap();
+            assert_eq!(rows.len(), count);
+            for row in rows {
+                assert_eq!(row.name.as_deref(), Some("中文.exe"));
+            }
+        }
+    }
 
     #[test]
     fn cim_snapshot_parses_single_and_multi_process_json_without_csv_splitting() {
@@ -504,21 +532,6 @@ mod tests {
         let empty = serde_json::from_slice::<Vec<ProcessRecord>>(b"[]").unwrap();
         assert!(empty.is_empty());
         assert!(serde_json::from_slice::<Vec<ProcessRecord>>(b"not-json").is_err());
-    }
-
-    #[test]
-    fn bounded_probe_reader_rejects_output_and_io_failures() {
-        assert_eq!(
-            read_bounded(Cursor::new(vec![b'x'; 9]), 8),
-            Err(ProbeError::OutputLimit)
-        );
-        struct FailingReader;
-        impl Read for FailingReader {
-            fn read(&mut self, _buf: &mut [u8]) -> std::io::Result<usize> {
-                Err(std::io::Error::other("injected reader failure"))
-            }
-        }
-        assert_eq!(read_bounded(FailingReader, 8), Err(ProbeError::Read));
     }
 
     #[test]
@@ -663,6 +676,22 @@ mod tests {
     }
 
     #[test]
+    fn exited_parent_with_live_pipe_descendant_does_not_block_reaping() {
+        let started = Instant::now();
+        let result = hidden_output(
+            "powershell",
+            &["-NoProfile", "-NonInteractive", "-Command",
+              "$p=Start-Process powershell -ArgumentList '-NoProfile','-Command','Start-Sleep -Seconds 5' -NoNewWindow -PassThru; Write-Output $p.Id; exit 0"],
+            Duration::from_secs(2), MAX_AUXILIARY_OUTPUT_BYTES);
+        assert!(
+            started.elapsed() < Duration::from_secs(4),
+            "descendant pipe delayed return: {:?}, result={:?}",
+            started.elapsed(),
+            result
+        );
+    }
+
+    #[test]
     fn process_batches_keep_terminal_trees_and_failure_state_isolated() {
         let entry = |pid: u32, ppid: u32, name: &str| ProcessEntry {
             pid,
@@ -674,11 +703,13 @@ mod tests {
             kernel_mode_time: 0,
         };
         let batch_a = ProcessSnapshot {
+            collected_at: std::time::Instant::now(),
             ppid_map: [(10, 1), (20, 10)].into(),
             processes: [(10, entry(10, 1, "WindowsTerminal.exe"))].into(),
             succeeded: true,
         };
         let batch_b = ProcessSnapshot {
+            collected_at: std::time::Instant::now(),
             ppid_map: [(10, 1), (20, 10)].into(),
             processes: [(10, entry(10, 1, "other.exe"))].into(),
             succeeded: false,

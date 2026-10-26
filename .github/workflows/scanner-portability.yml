@@ -1,0 +1,37 @@
+name: Scanner macOS compile boundary
+
+on:
+  pull_request:
+    paths:
+      - 'src-tauri/src/scanner/**'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - '.github/workflows/scanner-portability.yml'
+  push:
+    branches: ['codex/**']
+    paths:
+      - 'src-tauri/src/scanner/**'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/Cargo.lock'
+      - '.github/workflows/scanner-portability.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: scanner-portability-${{ github.head_ref || github.ref_name }}
+  cancel-in-progress: true
+
+jobs:
+  macos-check:
+    name: macOS compile only (no runtime acceptance)
+    runs-on: macos-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v6
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+      - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --tests
+      # No bundles, signing, application launch, or macOS support claim.
