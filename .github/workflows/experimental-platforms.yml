@@ -26,15 +26,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
           components: rustfmt, clippy
           targets: ${{ startsWith(matrix.platform, 'macos') && 'aarch64-apple-darwin,x86_64-apple-darwin' || 'x86_64-unknown-linux-gnu' }}
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src-tauri
       - name: Install Linux dependencies
@@ -49,13 +52,13 @@ jobs:
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
       - name: Build unsigned experimental bundles
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         env:
           APPIMAGE_EXTRACT_AND_RUN: '1'
         with:
           tauriScript: bun run tauri
           args: ${{ matrix.args }} --features custom-protocol -- --profile ci-release --locked
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: experimental-${{ matrix.platform }}-${{ github.sha }}
           if-no-files-found: error

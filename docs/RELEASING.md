@@ -1,5 +1,7 @@
 # Windows Alpha 发布流程
 
+CI 的 Actions 固定为完整提交 SHA，Bun / Rust 固定为经过验证的版本；升级通过普通变更审查完成。Windows 资产另外包含 `SBOM.cdx.json`（CycloneDX 1.6）、`DEPENDENCIES.json` 和 `THIRD_PARTY_NOTICES.txt`，由 `bun scripts/dependency-notices.ts dist/release x86_64-pc-windows-msvc` 从锁定依赖与本地许可证生成。清单注明源提交、锁文件哈希和范围，包含构建工具，不代表所有操作系统或原生捆绑组件已审完。公开发行前逐项处理 `reviewRequired`，核对许可证文本及原生组件的分发义务；生成成功本身不等于许可证审查通过。
+
 当前候选为 `0.2.0-alpha.7`；不可变标签 `v0.2.0-alpha.7` 已指向
 `b5dc64a760bae916c9d40b147616f9720405887b`。main 质量/安全 CI 和
 [发布运行 39636404358](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)
