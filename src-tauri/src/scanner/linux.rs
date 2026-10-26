@@ -2,20 +2,28 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
-use super::{known_terminal, ProcInfo, WindowCache};
+use super::{known_terminal, PlatformScan, ProcInfo, ProcessSnapshot, WindowCache};
 use crate::watcher::TerminalInfo;
 
 /// Find CLI processes matching any registered strategy.
 /// Returns each process paired with a reference to the strategy that matched it,
 /// plus a pid→ppid map for ALL processes (used for transitive ancestor filtering).
-pub fn find_cli_processes<'a>(
-    strategies: &'a [Box<dyn CliStrategy>],
-) -> (Vec<(ProcInfo, &'a dyn CliStrategy)>, HashMap<u32, u32>) {
+pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> PlatformScan<'a> {
     let mut out = Vec::new();
     let mut ppid_map = HashMap::new();
     let proc_dir = match std::fs::read_dir("/proc") {
         Ok(d) => d,
-        Err(_) => return (out, ppid_map),
+        Err(_) => {
+            return PlatformScan {
+                matched: out,
+                snapshot: ProcessSnapshot {
+                    collected_at: std::time::Instant::now(),
+                    ppid_map,
+                    processes: HashMap::new(),
+                    succeeded: false,
+                },
+            }
+        }
     };
 
     for entry in proc_dir.flatten() {
@@ -105,6 +113,10 @@ pub fn find_cli_processes<'a>(
         }
 
         // Reuse stat already read for ppid_map above
+        if strategy.cli_name() == "codex" && super::services::codex_service(&full) {
+            continue;
+        }
+
         let stat = match stat_str {
             Some(ref s) => s,
             None => continue,
@@ -144,6 +156,7 @@ pub fn find_cli_processes<'a>(
             ProcInfo {
                 pid,
                 ppid,
+                process_instance: None,
                 cwd,
                 tty_label,
                 utime,
@@ -156,10 +169,22 @@ pub fn find_cli_processes<'a>(
         ));
     }
 
-    (out, ppid_map)
+    PlatformScan {
+        matched: out,
+        snapshot: ProcessSnapshot {
+            collected_at: std::time::Instant::now(),
+            ppid_map,
+            processes: HashMap::new(),
+            succeeded: true,
+        },
+    }
 }
 
-pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {
+pub fn terminal_info(
+    cache: &mut WindowCache,
+    p: &ProcInfo,
+    _snapshot: &ProcessSnapshot,
+) -> Option<TerminalInfo> {
     let mut cur = p.ppid;
     let mut term_label = String::new();
     let mut term_pid: u32 = 0;

@@ -2,6 +2,21 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
+## 0.2.0-alpha.8 — Candidate; not released
+
+- Exclude internal Codex services and TaskPulse descendants from task discovery;
+  preserve native task identity and project scope across process observations.
+- Add explicit, reversible Codex approval observation; never guess approval from
+  command permission parameters, silence or elapsed tool time.
+- Persist manual attention changes atomically, prevent duplicate GUI writers and
+  improve notification inbox focus and dashboard refresh ordering.
+- Bound subprocess lifetime/output on Windows and Unix; update zstd/tokio fixes,
+  pin CI inputs and export dependency inventory, SBOM and available license texts.
+- Prepare native Apple Silicon DMGs with ad-hoc signatures, checksums and exact
+  source metadata; gate them on tests and isolated installed-app startup/restart.
+  macOS desktop interactions, Gatekeeper and real Agent events need manual testing.
+- Retain independent fresh-runner NSIS/MSI acceptance and draft-only Windows releases.
+
 ## 0.2.0-alpha.7 — Candidate; not released
 
 ### Added and refined

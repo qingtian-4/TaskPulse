@@ -161,12 +161,37 @@ pub fn status_dir() -> Option<PathBuf> {
 }
 
 /// Cached latest merged task list for on-demand popup refresh.
-static LATEST_TASKS: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
 static SELECTED_TASK: Mutex<Option<TaskSnapshot>> = Mutex::new(None);
-static LATEST_HOSTS: Mutex<Vec<HostHealth>> = Mutex::new(Vec::new());
-static LATEST_PROVIDERS: Mutex<Vec<ProviderHealth>> = Mutex::new(Vec::new());
 static ATTENTION_TRACKER: OnceLock<Mutex<AttentionTracker>> = OnceLock::new();
 static MANUAL_REFRESH_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+#[derive(Clone, Serialize)]
+pub struct DashboardSnapshot {
+    pub revision: u64,
+    pub tasks: Vec<TaskSnapshot>,
+    pub hosts: Vec<HostHealth>,
+    pub providers: Vec<ProviderHealth>,
+}
+
+static LATEST_DASHBOARD: Mutex<DashboardSnapshot> = Mutex::new(DashboardSnapshot {
+    revision: 0,
+    tasks: Vec::new(),
+    hosts: Vec::new(),
+    providers: Vec::new(),
+});
+
+fn commit_dashboard_snapshot(
+    latest: &mut DashboardSnapshot,
+    tasks: &[TaskSnapshot],
+    hosts: &[HostHealth],
+    providers: &[ProviderHealth],
+) -> DashboardSnapshot {
+    latest.revision = latest.revision.saturating_add(1);
+    latest.tasks = tasks.to_vec();
+    latest.hosts = hosts.to_vec();
+    latest.providers = providers.to_vec();
+    latest.clone()
+}
 
 fn reconcile_attention(tasks: Vec<TaskSnapshot>) -> Vec<TaskSnapshot> {
     reconcile_attention_with_persistence(tasks, true)
@@ -279,7 +304,7 @@ pub fn update_task_attention(
     id: String,
     action: String,
     pinned: Option<bool>,
-) -> Result<Vec<TaskSnapshot>, String> {
+) -> Result<(), String> {
     // Resolve before locking the tracker: catalog fallback reads the same tracker.
     let discovered = crate::monitoring::find_session(&id);
     if matches!(action.as_str(), "follow" | "restore" | "pin") {
@@ -320,7 +345,7 @@ pub fn update_task_attention(
         crate::task_notice::remove_task(&app, &id);
     }
     emit_agents(&app, &tasks, &hosts, &providers);
-    Ok(tasks)
+    Ok(())
 }
 
 fn emit_agents(
@@ -330,27 +355,13 @@ fn emit_agents(
     providers: &[ProviderHealth],
 ) {
     log::info!("emit_agents: {} tasks, {} hosts", tasks.len(), hosts.len());
-    {
-        let mut cache = LATEST_TASKS.lock().unwrap_or_else(|e| {
-            log::warn!("LATEST_TASKS mutex poisoned, recovering");
+    let snapshot = {
+        let mut latest = LATEST_DASHBOARD.lock().unwrap_or_else(|e| {
+            log::warn!("LATEST_DASHBOARD mutex poisoned, recovering");
             e.into_inner()
         });
-        *cache = tasks.to_vec();
-    }
-    {
-        let mut cache = LATEST_HOSTS.lock().unwrap_or_else(|e| {
-            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
-            e.into_inner()
-        });
-        *cache = hosts.to_vec();
-    }
-    {
-        let mut cache = LATEST_PROVIDERS.lock().unwrap_or_else(|e| {
-            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
-            e.into_inner()
-        });
-        *cache = providers.to_vec();
-    }
+        commit_dashboard_snapshot(&mut latest, tasks, hosts, providers)
+    };
     crate::tray::update_icon(app, tasks, hosts);
     crate::message_center::publish(app);
     let _ = app.emit(
@@ -358,6 +369,7 @@ fn emit_agents(
         crate::task_notice::get_pending_task_prompts(),
     );
     let _ = app.emit("agents-updated", tasks);
+    let _ = app.emit("dashboard-snapshot-updated", &snapshot);
     static ARCHIVED: Mutex<Vec<TaskSnapshot>> = Mutex::new(Vec::new());
     let archived = get_archived_attention();
     let mut previous = ARCHIVED.lock().unwrap_or_else(|e| e.into_inner());
@@ -375,31 +387,22 @@ fn emit_agents(
 
 /// Re-emit the last known task list (used when popup opens).
 pub fn emit_latest(app: &AppHandle) {
-    let tasks = LATEST_TASKS
+    let snapshot = latest_dashboard_snapshot();
+    crate::tray::update_icon(app, &snapshot.tasks, &snapshot.hosts);
+    let _ = app.emit("agents-updated", &snapshot.tasks);
+    let _ = app.emit("dashboard-snapshot-updated", &snapshot);
+    let _ = app.emit("hosts-updated", &snapshot.hosts);
+    let _ = app.emit("providers-updated", &snapshot.providers);
+}
+
+fn latest_dashboard_snapshot() -> DashboardSnapshot {
+    LATEST_DASHBOARD
         .lock()
         .unwrap_or_else(|e| {
-            log::warn!("LATEST_TASKS mutex poisoned, recovering");
+            log::warn!("LATEST_DASHBOARD mutex poisoned, recovering");
             e.into_inner()
         })
-        .clone();
-    let hosts = LATEST_HOSTS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone();
-    let providers = LATEST_PROVIDERS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone();
-    crate::tray::update_icon(app, &tasks, &hosts);
-    let _ = app.emit("agents-updated", &tasks);
-    let _ = app.emit("hosts-updated", &hosts);
-    let _ = app.emit("providers-updated", &providers);
+        .clone()
 }
 
 /// Tauri command: return the platform-appropriate status directory path.
@@ -413,39 +416,26 @@ pub fn get_status_dir() -> String {
 /// Tauri command: return cached tasks (called by frontend on mount).
 #[tauri::command]
 pub fn get_agents() -> Vec<TaskSnapshot> {
-    let tasks = LATEST_TASKS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_TASKS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone();
+    let tasks = latest_dashboard_snapshot().tasks;
     log::info!("get_agents: returning {} tasks", tasks.len());
     tasks
+}
+
+#[tauri::command]
+pub fn get_dashboard_snapshot() -> DashboardSnapshot {
+    latest_dashboard_snapshot()
 }
 
 /// Tauri command: return cached remote-host health with the cached tasks.
 #[tauri::command]
 pub fn get_hosts() -> Vec<HostHealth> {
-    LATEST_HOSTS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_HOSTS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone()
+    latest_dashboard_snapshot().hosts
 }
 
 /// Tauri command: return cached local-provider health.
 #[tauri::command]
 pub fn get_providers() -> Vec<ProviderHealth> {
-    LATEST_PROVIDERS
-        .lock()
-        .unwrap_or_else(|e| {
-            log::warn!("LATEST_PROVIDERS mutex poisoned, recovering");
-            e.into_inner()
-        })
-        .clone()
+    latest_dashboard_snapshot().providers
 }
 
 /// Tauri command: ask every provider to poll again instead of merely returning
@@ -545,7 +535,7 @@ fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
     for (i, t) in tasks.iter().enumerate() {
         // A project window can contain many native sessions. Its PID is not
         // session identity and must not deduplicate them by evidence strength.
-        if t.session_id.is_some() {
+        if is_scanner_observation(t) || t.session_id.is_some() {
             continue;
         }
         let Some(term) = &t.terminal else { continue };
@@ -589,48 +579,81 @@ fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
 /// session task exists, drop the scanner's inferred scan entry for the same
 /// CLI so we never show the same agent twice.
 fn dedup_codex_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    let has_session = tasks.iter().any(|t| t.source == TaskSource::Codex);
-    if has_session {
-        tasks.retain(|t| {
-            !(t.cli.as_deref() == Some("codex") && t.confidence == DetectionConfidence::Inferred)
-        });
-    }
+    dedup_scanner_observations(tasks, TaskSource::Codex, Some("codex"));
+}
+
+fn is_scanner_observation(task: &TaskSnapshot) -> bool {
+    task.source_instance.as_deref() == Some("scanner") || task.id.starts_with("scan:")
 }
 
 fn dedup_hermes_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    let has_session = tasks.iter().any(|t| t.source == TaskSource::Hermes);
-    if has_session {
-        // Native Hermes leases also use Inferred confidence. Evidence strength
-        // does not identify a scanner row; only remove actual scanner output.
-        tasks.retain(|t| {
-            !((t.source_instance.as_deref() == Some("scanner") || t.id.starts_with("scan:"))
-                && t.cli.as_deref() == Some("hermes")
-                && t.confidence == DetectionConfidence::Inferred)
-        });
-    }
+    // Native Hermes leases also use Inferred confidence. Evidence strength
+    // does not identify a scanner row; only remove actual scanner output with
+    // a matching stable identity.
+    dedup_scanner_observations(tasks, TaskSource::Hermes, Some("hermes"));
 }
 
 fn dedup_dsh_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    let has_session = tasks
+    dedup_scanner_observations(tasks, TaskSource::DeepSeekHarness, Some("dsh"));
+}
+
+fn dedup_scanner_observations(
+    tasks: &mut Vec<TaskSnapshot>,
+    source: TaskSource,
+    cli: Option<&str>,
+) {
+    let native: Vec<TaskSnapshot> = tasks
         .iter()
-        .any(|t| t.source == TaskSource::DeepSeekHarness);
-    if has_session {
-        tasks.retain(|t| {
-            !(t.cli.as_deref() == Some("dsh") && t.confidence == DetectionConfidence::Inferred)
-        });
+        .filter(|task| task.source == source && !is_scanner_observation(task))
+        .cloned()
+        .collect();
+    if native.is_empty() {
+        return;
     }
+    tasks.retain(|task| {
+        let scanner = is_scanner_observation(task)
+            && cli.is_none_or(|name| task.cli.as_deref() == Some(name))
+            && task.confidence == DetectionConfidence::Inferred;
+        !(scanner
+            && native
+                .iter()
+                .any(|candidate| same_observed_identity(candidate, task)))
+    });
+}
+
+/// Only merge a scanner row when a stable identity proves it is the same
+/// session. Ambiguous rows remain visible instead of deleting an independent
+/// scanner observation from another Agent or terminal.
+fn same_observed_identity(a: &TaskSnapshot, b: &TaskSnapshot) -> bool {
+    if a.source != b.source || a.host != b.host || a.remote != b.remote {
+        return false;
+    }
+    // A terminal is a focus target, not proof that two observations describe
+    // the same session. Unknown or mismatched session IDs must remain visible.
+    matches!((&a.session_id, &b.session_id), (Some(a_id), Some(b_id))
+        if !a_id.is_empty() && a_id == b_id)
 }
 
 fn dedup_claude_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    if tasks.iter().any(|t| {
-        t.source == TaskSource::ClaudeCode
-            && (t.id.starts_with("claude:") || t.id.contains(":claude:"))
-    }) {
-        tasks.retain(|t| {
-            !((t.source_instance.as_deref() == Some("scanner") || t.id.starts_with("scan:"))
-                && t.source == TaskSource::ClaudeCode)
-        });
+    let native: Vec<TaskSnapshot> = tasks
+        .iter()
+        .filter(|task| {
+            task.source == TaskSource::ClaudeCode
+                && !is_scanner_observation(task)
+                && (task.id.starts_with("claude:") || task.id.contains(":claude:"))
+        })
+        .cloned()
+        .collect();
+    if native.is_empty() {
+        return;
     }
+    tasks.retain(|task| {
+        !(task.source == TaskSource::ClaudeCode
+            && is_scanner_observation(task)
+            && native
+                .iter()
+                .any(|candidate| same_observed_identity(candidate, task)))
+    });
 }
 
 struct LocalBatch {
@@ -737,14 +760,21 @@ impl LocalProviders {
                 )),
                 SourceKind::Scanner => {
                     let mut scanner = Scanner::new();
+                    let mut last_tasks: Vec<TaskSnapshot> = Vec::new();
                     let id = source.id.clone();
                     self.workers.push((
                         id.clone(),
                         vec![TaskSource::ClaudeCode, TaskSource::Gemini],
                         Worker::spawn(Duration::from_secs(2), move |_| {
-                            ProviderOutput::tasks(
-                                scanner.scan().into_iter().map(Into::into).collect(),
-                            )
+                            match scanner.scan_result() {
+                                Ok(statuses) => {
+                                    let tasks: Vec<TaskSnapshot> =
+                                        statuses.into_iter().map(Into::into).collect();
+                                    last_tasks = tasks.clone();
+                                    ProviderOutput::tasks(tasks)
+                                }
+                                Err(error) => ProviderOutput::degraded(last_tasks.clone(), error),
+                            }
                         }),
                     ));
                     self.health.push(ProviderHealth {
@@ -1101,58 +1131,6 @@ fn update_provider_health(
     } else {
         health.push(next);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-#[allow(dead_code)]
-fn merge_and_emit(
-    app: &AppHandle,
-    store: &mut TaskStore,
-    engine: &mut TransitionEngine,
-    tasks: Vec<TaskSnapshot>,
-    hosts: &[HostHealth],
-    providers: &[ProviderHealth],
-    history: &mut HistoryStore,
-    now: SystemTime,
-    remote: bool,
-) {
-    let merged = store.merge_partition(tasks, remote, now);
-    let events = engine.apply(&merged, hosts, now);
-    for e in &events {
-        log::info!("transition event: {}", crate::privacy::event_kind(e));
-    }
-    crate::notifier::handle_events(app, &events, &merged);
-    if let Err(error) = history.save_if_changed(store.recent()) {
-        log::warn!("failed to persist recent task history: {error}");
-    }
-    let display = reconcile_attention(merged);
-    emit_agents(app, &display, hosts, providers);
-}
-
-/// Refresh local sources (file provider + Codex session metadata + scanner),
-/// dedup, and emit.
-#[allow(dead_code)]
-fn refresh_local(
-    app: &AppHandle,
-    store: &mut TaskStore,
-    engine: &mut TransitionEngine,
-    providers: &mut LocalProviders,
-    history: &mut HistoryStore,
-    hosts: &[HostHealth],
-    now: SystemTime,
-) {
-    let batch = providers.poll(now);
-    let merged = store.merge_sources(batch.tasks, &batch.authoritative_sources, now);
-    let events = engine.apply(&merged, hosts, now);
-    for event in &events {
-        log::info!("transition event: {}", crate::privacy::event_kind(event));
-    }
-    crate::notifier::handle_events(app, &events, &merged);
-    if let Err(error) = history.save_if_changed(store.recent()) {
-        log::warn!("failed to persist recent task history: {error}");
-    }
-    let display = reconcile_attention(merged);
-    emit_agents(app, &display, hosts, &providers.health);
 }
 
 fn remote_interval_ms(provider: &RemoteTmuxProvider) -> Duration {
@@ -1710,6 +1688,84 @@ mod tests {
         assert_eq!(health[1].provider, "state:notifications");
     }
 
+    #[test]
+    fn dashboard_snapshot_competes_without_mixed_batches_and_reopens_consistently() {
+        use std::sync::{Arc, Barrier};
+        use std::thread;
+
+        let store = Arc::new(Mutex::new(DashboardSnapshot {
+            revision: 0,
+            tasks: Vec::new(),
+            hosts: Vec::new(),
+            providers: Vec::new(),
+        }));
+        let start = Arc::new(Barrier::new(3));
+        let mut producers = Vec::new();
+        for prefix in ["producer-a", "producer-b"] {
+            let store = Arc::clone(&store);
+            let start = Arc::clone(&start);
+            producers.push(thread::spawn(move || {
+                start.wait();
+                for n in 0..25 {
+                    let task_id = format!("{prefix}-{n}");
+                    let host_id = format!("host-{prefix}-{n}");
+                    let provider_id = format!("provider-{prefix}-{n}");
+                    let task = TaskSnapshot::new(
+                        task_id,
+                        "snapshot",
+                        TaskSource::GenericEvent,
+                        TaskStatus::Running,
+                        DetectionConfidence::Hook,
+                        SystemTime::now(),
+                    );
+                    let host = HostHealth::connected(host_id, SystemTime::now());
+                    let provider = ProviderHealth {
+                        provider: provider_id,
+                        status: ProviderStatus::Connected,
+                        last_success: Some(SystemTime::now()),
+                        last_attempt: Some(SystemTime::now()),
+                        message: None,
+                    };
+                    let mut latest = store.lock().unwrap();
+                    commit_dashboard_snapshot(&mut latest, &[task], &[host], &[provider]);
+                }
+            }));
+        }
+        let reader_store = Arc::clone(&store);
+        let reader_start = Arc::clone(&start);
+        let reader = thread::spawn(move || {
+            reader_start.wait();
+            let mut seen = Vec::new();
+            for _ in 0..200 {
+                let snapshot = reader_store.lock().unwrap().clone();
+                if snapshot.revision > 0 {
+                    let task = &snapshot.tasks[0].id;
+                    let host = &snapshot.hosts[0].host;
+                    let provider = &snapshot.providers[0].provider;
+                    let marker = task.strip_prefix("producer-").unwrap();
+                    assert_eq!(host.strip_prefix("host-producer-").unwrap(), marker);
+                    assert_eq!(provider.strip_prefix("provider-producer-").unwrap(), marker);
+                    seen.push(snapshot);
+                }
+                thread::yield_now();
+            }
+            seen
+        });
+        let snapshots = reader.join().unwrap();
+        for producer in producers {
+            producer.join().unwrap();
+        }
+        let final_snapshot = store.lock().unwrap().clone();
+        assert_eq!(final_snapshot.revision, 50);
+        assert_eq!(final_snapshot.tasks.len(), 1);
+        assert!(!snapshots.is_empty());
+        let reopened = final_snapshot.clone();
+        assert_eq!(reopened.revision, final_snapshot.revision);
+        assert_eq!(reopened.tasks, final_snapshot.tasks);
+        assert_eq!(reopened.hosts, final_snapshot.hosts);
+        assert_eq!(reopened.providers, final_snapshot.providers);
+    }
+
     fn r03_source() -> crate::monitoring::SourceConfig {
         serde_json::from_value(serde_json::json!({
             "id":"r03-source","name":"Source","kind":"generic_event","enabled":true,
@@ -1982,6 +2038,8 @@ mod tests {
             "123",
             Some("hermes"),
         );
+        scan.source = TaskSource::Hermes;
+        scan.session_id = Some("hermes:running".into());
         scan.source_instance = Some("scanner".into());
         tasks.push(scan.clone());
         scan.id = "process:hermes".into();
@@ -2005,6 +2063,173 @@ mod tests {
         let mut tasks = vec![scan.clone()];
         dedup_hermes_over_scan(&mut tasks);
         assert_eq!(tasks, vec![scan]);
+    }
+
+    #[test]
+    fn codex_native_inferred_session_is_not_removed_as_scanner_duplicate() {
+        let mut native = task_with_terminal(
+            "codex:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("codex"),
+        );
+        native.source = TaskSource::Codex;
+        native.source_instance = Some("codex".into());
+        native.session_id = Some("native".into());
+        let mut tasks = vec![native.clone()];
+        dedup_codex_over_scan(&mut tasks);
+        assert_eq!(tasks, vec![native]);
+    }
+
+    #[test]
+    fn deepseek_native_inferred_session_is_not_removed_as_scanner_duplicate() {
+        let mut native = task_with_terminal(
+            "dsh-native:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "123",
+            Some("dsh"),
+        );
+        native.source = TaskSource::DeepSeekHarness;
+        native.source_instance = Some("deepseek_harness_desktop".into());
+        native.session_id = Some("native".into());
+        let mut tasks = vec![native.clone()];
+        dedup_dsh_over_scan(&mut tasks);
+        assert_eq!(tasks, vec![native]);
+    }
+
+    #[test]
+    fn codex_and_deepseek_scanner_duplicates_still_drop_when_native_exists() {
+        let mut expected = vec![];
+        for (id, source, cli) in [
+            ("codex:native", TaskSource::Codex, "codex"),
+            ("dsh-native:native", TaskSource::DeepSeekHarness, "dsh"),
+        ] {
+            let mut native = task_with_terminal(
+                id,
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "123",
+                Some(cli),
+            );
+            native.source = source;
+            native.source_instance = Some("native".into());
+            native.session_id = Some(id.into());
+            expected.push(native);
+        }
+        let mut tasks = expected.clone();
+        for (id, source, cli) in [
+            ("scan:codex", TaskSource::Codex, "codex"),
+            ("scan:dsh", TaskSource::DeepSeekHarness, "dsh"),
+        ] {
+            let mut scan = task_with_terminal(
+                id,
+                TaskStatus::Running,
+                DetectionConfidence::Inferred,
+                "123",
+                Some(cli),
+            );
+            scan.source = source;
+            scan.session_id = Some(
+                if cli == "codex" {
+                    "codex:native"
+                } else {
+                    "dsh-native:native"
+                }
+                .into(),
+            );
+            scan.source_instance = Some("scanner".into());
+            tasks.push(scan);
+        }
+        dedup_codex_over_scan(&mut tasks);
+        dedup_dsh_over_scan(&mut tasks);
+        assert_eq!(tasks, expected);
+    }
+
+    #[test]
+    fn terminal_sharing_without_a_session_match_cannot_delete_scanner_tasks() {
+        let mut native = task_with_terminal(
+            "codex:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "shared-terminal",
+            Some("codex"),
+        );
+        native.source = TaskSource::Codex;
+        native.session_id = Some("native-session".into());
+        let mut independent = native.clone();
+        independent.id = "scan:independent".into();
+        independent.source_instance = Some("scanner".into());
+        independent.session_id = None;
+        let expected = vec![native, independent];
+        let mut tasks = expected.clone();
+        dedup_by_terminal(&mut tasks);
+        dedup_codex_over_scan(&mut tasks);
+        assert_eq!(tasks, expected);
+    }
+
+    #[test]
+    fn scanner_session_dedup_does_not_cross_host_or_agent_scopes() {
+        let mut a = task_with_terminal(
+            "codex:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "shared",
+            Some("codex"),
+        );
+        a.source = TaskSource::Codex;
+        a.session_id = Some("same-session-id".into());
+        let mut b = a.clone();
+        assert!(same_observed_identity(&a, &b));
+        b.host = Some("another-host".into());
+        assert!(!same_observed_identity(&a, &b));
+        b.host = None;
+        b.source = TaskSource::ClaudeCode;
+        assert!(!same_observed_identity(&a, &b));
+    }
+
+    #[test]
+    fn independent_scanner_identity_survives_native_dedup() {
+        let mut native = task_with_terminal(
+            "codex:native-a",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "terminal-a",
+            Some("codex"),
+        );
+        native.source = TaskSource::Codex;
+        native.source_instance = Some("codex".into());
+        native.session_id = Some("session-a".into());
+        let mut scanner_a = task_with_terminal(
+            "scan:terminal-a",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "terminal-a",
+            Some("codex"),
+        );
+        scanner_a.session_id = Some("session-a".into());
+        scanner_a.source = TaskSource::Codex;
+        scanner_a.source_instance = Some("scanner".into());
+        let mut scanner_b = task_with_terminal(
+            "scan:terminal-b",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "terminal-a",
+            Some("codex"),
+        );
+        scanner_b.source = TaskSource::Codex;
+        scanner_b.source_instance = Some("scanner".into());
+        scanner_b.session_id = Some("session-b".into());
+        let mut tasks = vec![native, scanner_a, scanner_b];
+        dedup_codex_over_scan(&mut tasks);
+        assert_eq!(
+            tasks
+                .iter()
+                .map(|task| task.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["codex:native-a", "scan:terminal-b"]
+        );
     }
 
     #[test]
@@ -2034,7 +2259,7 @@ mod tests {
     }
 
     #[test]
-    fn dedup_hook_beats_scan_same_focus_and_cli() {
+    fn hook_beats_scanner_with_a_confirmed_matching_session() {
         let mut tasks = vec![
             task_with_terminal(
                 "file:codex",
@@ -2051,7 +2276,12 @@ mod tests {
                 Some("codex"),
             ),
         ];
+        for task in &mut tasks {
+            task.source = TaskSource::Codex;
+            task.session_id = Some("same-session".into());
+        }
         dedup_by_terminal(&mut tasks);
+        dedup_codex_over_scan(&mut tasks);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, "file:codex");
     }
@@ -2083,9 +2313,11 @@ mod tests {
         ];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.source = TaskSource::ClaudeCode;
-            if i < 2 {
-                task.session_id = Some(format!("session-{i}"));
-            }
+            task.session_id = Some(if i < 2 {
+                format!("session-{i}")
+            } else {
+                "session-0".into()
+            });
         }
         dedup_claude_over_scan(&mut tasks);
         dedup_by_terminal(&mut tasks);

@@ -7,6 +7,9 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+const MAX_ENVELOPE_BYTES: usize = 60 * 1024;
+const MAX_JOURNAL_BYTES: u64 = 8 * 1024 * 1024;
+
 pub fn record(dir: &Path, input: &Value, at: u64, root: &Path) -> std::io::Result<Value> {
     let id = input
         .get("session_id")
@@ -171,6 +174,11 @@ pub fn record(dir: &Path, input: &Value, at: u64, root: &Path) -> std::io::Resul
         "activity":activity});
     let mut bytes = serde_json::to_vec(&payload)?;
     bytes.push(b'\n');
+    if bytes.len() > MAX_ENVELOPE_BYTES {
+        return Err(std::io::Error::other(
+            "Claude event checkpoint exceeds capacity",
+        ));
+    }
     journal.seek(SeekFrom::End(0))?;
     journal.write_all(&bytes)?;
     journal.sync_all()?;
@@ -181,6 +189,17 @@ pub fn record(dir: &Path, input: &Value, at: u64, root: &Path) -> std::io::Resul
     temporary
         .persist(dir.join(format!("{id}.json")))
         .map_err(|e| e.error)?;
+    if journal.metadata()?.len() > MAX_JOURNAL_BYTES {
+        // Every v3 envelope is a complete reducer checkpoint: pending calls,
+        // approvals, turn start, sequence and correlation fingerprints survive.
+        // Persist the checkpoint before atomically replacing the old journal;
+        // a failed replacement keeps the full journal, never a truncated file.
+        drop(journal);
+        let mut compact = tempfile::NamedTempFile::new_in(dir)?;
+        compact.write_all(&bytes)?;
+        compact.as_file().sync_all()?;
+        compact.persist(path).map_err(|e| e.error)?;
+    }
     Ok(payload)
 }
 
@@ -203,6 +222,44 @@ fn tool_signature(input: &Value) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn compacted_journal_preserves_pending_requests_and_monotonic_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let input =
+            json!({"session_id":"s","hook_event_name":"PermissionRequest","tool_name":"Bash"});
+        let first = record(dir.path(), &input, 1, dir.path()).unwrap();
+        let path = dir.path().join("s.jsonl");
+        // Large valid history ending in the current checkpoint.
+        let line = serde_json::to_vec(&first).unwrap();
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&path)
+            .unwrap();
+        while file.metadata().unwrap().len() <= MAX_JOURNAL_BYTES {
+            file.write_all(&line).unwrap();
+            file.write_all(b"\n").unwrap();
+        }
+        drop(file);
+        let next = record(
+            dir.path(),
+            &json!({"session_id":"s","hook_event_name":"PreToolUse","tool_use_id":"unrelated"}),
+            2,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(next["sequence"], 2);
+        assert_eq!(next["pending_request_ids"], first["pending_request_ids"]);
+        assert!(std::fs::metadata(path).unwrap().len() < MAX_ENVELOPE_BYTES as u64);
+        let restarted = record(
+            dir.path(),
+            &json!({"session_id":"s","hook_event_name":"Stop"}),
+            3,
+            dir.path(),
+        )
+        .unwrap();
+        assert_eq!(restarted["sequence"], 3);
+        assert_eq!(restarted["pending_request_ids"], json!([]));
+    }
     #[test]
     fn r04_untrusted_tool_payloads_never_enter_new_journal_or_checkpoint_activity() {
         let dir = tempfile::tempdir().unwrap();

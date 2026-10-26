@@ -76,6 +76,8 @@ async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:
     const layout=await client.evaluate(`(()=>{
       const box=e=>{const r=e.getBoundingClientRect();return {left:r.left,right:r.right,top:r.top,bottom:r.bottom,width:r.width,height:r.height};};
       const buttons=[...document.querySelectorAll('button:not(:disabled),input:not(:disabled),select:not(:disabled),summary')].filter(e=>{
+        // Chromium retains layout boxes for some closed disclosure content.
+        for(let p=e.parentElement;p;p=p.parentElement){if(p.tagName==='DETAILS'&&!p.open&&!p.querySelector(':scope > summary')?.contains(e))return false;}
         const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
         if(!(r.width>0&&r.height>0&&r.top>=0&&r.bottom<=innerHeight))return false;
         // Offscreen descendants of a scrolling list are not occluded controls.

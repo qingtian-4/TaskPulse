@@ -40,7 +40,7 @@ try {
         # sqlite3 context managers commit/rollback but do not close handles;
         # these offline helpers must also pass on Windows file locking.
         $taskPulsePython = if (Get-Command python3.11.exe -ErrorAction SilentlyContinue) { 'python3.11.exe' } else { 'python' }
-        foreach ($fixture in @('scripts/test-wsl-discovery.py', 'scripts/test-codex-metadata.py', 'scripts/wsl-metadata.test.py')) {
+        foreach ($fixture in @('scripts/test-wsl-discovery.py', 'scripts/test-codex-metadata.py', 'scripts/wsl-metadata.test.py', 'scripts/test-codex-observer.py')) {
             & $taskPulsePython $fixture
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }

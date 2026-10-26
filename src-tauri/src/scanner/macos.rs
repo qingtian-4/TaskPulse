@@ -2,21 +2,29 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use super::strategies::{CliStrategy, SCRIPT_RUNTIMES};
-use super::{known_terminal, ProcInfo, WindowCache};
+use super::{known_terminal, PlatformScan, ProcInfo, ProcessSnapshot, WindowCache};
 use crate::watcher::TerminalInfo;
 
 /// Find CLI processes matching any registered strategy.
 /// Also returns a pid→ppid map for ALL processes (used for transitive
 /// ancestor filtering of subagent processes).
-pub fn find_cli_processes<'a>(
-    strategies: &'a [Box<dyn CliStrategy>],
-) -> (Vec<(ProcInfo, &'a dyn CliStrategy)>, HashMap<u32, u32>) {
+pub fn find_cli_processes<'a>(strategies: &'a [Box<dyn CliStrategy>]) -> PlatformScan<'a> {
     let output = match std::process::Command::new("ps")
         .args(["-eo", "pid,ppid,pcpu,tty,command"])
         .output()
     {
         Ok(o) => o,
-        Err(_) => return (Vec::new(), HashMap::new()),
+        Err(_) => {
+            return PlatformScan {
+                matched: Vec::new(),
+                snapshot: ProcessSnapshot {
+                    collected_at: std::time::Instant::now(),
+                    ppid_map: HashMap::new(),
+                    processes: HashMap::new(),
+                    succeeded: false,
+                },
+            }
+        }
     };
 
     let stdout = String::from_utf8_lossy(&output.stdout);
@@ -43,14 +51,14 @@ pub fn find_cli_processes<'a>(
         // Phase 1: Direct exe_name match (native binaries like "claude")
         let strategy = strategies
             .iter()
-            .find(|s| s.process_names().iter().any(|n| *n == exe_name));
+            .find(|s| s.process_names().contains(&exe_name));
 
         // Phase 2: If argv[0] is a script runtime (node, bun, etc.),
         // check remaining args for script names (e.g., "gemini", "codex")
         let strategy = match strategy {
             Some(s) => s.as_ref(),
             None => {
-                if !SCRIPT_RUNTIMES.iter().any(|r| *r == exe_name) {
+                if !SCRIPT_RUNTIMES.contains(&exe_name) {
                     continue;
                 }
                 match parts[5..].iter().find_map(|arg| {
@@ -63,7 +71,7 @@ pub fn find_cli_processes<'a>(
                         .unwrap_or("");
                     strategies
                         .iter()
-                        .find(|s| s.script_names().iter().any(|n| *n == arg_name))
+                        .find(|s| s.script_names().contains(&arg_name))
                 }) {
                     Some(s) => s.as_ref(),
                     None => continue,
@@ -80,6 +88,9 @@ pub fn find_cli_processes<'a>(
             continue;
         }
 
+        if strategy.cli_name() == "codex" && super::services::codex_service(&full_cmd) {
+            continue;
+        }
         let pid: u32 = match parts[0].parse() {
             Ok(p) => p,
             Err(_) => continue,
@@ -105,6 +116,7 @@ pub fn find_cli_processes<'a>(
             ProcInfo {
                 pid,
                 ppid,
+                process_instance: None,
                 cwd,
                 tty_label,
                 utime: 0,
@@ -117,10 +129,22 @@ pub fn find_cli_processes<'a>(
         ));
     }
 
-    (out, ppid_map)
+    PlatformScan {
+        matched: out,
+        snapshot: ProcessSnapshot {
+            collected_at: std::time::Instant::now(),
+            ppid_map,
+            processes: HashMap::new(),
+            succeeded: output.status.success(),
+        },
+    }
 }
 
-pub fn terminal_info(cache: &mut WindowCache, p: &ProcInfo) -> Option<TerminalInfo> {
+pub fn terminal_info(
+    cache: &mut WindowCache,
+    p: &ProcInfo,
+    _snapshot: &ProcessSnapshot,
+) -> Option<TerminalInfo> {
     let mut cur = p.ppid;
     let mut term_app = String::new();
     let mut term_pid: u32 = 0;

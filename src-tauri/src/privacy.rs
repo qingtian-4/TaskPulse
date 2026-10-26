@@ -1,6 +1,7 @@
 //! Allowlisted export/log views; private task content stays in local UI state.
 use crate::domain::TaskSnapshot;
 use crate::providers::ProviderHealth;
+#[cfg(test)]
 use crate::transition::TaskEvent;
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -64,7 +65,8 @@ pub fn keyed_metrics<T: serde::Serialize>(metrics: &HashMap<String, T>) -> Value
 }
 
 /// Event kind alone is enough for application logs. No Debug task dumps.
-pub fn event_kind(event: &TaskEvent) -> &'static str {
+#[cfg(test)]
+fn event_kind(event: &TaskEvent) -> &'static str {
     match event {
         TaskEvent::WaitingInput { .. } => "waiting_input",
         TaskEvent::Succeeded { .. } => "succeeded",

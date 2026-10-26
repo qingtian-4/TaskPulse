@@ -1,6 +1,7 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod attention;
+mod build_info;
 mod claude_events;
 mod claude_integration;
 mod domain;
@@ -8,12 +9,14 @@ mod focus;
 mod focusers;
 mod heuristics;
 mod history;
+mod instance;
 mod integrations;
 mod message_center;
 mod monitoring;
 mod notification_log;
 mod notifier;
 mod privacy;
+mod process;
 mod providers;
 mod scanner;
 mod state_file;
@@ -25,6 +28,7 @@ mod watcher;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
 fn main() {
@@ -58,17 +62,24 @@ fn main() {
         return;
     }
 
-    // Log panics from any thread before the process aborts (release uses panic=abort)
+    let instance = match instance::Instance::acquire(&providers::remote_tmux::config::config_dir())
+    {
+        Ok(Some(instance)) => instance,
+        Ok(None) => return,
+        Err(error) => {
+            log::error!("Cannot acquire TaskPulse GUI lock: {error}");
+            std::process::exit(1);
+        }
+    };
+
+    // Log panics from any thread before the default handler.
     let default_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         log::error!("PANIC: {}", info);
         default_hook(info);
     }));
 
-    let builder = tauri::Builder::default()
-        .plugin(tauri_plugin_shell::init())
-        .plugin(tauri_plugin_process::init())
-        .plugin(tauri_plugin_notification::init());
+    let builder = tauri::Builder::default();
     let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
         builder
     } else {
@@ -79,7 +90,9 @@ fn main() {
         )
     };
     builder
-        .setup(|app| {
+        .setup(move |app| {
+            instance.listen(app.handle().clone());
+            app.manage(instance);
             let handle = app.handle().clone();
             let first_setup = !monitoring::initialize().onboarding_complete;
 
@@ -173,6 +186,7 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            build_info::get_build_info,
             integrations::api::integration_catalog,
             integrations::api::integration_environment,
             integrations::api::integration_installations,
@@ -184,6 +198,7 @@ fn main() {
             integrations::api::integration_export,
             focus::focus_terminal,
             watcher::get_agents,
+            watcher::get_dashboard_snapshot,
             watcher::get_archived_attention,
             watcher::get_hosts,
             watcher::get_providers,

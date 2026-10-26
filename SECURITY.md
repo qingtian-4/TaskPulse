@@ -40,6 +40,7 @@ as security-supported.
 - Hook script injection or command injection
 - Privilege escalation through the tray app
 - Credential or token exposure in status files
+- Vulnerable dependencies still shipped by TaskPulse, including when an upstream fix is already available
 - Path traversal in file watcher or focus handlers
 - Unauthorized process control via focus commands
 
@@ -48,4 +49,4 @@ as security-supported.
 - Bugs that do not have a security impact
 - Feature requests
 - Issues requiring physical access to the machine
-- Vulnerabilities in dependencies that are already patched upstream
+- Reports about versions that TaskPulse does not distribute or use

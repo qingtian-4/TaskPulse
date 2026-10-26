@@ -104,6 +104,7 @@ mod tests {
         ProcInfo {
             pid: 1000,
             ppid: 999,
+            process_instance: None,
             cwd: PathBuf::from("/home/user/project"),
             tty_label: "pts/1".to_string(),
             utime: 0,

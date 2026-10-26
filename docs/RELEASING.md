@@ -1,5 +1,15 @@
 # Windows Alpha 发布流程
 
+正在准备的下一候选为 `0.2.0-alpha.8`，包含当前审计修复和独立 Apple Silicon DMG 验收。
+四处应用版本与 MSI 数值版本已同步；下文 Alpha.7 的标签、CI 和人工门禁属于历史证据，
+不能用于证明 Alpha.8 已通过。新包仍先作为候选供维护者下载测试，公开发布前记录本次准确 SHA 的结果。
+macOS 使用 [独立工作流](../.github/workflows/experimental-platforms.yml)，预发布标签默认选择
+Apple Silicon；手动运行可选择 Intel/Linux。DMG、架构专用校验和和 manifest 与 Windows 文件分开，
+只有该平台的全部检查成功才交付安装包。ad-hoc 签名不等于 Apple Developer ID 或公证，
+原生窗口存在、首次启动/重启检查也不等于真实宿主交互；见 [Mac 验收说明](MACOS_DEVELOPMENT.md)。
+
+CI 的 Actions 固定为完整提交 SHA，Bun / Rust 固定为经过验证的版本；升级通过普通变更审查完成。Windows 资产另外包含 `SBOM.cdx.json`（CycloneDX 1.6）、`DEPENDENCIES.json` 和 `THIRD_PARTY_NOTICES.txt`，由 `bun scripts/dependency-notices.ts dist/release x86_64-pc-windows-msvc` 从锁定依赖与本地许可证生成。清单注明源提交、锁文件哈希和范围，包含构建工具，不代表所有操作系统或原生捆绑组件已审完。公开发行前逐项处理 `reviewRequired`，核对许可证文本及原生组件的分发义务；生成成功本身不等于许可证审查通过。
+
 当前候选为 `0.2.0-alpha.7`；不可变标签 `v0.2.0-alpha.7` 已指向
 `b5dc64a760bae916c9d40b147616f9720405887b`。main 质量/安全 CI 和
 [发布运行 39636404358](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)

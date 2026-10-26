@@ -22,6 +22,7 @@
   let sessions=$state<SessionPage>({items:[],total:0});
   let error=$state('');
   let notice=$state('');
+  let buildInfo=$state<{version:string;commit:string;modified:boolean;profile:string;executable:string}|null>(null);
   let saving=$state(false);
   let loadingSessions=$state(false);
   let notificationError=$state('');
@@ -138,6 +139,7 @@
     const cleanups:Array<()=>void>=[];let mounted=true;
     void(async()=>{
       try {
+        buildInfo=await invoke('get_build_info');
         settings=await invoke<DashboardSettings>('get_monitoring_settings');
         applied=structuredClone($state.snapshot(settings));
         error=await invoke<string | null>('get_monitoring_error') ?? '';
@@ -165,6 +167,7 @@
 
 <div class="manage tp-theme">
   <header><div class="page-title"><span class="page-icon" aria-hidden="true"><Cable size={21}/></span><div><span class="eyebrow">TASKPULSE / SOURCES</span><h1>管理你的关注范围</h1><p>选择任务来源，交给 TaskPulse 跟踪新执行。</p></div></div><button class="primary tp-btn" data-variant="primary" disabled={saving || !dirty || !settings || conflict} onclick={save}>{saving?'保存中…':dirty?'保存并生效':'配置已保存'}</button></header>
+  {#if buildInfo}<details class="build-info tp-fold"><summary>关于 TaskPulse · {buildInfo.version}</summary><p class="help">构建 {buildInfo.commit.slice(0,12)}{buildInfo.modified?' · 含本地修改':''} · {buildInfo.profile}<br/>{buildInfo.executable}</p><button class="tp-btn" onclick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(buildInfo,null,2));notice='已复制构建信息';}catch{error='复制失败';}}}>复制构建信息</button></details>{/if}
   <nav aria-label="管理页面"><button class="tp-btn" class:active={tab==='sources'} onclick={()=>tab='sources'}>监控来源</button><button class="tp-btn" class:active={tab==='sessions'} onclick={()=>{tab='sessions';void loadSessions();}}>已发现会话</button><button class="tp-btn" class:active={tab==='notifications'} onclick={()=>{tab='notifications';void loadDelivery();}}>通知与显示</button></nav>
   {#if error}<div class="message error" role="alert">{error}<button class="tp-btn" onclick={()=>error=''} aria-label="关闭错误">×</button></div>{/if}
   {#if conflict}<div class="message"><button class="tp-btn" onclick={reloadSettings}>放弃未保存编辑，加载最新配置</button></div>{/if}
@@ -232,6 +235,7 @@
   {#if eventPrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="events-title"><h2 id="events-title">{eventPrompt.enabled?'启用 Claude 精确事件':'移除 Claude 精确事件'}</h2><p>这会修改所选 Claude 数据目录中的 settings.json，仅添加或移除 TaskPulse Hook。首次修改会备份；已有 Hook、statusLine、代理和模型设置保留。可随时移除。</p><div><button class="tp-btn" onclick={()=>eventPrompt=null}>取消</button><button class="primary tp-btn" data-variant="primary" onclick={confirmEvents}>确认{eventPrompt.enabled?'启用':'移除'}</button></div></dialog></div>{/if}
 </div>
 <style>
+  .build-info{flex:none;margin:0 24px 8px;padding:8px 12px;max-height:140px;overflow:auto;font-size:11px}.build-info .help{overflow-wrap:anywhere;font-size:11px}
   .manage{height:100vh;display:flex;flex-direction:column;background:var(--tp-bg)}
   header{padding:20px 24px 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--tp-border);background:linear-gradient(100deg,#76d6c407,transparent 50%),var(--tp-panel);flex:none}
   .page-title{display:flex;gap:12px;align-items:center;min-width:0}.page-title>div{min-width:0}.page-icon{width:37px;height:37px;flex:none;display:grid;place-items:center;border:1px solid var(--tp-accent-line);background:var(--tp-accent-soft);border-radius:var(--tp-radius-md);color:var(--tp-accent)}

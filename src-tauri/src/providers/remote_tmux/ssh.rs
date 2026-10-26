@@ -6,9 +6,8 @@
 //! drive the whole remote provider with a fake executor (no real servers).
 
 use std::collections::{HashMap, VecDeque};
-use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 pub trait SshExecutor: Send + Sync {
     /// Run one remote command.  `Err` on spawn failure, timeout, or
@@ -35,77 +34,31 @@ impl Default for SystemSshExecutor {
 impl SshExecutor for SystemSshExecutor {
     fn run(&self, host: &str, command: &str, timeout: Duration) -> Result<String, String> {
         let connect_timeout = timeout.as_secs().clamp(1, 10).to_string();
-        let mut cmd = Command::new("ssh");
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // Background polling must not open consoles.
+        // stderr is directed to the null device: no unbounded reader and no
+        // remote command/credential text leaked through diagnostics. stdout
+        // must be complete UTF-8 within the per-snapshot byte budget.
+        let connect = format!("ConnectTimeout={connect_timeout}");
+        let result = crate::process::output(
+            "ssh",
+            &[
+                "-o",
+                "BatchMode=yes",
+                "-o",
+                "LogLevel=ERROR",
+                "-o",
+                &connect,
+                "--",
+                host,
+                command,
+            ],
+            timeout,
+            16 * 1024 * 1024,
+        )
+        .map_err(|error| format!("ssh {host} probe failed: {error:?}"))?;
+        if !result.status.success() {
+            return Err(format!("ssh {host} exited {:?}", result.status.code()));
         }
-        cmd.arg("-o").arg("BatchMode=yes");
-        // Suppress non-fatal stderr noise (e.g. the post-quantum KEX WARNING)
-        // that would otherwise make ssh exit with status 1 on success.
-        cmd.arg("-o").arg("LogLevel=ERROR");
-        cmd.arg("-o")
-            .arg(format!("ConnectTimeout={connect_timeout}"));
-        cmd.arg(host);
-        cmd.arg(command);
-        cmd.stdout(Stdio::piped());
-        cmd.stderr(Stdio::piped());
-
-        let mut child = cmd
-            .spawn()
-            .map_err(|e| format!("failed to spawn ssh: {e}"))?;
-
-        // Read stdout/stderr CONCURRENTLY while the child runs.  Snapshot
-        // payloads can exceed the 64 KB pipe buffer on busy servers (big ps
-        // tables); reading only after exit would deadlock the child forever.
-        let mut out_reader = child.stdout.take();
-        let mut err_reader = child.stderr.take();
-        let out_thread = std::thread::spawn(move || {
-            use std::io::Read;
-            let mut s = String::new();
-            if let Some(mut out) = out_reader.take() {
-                let _ = out.read_to_string(&mut s);
-            }
-            s
-        });
-        let err_thread = std::thread::spawn(move || {
-            use std::io::Read;
-            let mut s = String::new();
-            if let Some(mut err) = err_reader.take() {
-                let _ = err.read_to_string(&mut s);
-            }
-            s
-        });
-
-        let deadline = Instant::now() + timeout;
-        let status = loop {
-            match child.try_wait() {
-                Ok(Some(status)) => break status,
-                Ok(None) => {
-                    if Instant::now() >= deadline {
-                        let _ = child.kill();
-                        return Err(format!("ssh {host} timed out after {timeout:?}"));
-                    }
-                    std::thread::sleep(Duration::from_millis(50));
-                }
-                Err(e) => return Err(format!("ssh wait failed: {e}")),
-            }
-        };
-
-        let stdout = out_thread.join().unwrap_or_default();
-        let stderr = err_thread.join().unwrap_or_default();
-
-        if status.success() {
-            Ok(stdout)
-        } else {
-            let detail = if stderr.trim().is_empty() {
-                stdout.trim().to_string()
-            } else {
-                stderr.trim().to_string()
-            };
-            Err(format!("ssh {host} exited {:?}: {}", status.code(), detail))
-        }
+        String::from_utf8(result.stdout).map_err(|_| format!("ssh {host} returned invalid UTF-8"))
     }
 }
 

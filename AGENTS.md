@@ -132,7 +132,8 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - For provider changes, validate against the real local data source when available; do not rely only on fixtures.
 - For remote-provider changes, run the ignored live snapshot test and confirm the expected server/project/task in its output.
 - For wrapper changes, run `bun scripts/run-wrapper-smoke.ts` on Windows and `python3 scripts/run-wrapper-smoke.py` inside an already-running opted-in WSL/Linux environment. These use isolated target directories, never real watched state paths. `tp-run` requires Python 3; direct foreground child exit does not prove a detached/container/Slurm job ended.
-- Keep unrelated user changes intact. Use small logical commits on the current `codex/*` branch; do not push or open a PR unless requested.
+- Keep unrelated user changes intact. After every completed task, review the code, run the relevant tests and required checks, verify the app runs, then create small logical commits on the current `codex/*` branch. Never commit a known failing change as a completed task. Do not push or open a PR unless requested.
+- Remove disposable intermediate logs and failed test artifacts only after validating their resolved paths and retaining useful final evidence, original-change backups and any running executable.
 
 ## Windows Alpha releases
 

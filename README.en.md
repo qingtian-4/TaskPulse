@@ -6,7 +6,7 @@ A Windows-first desktop tray companion that brings Codex, Claude Code, Hermes, D
 
 [中文](README.md) · [Getting started](docs/INSTALL.md) · [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Architecture](docs/ARCHITECTURE.md) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **Windows-first · Source preview for the next candidate.** The application version remains 0.2.0-alpha.7. No Alpha.7 installer is publicly available. The source instructions below use the default branch `main`; the updated dashboard, message center and Runtime fixes are absent from the historical Alpha.7 candidate. CI artifacts identify their main SHA separately and do not constitute a new release. [Build and release rules](docs/RELEASING.md).
+> **Windows-first · Alpha.8 candidate testing.** The application version is 0.2.0-alpha.8 and is not publicly released. Independent CI workflows produce Windows EXE/MSI and Apple Silicon DMG candidates for maintainer acceptance against an exact source commit. Historical Alpha.7 drafts do not include these fixes. [Candidate downloads and testing](docs/CANDIDATE_TESTING.md) · [Build and release rules](docs/RELEASING.md).
 
 ## At a glance
 
@@ -40,7 +40,7 @@ Ask Codex to edit code, Claude Code to review it, and a separate WSL Codex to ru
 
 ## Quick start
 
-There is no publicly downloadable Alpha.7 installer. On Windows x64, build from source with Rust 1.89+, Bun, Microsoft C++ Build Tools and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) including WebView2.
+Testers can follow the [candidate download guide](docs/CANDIDATE_TESTING.md) for Windows EXE or Mac arm64 DMG packages without developer tools. For Windows source development, use Rust 1.89+, Bun, Microsoft C++ Build Tools and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) including WebView2. See the [Mac guide](docs/MACOS_DEVELOPMENT.md) for macOS development.
 
 ```powershell
 git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git

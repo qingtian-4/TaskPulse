@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing pre-release tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.7'
+        default: 'v0.2.0-alpha.8'
       commit:
         description: 'Optional full current main SHA: CI artifacts only, overrides tag; no Tag or Release created'
         required: false
@@ -37,12 +37,14 @@ jobs:
       commit: ${{ steps.version.outputs.commit }}
       probe_commit: ${{ steps.version.outputs.probe_commit }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ github.event.inputs.commit || github.event.inputs.tag || github.ref }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
       - name: Verify exact main candidate or existing tag and all application versions
         id: version
         env:
@@ -77,16 +79,19 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 45
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
           targets: x86_64-pc-windows-msvc
           components: rustfmt, clippy
-      - uses: swatinem/rust-cache@v2
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: src-tauri
           cache-on-failure: true
@@ -105,6 +110,8 @@ jobs:
         run: python scripts/test-wsl-discovery.py
       - name: Test remote Codex metadata schemas (offline fixtures)
         run: python scripts/test-codex-metadata.py
+      - name: Test opt-in Codex approval observer and reversible installation
+        run: python scripts/test-codex-observer.py
       - name: Test WSL metadata freshness and read failures (offline fixtures)
         run: python scripts/wsl-metadata.test.py
       - name: Test frontend models
@@ -120,7 +127,7 @@ jobs:
       - name: Test Rust
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
       - name: Build NSIS and MSI installers
-        uses: tauri-apps/tauri-action@v0
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         with:
           tauriScript: bun run tauri
           args: --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
@@ -131,7 +138,9 @@ jobs:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
         run: bun scripts/release.ts stage --bundle-root src-tauri/target/x86_64-pc-windows-msvc/ci-release/bundle --out dist/release --version "$env:RELEASE_VERSION" --commit "$env:RELEASE_COMMIT" ${{ needs.preflight.outputs.tag == '' && '--untagged' || '' }}
-      - uses: actions/upload-artifact@v7
+      - name: Export dependency inventory and license texts
+        run: bun scripts/dependency-notices.ts dist/release x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: windows-installers
           path: dist/release/*
@@ -148,11 +157,11 @@ jobs:
         installer: [nsis, msi]
         round: [1, 2]
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
           persist-credentials: false
-      - uses: actions/download-artifact@v8
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: windows-installers
           path: dist/release
@@ -176,7 +185,7 @@ jobs:
           INSTALLER_KIND: ${{ matrix.installer }}
           TASKPULSE_PROBE_COMMIT: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
         run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND"
-      - uses: actions/upload-artifact@v7
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: windows-installer-evidence-${{ matrix.installer }}-${{ matrix.round }}
@@ -191,12 +200,14 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
           ref: ${{ needs.preflight.outputs.commit }}
           persist-credentials: false
-      - uses: oven-sh/setup-bun@v2
-      - uses: actions/download-artifact@v8
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: windows-installers
           path: dist/release
@@ -205,7 +216,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: bun scripts/release.ts verify --out dist/release --version "$RELEASE_VERSION"
       - name: Create draft (manual acceptance required before publishing)
-        uses: softprops/action-gh-release@v3
+        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ needs.preflight.outputs.commit }}
@@ -220,3 +231,6 @@ jobs:
             dist/release/*.msi
             dist/release/SHA256SUMS.txt
             dist/release/release-manifest.json
+            dist/release/DEPENDENCIES.json
+            dist/release/SBOM.cdx.json
+            dist/release/THIRD_PARTY_NOTICES.txt

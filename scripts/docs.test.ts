@@ -20,10 +20,12 @@ test('bilingual landing pages lead with the product and disclose alpha availabil
   const cn=readFileSync('README.md','utf8'),en=readFileSync('README.en.md','utf8');
   expect(en.split('##')[0]).toContain('Let TaskPulse watch your coding agents');
   expect(en.split('##')[0]).not.toContain('v1 protocol');
-  expect(cn).toContain('尚无公开可下载的 Alpha.7 安装包');
-  expect(en).toContain('No Alpha.7 installer is publicly available');
+  const version=JSON.parse(readFileSync('package.json','utf8')).version;
+  expect(cn).toContain('尚未公开发布');
+  expect(en).toContain('not publicly released');
   for(const body of [cn,en]){
-    expect(body).toContain('0.2.0-alpha.7');expect(body).toContain('fixture-tested');
+    expect(body).toContain(version);expect(body).toContain('fixture-tested');
+    expect(body).toContain('(docs/CANDIDATE_TESTING.md)');
     expect(body).toContain('sprklai/agenttray');expect(body).toContain('(LICENSE)');
     expect(body).not.toMatch(/!\[[^\]]*\]\([^)]*(agenttray-screenshot|agenttray-demo|taskpulse-overview)/);
   }

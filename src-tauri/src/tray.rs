@@ -88,24 +88,40 @@ pub fn update_icon(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]
     if let Some(tray) = app.tray_by_id(&TrayIconId::new("main")) {
         let needs = tasks
             .iter()
-            .filter(|t| t.status == TaskStatus::Failed || t.requires_action() || t.stale)
+            .filter(|t| t.requires_action() && !t.stale)
             .count();
         let running = tasks
             .iter()
-            .filter(|t| t.status == TaskStatus::Running && !t.stale)
+            .filter(|t| (t.status == TaskStatus::Running || t.requires_action()) && !t.stale)
             .count();
         let unread = tasks
             .iter()
             .filter(|t| {
                 t.unread
-                    && t.status != TaskStatus::Running
                     && !t.requires_action()
-                    && t.status != TaskStatus::Failed
                     && !t.stale
+                    && (matches!(t.status, TaskStatus::Succeeded | TaskStatus::Failed)
+                        || t.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded)
+                        || t.source == crate::domain::TaskSource::RemoteTmux
+                            && t.confidence == crate::domain::DetectionConfidence::Inferred
+                            && t.status == TaskStatus::Idle
+                            && t.finished_at.is_some()
+                            && t.exit_code.is_none())
+            })
+            .count();
+        let uncertain = tasks
+            .iter()
+            .filter(|t| {
+                t.stale
+                    || !t.requires_action()
+                        && matches!(t.status, TaskStatus::Unknown | TaskStatus::Disconnected)
+                    || !t.requires_action()
+                        && t.status == TaskStatus::WaitingInput
+                        && t.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded)
             })
             .count();
         let _ = tray.set_tooltip(Some(format!(
-            "TaskPulse · 需处理 {needs} · 运行 {running} · 待查看 {unread}"
+            "TaskPulse · 进行中 {running}（其中待处理 {needs}）· 待查看 {unread} · 待更新 {uncertain}"
         )));
     }
 

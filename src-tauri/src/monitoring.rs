@@ -480,6 +480,9 @@ pub fn save_monitoring_settings(
 }
 
 pub fn source_id(task: &TaskSnapshot) -> String {
+    if task.id.starts_with("scan:") && !task.remote {
+        return "scanner".into();
+    }
     task.source_instance
         .clone()
         .unwrap_or_else(|| match (task.source, task.remote) {
@@ -503,6 +506,9 @@ pub fn source_for<'a>(
     settings: &'a DashboardSettings,
     task: &TaskSnapshot,
 ) -> Option<&'a SourceConfig> {
+    if task.id.starts_with("scan:") && !task.remote {
+        return settings.sources.iter().find(|s| s.id == "scanner");
+    }
     if let Some(id) = &task.source_instance {
         return settings.sources.iter().find(|s| &s.id == id);
     }
@@ -550,6 +556,28 @@ pub fn exclusion(settings: &DashboardSettings, task: &TaskSnapshot) -> Option<&'
     };
     if !source.enabled {
         return Some("来源未启用");
+    }
+    if task.id.starts_with("scan:") && !task.remote {
+        let native = settings.sources.iter().find(|s| {
+            matches!(
+                (s.kind, task.source),
+                (SourceKind::Codex, TaskSource::Codex)
+                    | (SourceKind::ClaudeCode, TaskSource::ClaudeCode)
+            )
+        });
+        if let Some(native) = native {
+            if !native.enabled {
+                return Some("来源未启用");
+            }
+            if native
+                .excluded_projects
+                .iter()
+                .any(|p| project_matches(p, task))
+                || !native.projects.iter().any(|p| project_matches(p, task))
+            {
+                return Some("项目不在监控范围");
+            }
+        }
     }
     if source.kind == SourceKind::Tmux
         && ((!source.tmux_sessions.is_empty()
