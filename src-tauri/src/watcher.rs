@@ -535,7 +535,7 @@ fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
     for (i, t) in tasks.iter().enumerate() {
         // A project window can contain many native sessions. Its PID is not
         // session identity and must not deduplicate them by evidence strength.
-        if t.session_id.is_some() {
+        if is_scanner_observation(t) || t.session_id.is_some() {
             continue;
         }
         let Some(term) = &t.terminal else { continue };
@@ -625,16 +625,13 @@ fn dedup_scanner_observations(
 /// session. Ambiguous rows remain visible instead of deleting an independent
 /// scanner observation from another Agent or terminal.
 fn same_observed_identity(a: &TaskSnapshot, b: &TaskSnapshot) -> bool {
-    if let (Some(a_id), Some(b_id)) = (&a.session_id, &b.session_id) {
-        return !a_id.is_empty() && a_id == b_id;
+    if a.source != b.source || a.host != b.host || a.remote != b.remote {
+        return false;
     }
-    fn focus_id(task: &TaskSnapshot) -> Option<&str> {
-        task.terminal
-            .as_ref()
-            .map(|terminal| terminal.focus_id.trim())
-            .filter(|id| !id.is_empty())
-    }
-    matches!((focus_id(a), focus_id(b)), (Some(a_id), Some(b_id)) if a_id == b_id)
+    // A terminal is a focus target, not proof that two observations describe
+    // the same session. Unknown or mismatched session IDs must remain visible.
+    matches!((&a.session_id, &b.session_id), (Some(a_id), Some(b_id))
+        if !a_id.is_empty() && a_id == b_id)
 }
 
 fn dedup_claude_over_scan(tasks: &mut Vec<TaskSnapshot>) {
@@ -2093,6 +2090,8 @@ mod tests {
             "123",
             Some("hermes"),
         );
+        scan.source = TaskSource::Hermes;
+        scan.session_id = Some("hermes:running".into());
         scan.source_instance = Some("scanner".into());
         tasks.push(scan.clone());
         scan.id = "process:hermes".into();
@@ -2184,12 +2183,62 @@ mod tests {
                 Some(cli),
             );
             scan.source = source;
+            scan.session_id = Some(
+                if cli == "codex" {
+                    "codex:native"
+                } else {
+                    "dsh-native:native"
+                }
+                .into(),
+            );
             scan.source_instance = Some("scanner".into());
             tasks.push(scan);
         }
         dedup_codex_over_scan(&mut tasks);
         dedup_dsh_over_scan(&mut tasks);
         assert_eq!(tasks, expected);
+    }
+
+    #[test]
+    fn terminal_sharing_without_a_session_match_cannot_delete_scanner_tasks() {
+        let mut native = task_with_terminal(
+            "codex:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "shared-terminal",
+            Some("codex"),
+        );
+        native.source = TaskSource::Codex;
+        native.session_id = Some("native-session".into());
+        let mut independent = native.clone();
+        independent.id = "scan:independent".into();
+        independent.source_instance = Some("scanner".into());
+        independent.session_id = None;
+        let expected = vec![native, independent];
+        let mut tasks = expected.clone();
+        dedup_by_terminal(&mut tasks);
+        dedup_codex_over_scan(&mut tasks);
+        assert_eq!(tasks, expected);
+    }
+
+    #[test]
+    fn scanner_session_dedup_does_not_cross_host_or_agent_scopes() {
+        let mut a = task_with_terminal(
+            "codex:native",
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            "shared",
+            Some("codex"),
+        );
+        a.source = TaskSource::Codex;
+        a.session_id = Some("same-session-id".into());
+        let mut b = a.clone();
+        assert!(same_observed_identity(&a, &b));
+        b.host = Some("another-host".into());
+        assert!(!same_observed_identity(&a, &b));
+        b.host = None;
+        b.source = TaskSource::ClaudeCode;
+        assert!(!same_observed_identity(&a, &b));
     }
 
     #[test]
@@ -2211,6 +2260,7 @@ mod tests {
             "terminal-a",
             Some("codex"),
         );
+        scanner_a.session_id = Some("session-a".into());
         scanner_a.source = TaskSource::Codex;
         scanner_a.source_instance = Some("scanner".into());
         let mut scanner_b = task_with_terminal(
@@ -2261,7 +2311,7 @@ mod tests {
     }
 
     #[test]
-    fn dedup_hook_beats_scan_same_focus_and_cli() {
+    fn hook_beats_scanner_with_a_confirmed_matching_session() {
         let mut tasks = vec![
             task_with_terminal(
                 "file:codex",
@@ -2278,7 +2328,12 @@ mod tests {
                 Some("codex"),
             ),
         ];
+        for task in &mut tasks {
+            task.source = TaskSource::Codex;
+            task.session_id = Some("same-session".into());
+        }
         dedup_by_terminal(&mut tasks);
+        dedup_codex_over_scan(&mut tasks);
         assert_eq!(tasks.len(), 1);
         assert_eq!(tasks[0].id, "file:codex");
     }
@@ -2310,9 +2365,11 @@ mod tests {
         ];
         for (i, task) in tasks.iter_mut().enumerate() {
             task.source = TaskSource::ClaudeCode;
-            if i < 2 {
-                task.session_id = Some(format!("session-{i}"));
-            }
+            task.session_id = Some(if i < 2 {
+                format!("session-{i}")
+            } else {
+                "session-0".into()
+            });
         }
         dedup_claude_over_scan(&mut tasks);
         dedup_by_terminal(&mut tasks);
