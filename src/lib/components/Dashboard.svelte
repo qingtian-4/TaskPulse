@@ -15,7 +15,7 @@
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
   import Search from '@lucide/svelte/icons/search';
-  import Activity from '@lucide/svelte/icons/activity';
+  import BrandMark from './BrandMark.svelte';
   import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
   import Inbox from '@lucide/svelte/icons/inbox';
   import Bell from '@lucide/svelte/icons/bell';
@@ -234,7 +234,7 @@
 
 <div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(tasks,filtered))} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
   <header data-tauri-drag-region>
-    <span class="brand" data-tauri-drag-region><span class="brand-mark" aria-hidden="true"><Activity size={17}/></span>TaskPulse</span>
+    <span class="brand" data-tauri-drag-region><BrandMark />TaskPulse</span>
     <div class="header-actions">
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={()=>showPrompts=!showPrompts} aria-expanded={showPrompts} title={'消息中心 · '+messages.unread+' 条未读'} aria-label={'消息中心：'+messages.unread+' 条未读'}><Bell size={15}/>{#if messages.unread}<span>{messages.unread}</span>{/if}</button>
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={manage} title="管理监控来源" aria-label="管理监控来源"><Settings size={15}/></button>
@@ -310,7 +310,6 @@
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}
   .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;color:var(--tp-text)}
-  .brand-mark{width:24px;height:24px;border:1px solid var(--tp-accent-line);border-radius:6px;display:grid;place-items:center;background:var(--tp-accent-soft);color:var(--tp-accent)}
   .header-actions{display:flex;gap:4px}.header-actions button{border:0;position:relative}.header-actions span{position:absolute;right:0;top:0;font-size:10px;min-width:14px;line-height:14px;text-align:center;border-radius:4px;background:var(--tp-card);color:var(--tp-action)}
   .counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 12px 8px;flex:none}
   .overview{text-align:left;padding:8px 12px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-card);min-width:0}
@@ -339,6 +338,7 @@
   .quota{font-size:11px;min-width:0;max-width:65%}.quota summary{cursor:pointer;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.quota summary span{color:var(--tp-quiet)}
   .quota p{position:absolute;z-index:3;bottom:44px;left:12px;right:12px;max-height:44dvh;overflow:auto;padding:12px;background:var(--tp-raised);border:1px solid var(--tp-border-strong);border-radius:8px;font-size:11px;line-height:1.7;overflow-wrap:anywhere;margin:0}
   .onboarding{padding:12px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:14px}.onboarding p{font-size:12px;color:var(--tp-muted);line-height:1.6;margin:8px 0}
+  @media(max-width:380px){header{min-height:46px;padding:6px 10px 6px 12px}.counts{gap:6px;padding:8px 10px 6px}.overview{padding:6px 10px}.overview b{font-size:22px;margin-top:2px}.header-actions{gap:2px}footer{min-height:36px;padding-top:6px;padding-bottom:6px}}
   @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.search-bar{padding-left:8px;padding-right:8px}footer{padding:8px;font-size:10px}footer>button,.quota{font-size:10px}.detail-heading{flex-wrap:wrap}}
   @media(max-height:500px){header{min-height:44px;padding-top:6px;padding-bottom:6px}.counts{padding-top:8px}.overview{padding-top:4px;padding-bottom:4px}.view-bar{padding-bottom:4px}.notice{max-height:44px}.filter-note{max-height:32px}.detail{max-height:30dvh;min-height:80px;padding:8px}.task-scroll{min-height:40px}}
 </style>

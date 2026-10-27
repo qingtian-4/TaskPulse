@@ -150,7 +150,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   assert.equal((await center()).entries.length,6);assert.equal((await center()).unread,0);
   checks.push('source fault demotes stale pending without resolving or losing task; recovery/reconfirmation cannot revive read messages');
 
-  for(const [width,height] of [[412,620],[380,640],[320,480],[440,720]])for(const scale of [1,1.5,2]){
+  for(const [width,height] of [[412,620],[380,640],[320,480],[440,720]])for(const scale of [1,1.25,1.5,2]){
     await root.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});await Bun.sleep(200);
     const layout=await root.evaluate(`(()=>{const p=document.querySelector('.message-center').getBoundingClientRect(),s=document.querySelector('.message-scroll');return {width:document.documentElement.scrollWidth,height:innerHeight,top:p.top,bottom:p.bottom,right:p.right,left:p.left,scroll:s.scrollHeight>s.clientHeight};})()`);
     assert.ok(layout.width<=width&&layout.bottom<=height&&layout.left>=0&&layout.right<=width);
@@ -193,7 +193,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await root.invoke('dismiss_task_notice',{id:historicalNotice.current.id});
   assert.equal((await center()).entries.length,15);assert.equal((await center()).unread,0);
   checks.push('fresh historical request without an inbox event remains manually reopenable without creating unread');
-  checks.push('412x620/380x640/320x480/440x720 at DPR 1/1.5/2 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
+  checks.push('412x620/380x640/320x480/440x720 at DPR 1/1.25/1.5/2 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');
   if(process.argv.includes('--capture')){
     await mkdir('assets/screenshots',{recursive:true});
     await copyFile(join(owned,'messages-412x620-100.png'),'assets/screenshots/message-center-current.png');

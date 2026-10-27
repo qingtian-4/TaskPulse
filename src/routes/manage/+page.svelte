@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Cable, Radio, Bell, Info } from '@lucide/svelte';
+  import { Radio, Bell, Info } from '@lucide/svelte';
+  import BrandMark from '$lib/components/BrandMark.svelte';
   import IntegrationEditor from '$lib/components/IntegrationEditor.svelte';
   import IntegrationHookCleanup from '$lib/components/IntegrationHookCleanup.svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -56,7 +57,7 @@
   }
   let editor=$derived(settings?.sources.find(s=>s.id===selected) ?? null);
   const setupStep=$derived(sourceSetupStep(!!editor,dirty || !applied?.onboarding_complete,readTest?.id===editor?.id && readTest?.passed===true));
-  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
+  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'doubao',name:'豆包 · 本机（实验）'},{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
   const candidates=$derived(discovery.filter(d=>d.available && d.candidate && !settings?.sources.some(s=>s.id===d.candidate!.id || s.kind===d.candidate!.kind && s.location.toLowerCase()===d.candidate!.location.toLowerCase())));
   function addCandidate(candidate:MonitorSource) {
     if(!settings)return;
@@ -71,7 +72,7 @@
   function changed(){dirty=true;readTest=null;}
   function add(){
     if(!settings)return;
-    const builtin:Partial<Record<SourceKind,string>>={codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
+    const builtin:Partial<Record<SourceKind,string>>={doubao:'doubao',codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
     const candidate=builtin[addKind];
     if(['codex','hooks','scanner'].includes(addKind) && settings.sources.some(s=>s.kind===addKind)){selected=settings.sources.find(s=>s.kind===addKind)!.id;notice='本机来源已存在，请在左侧启用或编辑。';return;}
     const id=candidate && !settings.sources.some(s=>s.id===candidate) ? candidate : addKind+':'+crypto.randomUUID();
@@ -166,7 +167,7 @@
 </script>
 
 <div class="manage tp-theme">
-  <header><div class="page-title"><span class="page-icon" aria-hidden="true"><Cable size={21}/></span><div><span class="eyebrow">TASKPULSE / SOURCES</span><h1>管理你的关注范围</h1><p>选择任务来源，交给 TaskPulse 跟踪新执行。</p></div></div><button class="primary tp-btn" data-variant="primary" disabled={saving || !dirty || !settings || conflict} onclick={save}>{saving?'保存中…':dirty?'保存并生效':'配置已保存'}</button></header>
+  <header><div class="page-title"><span class="page-icon" aria-hidden="true"><BrandMark size={37}/></span><div><span class="eyebrow">TASKPULSE / SOURCES</span><h1>管理你的关注范围</h1><p>选择任务来源，交给 TaskPulse 跟踪新执行。</p></div></div><button class="primary tp-btn" data-variant="primary" disabled={saving || !dirty || !settings || conflict} onclick={save}>{saving?'保存中…':dirty?'保存并生效':'配置已保存'}</button></header>
   {#if buildInfo}<details class="build-info tp-fold"><summary>关于 TaskPulse · {buildInfo.version}</summary><p class="help">构建 {buildInfo.commit.slice(0,12)}{buildInfo.modified?' · 含本地修改':''} · {buildInfo.profile}<br/>{buildInfo.executable}</p><button class="tp-btn" onclick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(buildInfo,null,2));notice='已复制构建信息';}catch{error='复制失败';}}}>复制构建信息</button></details>{/if}
   <nav aria-label="管理页面"><button class="tp-btn" class:active={tab==='sources'} onclick={()=>tab='sources'}>监控来源</button><button class="tp-btn" class:active={tab==='sessions'} onclick={()=>{tab='sessions';void loadSessions();}}>已发现会话</button><button class="tp-btn" class:active={tab==='notifications'} onclick={()=>{tab='notifications';void loadDelivery();}}>通知与显示</button></nav>
   {#if error}<div class="message error" role="alert">{error}<button class="tp-btn" onclick={()=>error=''} aria-label="关闭错误">×</button></div>{/if}
@@ -194,6 +195,7 @@
           {#if editor.kind==='generic_event'}{#key editor.id}<IntegrationEditor source={editor} {dirty} changed={changed}/>{/key}{/if}
           <label>显示名称<input aria-label="来源显示名称" bind:value={editor.name} oninput={changed}/></label>
           {#if editor.kind==='remote_codex' || editor.kind==='tmux'}<label>SSH 别名<input bind:value={editor.location} oninput={changed} placeholder="例如 dev-server"/></label><p class="help">使用系统 SSH 配置和已有登录方式，不在 TaskPulse 保存密码。</p><label>轮询周期（毫秒）<input type="number" min="500" max="60000" bind:value={editor.poll_interval_ms} oninput={changed}/></label>
+          {:else if editor.kind==='doubao'}<label>豆包 IndexedDB 目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用本机默认目录"/></label><p class="help">只读原生执行检查点。未验证的格式会提示读取异常；任务检查点消失不代表结束。审批提醒尚未适配。</p>
           {:else if editor.kind==='claude_code'}<label>Claude 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 CLAUDE_CONFIG_DIR 或本机 .claude"/></label><p class="help">自动观测 VS Code / CLI 原生会话、标题与上报模型；未启用精确事件时，内部格式的状态显示为“推断”。</p>
           {:else if editor.kind==='deepseek_desktop'}<label>桌面版数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 DSH_HOME 或本机 .dsh"/></label>
           {:else if editor.kind==='deepseek_wsl' || editor.kind==='codex_wsl'}<label>WSL 发行版<input bind:value={editor.location} oninput={changed} placeholder="例如 Ubuntu"/></label>{#if editor.kind==='codex_wsl'}<p class="help">本机 WSL 的 Codex 独立于 Windows 和 SSH 来源。只读当前发行版默认用户的 CODEX_HOME / .codex；不导入空闲历史，不自动唤醒已停止的发行版。</p>{/if}
@@ -238,7 +240,7 @@
   .build-info{flex:none;margin:0 24px 8px;padding:8px 12px;max-height:140px;overflow:auto;font-size:11px}.build-info .help{overflow-wrap:anywhere;font-size:11px}
   .manage{height:100vh;display:flex;flex-direction:column;background:var(--tp-bg)}
   header{padding:20px 24px 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--tp-border);background:linear-gradient(100deg,#76d6c407,transparent 50%),var(--tp-panel);flex:none}
-  .page-title{display:flex;gap:12px;align-items:center;min-width:0}.page-title>div{min-width:0}.page-icon{width:37px;height:37px;flex:none;display:grid;place-items:center;border:1px solid var(--tp-accent-line);background:var(--tp-accent-soft);border-radius:var(--tp-radius-md);color:var(--tp-accent)}
+  .page-title{display:flex;gap:12px;align-items:center;min-width:0}.page-title>div{min-width:0}.page-icon{width:37px;height:37px;flex:none;display:grid;place-items:center;}
   .eyebrow{color:var(--tp-accent);letter-spacing:.13em;font-size:9px}h1{font-size:19px;line-height:1.5;font-weight:600;margin:3px 0}header p{color:var(--tp-muted);font-size:11px;margin:0}
   header>.primary{flex:none;font-size:11px}
   nav{display:flex;padding:0 24px;gap:20px;border-bottom:1px solid var(--tp-border);background:var(--tp-panel);flex:none}

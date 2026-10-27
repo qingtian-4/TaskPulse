@@ -33,6 +33,9 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if let Some(code) = integrations::mcp::cli(&std::env::args().collect::<Vec<_>>()) {
+        std::process::exit(code);
+    }
     if let Some(code) = integrations::bridge::cli(&std::env::args().collect::<Vec<_>>()) {
         std::process::exit(code);
     }
@@ -127,7 +130,7 @@ fn main() {
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
                     "../icons/tray-offline.png"
                 ))?)
-                .tooltip("TaskPulse")
+                .tooltip("TaskPulse · 正在采集，状态待更新")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event({
@@ -161,6 +164,7 @@ fn main() {
                     }
                 })
                 .build(app)?;
+            watcher::emit_latest(app.handle());
 
             // Global shortcut: Ctrl+Shift+A toggles the popup
             let h_shortcut = app.handle().clone();

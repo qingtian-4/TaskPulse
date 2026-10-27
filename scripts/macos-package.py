@@ -9,6 +9,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -106,6 +107,9 @@ def smoke(dmg, version, arch, evidence):
                 raise RuntimeError(f"Version mismatch: {found}")
             result["checks"].extend(["strict ad-hoc signature", "bundle identity and native architecture",
                                      "packaged hook resources", "actual installed executable version"])
+            run(sys.executable, str(Path(__file__).with_name("mcp-smoke.py")), "--exe", str(exe),
+                "--out", str(evidence / "mcp.json"), env=env)
+            result["checks"].append("installed app MCP stdio source binding and lifecycle smoke")
             for cycle in ("first-launch", "restart"):
                 with (evidence / f"{cycle}.stdout.txt").open("wb") as out, (evidence / f"{cycle}.stderr.txt").open("wb") as err:
                     child = subprocess.Popen([str(exe), "--show"], env=env, stdout=out, stderr=err)
@@ -119,6 +123,10 @@ def smoke(dmg, version, arch, evidence):
                             raise RuntimeError("GUI instance did not acquire its isolated lock")
                         windows = run(str(probe), str(child.pid)).stdout
                         (evidence / f"{cycle}.windows.json").write_bytes(windows)
+                        # CoreGraphics reports logical points, independently of Retina.
+                        if not any(abs(window["width"] - 371) <= 1 and abs(window["height"] - 360) <= 1
+                                   for window in json.loads(windows)["windows"]):
+                            raise RuntimeError("Empty dashboard did not use the compact macOS size")
                         run(str(exe), "--show", env=env)
                         if not (profile / "gui.activate").is_file() or child.poll() is not None:
                             raise RuntimeError("Second launch did not activate the existing GUI")

@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 #[tauri::command]
 pub fn integration_environment() -> Value {
-    json!({"isolated":std::env::var_os("TASKPULSE_HOME").is_some(),"state_directory":crate::providers::remote_tmux::config::config_dir(),"executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION")})
+    json!({"isolated":std::env::var_os("TASKPULSE_HOME").is_some(),"platform":std::env::consts::OS,"state_directory":crate::providers::remote_tmux::config::config_dir(),"executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION")})
 }
 
 #[tauri::command]
@@ -135,9 +135,21 @@ pub fn integration_export(source_id: String) -> Result<Value, String> {
         .as_ref()
         .ok_or("integration_not_configured")?;
     let exe = std::env::current_exe().map_err(|_| "executable_unavailable")?;
+    let mcp = if config.adapter_id == "standard-events" {
+        let mut server = json!({"command":exe,"args":["--integration-mcp","--source",source_id]});
+        // An isolated profile's export must never silently write the user's real state.
+        if let Some(home) = std::env::var_os("TASKPULSE_HOME") {
+            let home = home.into_string().map_err(|_| "state_directory_not_utf8")?;
+            server["env"] = json!({"TASKPULSE_HOME":home});
+        }
+        Some(json!({"mcpServers":{"taskpulse":server}}))
+    } else {
+        None
+    };
     Ok(
         json!({"transport":"local","argv":[exe,"--integration-event","--source",source_id,"--adapter",config.adapter_id],
+        "mcp_config":mcp,"mcp_protocol_versions":["2025-06-18","2025-11-25"],
         "sample":{"schema_version":1,"agent_id":config.agent_id,"session_id":"producer-stable-session","turn_id":"producer-stable-turn","event_id":"producer-stable-event","kind":"turn.started","payload":{}},
-        "evidence":"self_reported","notice":"示例不是执行命令；生产者须传递 JSON 到 stdin。请使用长期保留的安装路径（不要引用 target/debug 或临时目录）。WSL/SSH 通用事件传输尚未实现。"}),
+        "evidence":"self_reported","notice":"标准事件由生产者传递 JSON 到 stdin；MCP 配置需在支持自定义本机 stdio 的宿主中手动添加，并由宿主调用 taskpulse_report。仅连接不会自动发现任务；依赖模型主动调用时可能漏报，不能替代原生 Hook，不能批准命令。请使用长期保留的安装路径。仅本机，不含 WSL/SSH/远程 HTTP 传输。"}),
     )
 }

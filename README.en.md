@@ -1,46 +1,56 @@
+<div align="center">
+
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
+  <img alt="TaskPulse — Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
+</picture>
+
 # TaskPulse
 
 **Stay focused on your code. Let TaskPulse watch your coding agents.**
 
-A Windows-first desktop tray companion that brings Codex, Claude Code, Hermes, DeepSeek Harness and other supported sources into one task overview. Get notified when an agent **explicitly requests an answer or approval, or finishes a turn**. Supports selected local, WSL and SSH workflows without changing model or approval settings.
+![Windows first](https://img.shields.io/badge/Windows-first-76DFCD?style=flat-square)
+![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square)
+[![MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 
-[中文](README.md) · [Getting started](docs/INSTALL.md) · [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Architecture](docs/ARCHITECTURE.md) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
+[中文](README.md) · [Quick start](#quick-start) · [Supported agents](#supported-agents) · [Roadmap](#roadmap) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **Windows-first · Alpha.8 candidate testing.** The application version is 0.2.0-alpha.8 and is not publicly released. Independent CI workflows produce Windows EXE/MSI and Apple Silicon DMG candidates for maintainer acceptance against an exact source commit. Historical Alpha.7 drafts do not include these fixes. [Candidate downloads and testing](docs/CANDIDATE_TESTING.md) · [Build and release rules](docs/RELEASING.md).
+</div>
 
-## At a glance
+TaskPulse brings coding-agent tasks from local, WSL and SSH environments into one desktop tray. Get a reminder when an agent **needs an answer, requests approval or finishes a turn**, without repeatedly checking every window.
 
-![TaskPulse native Windows task dashboard](assets/screenshots/dashboard-current.png)
+> **0.2.0-alpha.8**, not publicly released. [Candidate downloads and testing](docs/CANDIDATE_TESTING.md). Windows first; macOS/Linux are experimental. A mobile companion is planned.
 
-*Actual Tauri/WebView2 rendering with isolated **synthetic standard events**. This is not a real agent session or evidence that every adapter is host-verified.*
+## See it in action
 
-| Task overview | Explicit human requests | Recoverable attention |
-|---|---|---|
-| See task, agent, project, and source independently | Distinguish approval, question, and tool activity | Independent reminders, unread items, pins, restart recovery |
-| Thinking and model waits remain running | Never guess end-of-turn from silence or tool return | Unavailable collection becomes *stale*, not a fake completion |
+<p align="center"><img src="assets/screenshots/dashboard-current.png" alt="TaskPulse dashboard: running, needs action and results to review" width="412"></p>
 
-The dashboard focuses on **running, needs action, and results to review**. Needs action is a subset of running; do not add the counts. The bell counts unread messages only: reading a message neither resolves an agent request nor marks its result viewed.
+| Answer needed | Approval needed |
+|---|---|
+| ![Input request reminder](assets/screenshots/notice-question-current.png) | ![Approval reminder](assets/screenshots/notice-approval-current.png) |
+
+*Actual Tauri/WebView2 screenshots with isolated synthetic standard events. Respond in the original agent; dismissing a reminder does not approve or resolve its request. [Media and reproduction](assets/README.md).*
 
 <details>
-<summary>More native screenshots — message center, source management and reminders</summary>
+<summary>Message center and source management</summary>
 
-![Message center: reading messages is separate from pending requests](assets/screenshots/message-center-current.png)
+![Message center](assets/screenshots/message-center-current.png)
 
 ![Source management](assets/screenshots/sources-current.png)
 
-![Test reminder](assets/screenshots/notice-current.png)
-
-All use isolated synthetic data; the reminder is a clearly labeled test. Previous Alpha.7 screenshots remain as historical materials. [Media provenance](assets/README.md).
-
 </details>
 
-### An everyday workflow
+## Features
 
-Ask Codex to edit code, Claude Code to review it, and a separate WSL Codex to run tests. TaskPulse helps you find when to switch back without repeatedly opening each terminal. **Approvals and answers still happen in the original agent.**
+- **One attention dashboard** for running tasks, pending requests, failures and unviewed results, grouped by agent, project or source.
+- **Aggregate tray status** prioritizes requests over errors, unviewed results and running work across concurrent agents.
+- **Explicit event reminders** keep thinking and tools running; silence, low CPU or collection failure never imply completion.
+- **Recoverable attention** retains unviewed results and pins across restarts. Message seen, result viewed and request resolved stay separate.
 
 ## Quick start
 
-Testers can follow the [candidate download guide](docs/CANDIDATE_TESTING.md) for Windows EXE or Mac arm64 DMG packages without developer tools. For Windows source development, use Rust 1.89+, Bun, Microsoft C++ Build Tools and the [Tauri 2 prerequisites](https://v2.tauri.app/start/prerequisites/) including WebView2. See the [Mac guide](docs/MACOS_DEVELOPMENT.md) for macOS development.
+For Windows EXE/MSI or Apple Silicon DMG packages, follow the [candidate guide](docs/CANDIDATE_TESTING.md). Source development needs Bun, Rust 1.89+ and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/):
 
 ```powershell
 git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
@@ -49,49 +59,43 @@ bun install --frozen-lockfile
 bun run tauri dev
 ```
 
-Open source management from the tray → choose a source and project scope → save and apply → start a task in the original coding agent → open TaskPulse with `Ctrl+Shift+A`. A successful connection or test notification does **not** prove real host lifecycle support. WSL/SSH are separately configured and never auto-start stopped environments.
+Open **source management → select an agent and projects → save and apply**, then start work in the original agent. Open the dashboard with `Ctrl+Shift+A`.
 
-[Installation](docs/INSTALL.md) · [Dashboard guide](docs/PRODUCT_DASHBOARD.md) · [WSL](docs/WSL_CODEX.md) · [Development](docs/DEVELOPMENT.md)
+[Installation](docs/INSTALL.md) · [WSL](docs/WSL_CODEX.md) · [Mac development](docs/MACOS_DEVELOPMENT.md) · [Troubleshooting](docs/DEVELOPMENT.md)
 
-## Agent compatibility
+## Supported agents
 
-| Source | Implemented | Important boundary |
-|---|---|---|
-| **Codex** | Local native sessions, independent WSL source, SSH sessions | Large history needs initial catch-up; WSL requires Python 3 and an already-running distro |
-| **Claude Code** | Local records and optional consented hooks | No dedicated WSL/SSH adapter |
-| **Hermes** | Local SQLite and runtime lease | Lease loss is not completion |
-| **DeepSeek Harness** | Desktop/CLI and separate WSL source | Local quotas are not remote account quotas |
-| **Gemini CLI** | Basic hook/process scanning | Not a full native session adapter |
-| **Kimi / TRAE / ZCode** | Partial declarative mappings and fixtures | Not real-host hook-verified |
-| **WorkBuddy** | Candidate entry | No event adapter |
-| **Custom / community** | Standard Events v1 / declarative Manifest | No general executable plugin loader |
-| **Ordinary code runs** | SSH tmux / `tp-run` | Unified local/WSL/SSH execution workflow not delivered; foreground exit does not prove detached, container or Slurm completion |
+| Source | Current integration |
+|---|---|
+| Codex | Local native sessions, independent WSL sources and configured SSH sessions |
+| Claude Code | Local read-only records and explicitly enabled official hooks |
+| Hermes / DeepSeek Harness | Local native data; DeepSeek Harness also has a separate WSL source |
+| Doubao Desktop (experimental) | Native Windows running checkpoints; approval unsupported, end reminders not guaranteed |
+| Gemini CLI / SSH tmux / `tp-run` | Compatibility hooks, process scanning or run wrappers |
+| Kimi / TRAE / ZCode | Partial event mappings, fixture-tested; real-host acceptance pending |
+| Other agents | Standard Events, declarative manifests and active reporting from hosts supporting local MCP |
 
-Source discovery does not establish that turn-completion events are reliable. Kimi / TRAE / ZCode are **fixture-tested**, not native-tested. Linux/macOS builds are opt-in experimental and do not inherit Windows native acceptance. See [the detailed compatibility matrix](docs/AGENT_COMPATIBILITY.md).
+Environment coverage, event support and validation differ by source. See the [compatibility matrix](docs/AGENT_COMPATIBILITY.md) and [integration guide](docs/AGENT_INTEGRATION_GUIDE.md).
 
-## Architecture
+## How it works
 
 ![TaskPulse architecture](assets/diagrams/taskpulse-architecture.svg)
 
-1. **Collect evidence** in independent provider workers: native records, hooks, SQLite, bounded file tailers and selected remote sources.
-2. **Normalize and reconcile** source/project scope, stable session/turn identity and freshness through TaskStore and AttentionTracker.
-3. **Notify meaningful changes** using TransitionEngine; the versioned event lane uses Journal, Checkpoint and Outbox for ordered recovery and deduplication.
-4. **Present facts** through Rust/Tauri 2 and Svelte 5: dashboard, independent message center, tray and reminders. Message seen, result viewed and request pending remain separate; a stale task does not become a fresh run or completed turn.
+**Collect evidence → reconcile tasks → track attention → update the tray, dashboard and event reminders.**
 
-There is no TaskPulse cloud account or telemetry service. Settings and attention normally live in `~/.taskpulse/`; local activity and diagnostics may contain paths or command fragments, so redact before sharing. TaskPulse never auto-installs real hooks or relaxes approval policies. See [demo reproduction and recording](docs/DEMO_RECORDING_PLAN.md).
+Built with Rust, Tauri 2 and Svelte 5. State stays local without a TaskPulse cloud account. Source failures remain uncertain, and approvals stay in the original agent. [Architecture details](docs/ARCHITECTURE.md).
 
-[Architecture](docs/ARCHITECTURE.md) · [Integration guide](docs/AGENT_INTEGRATION_GUIDE.md) · [Event protocol](docs/AGENT_INTEGRATION_PROTOCOL.md)
+## Roadmap
 
-## Release readiness
+- [ ] **Mobile companion** to view tasks on paired computers and receive question, approval, failure and completion alerts.
+- [ ] **More coding agents**, using official events, native data and MCP, with real-host validation for each integration.
+- [ ] **Cross-device experience** with pairing, offline visibility, notification deduplication and reading-state sync.
+- [ ] **Desktop reliability** across upgrades, mixed-DPI monitors and extended use.
 
-**Available today:** open-source source code, CI regression tests, source management, native UI tests and CI acceptance of Alpha.7 NSIS/MSI installer candidates.
+These are plans: mobile apps and cross-device notifications are not implemented. [Scope and milestones](docs/ROADMAP.md).
 
-**Not yet accepted for public distribution:** clean-user Windows install/upgrade/uninstall, sustained real-agent lifecycle and notification checks, and a safely redacted screen recording. CI installation and synthetic events are not substitutes for real-host evidence.
+## Contributing & license
 
-[Release checklist](docs/OPEN_SOURCE_CHECKLIST.md) · [Security](docs/internal/reports/SECURITY_AUDIT_2026-10.md)
+Issues, documentation and adapters are welcome. Use **feature branch → Pull Request → checks and review → merge into main**. [Contributing](CONTRIBUTING.md) · [Merge workflow](docs/GIT_WORKFLOW.md) · [Security](SECURITY.md).
 
-## Contributing & credits
-
-Issues and adapter contributions are welcome. Share OS, agent version, source type and **redacted** steps; never post credentials or private conversations. [Contributing](CONTRIBUTING.md) · [Security policy](SECURITY.md).
-
-Derived from [sprklai/agenttray](https://github.com/sprklai/agenttray), with upstream credits and Git history preserved. [MIT License](LICENSE).
+Derived from [sprklai/agenttray](https://github.com/sprklai/agenttray), with upstream credits and history preserved. [MIT License](LICENSE).

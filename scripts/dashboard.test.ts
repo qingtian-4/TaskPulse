@@ -8,6 +8,15 @@ import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
 
+test('Doubao conversation titles remain separate from project membership and filters',()=>{
+  const task:TaskSnapshot={...base,source:'doubao',name:'真实会话名称'};
+  expect(taskContext(task)).toBe('独立会话 · 豆包 · 本机');
+  expect(projectKey(task)).toBe(projectKey({...task,name:'已改名'}));
+  expect(filterTasks([task],{...EMPTY_FILTERS,query:'真实会话名称'})).toEqual([task]);
+  expect(taskContext({...task,project:'实际项目'})).toBe('实际项目 · 豆包 · 本机');
+  expect(task.project).toBeUndefined();
+});
+
 test('dashboard snapshots reject late responses from an older request or revision',()=>{
   expect(shouldApplyDashboardSnapshot(4,3,1,2)).toBe(false);
   expect(shouldApplyDashboardSnapshot(4,5,1,2)).toBe(false);

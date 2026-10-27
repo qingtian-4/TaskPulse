@@ -18,6 +18,12 @@ TaskPulse 已有 macOS 扫描、AppleScript 聚焦、macOS 打包配置，以及
 
 ## 路线 A：下载测试包（常规测试推荐）
 
+macOS 紧凑布局候选（2026-10-27）把主面板从 412×400–620 调整为约
+371×360–558 逻辑像素，提醒从 320×132 调整为 300×124。正文保留字号，
+通过缩短工具栏、统计卡和任务卡留白适配；Retina 屏幕仍由系统换算物理像素。
+Windows 默认尺寸保持原样。该修改属于 Alpha.8 之后的提交候选，下载时请核对
+Actions 的完整提交 SHA；旧 `v0.2.0-alpha.8` 标签和 DMG 不会被替换。
+
 前提是候选代码已经同步至 GitHub，且该提交的 macOS 构建成功；目前不能把本地 Windows EXE 当成 Mac 安装包。
 
 1. 登录有仓库读取权限的 GitHub 账号，打开仓库 Actions。
@@ -33,7 +39,7 @@ Actions 附件要求登录并拥有读取权限，且有保留期限，不适合
 
 首次打开若提示开发者无法验证，在确认下载来源及校验和后，可按 [Apple 的单应用放行步骤](https://support.apple.com/en-us/102445)，到“系统设置 → 隐私与安全性 → 仍要打开”确认。不要全局关闭 Gatekeeper。若提示文件损坏或不出现放行入口，请保留提示并反馈，不用删除安全属性来冒充正常安装通过。
 
-首轮建议先输出经过验证的 ad-hoc 签名实验包，并明确未公证；当前工作流尚未显式配置这一签名步骤。它不等于 Apple 身份签名，仍可能出现系统确认。面对公众的顺畅下载体验应配置 Developer ID 签名和 notarization；不用关闭系统 Gatekeeper。证书通过受限 CI secrets 提供，不进入源码或聊天。参见 [Tauri macOS 签名说明](https://v2.tauri.app/distribute/sign/macos/)。
+首轮使用经过验证的 ad-hoc 签名实验包，并明确未公证；当前工作流已配置这一签名步骤。它不等于 Apple 身份签名，仍可能出现系统确认。面对公众的顺畅下载体验应配置 Developer ID 签名和 notarization；不用关闭系统 Gatekeeper。证书通过受限 CI secrets 提供，不进入源码或聊天。参见 [Tauri macOS 签名说明](https://v2.tauri.app/distribute/sign/macos/)。
 
 ## 路线 B：Mac 本地开发（首轮排查推荐）
 

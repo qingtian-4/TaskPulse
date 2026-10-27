@@ -2,6 +2,28 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
+## Unreleased
+
+- Resolve Doubao task titles from native conversation metadata without importing
+  idle history or treating a conversation name as a project. Unassociated Doubao
+  tasks display as standalone conversations; renames preserve activity and alerts.
+  Document the missing durable completion event and unverified approval resolution.
+
+- Fix Doubao checkpoints containing shared V8 objects and non-finite optional
+  statistics being rejected while tasks run. Require sustained rendered task
+  evidence for native Doubao UI acceptance; empty-source reads do not qualify.
+
+- Add an opt-in, read-only Doubao Desktop execution-checkpoint provider, verified
+  against Windows 2.26.10. It discovers running main tasks without MCP setup;
+  missing checkpoints stay uncertain, and approval notifications remain unsupported.
+
+- Add a source-bound local MCP stdio bridge and configuration export for unlisted
+  Agent hosts. Reports remain self-reported; connecting alone never creates tasks,
+  disconnecting never completes them, and unsupported desktop hosts stay unverified.
+
+- Reduce macOS dashboard dimensions by 10% and use a 300×124 reminder. Tighten
+  narrow-layout spacing while retaining body text size and Windows defaults.
+
 ## 0.2.0-alpha.8 — Candidate; not released
 
 - Exclude internal Codex services and TaskPulse descendants from task discovery;

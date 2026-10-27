@@ -1,7 +1,7 @@
 //! Tray lifecycle: aggregate attention state → icon, popup window show/hide/
 //! pin, position restore.  Preserved from AgentTray, with the aggregate
 //! priority updated to TaskPulse semantics:
-//! FAILED > WAITING_INPUT > DISCONNECTED > RUNNING > SUCCEEDED/IDLE > UNKNOWN
+//! ACTION > ERROR/UNCERTAIN > UNVIEWED RESULT > RUNNING > VERIFIED IDLE
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Mutex;
@@ -14,135 +14,187 @@ use tauri::{AppHandle, Emitter, Listener, Manager, WebviewUrl};
 
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
-use crate::domain::{TaskSnapshot, TaskStatus};
-use crate::providers::{HostHealth, HostStatus};
+use crate::domain::{TaskSnapshot, TaskStatus, WaitingReason};
+use crate::providers::{HostStatus, ProviderStatus};
+use crate::watcher::DashboardSnapshot;
 
-static LAST_STATE: Mutex<String> = Mutex::new(String::new());
+static LAST_PRESENTATION: Mutex<AppliedPresentation> = Mutex::new(AppliedPresentation {
+    revision: 0,
+    icon: None,
+    tooltip: None,
+});
+
+#[derive(Default)]
+struct AppliedPresentation {
+    revision: u64,
+    icon: Option<&'static str>,
+    tooltip: Option<String>,
+}
+
+impl AppliedPresentation {
+    fn accepts(&self, revision: u64) -> bool {
+        revision >= self.revision
+    }
+    fn needs_icon(&self, state: &str) -> bool {
+        self.icon != Some(state)
+    }
+    fn needs_tooltip(&self, tooltip: &str) -> bool {
+        self.tooltip.as_deref() != Some(tooltip)
+    }
+}
 static PINNED: AtomicBool = AtomicBool::new(false);
 static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 
-/// Aggregate attention state across tasks (and host health).
-/// Returns an icon-name string used by `icon_bytes`.
-fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str {
-    // Task attention wins over infrastructure health, matching the public
-    // priority contract: FAILED > WAITING_INPUT > DISCONNECTED > RUNNING.
-    if tasks.iter().any(|t| t.status == TaskStatus::Failed) {
-        return "error";
-    }
-    if tasks.iter().any(|t| {
-        t.status == TaskStatus::WaitingInput
-            && t.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded)
-            && (!t.is_agent_session() || t.requires_action())
-    }) {
-        return "needs-input";
-    }
-    if hosts.iter().any(|h| h.status == HostStatus::Disconnected)
-        || tasks.iter().any(|t| t.status == TaskStatus::Disconnected)
-    {
-        return "disconnected";
-    }
+// Keep text readable; the narrow CSS layout reduces spacing instead of fonts.
+// Logical size preference is independent of the monitor's Retina/DPI scale.
+const DASHBOARD_SCALE: f64 = if cfg!(target_os = "macos") { 0.9 } else { 1.0 };
+const DASHBOARD_WIDTH: f64 = 412.0 * DASHBOARD_SCALE;
 
-    let Some(best) = tasks.iter().min_by_key(|t| {
-        if t.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
-            4
-        } else if t.is_agent_session()
-            && t.status == TaskStatus::WaitingInput
-            && !t.requires_action()
+/// Presentation only: consumes the same scoped, reconciled attention snapshot
+/// as the Dashboard. Never changes lifecycle, unread state or notifications.
+#[derive(Debug, PartialEq, Eq)]
+struct TrayPresentation {
+    icon: &'static str,
+    tooltip: String,
+}
+
+fn result_to_review(task: &TaskSnapshot) -> bool {
+    task.unread
+        && !task.requires_action()
+        && (matches!(task.status, TaskStatus::Succeeded | TaskStatus::Failed)
+            || task.status == TaskStatus::WaitingInput
+                && task.waiting_reason == Some(WaitingReason::TurnEnded)
+            || !task.is_agent_session()
+                && task.source == crate::domain::TaskSource::RemoteTmux
+                && task.confidence == crate::domain::DetectionConfidence::Inferred
+                && task.status == TaskStatus::Idle
+                && task.finished_at.is_some()
+                && task.exit_code.is_none())
+}
+
+fn aggregate(snapshot: &DashboardSnapshot) -> TrayPresentation {
+    let mut needs = 0;
+    let mut running = 0;
+    let mut unread = 0;
+    let mut failed = 0;
+    let mut uncertain = 0;
+    let unhealthy = snapshot
+        .providers
+        .iter()
+        .filter(|p| p.status == ProviderStatus::Degraded || p.last_success.is_none())
+        .count();
+    let disconnected = snapshot
+        .hosts
+        .iter()
+        .filter(|h| h.status == HostStatus::Disconnected)
+        .count();
+    for task in &snapshot.tasks {
+        let source_unhealthy = task.source_instance.as_ref().is_some_and(|id| {
+            snapshot
+                .providers
+                .iter()
+                .find(|p| &p.provider == id)
+                .is_none_or(|p| p.status == ProviderStatus::Degraded || p.last_success.is_none())
+        }) || task.host.as_ref().is_some_and(|host| {
+            snapshot
+                .hosts
+                .iter()
+                .any(|h| &h.host == host && h.status == HostStatus::Disconnected)
+        });
+        let stale = task.stale || source_unhealthy;
+        if stale
+            || matches!(task.status, TaskStatus::Unknown | TaskStatus::Disconnected)
+            || task.status == TaskStatus::WaitingInput
+                && !task.requires_action()
+                && task.waiting_reason != Some(WaitingReason::TurnEnded)
         {
-            5
-        } else {
-            t.status.priority()
+            uncertain += 1;
         }
-    }) else {
-        return "offline";
-    };
-    match best.status {
-        TaskStatus::Failed => "error",
-        TaskStatus::WaitingInput
-            if best.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) =>
-        {
-            "idle"
+        if stale {
+            continue;
         }
-        TaskStatus::WaitingInput if best.is_agent_session() && !best.requires_action() => "offline",
-        TaskStatus::WaitingInput => "needs-input",
-        TaskStatus::Disconnected => "disconnected",
-        TaskStatus::Running => "working",
-        TaskStatus::Succeeded | TaskStatus::Idle => "idle",
-        TaskStatus::Unknown => "offline",
+        if task.requires_action() {
+            needs += 1;
+        }
+        if task.status == TaskStatus::Running || task.requires_action() {
+            running += 1;
+        }
+        if result_to_review(task) {
+            unread += 1;
+        }
+        // A viewed result retained only by a pin does not demand attention again.
+        if task.status == TaskStatus::Failed && task.unread {
+            failed += 1;
+        }
     }
+    let starting = snapshot.revision == 0;
+    let icon = if needs > 0 {
+        "needs-input"
+    } else if failed > 0 || unhealthy > 0 || disconnected > 0 || uncertain > 0 || starting {
+        "error"
+    } else if unread > 0 {
+        "review"
+    } else if running > 0 {
+        "working"
+    } else {
+        "idle"
+    };
+    // Keep this comfortably below Windows' 127 UTF-16-unit tooltip limit.
+    let tooltip = format!(
+        "TaskPulse · 进行中 {running}（待处理 {needs}）· 待查看 {unread} · 任务失败 {failed} · 来源异常 {unhealthy} / 断连 {disconnected} · 状态待更新 {}",
+        uncertain + usize::from(starting)
+    );
+    TrayPresentation { icon, tooltip }
 }
 
 fn icon_bytes(state: &str) -> &'static [u8] {
     match state {
         "needs-input" => include_bytes!("../icons/tray-needs-input.png"),
-        "error" => include_bytes!("../icons/tray-error.png"),
         "working" => include_bytes!("../icons/tray-working.png"),
-        "disconnected" => include_bytes!("../icons/tray-offline.png"),
+        "review" => include_bytes!("../icons/tray-review.png"),
         "idle" => include_bytes!("../icons/tray-idle.png"),
-        _ => include_bytes!("../icons/tray-offline.png"),
+        _ => include_bytes!("../icons/tray-error.png"),
     }
 }
 
-pub fn update_icon(app: &AppHandle, tasks: &[TaskSnapshot], hosts: &[HostHealth]) {
-    let state = aggregate_state(tasks, hosts);
-    if let Some(tray) = app.tray_by_id(&TrayIconId::new("main")) {
-        let needs = tasks
-            .iter()
-            .filter(|t| t.requires_action() && !t.stale)
-            .count();
-        let running = tasks
-            .iter()
-            .filter(|t| (t.status == TaskStatus::Running || t.requires_action()) && !t.stale)
-            .count();
-        let unread = tasks
-            .iter()
-            .filter(|t| {
-                t.unread
-                    && !t.requires_action()
-                    && !t.stale
-                    && (matches!(t.status, TaskStatus::Succeeded | TaskStatus::Failed)
-                        || t.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded)
-                        || t.source == crate::domain::TaskSource::RemoteTmux
-                            && t.confidence == crate::domain::DetectionConfidence::Inferred
-                            && t.status == TaskStatus::Idle
-                            && t.finished_at.is_some()
-                            && t.exit_code.is_none())
-            })
-            .count();
-        let uncertain = tasks
-            .iter()
-            .filter(|t| {
-                t.stale
-                    || !t.requires_action()
-                        && matches!(t.status, TaskStatus::Unknown | TaskStatus::Disconnected)
-                    || !t.requires_action()
-                        && t.status == TaskStatus::WaitingInput
-                        && t.waiting_reason != Some(crate::domain::WaitingReason::TurnEnded)
-            })
-            .count();
-        let _ = tray.set_tooltip(Some(format!(
-            "TaskPulse · 进行中 {running}（其中待处理 {needs}）· 待查看 {unread} · 待更新 {uncertain}"
-        )));
-    }
-
-    {
-        let mut last = LAST_STATE.lock().unwrap_or_else(|e| {
-            log::warn!("LAST_STATE mutex poisoned, recovering");
-            e.into_inner()
-        });
-        if last.as_str() == state {
+pub fn update_icon(app: &AppHandle, snapshot: &DashboardSnapshot) {
+    let next = aggregate(snapshot);
+    let revision = snapshot.revision;
+    let handle = app.clone();
+    // Tauri setters wait for the main thread. Acquire the cache lock there,
+    // never on a worker: popup-open can also update the tray on the main thread.
+    // Otherwise it could wait for the worker lock while that worker waits for it.
+    if let Err(error) = app.run_on_main_thread(move || {
+        let Some(tray) = handle.tray_by_id(&TrayIconId::new("main")) else {
+            return;
+        };
+        // Reject late snapshots; cache only successful native writes. Failed
+        // writes retry on an existing watcher update, without any new timer.
+        let mut last = LAST_PRESENTATION.lock().unwrap_or_else(|e| e.into_inner());
+        if !last.accepts(revision) {
             return;
         }
-        *last = state.to_string();
-    }
-
-    let bytes = icon_bytes(state);
-    if let Ok(icon) = Image::from_bytes(bytes) {
-        if let Some(tray) = app.tray_by_id(&TrayIconId::new("main")) {
-            let _ = tray.set_icon(Some(icon));
+        last.revision = revision;
+        if last.needs_icon(next.icon) {
+            match Image::from_bytes(icon_bytes(next.icon))
+                .and_then(|icon| tray.set_icon(Some(icon)))
+            {
+                Ok(()) => {
+                    last.icon = Some(next.icon);
+                    log::debug!("Tray icon updated to: {}", next.icon);
+                }
+                Err(error) => log::warn!("Tray icon update failed: {error}"),
+            }
         }
+        if last.needs_tooltip(&next.tooltip) {
+            match tray.set_tooltip(Some(&next.tooltip)) {
+                Ok(()) => last.tooltip = Some(next.tooltip),
+                Err(error) => log::warn!("Tray tooltip update failed: {error}"),
+            }
+        }
+    }) {
+        log::warn!("Tray update scheduling failed: {error}");
     }
-    log::debug!("Tray icon updated to: {state}");
 }
 
 pub fn pin_popup(app: &AppHandle) {
@@ -228,7 +280,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title("TaskPulse")
-        .inner_size(412.0, 620.0)
+        .inner_size(DASHBOARD_WIDTH, 620.0 * DASHBOARD_SCALE)
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
         // keeps its native shadow. The transparent dashboard draws its own edge.
@@ -341,9 +393,9 @@ fn popup_geometry(
 ) -> (u32, u32, i32, i32) {
     let (left, top, available_width, available_height) = area;
     let margin = (8.0 * scale).round() as i32;
-    let width = ((412.0 * scale).round() as u32)
+    let width = ((DASHBOARD_WIDTH * scale).round() as u32)
         .min(available_width.saturating_sub((margin * 2) as u32).max(1));
-    let height = ((f64::from(height.clamp(400, 620)) * scale).round() as u32)
+    let height = ((f64::from(height.clamp(400, 620)) * DASHBOARD_SCALE * scale).round() as u32)
         .min(available_height.saturating_sub((margin * 2) as u32).max(1));
     let min_x = left + margin.min(available_width.saturating_sub(width) as i32);
     let min_y = top + margin.min(available_height.saturating_sub(height) as i32);
@@ -401,10 +453,15 @@ mod tests {
 
     #[test]
     fn popup_fits_work_area_at_scaled_and_negative_monitor_coordinates() {
-        for scale in [1.0, 1.5, 2.0] {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
             let (w, h, x, y) =
                 popup_geometry((-1920, 40, 1920, 1000), scale, 620, Some((-9999, 9999)));
-            assert_eq!(w, (412.0 * scale) as u32);
+            assert_eq!(w, (DASHBOARD_WIDTH * scale).round() as u32);
+            assert_eq!(
+                h,
+                ((620.0 * DASHBOARD_SCALE * scale).round() as u32)
+                    .min(1000 - (16.0 * scale) as u32)
+            );
             assert!(x >= -1920 && y >= 40);
             assert!(x + w as i32 <= 0 && y + h as i32 <= 1040);
         }
@@ -425,78 +482,274 @@ mod tests {
         )
     }
 
-    #[test]
-    fn aggregate_empty_returns_offline() {
-        assert_eq!(aggregate_state(&[], &[]), "offline");
+    fn snapshot(tasks: Vec<TaskSnapshot>) -> DashboardSnapshot {
+        DashboardSnapshot {
+            revision: 1,
+            tasks,
+            hosts: vec![],
+            providers: vec![],
+        }
+    }
+
+    fn pending() -> TaskSnapshot {
+        let mut t = task(TaskStatus::WaitingInput);
+        t.source = crate::domain::TaskSource::ClaudeCode;
+        t.waiting_reason = Some(WaitingReason::Approval);
+        t.input_request_id = Some("request-1".into());
+        t.input_request_ids = vec!["request-1".into()];
+        t
+    }
+
+    fn completed(status: TaskStatus) -> TaskSnapshot {
+        let mut t = task(status);
+        t.unread = true;
+        t
+    }
+
+    fn health(status: ProviderStatus) -> crate::providers::ProviderHealth {
+        crate::providers::ProviderHealth {
+            provider: "fixture-source".into(),
+            status,
+            last_success: Some(SystemTime::now()),
+            last_attempt: Some(SystemTime::now()),
+            message: None,
+        }
     }
 
     #[test]
-    fn aggregate_single_agent() {
+    fn tray_basic_states_and_unknown_startup_are_distinct() {
+        for (tasks, expected) in [
+            (vec![], "idle"),
+            (vec![task(TaskStatus::Idle)], "idle"),
+            (vec![task(TaskStatus::Running)], "working"),
+            (vec![pending()], "needs-input"),
+            (vec![completed(TaskStatus::Failed)], "error"),
+            (vec![completed(TaskStatus::Succeeded)], "review"),
+            (vec![task(TaskStatus::Unknown)], "error"),
+            (vec![task(TaskStatus::Disconnected)], "error"),
+        ] {
+            assert_eq!(aggregate(&snapshot(tasks)).icon, expected);
+        }
+        let mut first = snapshot(vec![]);
+        first.revision = 0;
+        assert_eq!(aggregate(&first).icon, "error");
+        assert!(aggregate(&first).tooltip.contains("状态待更新 1"));
+    }
+
+    #[test]
+    fn tray_multi_agent_priority_is_independent_of_observation_order() {
+        let mut codex = task(TaskStatus::Running);
+        codex.source = crate::domain::TaskSource::Codex;
+        let mut hermes = completed(TaskStatus::Succeeded);
+        hermes.source = crate::domain::TaskSource::Hermes;
+        let failure = completed(TaskStatus::Failed);
+        let tasks = [codex.clone(), hermes.clone(), failure.clone(), pending()];
+        for shift in 0..tasks.len() {
+            let mut mixed = tasks.to_vec();
+            mixed.rotate_left(shift);
+            let state = aggregate(&snapshot(mixed));
+            assert_eq!(state.icon, "needs-input");
+            assert!(state.tooltip.contains("待处理 1"));
+            assert!(state.tooltip.contains("任务失败 1"));
+        }
         assert_eq!(
-            aggregate_state(&[task(TaskStatus::Running)], &[]),
+            aggregate(&snapshot(vec![codex.clone(), hermes.clone(), failure])).icon,
+            "error"
+        );
+        assert_eq!(aggregate(&snapshot(vec![codex, hermes])).icon, "review");
+    }
+
+    #[test]
+    fn tray_source_failure_and_catchup_never_imply_idle_or_completion() {
+        let mut live = task(TaskStatus::Running);
+        live.source_instance = Some("fixture-source".into());
+        let mut state = snapshot(vec![live]);
+        state.providers = vec![health(ProviderStatus::Connected)];
+        assert_eq!(aggregate(&state).icon, "working");
+        state.providers[0].status = ProviderStatus::Degraded;
+        assert_eq!(aggregate(&state).icon, "error");
+        assert!(aggregate(&state).tooltip.contains("来源异常 1"));
+        assert!(aggregate(&state).tooltip.contains("任务失败 0"));
+        state.tasks[0].stale = true;
+        state.providers[0].status = ProviderStatus::Connected;
+        assert_eq!(aggregate(&state).icon, "error");
+        state.tasks[0].stale = false;
+        assert_eq!(aggregate(&state).icon, "working");
+        state.tasks.clear();
+        state.providers[0].status = ProviderStatus::Degraded;
+        assert_eq!(aggregate(&state).icon, "error");
+        state.providers[0].status = ProviderStatus::Connected;
+        state.providers[0].last_success = None;
+        assert_eq!(aggregate(&state).icon, "error");
+    }
+
+    #[test]
+    fn tray_remote_loss_and_stale_requests_are_uncertainty() {
+        let mut state = snapshot(vec![task(TaskStatus::Running)]);
+        state.hosts.push(crate::providers::HostHealth::disconnected(
+            "fixture-host",
+            None,
+        ));
+        assert_eq!(aggregate(&state).icon, "error");
+        state.tasks.push(pending());
+        assert_eq!(aggregate(&state).icon, "needs-input");
+        state.tasks[1].stale = true;
+        assert_eq!(aggregate(&state).icon, "error");
+        state.tasks[1].stale = false;
+        state.tasks[1].source_instance = Some("not-yet-observed".into());
+        assert_eq!(aggregate(&state).icon, "error");
+    }
+
+    #[test]
+    fn tray_turn_end_review_is_not_a_request_and_viewing_does_not_resolve_requests() {
+        let mut ended = completed(TaskStatus::WaitingInput);
+        ended.waiting_reason = Some(WaitingReason::TurnEnded);
+        assert_eq!(aggregate(&snapshot(vec![ended.clone()])).icon, "review");
+        ended.unread = false;
+        assert_eq!(aggregate(&snapshot(vec![ended])).icon, "idle");
+        let mut request = pending();
+        for unread in [true, false] {
+            request.unread = unread;
+            assert_eq!(
+                aggregate(&snapshot(vec![request.clone()])).icon,
+                "needs-input"
+            );
+        }
+        let mut viewed_failure = completed(TaskStatus::Failed);
+        viewed_failure.unread = false;
+        viewed_failure.pinned = true;
+        assert_eq!(aggregate(&snapshot(vec![viewed_failure])).icon, "idle");
+    }
+
+    #[test]
+    fn tray_tool_and_model_waits_are_not_human_blockers() {
+        for phase in [
+            crate::domain::ExecutionPhase::Thinking,
+            crate::domain::ExecutionPhase::Tool,
+            crate::domain::ExecutionPhase::Responding,
+            crate::domain::ExecutionPhase::AwaitingModel,
+            crate::domain::ExecutionPhase::AwaitingTool,
+        ] {
+            let mut live = task(TaskStatus::Running);
+            live.phase = Some(phase);
+            assert_eq!(aggregate(&snapshot(vec![live])).icon, "working");
+        }
+        let legacy = task(TaskStatus::WaitingInput);
+        assert_eq!(aggregate(&snapshot(vec![legacy])).icon, "error");
+    }
+
+    #[test]
+    fn tray_inferred_shell_return_is_review_but_never_an_agent_finish() {
+        let mut shell = completed(TaskStatus::Idle);
+        shell.source = crate::domain::TaskSource::RemoteTmux;
+        shell.confidence = crate::domain::DetectionConfidence::Inferred;
+        shell.finished_at = Some(SystemTime::now());
+        assert_eq!(aggregate(&snapshot(vec![shell.clone()])).icon, "review");
+        shell.session_id = Some("agent-session".into());
+        assert!(!result_to_review(&shell));
+    }
+
+    #[test]
+    fn tray_attention_restart_restores_unviewed_result_and_view_action() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = crate::attention::AttentionTracker::open(path.clone());
+        let live = task(TaskStatus::Running);
+        let id = live.id.clone();
+        assert_eq!(
+            aggregate(&snapshot(tracker.reconcile(vec![live.clone()]))).icon,
             "working"
+        );
+        let mut ended = live;
+        ended.status = TaskStatus::Succeeded;
+        let display = tracker.reconcile(vec![ended.clone()]);
+        assert_eq!(aggregate(&snapshot(display)).icon, "review");
+        tracker.flush().unwrap();
+        drop(tracker);
+        let mut restored = crate::attention::AttentionTracker::open(path);
+        let display = restored.reconcile(vec![ended.clone()]);
+        assert_eq!(aggregate(&snapshot(display)).icon, "review");
+        restored.mark_viewed(&id).unwrap();
+        assert_eq!(
+            aggregate(&snapshot(restored.reconcile(vec![ended]))).icon,
+            "idle"
         );
     }
 
     #[test]
-    fn aggregate_waiting_input_beats_running() {
-        let tasks = vec![
-            task(TaskStatus::Idle),
+    fn tray_repeated_updates_and_old_snapshots_do_not_rewrite_icons() {
+        let mut applied = AppliedPresentation::default();
+        let next = aggregate(&snapshot(vec![task(TaskStatus::Running)]));
+        assert!(applied.needs_icon(next.icon));
+        // A failed native write leaves the cache untouched and can retry.
+        assert!(applied.needs_icon(next.icon));
+        applied.revision = 2;
+        applied.icon = Some(next.icon);
+        applied.tooltip = Some(next.tooltip.clone());
+        assert!(!applied.needs_icon(next.icon));
+        assert!(!applied.needs_tooltip(&next.tooltip));
+        assert!(!applied.accepts(1));
+        assert!(applied.accepts(2));
+        assert!(applied.accepts(3));
+        let more = aggregate(&snapshot(vec![
             task(TaskStatus::Running),
-            task(TaskStatus::WaitingInput),
-        ];
-        assert_eq!(aggregate_state(&tasks, &[]), "needs-input");
+            task(TaskStatus::Running),
+        ]));
+        assert!(!applied.needs_icon(more.icon));
+        assert!(applied.needs_tooltip(&more.tooltip));
+        assert!(more.tooltip.encode_utf16().count() < 128);
     }
 
     #[test]
-    fn aggregate_failed_beats_waiting() {
-        let tasks = vec![task(TaskStatus::WaitingInput), task(TaskStatus::Failed)];
-        assert_eq!(aggregate_state(&tasks, &[]), "error");
+    fn tray_embedded_assets_decode_with_transparency_and_distinct_palettes() {
+        let mut pixels = vec![];
+        for state in ["needs-input", "error", "review", "working", "idle"] {
+            let image = Image::from_bytes(icon_bytes(state)).unwrap();
+            assert_eq!((image.width(), image.height()), (32, 32));
+            assert_eq!(image.rgba()[3], 0);
+            assert!(image.rgba().chunks_exact(4).any(|p| p[3] == 255));
+            assert!(!pixels.contains(&image.rgba().to_vec()));
+            pixels.push(image.rgba().to_vec());
+        }
     }
 
     #[test]
-    fn aggregate_disconnected_host_beats_running() {
-        let tasks = vec![task(TaskStatus::Running), task(TaskStatus::Running)];
-        let hosts = vec![HostHealth::disconnected("Server3", None)];
-        assert_eq!(aggregate_state(&tasks, &hosts), "disconnected");
-    }
-
-    #[test]
-    fn aggregate_failed_beats_disconnected_host() {
-        let tasks = vec![task(TaskStatus::Failed)];
-        let hosts = vec![HostHealth::disconnected("Server3", None)];
-        assert_eq!(aggregate_state(&tasks, &hosts), "error");
-    }
-
-    #[test]
-    fn aggregate_waiting_beats_disconnected_host() {
-        let tasks = vec![task(TaskStatus::WaitingInput)];
-        let hosts = vec![HostHealth::disconnected("Server3", None)];
-        assert_eq!(aggregate_state(&tasks, &hosts), "needs-input");
-    }
-
-    #[test]
-    fn aggregate_succeeded_idle() {
-        let tasks = vec![task(TaskStatus::Succeeded), task(TaskStatus::Idle)];
-        assert_eq!(aggregate_state(&tasks, &[]), "idle");
-    }
-
-    #[test]
-    fn aggregate_unknown() {
-        assert_eq!(
-            aggregate_state(&[task(TaskStatus::Unknown)], &[]),
-            "offline"
-        );
-    }
-
-    #[test]
-    fn completed_turn_does_not_mask_a_running_task_as_blocked() {
-        let mut ended = task(TaskStatus::WaitingInput);
-        ended.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
-        assert_eq!(
-            aggregate_state(&[ended.clone(), task(TaskStatus::Running)], &[]),
-            "working"
-        );
-        assert_eq!(aggregate_state(&[ended], &[]), "idle");
+    fn tray_store_silence_and_recovery_preserve_lifecycle_and_notification_dedup() {
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("notifications.json");
+        let mut engine = crate::transition::TransitionEngine::open(ledger.clone());
+        let mut store = crate::store::TaskStore::default();
+        let now = SystemTime::now();
+        let mut live = task(TaskStatus::Running);
+        live.source = crate::domain::TaskSource::Codex;
+        live.source_instance = Some("fixture-source".into());
+        live.turn_key = Some("turn-1".into());
+        let mut state = snapshot(store.merge(vec![live.clone()], now));
+        state.providers.push(health(ProviderStatus::Connected));
+        assert!(engine.apply_snapshots(&state.tasks, &[], now).is_empty());
+        assert_eq!(aggregate(&state).icon, "working");
+        // No new log line is not an authoritative removal.
+        state.tasks = store.merge_instances(vec![], &Default::default(), now);
+        assert_eq!(aggregate(&state).icon, "working");
+        assert!(engine.apply_snapshots(&state.tasks, &[], now).is_empty());
+        // Even an authoritative disappearance of an Agent is stale, not done.
+        state.tasks = store.merge_instances(vec![], &["fixture-source".into()].into(), now);
+        assert_eq!(aggregate(&state).icon, "error");
+        assert!(engine.apply_snapshots(&state.tasks, &[], now).is_empty());
+        state.tasks = store.merge(vec![live.clone()], now);
+        assert_eq!(aggregate(&state).icon, "working");
+        assert!(engine.apply_snapshots(&state.tasks, &[], now).is_empty());
+        live.status = TaskStatus::Succeeded;
+        live.unread = true;
+        state.tasks = store.merge(vec![live], now);
+        assert_eq!(engine.apply_snapshots(&state.tasks, &[], now).len(), 1);
+        let bytes = std::fs::read(&ledger).unwrap();
+        for _ in 0..5 {
+            assert_eq!(aggregate(&state).icon, "review");
+        }
+        assert_eq!(std::fs::read(&ledger).unwrap(), bytes);
+        assert!(engine.apply_snapshots(&state.tasks, &[], now).is_empty());
+        let mut restarted = crate::transition::TransitionEngine::open(ledger);
+        assert!(restarted.apply_snapshots(&state.tasks, &[], now).is_empty());
     }
 }

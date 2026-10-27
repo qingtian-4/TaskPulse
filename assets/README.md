@@ -2,7 +2,7 @@
 
 公开素材来自当前 TaskPulse 原生 WebView2，不拼接或重绘。原生截图代表真实应用渲染；使用隔离合成事件时必须注明，不能作为 Agent 宿主实机支持证据。
 
-## 下一候选源码预览（2026-10-24）
+## 下一候选源码预览（2026-10-27）
 
 以下 PNG 由隔离的真实 Tauri / Windows WebView2 直接输出，输入均为公开合成事件；未拼接、重绘或替换文字。截图不是实际 Agent 新任务或宿主兼容性证据。
 
@@ -12,6 +12,8 @@
 | [message-center-current.png](screenshots/message-center-current.png) | 412 × 620 | 合成审批、明确失败与完成；消息已读不解除待处理请求 |
 | [sources-current.png](screenshots/sources-current.png) | 1040 × 900 | 隔离来源管理，未安装真实 Hook |
 | [notice-current.png](screenshots/notice-current.png) | 320 × 132 | 独立原生测试提醒，不创建监控任务 |
+| [notice-question-current.png](screenshots/notice-question-current.png) | 320 × 132 | 隔离标准事件触发的真实待输入弹窗，合成示例 |
+| [notice-approval-current.png](screenshots/notice-approval-current.png) | 320 × 132 | 隔离标准事件触发的真实待批准弹窗，合成示例 |
 
 先执行 `scripts/verify.ps1 -Frontend`，再依次运行（端口不能并用）：
 
@@ -21,8 +23,15 @@ bun scripts/native-message-center-smoke.ts --exe src-tauri/target/codex-check/de
 ```
 
 只有全部检查通过才更新公开图片；每次输入与结果留在忽略提交的 `src-tauri/target/ui-smoke/evidence/`。
-检查覆盖 412×620、380×640、320×480、440×720，WebView2 DPR 1 / 1.5 / 2，以及消息已读、请求解除、结果未查看和重启恢复。
+新增的两张请求截图经实际 Provider/TaskStore/AttentionTracker/TransitionEngine 到原生提醒窗口产生，未替换 DOM 文案；测试还检查关闭不解除请求，只有匹配 request ID 的解决事件恢复运行。
+2026-10-27 本轮请求截图与原生回归通过，证据保留于本地
+`src-tauri/target/ui-smoke/evidence/product-native-2026-10-27T07-45-36-931Z-yIbGDw/`；
+中文架构图和 README 另经本地浏览器渲染检查，预览位于 `src-tauri/target/readme-refresh-20261027/`。
+检查覆盖 412×620、380×640、320×480、440×720，WebView2 DPR 1 / 1.25 / 1.5 / 2，以及消息已读、请求解除、结果未查看和重启恢复。
 这不等同 Windows 实际改变显示比例、混合 DPI 显示器迁移或真实 Agent 生命周期验收。
+
+本次图片包含已确认的双色开口 P 品牌标记，原有界面尺寸和布局保持不变。
+[品牌资源与 Social Preview](brand/README.md) · [本次验收结果](../docs/BRAND_VALIDATION_2026-10-27.md)。
 
 ## 历史 Alpha.7 原生素材
 
@@ -48,6 +57,8 @@ bun scripts/native-message-center-smoke.ts --exe src-tauri/target/codex-check/de
 ## 当前架构示意
 
 [taskpulse-architecture.svg](diagrams/taskpulse-architecture.svg) 来自 PR #10，2026-10-23 按源码修正：native/WSL Worker、远端独立线程、watcher 内兼容文件采集分别标明；Journal/Checkpoint/Outbox 只适用于 Generic Event，ack 不等于可见投递。它是说明图，不是应用截图。详细事实与限制见 [架构](../docs/ARCHITECTURE.md)。
+
+中文首页使用 [taskpulse-architecture-zh.svg](diagrams/taskpulse-architecture-zh.svg)：保留上述数据流，翻译标题、模块职责与说明；英文首页保留英文版。手机 App 只出现在路线图中，不纳入现有实现图。
 
 2026-10-23 人工检查的三张 Alpha.7 PNG 继续保留原文件，尺寸分别为 440×720、1040×900、320×132；不覆盖其历史证据。当前 UI 为中文。没有新 MP4/GIF 成品，复现命令、storyboard、字幕及 Release 附件方案见 [演示计划](../docs/DEMO_RECORDING_PLAN.md)。
 

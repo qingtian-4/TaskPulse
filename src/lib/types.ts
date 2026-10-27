@@ -10,6 +10,7 @@ export type Status =
   | 'unknown';
 
 export type Source =
+  | 'doubao'
   | 'codex'
   | 'hermes'
   | 'deepseek_harness'
@@ -78,7 +79,7 @@ export interface TaskSnapshot {
   hook_matcher?: string;
 }
 
-export type SourceKind = 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner' | 'generic_event';
+export type SourceKind = 'doubao' | 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner' | 'generic_event';
 export interface MonitorSource {
   id: string; name: string; kind: SourceKind; enabled: boolean; location: string;
   projects: string[]; excluded_projects: string[]; tmux_sessions: string[]; tmux_panes: string[]; poll_interval_ms: number;
@@ -146,6 +147,7 @@ export const STATUS_COLOR: Record<Status, string> = {
 };
 
 export const SOURCE_LABEL: Record<Source, string> = {
+  'doubao':           '豆包',
   'generic_event':    '其他 Agent',
   'codex':            'Codex',
   'hermes':           'Hermes',
@@ -157,6 +159,7 @@ export const SOURCE_LABEL: Record<Source, string> = {
 };
 
 export const SOURCE_COLOR: Record<Source, string> = {
+  'doubao':           '#69b7cf',
   'generic_event':    '#69b7cf',
   'codex':            '#6fbe5a',
   'hermes':           '#d97757',

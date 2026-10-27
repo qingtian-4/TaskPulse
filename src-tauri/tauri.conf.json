@@ -35,7 +35,7 @@
     "windows": {
       "webviewInstallMode": { "type": "downloadBootstrapper", "silent": true },
       "wix": { "upgradeCode": "6cd0d94e-66e7-5fec-8e52-e96008b6a767", "version": "0.2.0.1008" },
-      "nsis": { "installMode": "currentUser", "languages": ["English", "SimpChinese"], "displayLanguageSelector": true }
+      "nsis": { "installMode": "currentUser", "languages": ["English", "SimpChinese"], "displayLanguageSelector": true, "installerIcon": "icons/icon.ico" }
     },
     "linux": {
       "deb": {

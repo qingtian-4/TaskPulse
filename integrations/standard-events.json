@@ -2,7 +2,9 @@
   "manifest_version": 1,
   "adapter_version": "1.0.0",
   "systems": [
-    "windows"
+    "windows",
+    "macos",
+    "linux"
   ],
   "supported_versions": [],
   "adapter_id": "standard-events",
@@ -18,77 +20,77 @@
   "capabilities": {
     "session_discovery": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "title": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "project": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "turn_start": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "phase": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "final_end": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "生产者自报，不等于官方宿主验证；必须发送明确结束事件。"
     },
     "failure": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "approval_request": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "approval_resolution": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "question": {
       "support": "explicit",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"
     },
     "focus": {
       "support": "unsupported",
-      "channel": "documented-hook",
+      "channel": "self-reported",
       "validation": "fixture-tested",
       "tested_versions": [],
       "limitations": "未实机验证；版本未知不表示兼容。"

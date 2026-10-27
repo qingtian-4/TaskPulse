@@ -1,7 +1,13 @@
 # 候选安装包下载与测试
 
 当前候选版本：`0.2.0-alpha.8`。公开稳定版尚未发布；旧 Alpha.7 草稿不是本次修复版。
-本页先说明操作方式；具体可交付包以对应运行完成、附件存在及验收记录为准。
+2026-10-27 两平台准确标签构建及自动验收均已通过，源 SHA 为 `fe48e69b9864eeaddcd68e84a4928c6b4176500c`。
+详见[验收记录](ALPHA8_CANDIDATE_VALIDATION_2026-10-27.md)。
+
+直接下载：[Windows EXE/MSI 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274223/artifacts/12668203350) ·
+[Apple Silicon DMG 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274417/artifacts/12668502437) ·
+[汇总草稿 Release](https://github.com/qingtian-4/TaskPulse/releases)（选择 Alpha.8）。
+Actions 附件解压后，Mac 文件位于 `dist/macos`；Release 中可以单独下载 DMG。
 
 ## 下载入口
 

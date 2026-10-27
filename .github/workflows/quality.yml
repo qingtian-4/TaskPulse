@@ -74,5 +74,7 @@ jobs:
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --features custom-protocol
       - name: Test integration bridge in an isolated home
         run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/debug/agent-tray.exe
+      - name: Test source-bound MCP with the native executable
+        run: python scripts/mcp-smoke.py --exe src-tauri/target/debug/agent-tray.exe
       # Opt-in live Agent/SSH/WSL and GUI acceptance tests are not unattended CI.
       # No tags, installers, release publication or write-capable token here.

@@ -94,7 +94,7 @@
 </div>
 
 <style>
-  .notice-window{box-sizing:border-box;height:132px;width:100%;position:relative;display:flex;flex-direction:column;overflow:hidden;background:var(--tp-panel);border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-lg);color:var(--tp-text);box-shadow:var(--tp-shadow-card)}
+  .notice-window{box-sizing:border-box;height:100dvh;width:100%;position:relative;display:flex;flex-direction:column;overflow:hidden;background:var(--tp-panel);border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-lg);color:var(--tp-text);box-shadow:var(--tp-shadow-card)}
   .notice-window::before{content:'';position:absolute;left:0;top:11px;bottom:11px;width:2px;border-radius:2px;background:var(--tone);opacity:.8;pointer-events:none}
   button{cursor:pointer;font:inherit;border:0;background:transparent}.close{position:absolute;top:5px;right:5px;z-index:1;width:24px;height:24px;color:var(--tp-quiet)}.close:hover{background:var(--tp-hover);color:var(--tp-text)}
   .message{min-height:0;flex:1;display:flex;align-items:flex-start;gap:10px;padding:11px 12px 9px 13px;text-align:left;color:inherit}.message:hover{background:var(--tp-hover)}
@@ -110,4 +110,5 @@
   .actions{display:flex;align-items:center;gap:2px;flex-shrink:0}.actions .tp-btn{min-height:24px;gap:3px;padding:3px 5px;border-radius:var(--tp-radius-sm);font-size:10px;line-height:16px}.actions .primary{color:var(--tp-accent);font-weight:550}.actions .primary:hover{background:var(--tp-accent-soft)}
   .progress-track{position:absolute;bottom:0;left:0;right:0;height:1px;background:var(--tp-border)}.progress{height:100%;background:var(--tone);opacity:.6;transition:width .2s linear}
   .error{color:var(--tp-danger)}.empty-error{padding:28px 14px;font-size:11px;color:var(--tp-danger);overflow-wrap:anywhere}
+  @media(max-height:124px){.message{padding-top:8px;padding-bottom:6px;gap:8px}.heading,.summary{margin-top:2px}}
 </style>

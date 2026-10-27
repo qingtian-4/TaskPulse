@@ -362,7 +362,7 @@ fn emit_agents(
         });
         commit_dashboard_snapshot(&mut latest, tasks, hosts, providers)
     };
-    crate::tray::update_icon(app, tasks, hosts);
+    crate::tray::update_icon(app, &snapshot);
     crate::message_center::publish(app);
     let _ = app.emit(
         "pending-prompts-updated",
@@ -388,7 +388,7 @@ fn emit_agents(
 /// Re-emit the last known task list (used when popup opens).
 pub fn emit_latest(app: &AppHandle) {
     let snapshot = latest_dashboard_snapshot();
-    crate::tray::update_icon(app, &snapshot.tasks, &snapshot.hosts);
+    crate::tray::update_icon(app, &snapshot);
     let _ = app.emit("agents-updated", &snapshot.tasks);
     let _ = app.emit("dashboard-snapshot-updated", &snapshot);
     let _ = app.emit("hosts-updated", &snapshot.hosts);
@@ -726,6 +726,13 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::Doubao => Box::new(crate::providers::doubao::DoubaoProvider::new(
+                    if source.location.is_empty() {
+                        crate::providers::doubao::default_root()
+                    } else {
+                        PathBuf::from(&source.location)
+                    },
+                )),
                 SourceKind::GenericEvent => Box::new(
                     crate::providers::generic_event::GenericEventProvider::new(source.clone()),
                 ),
@@ -1564,6 +1571,16 @@ pub fn watch(app: AppHandle) {
                         last_success: remote_source_success.get(&source.id).copied(),
                         last_attempt: remote_attempts.get(&host.host).copied(),
                         message: segment.and_then(|health| health.error.clone()),
+                    });
+                } else {
+                    // An enabled remote source without its first observation
+                    // is not a trustworthy empty/idle source.
+                    health.push(ProviderHealth {
+                        provider: source.id.clone(),
+                        status: ProviderStatus::Degraded,
+                        last_success: None,
+                        last_attempt: None,
+                        message: Some("首次采集中".into()),
                     });
                 }
             }
