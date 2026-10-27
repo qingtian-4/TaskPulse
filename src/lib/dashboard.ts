@@ -145,9 +145,12 @@ export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | nu
     ? settings?.sources.find(s => s.location === task.host && s.kind === (task.source === 'codex' ? 'remote_codex' : 'tmux'))
     : settings?.sources.find(s => s.id === nativeId));
 }
+export function taskProjectLabel(task: TaskSnapshot): string {
+  return task.project ?? (task.source === 'doubao' ? '独立会话' : '未关联项目');
+}
 export function taskContext(task: TaskSnapshot, settings?: DashboardSettings | null): string {
   const source = taskSource(task, settings);
-  return `${task.project ?? '未关联项目'} · ${source?.name ?? `${SOURCE_LABEL[task.source]} · ${task.host ?? '本机'}`}`;
+  return `${taskProjectLabel(task)} · ${source?.name ?? `${SOURCE_LABEL[task.source]} · ${task.host ?? '本机'}`}`;
 }
 export function projectKey(task: TaskSnapshot, settings?: DashboardSettings | null): string {
   return `${taskSource(task, settings)?.id ?? task.source_instance ?? task.host ?? task.source}:${task.project_path ?? task.project ?? '@unassociated'}`;

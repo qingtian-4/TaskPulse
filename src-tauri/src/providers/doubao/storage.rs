@@ -1,4 +1,4 @@
-//! Bounded, read-only projection of one Chromium IndexedDB record. Never opens
+//! Bounded, read-only projection of execution and conversation metadata. Never opens
 //! LevelDB for writing or takes its LOCK; active MANIFEST files and sequence
 //! numbers select the current checkpoint, including tombstones and blob values.
 use serde_json::{Map, Value};
@@ -17,6 +17,7 @@ pub type Result<T> = std::result::Result<T, &'static str>;
 const LIMIT: usize = 32 * 1024 * 1024;
 const RECORD: &str = "default-chat-im-protocol-store";
 pub const DATABASE: &str = "chrome_doubao-chat_0.indexeddb.leveldb";
+type Records = BTreeMap<Vec<u8>, (u64, Option<Vec<u8>>)>;
 
 struct Input<'a> {
     b: &'a [u8],
@@ -235,6 +236,7 @@ fn stamp(p: &Path) -> Result<Stamp> {
 pub struct Reader {
     stamps: Vec<Stamp>,
     cached: Option<Value>,
+    pub titles: BTreeMap<String, String>,
 }
 impl Reader {
     pub fn read(&mut self, root: &Path) -> Result<Value> {
@@ -294,9 +296,9 @@ impl Reader {
             }
             Ok(())
         })?;
-        let mut records = BTreeMap::<Vec<u8>, (u64, Option<Vec<u8>>)>::new();
+        let mut records = Records::new();
         let mut accept = |key: &[u8], seq: u64, kind: u8, value: &[u8]| -> Result<()> {
-            if !checkpoint_key(key)? {
+            if !checkpoint_key(key)? && !conversation_metadata_key(key) && !numeric_zero_key(key) {
                 return Ok(());
             }
             if kind > 1 {
@@ -361,7 +363,9 @@ impl Reader {
         }
         let active: Vec<_> = records
             .iter()
-            .filter(|(key, (_, v))| key[3] == 1 && v.is_some())
+            .filter(|(key, (_, v))| {
+                key[3] == 1 && v.is_some() && checkpoint_key(key).unwrap_or(false)
+            })
             .collect();
         if active.len() != 1 {
             return Err("checkpoint unavailable/ambiguous");
@@ -369,40 +373,33 @@ impl Reader {
         let (key, (_, Some(value))) = active[0] else {
             return Err("checkpoint unavailable");
         };
-        let mut r = Input::new(value);
-        r.var()?;
-        let mut bytes = value[r.p..].to_vec();
-        if bytes.starts_with(&[255, 17, 1]) {
-            let mut wrapper = Input::new(&bytes[3..]);
-            let size = wrapper.size()?;
-            let index = wrapper.var()?;
-            if index != 0 || wrapper.p != wrapper.b.len() {
-                return Err("blob wrapper");
+        let bytes = record_bytes(root, key, value, &records, &mut files)?;
+        let value = decode(&bytes)?;
+        let mut titles = BTreeMap::new();
+        let mut ambiguous = BTreeSet::new();
+        for (meta, (_, name)) in &records {
+            if !conversation_metadata_key(meta) || name.as_deref() != Some(CONVERSATIONS_NAME) {
+                continue;
             }
-            let mut blob_key = key.to_vec();
-            blob_key[3] = 3;
-            let Some((_, Some(blob))) = records.get(&blob_key) else {
-                return Err("blob metadata");
+            let mut title_key = vec![0, meta[1], meta[5], 1, 3];
+            title_key.extend([0; 8]);
+            let Some((_, Some(record))) = records.get(&title_key) else {
+                continue;
             };
-            let mut b = Input::new(blob);
-            if b.byte()? != 0 {
-                return Err("blob kind");
-            }
-            let number = b.var()?;
-            let mime_len = b.size()?;
-            b.take(mime_len.checked_mul(2).ok_or("blob mime")?)?;
-            if b.var()? != size as u64 || b.p != blob.len() {
-                return Err("blob size");
-            }
-            let path = root
-                .join("chrome_doubao-chat_0.indexeddb.blob")
-                .join(format!("{:x}/{:02x}/{:x}", key[1], number >> 8, number));
-            bytes = files.read(&path)?;
-            if bytes.len() != size {
-                return Err("blob size");
+            // Conversation metadata is optional: an unfamiliar cache must not
+            // hide execution evidence. Only matching IDs enrich known tasks.
+            if let Ok(data) = record_bytes(root, &title_key, record, &records, &mut files)
+                .and_then(|bytes| decode(&bytes))
+            {
+                for (id, title) in conversation_titles(&data) {
+                    if titles.get(&id).is_some_and(|old| old != &title) {
+                        ambiguous.insert(id.clone());
+                    }
+                    titles.insert(id, title);
+                }
             }
         }
-        let value = decode(&bytes)?;
+        titles.retain(|id, _| !ambiguous.contains(id));
         if files
             .stamps
             .iter()
@@ -411,11 +408,92 @@ impl Reader {
             return Err("concurrent write");
         }
         // Cache ONLY normalized task facts, never messages/prompts/account data.
-        let value = super::project_checkpoint(&value)?;
+        let mut value = super::project_checkpoint(&value)?;
+        for row in value.as_array_mut().ok_or("projection")? {
+            if let Some(title) = row["conversation"].as_str().and_then(|id| titles.get(id)) {
+                row["name"] = Value::String(title.clone());
+            }
+        }
+        self.titles = titles;
         self.stamps = files.stamps;
         self.cached = Some(value.clone());
         Ok(value)
     }
+}
+
+const CONVERSATIONS_NAME: &[u8] = b"\0c\0o\0n\0v\0e\0r\0s\0a\0t\0i\0o\0n\0s";
+fn conversation_metadata_key(key: &[u8]) -> bool {
+    key.len() == 7
+        && key[0] == 0
+        && key[1] != 0
+        && key[2..5] == [0, 0, 50]
+        && key[5] != 0
+        && key[5] < 128
+        && key[6] == 0
+}
+fn numeric_zero_key(key: &[u8]) -> bool {
+    key.len() == 13
+        && key[0] == 0
+        && key[1] != 0
+        && key[2] != 0
+        && [1, 3].contains(&key[3])
+        && key[4] == 3
+        && key[5..] == [0; 8]
+}
+fn conversation_titles(data: &Value) -> Vec<(String, String)> {
+    super::objects(&data["downlink_body"]["pull_recent_conv_chain_downlink_body"]["cells"])
+        .into_iter()
+        .take(1000)
+        .filter_map(|cell| {
+            let conversation = &cell["conversation"];
+            let id = super::text(&conversation["conversation_id"])?;
+            let name = super::text(&conversation["name"])?;
+            Some((id.to_owned(), name.to_owned()))
+        })
+        .collect()
+}
+
+fn record_bytes(
+    root: &Path,
+    key: &[u8],
+    value: &[u8],
+    records: &Records,
+    files: &mut Files,
+) -> Result<Vec<u8>> {
+    let mut r = Input::new(value);
+    r.var()?;
+    let mut bytes = value[r.p..].to_vec();
+    if bytes.starts_with(&[255, 17, 1]) {
+        let mut wrapper = Input::new(&bytes[3..]);
+        let size = wrapper.size()?;
+        let index = wrapper.var()?;
+        if index != 0 || wrapper.p != wrapper.b.len() {
+            return Err("blob wrapper");
+        }
+        let mut blob_key = key.to_vec();
+        blob_key[3] = 3;
+        let Some((_, Some(blob))) = records.get(&blob_key) else {
+            return Err("blob metadata");
+        };
+        let mut b = Input::new(blob);
+        if b.byte()? != 0 {
+            return Err("blob kind");
+        }
+        let number = b.var()?;
+        let mime_len = b.size()?;
+        b.take(mime_len.checked_mul(2).ok_or("blob mime")?)?;
+        if b.var()? != size as u64 || b.p != blob.len() {
+            return Err("blob size");
+        }
+        let path = root
+            .join("chrome_doubao-chat_0.indexeddb.blob")
+            .join(format!("{:x}/{:02x}/{:x}", key[1], number >> 8, number));
+        bytes = files.read(&path)?;
+        if bytes.len() != size {
+            return Err("blob size");
+        }
+    }
+    Ok(bytes)
 }
 #[derive(Default)]
 struct Files {

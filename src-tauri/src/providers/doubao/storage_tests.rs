@@ -95,6 +95,131 @@ fn serialized(body: &[u8]) -> Vec<u8> {
     bytes
 }
 
+fn title_record(cells: Value) -> Vec<u8> {
+    let mut body = Vec::new();
+    v8(
+        &json!({"downlink_body":{"pull_recent_conv_chain_downlink_body":{"cells":cells}}}),
+        &mut body,
+    );
+    let mut record = vec![1];
+    record.extend(serialized(&body));
+    record
+}
+
+#[test]
+fn conversation_metadata_enriches_only_matching_active_tasks_and_tracks_renames() {
+    let (d, p) = db();
+    // Discover DB/store IDs from metadata, not the developer's account layout.
+    let metadata = vec![0, 7, 0, 0, 50, 9, 0];
+    let mut cache_key = vec![0, 7, 9, 1, 3];
+    cache_key.extend([0; 8]);
+    let rows = |name: &str| {
+        vec![
+            (key(1), Some(inline())),
+            (metadata.clone(), Some(CONVERSATIONS_NAME.to_vec())),
+            (
+                cache_key.clone(),
+                Some(title_record(json!({
+                    "0":{"conversation":{"conversation_id":"123","name":name}},
+                    "1":{"conversation":{"conversation_id":"idle-history","name":"Never import"}}
+                }))),
+            ),
+        ]
+    };
+    fs::write(p.join("000003.log"), batch(1, &rows("真实会话"))).unwrap();
+    let mut reader = Reader::default();
+    let first = reader.read(d.path()).unwrap();
+    assert_eq!(first.as_array().unwrap().len(), 1);
+    assert_eq!(first[0]["name"], "真实会话");
+    assert!(first[0].get("project").is_none());
+    let mut log = batch(1, &rows("真实会话"));
+    log.extend(batch(10, &rows("改名后的真实会话")));
+    fs::write(p.join("000003.log"), log).unwrap();
+    let second = reader.read(d.path()).unwrap();
+    assert_eq!(second[0]["name"], "改名后的真实会话");
+    assert_eq!(first[0]["progress"], second[0]["progress"]);
+    assert_eq!(first[0]["conversation"], second[0]["conversation"]);
+    // Deleted metadata cannot silently reuse a previously cached title.
+    fs::write(
+        p.join("000003.log"),
+        batch(20, &[(key(1), Some(inline())), (metadata, None)]),
+    )
+    .unwrap();
+    assert!(reader.read(d.path()).unwrap()[0]["name"]
+        .as_str()
+        .unwrap()
+        .starts_with("豆包工作任务"));
+    assert!(reader.titles.is_empty());
+}
+
+#[test]
+fn ambiguous_unknown_or_corrupt_title_caches_cannot_override_execution() {
+    let (d, p) = db();
+    let metadata = vec![0, 7, 0, 0, 50, 9, 0];
+    let mut cache_key = vec![0, 7, 9, 1, 3];
+    cache_key.extend([0; 8]);
+    let conflict = title_record(json!({
+        "0":{"conversation":{"conversation_id":"123","name":"One"}},
+        "1":{"conversation":{"conversation_id":"123","name":"Two"}}
+    }));
+    for (name, data) in [
+        (CONVERSATIONS_NAME.to_vec(), conflict),
+        (
+            b"unrelated-store".to_vec(),
+            title_record(json!({"0":{"conversation":{"conversation_id":"123","name":"Wrong"}}})),
+        ),
+        (CONVERSATIONS_NAME.to_vec(), vec![1, 255, 17, 3]),
+    ] {
+        fs::write(
+            p.join("000003.log"),
+            batch(
+                1,
+                &[
+                    (key(1), Some(inline())),
+                    (metadata.clone(), Some(name)),
+                    (cache_key.clone(), Some(data)),
+                ],
+            ),
+        )
+        .unwrap();
+        let mut reader = Reader::default();
+        let rows = reader.read(d.path()).unwrap();
+        assert_eq!(rows[0]["state"], "running");
+        assert!(rows[0]["name"]
+            .as_str()
+            .unwrap()
+            .starts_with("豆包工作任务"));
+        assert!(reader.titles.is_empty());
+    }
+}
+
+#[test]
+#[ignore = "read-only real conversation metadata; no titles or IDs printed"]
+fn live_doubao_conversation_titles() {
+    let mut reader = Reader::default();
+    let rows = reader.read(&super::super::default_root()).unwrap();
+    assert!(
+        !reader.titles.is_empty(),
+        "No supported conversation metadata found"
+    );
+    let active = rows.as_array().unwrap();
+    let named = active
+        .iter()
+        .filter(|row| {
+            row["conversation"].as_str().is_some_and(|id| {
+                reader
+                    .titles
+                    .get(id)
+                    .is_some_and(|name| row["name"].as_str() == Some(name))
+            })
+        })
+        .count();
+    println!(
+        "conversation metadata readable=true; active={} matched={named}",
+        active.len()
+    );
+}
+
 #[test]
 fn shared_objects_replay_without_renumbering_later_references() {
     // root=0, a=1, a.nested=2, c=3; replaying a must not allocate IDs 3/4.

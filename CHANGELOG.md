@@ -4,6 +4,11 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 ## Unreleased
 
+- Resolve Doubao task titles from native conversation metadata without importing
+  idle history or treating a conversation name as a project. Unassociated Doubao
+  tasks display as standalone conversations; renames preserve activity and alerts.
+  Document the missing durable completion event and unverified approval resolution.
+
 - Fix Doubao checkpoints containing shared V8 objects and non-finite optional
   statistics being rejected while tasks run. Require sustained rendered task
   evidence for native Doubao UI acceptance; empty-source reads do not qualify.

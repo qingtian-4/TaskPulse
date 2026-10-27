@@ -14,7 +14,7 @@ UI / 原生截图验收见 [第二轮验证报告](UI_UX_VALIDATION_2026-10-21.m
 | Claude Code | Windows 本机 | 原生只读记录 best-effort；官方 Hook 显式确认安装，代理模型不改变 Agent 身份；无专用 WSL/SSH 适配 |
 | Hermes | Windows 本机 | SQLite 与租约，租约丢失不证明完成；无专用 WSL/SSH 适配 |
 | DeepSeek Harness | Windows Desktop/CLI、独立 WSL | 旧版/v4 压缩日志与标题 projection；无专用 SSH 适配 |
-| 豆包桌面（实验） | Windows 2.26.10 真实运行任务已读取 | [原生执行检查点](DOUBAO.md)；仅当前主任务，标题用会话 ID 尾号；审批未适配、结束提醒不保证，检查点消失保留为待更新 |
+| 豆包桌面（实验） | Windows 2.26.10 真实运行任务已读取 | [原生执行检查点](DOUBAO.md)；按 ID 关联真实会话名，无项目时显示独立会话；审批未适配，主任务结束事件未持久化，检查点消失保留为待更新 |
 | Gemini CLI | 兼容 Hook / 进程扫描 | 不能作为完整会话/阶段/审批验收 |
 | 远程普通代码 | SSH tmux / tp-run | wrapper 的前台退出码可靠性不扩展到 detached/container/Slurm 子任务 |
 

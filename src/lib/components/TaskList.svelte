@@ -1,7 +1,7 @@
 <script lang="ts">
   import type { TaskSnapshot, DashboardSettings, ProviderHealth } from '$lib/types';
   import { formatElapsed } from '$lib/types';
-  import { taskContext, taskLabel, taskAgent, taskSummary, taskSource, sourceFreshness, isEndedResult, matchesSignal, taskTone } from '$lib/dashboard';
+  import { taskContext, taskProjectLabel, taskLabel, taskAgent, taskSummary, taskSource, sourceFreshness, isEndedResult, matchesSignal, taskTone } from '$lib/dashboard';
   import Check from '@lucide/svelte/icons/check';
   import Pin from '@lucide/svelte/icons/pin';
   let { tasks, settings, selectedId, onSelect, onViewed, providers=[], now=Date.now() }: { tasks: TaskSnapshot[]; settings: DashboardSettings | null; selectedId: string | null; onSelect: (task: TaskSnapshot) => void; onViewed?: (task: TaskSnapshot) => void; providers?:ProviderHealth[]; now?:number } = $props();
@@ -21,7 +21,7 @@
         <span class="dot" class:running={task.status==='running' && !task.stale} class:failed={task.status==='failed'} class:waiting={task.status==='waiting_input'} class:stale={task.stale}></span>
         <span class="row-copy">
           <span class="row-title" title={task.name}>{task.name}</span>
-          <span class="context" title={taskContext(task,settings)+(task.project_path?' · '+task.project_path:'')}><span class="agent">{taskAgent(task)}</span><span class="project">{task.project ?? '未关联项目'}</span><span class="location">{task.remote ? 'SSH · '+(task.host ?? '远程') : taskSource(task,settings??undefined)?.kind.endsWith('_wsl') ? 'WSL · '+taskSource(task,settings??undefined)?.location : '本机'}</span></span>
+          <span class="context" title={taskContext(task,settings)+(task.project_path?' · '+task.project_path:'')}><span class="agent">{taskAgent(task)}</span><span class="project">{taskProjectLabel(task)}</span><span class="location">{task.remote ? 'SSH · '+(task.host ?? '远程') : taskSource(task,settings??undefined)?.kind.endsWith('_wsl') ? 'WSL · '+taskSource(task,settings??undefined)?.location : '本机'}</span></span>
           <span class="activity" title={taskSummary(task)}>{taskSummary(task)}</span>
           {#if task.stale || sourceFreshness(task,settings,providers,now).startsWith('来源数据待更新')}<span class="freshness" title={sourceFreshness(task,settings,providers,now)}>来源数据待更新</span>{/if}
         </span>

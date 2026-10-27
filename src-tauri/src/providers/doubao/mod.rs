@@ -134,6 +134,17 @@ impl Provider for DoubaoProvider {
         } else {
             Err("desktop not running")
         };
+        if rows.is_ok() {
+            for task in self.last.values_mut() {
+                if let Some(title) = task
+                    .session_id
+                    .as_ref()
+                    .and_then(|id| self.reader.titles.get(id))
+                {
+                    task.name.clone_from(title);
+                }
+            }
+        }
         match rows.and_then(|rows| self.observe(rows, now)) {
             Ok(output) => output,
             Err(reason) => ProviderOutput::degraded(
@@ -332,6 +343,40 @@ mod tests {
             .unwrap()
             .tasks
             .is_empty());
+    }
+    #[test]
+    fn rename_does_not_renew_activity_or_replay_completion_even_after_restart() {
+        use crate::transition::TransitionEngine;
+        let dir = tempfile::tempdir().unwrap();
+        let ledger = dir.path().join("notifications.json");
+        let mut engine = TransitionEngine::open(ledger.clone());
+        let mut p = DoubaoProvider::new(PathBuf::new());
+        let now = SystemTime::now();
+        let active = project_checkpoint(&checkpoint(2, 2)).unwrap();
+        let first = p.observe(active.clone(), now).unwrap().tasks;
+        assert!(engine.apply(&first, &[], now).is_empty());
+        let mut renamed = active.clone();
+        renamed[0]["name"] = "真实会话名称".into();
+        let next = p
+            .observe(renamed, now + Duration::from_secs(2))
+            .unwrap()
+            .tasks;
+        assert_eq!(next[0].id, first[0].id);
+        assert_eq!(next[0].turn_key, first[0].turn_key);
+        assert_eq!(next[0].updated_at, first[0].updated_at);
+        assert!(next[0].project.is_none());
+        assert!(engine.apply(&next, &[], now).is_empty());
+        let missing = p.observe(json!([]), now).unwrap().tasks;
+        assert!(engine.apply(&missing, &[], now).is_empty());
+        let end = project_checkpoint(&checkpoint(4, 1)).unwrap();
+        let ended = p.observe(end.clone(), now).unwrap().tasks;
+        assert_eq!(engine.apply(&ended, &[], now).len(), 1);
+        assert!(engine.flush());
+        let mut restored = TransitionEngine::open(ledger);
+        let replay = p.observe(active, now).unwrap().tasks;
+        assert!(restored.apply(&replay, &[], now).is_empty());
+        let replay = p.observe(end, now).unwrap().tasks;
+        assert!(restored.apply(&replay, &[], now).is_empty());
     }
     #[test]
     #[ignore = "read-only real Doubao Desktop data; opt in locally"]
