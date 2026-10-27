@@ -13,6 +13,7 @@ use tauri::{AppHandle, Emitter};
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
+    Doubao,
     Codex,
     CodexWsl,
     ClaudeCode,
@@ -134,6 +135,7 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         ),
         source("local_file", "通用 Hooks", SourceKind::Hooks, ""),
         source("scanner", "进程扫描", SourceKind::Scanner, ""),
+        source("doubao", "豆包 · 本机（实验）", SourceKind::Doubao, ""),
     ];
     for item in &mut sources {
         item.projects = match item.kind {
@@ -146,7 +148,10 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         };
         item.enabled = existing
             && !item.projects.is_empty()
-            && !matches!(item.kind, SourceKind::ClaudeCode | SourceKind::CodexWsl);
+            && !matches!(
+                item.kind,
+                SourceKind::ClaudeCode | SourceKind::CodexWsl | SourceKind::Doubao
+            );
     }
     for host in &cfg.remote_hosts {
         let mut codex = source(
@@ -323,6 +328,11 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
             return Err("请输入有效的 SSH 别名".into());
         }
         let location = match source.kind {
+            SourceKind::Doubao => Some(if source.location.is_empty() {
+                crate::providers::doubao::default_root()
+            } else {
+                PathBuf::from(&source.location)
+            }),
             SourceKind::ClaudeCode => Some(if source.location.is_empty() {
                 crate::providers::claude_code::default_root()
             } else {
@@ -486,6 +496,7 @@ pub fn source_id(task: &TaskSnapshot) -> String {
     task.source_instance
         .clone()
         .unwrap_or_else(|| match (task.source, task.remote) {
+            (TaskSource::Doubao, _) => "doubao".into(),
             (TaskSource::Codex, true) => {
                 format!("remote-codex:{}", task.host.as_deref().unwrap_or(""))
             }
@@ -823,6 +834,10 @@ fn discover_source_rows_with_wsl(
         .iter()
         .map(|source| {
             let (available, detail) = match source.kind {
+                SourceKind::Doubao => {
+                    let root=if source.location.is_empty() {crate::providers::doubao::default_root()} else {PathBuf::from(&source.location)};
+                    (crate::providers::doubao::available(&root),format!("{} · 原生执行检查点（实验）；审批提醒尚未适配",root.display()))
+                }
                 SourceKind::ClaudeCode => {
                     let root = if source.location.is_empty() {
                         crate::providers::claude_code::default_root()

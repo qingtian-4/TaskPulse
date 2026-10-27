@@ -99,6 +99,7 @@ impl TaskStatus {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum TaskSource {
+    Doubao,
     Codex,
     Hermes,
     #[serde(rename = "deepseek_harness")]
@@ -115,6 +116,7 @@ impl TaskSource {
     #[allow(dead_code)]
     pub fn label(self) -> &'static str {
         match self {
+            TaskSource::Doubao => "豆包",
             TaskSource::Codex => "Codex",
             TaskSource::Hermes => "Hermes",
             TaskSource::DeepSeekHarness => "DeepSeek Harness",

@@ -48,7 +48,7 @@
         <li><strong>支持 Hook / API / 脚本</strong>：导出标准接入说明，在真实生命周期事件发生时转发。</li>
         <li><strong>没有开放接入口</strong>：暂时无法可靠监控其中的任务。打开桌面应用或网页不等于任务正在运行，也不能证明需要批准或已经完成。</li>
       </ol>
-      <p>主动上报可能漏报，接收成功不等于完整自动采集；优先使用可用的原生日志或 Hook。豆包桌面的 MCP / 插件入口需按具体版本核对，本项目尚未完成豆包实机适配。</p>
+      <p>主动上报可能漏报，接收成功不等于完整自动采集；优先使用可用的原生日志或 Hook。豆包可另选“豆包 · 本机（实验）”读取原生执行检查点；此处 MCP 接入仍需核对宿主能力。</p>
       <div class="actions"><button class="tp-btn" disabled={busy||dirty} onclick={exportMcp}>生成本机 MCP 配置</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);advanced=true;})}>导出标准接入说明</button></div>
       {#if mcpConfig}<pre aria-label="MCP 接入配置">{mcpConfig}</pre><button class="tp-btn" onclick={()=>action(async()=>{await navigator.clipboard.writeText(mcpConfig);message='MCP 配置已复制。请合并到宿主配置；TaskPulse 没有改动任何宿主设置。';})}>复制 MCP 配置</button><p>支持 stdio 的 MCP 宿主可使用；仅支持远程 URL 或预置连接器的宿主不能直接粘贴这份配置。应用更新后若路径变化，请重新生成。</p>{/if}
     </section>

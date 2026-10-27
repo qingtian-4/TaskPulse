@@ -726,6 +726,13 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::Doubao => Box::new(crate::providers::doubao::DoubaoProvider::new(
+                    if source.location.is_empty() {
+                        crate::providers::doubao::default_root()
+                    } else {
+                        PathBuf::from(&source.location)
+                    },
+                )),
                 SourceKind::GenericEvent => Box::new(
                     crate::providers::generic_event::GenericEventProvider::new(source.clone()),
                 ),

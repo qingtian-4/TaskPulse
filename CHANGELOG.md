@@ -4,6 +4,10 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 ## Unreleased
 
+- Add an opt-in, read-only Doubao Desktop execution-checkpoint provider, verified
+  against Windows 2.26.10. It discovers running main tasks without MCP setup;
+  missing checkpoints stay uncertain, and approval notifications remain unsupported.
+
 - Add a source-bound local MCP stdio bridge and configuration export for unlisted
   Agent hosts. Reports remain self-reported; connecting alone never creates tasks,
   disconnecting never completes them, and unsupported desktop hosts stay unverified.

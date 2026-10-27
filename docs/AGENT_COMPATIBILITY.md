@@ -14,6 +14,7 @@ UI / 原生截图验收见 [第二轮验证报告](UI_UX_VALIDATION_2026-10-21.m
 | Claude Code | Windows 本机 | 原生只读记录 best-effort；官方 Hook 显式确认安装，代理模型不改变 Agent 身份；无专用 WSL/SSH 适配 |
 | Hermes | Windows 本机 | SQLite 与租约，租约丢失不证明完成；无专用 WSL/SSH 适配 |
 | DeepSeek Harness | Windows Desktop/CLI、独立 WSL | 旧版/v4 压缩日志与标题 projection；无专用 SSH 适配 |
+| 豆包桌面（实验） | Windows 2.26.10 真实运行任务已读取 | [原生执行检查点](DOUBAO.md)；仅当前主任务，标题用会话 ID 尾号；审批未适配、结束提醒不保证，检查点消失保留为待更新 |
 | Gemini CLI | 兼容 Hook / 进程扫描 | 不能作为完整会话/阶段/审批验收 |
 | 远程普通代码 | SSH tmux / tp-run | wrapper 的前台退出码可靠性不扩展到 detached/container/Slurm 子任务 |
 
@@ -58,7 +59,7 @@ R2 修复不只改表格：mapper 不再把无可靠轮次的终态赋给最新 
 
 2026-10-27 新增来源绑定的本机 MCP stdio 接入口：未列出的宿主若允许自定义本机 MCP，可使用同一个 `taskpulse_report` 工具，无需新增品牌枚举。它属于主动上报，可能漏报，不能自动观察宿主审批或替代可靠 Hook。Windows/macOS 共用接收器；Linux 原生验收仍待完成。内置三款 Hook 写入 recipe 仍仅支持 Windows，在其他平台禁止新增，撤销自有登记仍可执行。
 
-豆包桌面目前**没有 TaskPulse 原生适配或实机 MCP 验收**。官方开放平台的插件 / MCP 能力不能推广为任意版本都开放本机 stdio 配置。没有官方事件、可读日志或可用插件接口时，只能保持尚未接入，不制造运行/完成/批准状态。接入步骤见[通用指南](AGENT_INTEGRATION_GUIDE.md#支持本机-mcp-的桌面或-cli-宿主)。
+豆包桌面已有上述 Windows 实验原生读取，但**尚无实机 MCP 验收**。官方开放平台的插件 / MCP 能力不能推广为任意版本都开放本机 stdio 配置。其他没有官方事件、可读日志或可用插件接口的宿主仍保持尚未接入，不制造运行/完成/批准状态。MCP 接入步骤见[通用指南](AGENT_INTEGRATION_GUIDE.md#支持本机-mcp-的桌面或-cli-宿主)。
 
 ## 官方依据
 
