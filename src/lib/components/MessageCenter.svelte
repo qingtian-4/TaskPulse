@@ -1,4 +1,5 @@
 <script lang="ts">
+  import BrandMark from './BrandMark.svelte';
   import {getCurrentWindow} from '@tauri-apps/api/window';
   import {isTauri} from '@tauri-apps/api/core';
   import {SOURCE_LABEL,formatAgo,type MessageCenterState,type MessageEntry,type TaskSnapshot} from '$lib/types';
@@ -41,7 +42,7 @@
 </script>
 
 <dialog use:modal class="message-center glass-panel" aria-label="消息中心" oncancel={event=>{event.preventDefault();onClose();}}>
-  <header><h2>消息中心 <span>{center.unread} 条未读</span></h2><button class="link" disabled={!center.unread} onclick={()=>onRead(unreadMessageIds(center))}>全部标为已读</button><button class="tp-btn tp-icon" aria-label="关闭消息中心" onclick={onClose}>×</button></header>
+  <header><h2><BrandMark size={18}/> 消息中心 <span>{center.unread} 条未读</span></h2><button class="link" disabled={!center.unread} onclick={()=>onRead(unreadMessageIds(center))}>全部标为已读</button><button class="tp-btn tp-icon" aria-label="关闭消息中心" onclick={onClose}>×</button></header>
   <p class="explanation">显示的消息标为已读；不会查看任务结果，也不会批准或解除请求。</p>
   {#if center.error}<p class="message-error" role="alert">{center.error}</p>{/if}
   <div class="message-scroll glass-scroll" aria-label="最近消息">

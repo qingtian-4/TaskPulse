@@ -1,10 +1,16 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
+  <img alt="TaskPulse — Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
+</picture>
+
 # TaskPulse
 
 **Stay focused on your code. Let TaskPulse watch your coding agents.**
 
 A Windows-first desktop tray companion that brings Codex, Claude Code, Hermes, DeepSeek Harness and other supported sources into one task overview. Get notified when an agent **explicitly requests an answer or approval, or finishes a turn**. Supports selected local, WSL and SSH workflows without changing model or approval settings.
 
-[中文](README.md) · [Getting started](docs/INSTALL.md) · [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Architecture](docs/ARCHITECTURE.md) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
+[Brand assets and Social Preview](assets/brand/README.md) · [中文](README.md) · [Getting started](docs/INSTALL.md) · [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Architecture](docs/ARCHITECTURE.md) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
 
 > **Windows-first · Alpha.8 candidate testing.** The application version is 0.2.0-alpha.8 and is not publicly released. Independent CI workflows produce Windows EXE/MSI and Apple Silicon DMG candidates for maintainer acceptance against an exact source commit. Historical Alpha.7 drafts do not include these fixes. [Candidate downloads and testing](docs/CANDIDATE_TESTING.md) · [Build and release rules](docs/RELEASING.md).
 

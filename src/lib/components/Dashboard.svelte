@@ -15,7 +15,7 @@
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
   import Search from '@lucide/svelte/icons/search';
-  import Activity from '@lucide/svelte/icons/activity';
+  import BrandMark from './BrandMark.svelte';
   import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
   import Inbox from '@lucide/svelte/icons/inbox';
   import Bell from '@lucide/svelte/icons/bell';
@@ -234,7 +234,7 @@
 
 <div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(tasks,filtered))} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
   <header data-tauri-drag-region>
-    <span class="brand" data-tauri-drag-region><span class="brand-mark" aria-hidden="true"><Activity size={17}/></span>TaskPulse</span>
+    <span class="brand" data-tauri-drag-region><BrandMark />TaskPulse</span>
     <div class="header-actions">
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={()=>showPrompts=!showPrompts} aria-expanded={showPrompts} title={'消息中心 · '+messages.unread+' 条未读'} aria-label={'消息中心：'+messages.unread+' 条未读'}><Bell size={15}/>{#if messages.unread}<span>{messages.unread}</span>{/if}</button>
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={manage} title="管理监控来源" aria-label="管理监控来源"><Settings size={15}/></button>
@@ -310,7 +310,6 @@
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}
   .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;color:var(--tp-text)}
-  .brand-mark{width:24px;height:24px;border:1px solid var(--tp-accent-line);border-radius:6px;display:grid;place-items:center;background:var(--tp-accent-soft);color:var(--tp-accent)}
   .header-actions{display:flex;gap:4px}.header-actions button{border:0;position:relative}.header-actions span{position:absolute;right:0;top:0;font-size:10px;min-width:14px;line-height:14px;text-align:center;border-radius:4px;background:var(--tp-card);color:var(--tp-action)}
   .counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 12px 8px;flex:none}
   .overview{text-align:left;padding:8px 12px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-card);min-width:0}

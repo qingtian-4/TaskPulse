@@ -1,10 +1,16 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
+  <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
+  <img alt="TaskPulse — Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
+</picture>
+
 # TaskPulse
 
 **专注写代码，其他 Agent 的进展交给 TaskPulse。**
 
 Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex、Claude Code、Hermes、DeepSeek Harness 等来源的运行状态，在**明确需要回答、审批或本轮结束**时提醒你。支持部分本机、WSL 和 SSH 工作流；不修改 Agent 的模型与审批权限。
 
-[English](README.en.md) · [使用指南](docs/INSTALL.md) · [兼容性](docs/AGENT_COMPATIBILITY.md) · [架构](docs/ARCHITECTURE.md) · [提交问题](https://github.com/qingtian-4/TaskPulse/issues)
+[品牌资源与 Social Preview](assets/brand/README.md) · [English](README.en.md) · [使用指南](docs/INSTALL.md) · [兼容性](docs/AGENT_COMPATIBILITY.md) · [架构](docs/ARCHITECTURE.md) · [提交问题](https://github.com/qingtian-4/TaskPulse/issues)
 
 > **Windows 优先 · Alpha.8 候选测试。** 当前应用版本为 0.2.0-alpha.8，尚未公开发布。Windows EXE/MSI 和 Apple Silicon DMG 通过独立 CI 生成候选安装包，供维护者按准确提交下载验收；历史 Alpha.7 草稿不包含本次修复。[候选下载与测试](docs/CANDIDATE_TESTING.md) · [构建与发布规则](docs/RELEASING.md)。
 

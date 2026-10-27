@@ -1,0 +1,59 @@
+{
+  "name": "TaskPulse Brand and Tray State Icon Kit",
+  "version": "design-handoff-2026-10-27",
+  "status": "integrated-desktop-assets",
+  "brand_source": "brand.svg",
+  "wordmarks": {
+    "dark": "wordmark-dark.svg",
+    "light": "wordmark-light.svg"
+  },
+  "app_icon": "../../src-tauri/icons/icon.ico",
+  "tray_palette": {
+    "running": {
+      "hex": "#76DFCD",
+      "svg": "tray-running.svg",
+      "meaning": "reliably observed active task"
+    },
+    "attention": {
+      "hex": "#FFC15A",
+      "svg": "tray-attention.svg",
+      "meaning": "unresolved request requiring user input"
+    },
+    "error": {
+      "hex": "#FF7079",
+      "svg": "tray-error.svg",
+      "meaning": "confirmed error or explicitly degraded monitoring"
+    },
+    "idle": {
+      "hex": "#9EABBC",
+      "svg": "tray-idle.svg",
+      "meaning": "verified no active, unresolved or unviewed work with trustworthy source health"
+    }
+  },
+  "optional_review": {
+    "hex": "#8BB9FA",
+    "svg": "tray-review-optional.svg",
+    "meaning": "completed result remains unviewed; do not collapse into idle or resolved input",
+    "enabled": true
+  },
+  "shared_geometry": {
+    "viewBox": "0 0 100 100",
+    "tile_fill": "#101929",
+    "stem": "#EAF9F6",
+    "status_color_changes": "P loop only"
+  },
+  "social_preview": "social-preview.png",
+  "integration": "README.md",
+  "handoff_raster_sizes": [
+    16,
+    20,
+    24,
+    32,
+    48,
+    64,
+    128,
+    256,
+    1024
+  ],
+  "runtime_tray_size": 32
+}

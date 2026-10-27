@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
-  import { Cable, Radio, Bell, Info } from '@lucide/svelte';
+  import { Radio, Bell, Info } from '@lucide/svelte';
+  import BrandMark from '$lib/components/BrandMark.svelte';
   import IntegrationEditor from '$lib/components/IntegrationEditor.svelte';
   import IntegrationHookCleanup from '$lib/components/IntegrationHookCleanup.svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -166,7 +167,7 @@
 </script>
 
 <div class="manage tp-theme">
-  <header><div class="page-title"><span class="page-icon" aria-hidden="true"><Cable size={21}/></span><div><span class="eyebrow">TASKPULSE / SOURCES</span><h1>管理你的关注范围</h1><p>选择任务来源，交给 TaskPulse 跟踪新执行。</p></div></div><button class="primary tp-btn" data-variant="primary" disabled={saving || !dirty || !settings || conflict} onclick={save}>{saving?'保存中…':dirty?'保存并生效':'配置已保存'}</button></header>
+  <header><div class="page-title"><span class="page-icon" aria-hidden="true"><BrandMark size={37}/></span><div><span class="eyebrow">TASKPULSE / SOURCES</span><h1>管理你的关注范围</h1><p>选择任务来源，交给 TaskPulse 跟踪新执行。</p></div></div><button class="primary tp-btn" data-variant="primary" disabled={saving || !dirty || !settings || conflict} onclick={save}>{saving?'保存中…':dirty?'保存并生效':'配置已保存'}</button></header>
   {#if buildInfo}<details class="build-info tp-fold"><summary>关于 TaskPulse · {buildInfo.version}</summary><p class="help">构建 {buildInfo.commit.slice(0,12)}{buildInfo.modified?' · 含本地修改':''} · {buildInfo.profile}<br/>{buildInfo.executable}</p><button class="tp-btn" onclick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(buildInfo,null,2));notice='已复制构建信息';}catch{error='复制失败';}}}>复制构建信息</button></details>{/if}
   <nav aria-label="管理页面"><button class="tp-btn" class:active={tab==='sources'} onclick={()=>tab='sources'}>监控来源</button><button class="tp-btn" class:active={tab==='sessions'} onclick={()=>{tab='sessions';void loadSessions();}}>已发现会话</button><button class="tp-btn" class:active={tab==='notifications'} onclick={()=>{tab='notifications';void loadDelivery();}}>通知与显示</button></nav>
   {#if error}<div class="message error" role="alert">{error}<button class="tp-btn" onclick={()=>error=''} aria-label="关闭错误">×</button></div>{/if}
@@ -239,7 +240,7 @@
   .build-info{flex:none;margin:0 24px 8px;padding:8px 12px;max-height:140px;overflow:auto;font-size:11px}.build-info .help{overflow-wrap:anywhere;font-size:11px}
   .manage{height:100vh;display:flex;flex-direction:column;background:var(--tp-bg)}
   header{padding:20px 24px 18px;display:flex;justify-content:space-between;align-items:center;gap:16px;border-bottom:1px solid var(--tp-border);background:linear-gradient(100deg,#76d6c407,transparent 50%),var(--tp-panel);flex:none}
-  .page-title{display:flex;gap:12px;align-items:center;min-width:0}.page-title>div{min-width:0}.page-icon{width:37px;height:37px;flex:none;display:grid;place-items:center;border:1px solid var(--tp-accent-line);background:var(--tp-accent-soft);border-radius:var(--tp-radius-md);color:var(--tp-accent)}
+  .page-title{display:flex;gap:12px;align-items:center;min-width:0}.page-title>div{min-width:0}.page-icon{width:37px;height:37px;flex:none;display:grid;place-items:center;}
   .eyebrow{color:var(--tp-accent);letter-spacing:.13em;font-size:9px}h1{font-size:19px;line-height:1.5;font-weight:600;margin:3px 0}header p{color:var(--tp-muted);font-size:11px;margin:0}
   header>.primary{flex:none;font-size:11px}
   nav{display:flex;padding:0 24px;gap:20px;border-bottom:1px solid var(--tp-border);background:var(--tp-panel);flex:none}

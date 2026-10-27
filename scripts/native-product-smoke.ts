@@ -39,7 +39,7 @@ adapter_id="standard-events"
 transport="local"
 accept_since_ms=${source.integration.accept_since_ms}
 `);
-const env={...process.env,TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port=9337'};
+const env={...process.env,RUST_LOG:'agent_tray::tray=debug',TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port=9337'};
 type Tab={url:string;webSocketDebuggerUrl:string};
 const tabs=async():Promise<Tab[]>=>fetch('http://127.0.0.1:9337/json').then(r=>r.json());
 assert.equal(await tabs().then(()=>true).catch(()=>false),false,'Refusing occupied CDP port');
@@ -57,7 +57,25 @@ async function connect(tab:Tab){
 
 app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});
 app.once('error',error=>spawnFailure=error);
-let stderr='';app.stderr?.on('data',d=>stderr=(stderr+String(d)).slice(-12000));
+let stderr='';const trayStates:string[]=[];const trayCaptures:unknown[]=[];const capturedTrayStates=new Set<string>();
+app.stderr?.on('data',d=>{stderr=(stderr+String(d)).slice(-12000);});
+async function nativeTray(expected:string){
+  const end=Date.now()+15000;
+  while(Date.now()<end){
+    const observed=[...stderr.matchAll(/Tray icon updated to: ([a-z-]+)/g)].map(m=>m[1]);
+    if(observed.at(-1)===expected){
+      trayStates.push(expected);
+      if(!capturedTrayStates.has(expected)){
+        capturedTrayStates.add(expected);
+        const capture=spawnSync('powershell',['-NoProfile','-ExecutionPolicy','Bypass','-File',resolve('scripts/capture-tray.ps1'),'-OutputPath',join(owned,'tray-'+expected+'.png')],{encoding:'utf8',windowsHide:true,timeout:12000});
+        trayCaptures.push({state:expected,...(capture.status===0?JSON.parse(capture.stdout):{visible:false,reason:String(capture.error??capture.stderr)})});
+      }
+      return;
+    }
+    await Bun.sleep(100);
+  }
+  throw Error('Native set_icon did not reach '+expected+'; '+stderr);
+}
 async function page(part:string){for(let n=0;n<200;n++){if(spawnFailure)throw spawnFailure;const tab=(await tabs().catch(()=>[])).find(t=>part?t.url.includes(part):t.url.includes('tauri.localhost')&&!/\/(manage|notice)/.test(t.url));if(tab)return connect(tab);if(app?.exitCode!==null)throw Error('Owned native app exited');await Bun.sleep(100);}throw Error('Page missing: '+part);}
 let sequence=0;
 function event(session:string,kind:string,payload:Record<string,string>={},extra:Record<string,string>={}){
@@ -70,7 +88,7 @@ async function click(client:any,selector:string){await client.wait(`!!document.q
 // Native WebView2 DPR emulation, not a claim that Windows display settings or
 // mixed-DPI monitor migration were changed/tested. Logical window sizes stay fixed.
 async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:number,height:number){
-  for(const scale of [1,1.5,2]){
+  for(const scale of [1,1.25,1.5,2]){
     await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:scale,mobile:false});
     await Bun.sleep(150);
     const layout=await client.evaluate(`(()=>{
@@ -116,19 +134,31 @@ try{
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
   await root.wait(`innerWidth===412&&innerHeight===400`);
   await Bun.write(join(owned,'empty-412x400.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await nativeTray('idle');
+  assert.ok(await root.evaluate(`document.querySelector('.brand img')?.complete&&document.querySelector('.brand img')?.naturalWidth>0`));
   event('done','turn.started',{title:'示例：整理新用户快速开始指南',project:'Docs Demo'});
   event('done','turn.completed');
   await root.wait(`document.querySelectorAll('.task-row').length===1&&innerHeight===400`);
   await Bun.write(join(owned,'one-result-412x400.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await nativeTray('review');
   const firstResult=(await root.invoke('get_agents'))[0];
   await root.invoke('update_task_attention',{id:firstResult.id,action:'hide'});
+  await nativeTray('idle');
+  event('brand-error','turn.started',{title:'合成品牌异常测试',project:'Brand Test'});
+  event('brand-error','turn.failed');
+  await nativeTray('error');
+  const errorTask=(await root.invoke('get_agents')).find((t:any)=>t.session_id==='brand-error');
+  assert.ok(errorTask);await root.invoke('update_task_attention',{id:errorTask.id,action:'hide'});
+  await nativeTray('idle');
   // The generic adapter name is honest: these are NOT native Codex/Claude fixtures.
   event('thinking','turn.started',{title:'示例：评审跨平台任务面板与多来源项目通知消息的长中文标题排版稳定性',project:'TaskPulse Demo'});
   event('thinking','phase.changed',{phase:'thinking'});
+  await nativeTray('working');
   event('question','turn.started',{title:'示例：确认下一轮迭代范围',project:'TaskPulse Demo'});
   event('question','input.requested',{request_kind:'question'},{request_id:'question-1'});
   await root.wait(`document.querySelectorAll('.task-row').length===2&&innerHeight===620`);
   await Bun.write(join(owned,'running-and-request-412x620.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await nativeTray('needs-input');
   const requestTask=(await root.invoke('get_agents')).find((t:any)=>t.session_id==='question');
   await root.invoke('update_task_attention',{id:requestTask.id,action:'hide'});
   await root.wait(`document.querySelectorAll('.task-row').length===1`);
@@ -145,7 +175,7 @@ try{
   assert.deepEqual(fontSizes,{title:'14px',context:'11px',activity:'12px',number:'24px'});
   for(const [width,height] of [[412,620],[371,558],[371,360],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.setDeviceMetricsOverride',{width:412,height:620,deviceScaleFactor:1,mobile:false});
-  checks.push('empty and one-result use 400px; two tasks grow to 620px; long Chinese/English typography and Windows/macOS-sized viewports at DPR 1/1.5/2');
+  checks.push('empty and one-result use 400px; two tasks grow to 620px; long Chinese/English typography and Windows/macOS-sized viewports at DPR 1/1.25/1.5/2');
   await root.evaluate(`[...document.querySelectorAll('.counts .overview')].find(b=>b.textContent.includes('待处理')).click()`);
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('等待输入')`);
   await click(root,'.all-tasks');
@@ -153,6 +183,7 @@ try{
   event('failed','turn.started',{title:'示例：失败结果展示回归',project:'State Demo'});
   event('failed','turn.failed');
   await root.wait(`document.querySelectorAll('.task-row').length===5&&!!document.querySelector('.task-item[data-tone="danger"] .status-label')`);
+  await nativeTray('needs-input');
   assert.equal(await root.evaluate(`getComputedStyle(document.querySelector('.task-item[data-tone="danger"] .status-label')).color`),'rgb(240, 155, 167)');
   await click(root,'.signals [data-tone="danger"]');
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.status-label').textContent==='失败'`);
@@ -318,7 +349,7 @@ try{
     await mkdir('assets/screenshots',{recursive:true});
     for(const name of ['dashboard-current','sources-current','notice-current'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
   }
-  const report={passed:true,checks,layout,scaleChecks,scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
+  const report={passed:true,checks,layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){const ui=await management?.evaluate(`({read:document.querySelector('.read-result')?.textContent,buttons:[...document.querySelectorAll('.source-tests button')].map(b=>({text:b.textContent,disabled:b.disabled})),errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)})`).catch(()=>null);const providers=await root?.invoke('get_providers').catch(()=>null);await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr,errors,ui,providers},null,2));console.error('Evidence: '+evidenceDir);throw error;}
 });
