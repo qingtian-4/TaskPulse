@@ -4,6 +4,10 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 ## Unreleased
 
+- Fix Doubao checkpoints containing shared V8 objects and non-finite optional
+  statistics being rejected while tasks run. Require sustained rendered task
+  evidence for native Doubao UI acceptance; empty-source reads do not qualify.
+
 - Add an opt-in, read-only Doubao Desktop execution-checkpoint provider, verified
   against Windows 2.26.10. It discovers running main tasks without MCP setup;
   missing checkpoints stay uncertain, and approval notifications remain unsupported.

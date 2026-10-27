@@ -484,6 +484,9 @@ fn decode(b: &[u8]) -> Result<Value> {
     let mut parser = V8 {
         r: Input::new(&b[17..]),
         nodes: 0,
+        string_bytes: 0,
+        objects: Vec::new(),
+        object_offsets: BTreeMap::new(),
     };
     let value = parser.value(0)?;
     if parser.r.p != parser.r.b.len() {
@@ -494,6 +497,11 @@ fn decode(b: &[u8]) -> Result<Value> {
 struct V8<'a> {
     r: Input<'a>,
     nodes: usize,
+    string_bytes: usize,
+    // Reparse completed object spans instead of retaining a clone of every
+    // ancestor. Replays reuse IDs and share the same expansion budgets.
+    objects: Vec<(usize, bool)>,
+    object_offsets: BTreeMap<usize, usize>,
 }
 impl V8<'_> {
     fn value(&mut self, depth: usize) -> Result<Value> {
@@ -505,6 +513,7 @@ impl V8<'_> {
         while t == 0 {
             t = self.r.byte()?;
         }
+        let offset = self.r.p - 1;
         Ok(match t {
             b'"' | b'S' | b'c' => {
                 let b = self.r.slice()?;
@@ -525,6 +534,10 @@ impl V8<'_> {
                 } else {
                     b.iter().map(|b| char::from(*b)).collect()
                 };
+                self.string_bytes += s.len();
+                if self.string_bytes > LIMIT * 2 {
+                    return Err("serialization string budget");
+                }
                 Value::String(s)
             }
             b'I' => {
@@ -537,10 +550,12 @@ impl V8<'_> {
             b'U' => Value::from(self.r.var()?),
             b'N' => {
                 let n = f64::from_bits(self.r.fixed(8)?);
+                // V8 can store NaN/Infinity in optional statistics. Match the
+                // JSON projection (null); required identity/time/status fields
+                // still undergo their own validation, never coerce to zero.
                 if !n.is_finite() {
-                    return Err("number");
-                }
-                if n.fract() == 0.0 && n.abs() <= 9_007_199_254_740_991.0 {
+                    Value::Null
+                } else if n.fract() == 0.0 && n.abs() <= 9_007_199_254_740_991.0 {
                     Value::from(n as i64)
                 } else {
                     Value::from(n)
@@ -549,7 +564,29 @@ impl V8<'_> {
             b'T' => Value::Bool(true),
             b'F' => Value::Bool(false),
             b'0' | b'_' | b'-' => Value::Null,
+            b'^' => {
+                let id = self.r.size()?;
+                let start = self
+                    .objects
+                    .get(id)
+                    .filter(|(_, complete)| *complete)
+                    .map(|(start, _)| *start)
+                    .ok_or("invalid/cyclic object reference")?;
+                let resume = self.r.p;
+                self.r.p = start;
+                let value = self.value(depth + 1);
+                self.r.p = resume;
+                value?
+            }
             b'o' | b'a' | b'A' => {
+                let id = if let Some(id) = self.object_offsets.get(&offset) {
+                    *id
+                } else {
+                    let id = self.objects.len();
+                    self.objects.push((offset, false));
+                    self.object_offsets.insert(offset, id);
+                    id
+                };
                 let length = if t != b'o' { self.r.size()? } else { 0 };
                 let end = match t {
                     b'o' => b'{',
@@ -580,9 +617,9 @@ impl V8<'_> {
                 if t != b'o' && self.r.size()? != length {
                     return Err("array length");
                 }
+                self.objects[id].1 = true;
                 Value::Object(map)
             }
-            // Object references can contain cycles; do not expand unbounded graphs.
             _ => return Err("unsupported serialization tag"),
         })
     }

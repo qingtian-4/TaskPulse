@@ -89,6 +89,119 @@ fn inline() -> Vec<u8> {
     v
 }
 
+fn serialized(body: &[u8]) -> Vec<u8> {
+    let mut bytes = checkpoint()[..17].to_vec();
+    bytes.extend(body);
+    bytes
+}
+
+#[test]
+fn shared_objects_replay_without_renumbering_later_references() {
+    // root=0, a=1, a.nested=2, c=3; replaying a must not allocate IDs 3/4.
+    let body=b"o\"\x01ao\"\x06nestedo\"\x01xI\x02{\x01{\x01\"\x01b^\x01\"\x01co\"\x01yI\x04{\x01\"\x01d^\x03{\x04";
+    let value = decode(&serialized(body)).unwrap();
+    assert_eq!(value["a"], value["b"]);
+    assert_eq!(value["c"], value["d"]);
+    assert_eq!(value["b"]["nested"]["x"], 1);
+    assert_eq!(value["d"]["y"], 2);
+}
+
+#[test]
+fn shared_arrays_and_reference_expansion_are_bounded() {
+    let value = decode(&serialized(b"o\"\x01aA\x01I\x02$\x00\x01\"\x01b^\x01{\x02")).unwrap();
+    assert_eq!(value["a"], value["b"]);
+    assert_eq!(value["b"]["0"], 1);
+    for body in [b"o\"\x01x^\x00{\x01".as_slice(), b"o\"\x01x^\x7f{\x01"] {
+        assert!(decode(&serialized(body)).is_err());
+    }
+    let mut body = b"o\"\x010o{\x00".to_vec();
+    for id in 1..20u8 {
+        body.extend([
+            b'"',
+            1,
+            b'A' + id,
+            b'o',
+            b'"',
+            1,
+            b'a',
+            b'^',
+            id,
+            b'"',
+            1,
+            b'b',
+            b'^',
+            id,
+            b'{',
+            2,
+        ]);
+    }
+    body.extend([b'{', 20]);
+    assert!(decode(&serialized(&body)).is_err());
+}
+
+#[test]
+fn optional_nonfinite_v8_numbers_do_not_discard_the_checkpoint() {
+    for n in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+        let mut body = b"o\"\x01nN".to_vec();
+        body.extend(n.to_le_bytes());
+        body.extend(b"{\x01");
+        assert_eq!(decode(&serialized(&body)).unwrap()["n"], Value::Null);
+    }
+    let mut invalid = decode(&checkpoint()).unwrap();
+    invalid["state"]["mainTaskDataMap"]["turn"]["createTime"] = Value::Null;
+    assert!(super::super::project_checkpoint(&invalid).is_err());
+}
+
+#[test]
+#[ignore = "read-only historical inline execution checkpoints; counts only, no task import"]
+fn live_doubao_reference_checkpoints() {
+    let root = super::super::default_root().join(DATABASE);
+    let mut parsed = 0;
+    let mut active = 0;
+    for entry in fs::read_dir(root).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|s| s.to_str()) != Some("log") {
+            continue;
+        }
+        let b = fs::read(path).unwrap();
+        log_records(&b, |batch| {
+            let mut r = Input::new(batch);
+            r.fixed(8)?;
+            let count = r.fixed(4)?;
+            for _ in 0..count {
+                let kind = r.byte()?;
+                let key = r.slice()?;
+                let value = if kind == 1 { r.slice()? } else { &[] };
+                if key.get(3) != Some(&1) || !checkpoint_key(key)? || value.is_empty() {
+                    continue;
+                }
+                let mut v = Input::new(value);
+                v.var()?;
+                let data = &value[v.p..];
+                if !data.starts_with(&[255, 21, 254]) {
+                    continue;
+                }
+                let decoded = decode(data)?;
+                let rows = super::super::project_checkpoint(&decoded)?;
+                parsed += 1;
+                active += rows
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|row| row["state"] == "running")
+                    .count();
+            }
+            Ok(())
+        })
+        .unwrap();
+    }
+    println!("real inline checkpoints parsed={parsed}; running observations={active}");
+    assert!(
+        parsed > 0 && active > 0,
+        "Need real execution checkpoints for this opt-in regression"
+    );
+}
+
 #[test]
 fn checksum_truncation_and_unsupported_values_fail_closed() {
     let b = log_record(b"abc");
