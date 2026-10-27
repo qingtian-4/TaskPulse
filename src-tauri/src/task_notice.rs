@@ -10,8 +10,16 @@ use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, WebviewUrl, WebviewWi
 
 use crate::domain::{TaskSnapshot, TaskSource};
 
-const NOTICE_WIDTH: f64 = 320.0;
-const NOTICE_HEIGHT: f64 = 132.0;
+const NOTICE_WIDTH: f64 = if cfg!(target_os = "macos") {
+    300.0
+} else {
+    320.0
+};
+const NOTICE_HEIGHT: f64 = if cfg!(target_os = "macos") {
+    124.0
+} else {
+    132.0
+};
 const NOTICE_MARGIN: f64 = 16.0;
 const MAX_QUEUED_NOTICES: usize = 128;
 
@@ -875,9 +883,14 @@ mod tests {
     }
     #[test]
     fn placement_respects_work_area_dpi_and_negative_monitor_origin() {
-        assert_eq!(corner_position(0, 0, 1920, 1040, 1.0), (1584, 892));
-        assert_eq!(corner_position(-1920, 0, 1920, 1040, 1.5), (-504, 818));
-        assert_eq!(corner_position(0, 0, 300, 130, 1.0), (0, 0));
+        let expected = if cfg!(target_os = "macos") {
+            [(1604, 900), (-474, 830)]
+        } else {
+            [(1584, 892), (-504, 818)]
+        };
+        assert_eq!(corner_position(0, 0, 1920, 1040, 1.0), expected[0]);
+        assert_eq!(corner_position(-1920, 0, 1920, 1040, 1.5), expected[1]);
+        assert_eq!(corner_position(0, 0, 280, 120, 1.0), (0, 0));
     }
 
     #[test]

@@ -21,6 +21,11 @@ static LAST_STATE: Mutex<String> = Mutex::new(String::new());
 static PINNED: AtomicBool = AtomicBool::new(false);
 static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 
+// Keep text readable; the narrow CSS layout reduces spacing instead of fonts.
+// Logical size preference is independent of the monitor's Retina/DPI scale.
+const DASHBOARD_SCALE: f64 = if cfg!(target_os = "macos") { 0.9 } else { 1.0 };
+const DASHBOARD_WIDTH: f64 = 412.0 * DASHBOARD_SCALE;
+
 /// Aggregate attention state across tasks (and host health).
 /// Returns an icon-name string used by `icon_bytes`.
 fn aggregate_state(tasks: &[TaskSnapshot], hosts: &[HostHealth]) -> &'static str {
@@ -228,7 +233,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title("TaskPulse")
-        .inner_size(412.0, 620.0)
+        .inner_size(DASHBOARD_WIDTH, 620.0 * DASHBOARD_SCALE)
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
         // keeps its native shadow. The transparent dashboard draws its own edge.
@@ -341,9 +346,9 @@ fn popup_geometry(
 ) -> (u32, u32, i32, i32) {
     let (left, top, available_width, available_height) = area;
     let margin = (8.0 * scale).round() as i32;
-    let width = ((412.0 * scale).round() as u32)
+    let width = ((DASHBOARD_WIDTH * scale).round() as u32)
         .min(available_width.saturating_sub((margin * 2) as u32).max(1));
-    let height = ((f64::from(height.clamp(400, 620)) * scale).round() as u32)
+    let height = ((f64::from(height.clamp(400, 620)) * DASHBOARD_SCALE * scale).round() as u32)
         .min(available_height.saturating_sub((margin * 2) as u32).max(1));
     let min_x = left + margin.min(available_width.saturating_sub(width) as i32);
     let min_y = top + margin.min(available_height.saturating_sub(height) as i32);
@@ -404,7 +409,12 @@ mod tests {
         for scale in [1.0, 1.5, 2.0] {
             let (w, h, x, y) =
                 popup_geometry((-1920, 40, 1920, 1000), scale, 620, Some((-9999, 9999)));
-            assert_eq!(w, (412.0 * scale) as u32);
+            assert_eq!(w, (DASHBOARD_WIDTH * scale).round() as u32);
+            assert_eq!(
+                h,
+                ((620.0 * DASHBOARD_SCALE * scale).round() as u32)
+                    .min(1000 - (16.0 * scale) as u32)
+            );
             assert!(x >= -1920 && y >= 40);
             assert!(x + w as i32 <= 0 && y + h as i32 <= 1040);
         }

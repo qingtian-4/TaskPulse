@@ -2,6 +2,11 @@
 
 TaskPulse-specific changes. Upstream AgentTray history and attribution are retained.
 
+## Unreleased
+
+- Reduce macOS dashboard dimensions by 10% and use a 300×124 reminder. Tighten
+  narrow-layout spacing while retaining body text size and Windows defaults.
+
 ## 0.2.0-alpha.8 — Candidate; not released
 
 - Exclude internal Codex services and TaskPulse descendants from task discovery;

@@ -54,5 +54,6 @@
   .task-item:has(.viewed) .freshness{min-height:28px;padding-right:76px}
   .task-item:has(.freshness):has(.viewed) .activity{min-height:0;padding-right:0}
   .viewed{position:absolute;right:12px;bottom:12px;min-height:28px;padding:4px 8px;gap:4px;font-size:11px;color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line)}
+  @media(max-width:380px){.task-row{padding-top:8px;padding-bottom:8px}.dot{top:16px}.viewed{bottom:8px}}
   @media(max-width:350px){.task-row{padding:8px 8px 8px 20px;gap:4px 6px}.dot{left:8px;top:16px}.status-label{max-width:90px;padding:2px 4px}.context{gap:4px}.project{padding-left:4px}.viewed{right:8px;bottom:8px}}
 </style>

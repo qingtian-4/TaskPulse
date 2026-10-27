@@ -143,9 +143,9 @@ try{
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
   assert.deepEqual(fontSizes,{title:'14px',context:'11px',activity:'12px',number:'24px'});
-  for(const [width,height] of [[412,620],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
+  for(const [width,height] of [[412,620],[371,558],[371,360],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.setDeviceMetricsOverride',{width:412,height:620,deviceScaleFactor:1,mobile:false});
-  checks.push('empty and one-result use 400px; two tasks grow to 620px; long Chinese/English typography and all four sizes at DPR 1/1.5/2');
+  checks.push('empty and one-result use 400px; two tasks grow to 620px; long Chinese/English typography and Windows/macOS-sized viewports at DPR 1/1.5/2');
   await root.evaluate(`[...document.querySelectorAll('.counts .overview')].find(b=>b.textContent.includes('待处理')).click()`);
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('等待输入')`);
   await click(root,'.all-tasks');
@@ -205,7 +205,7 @@ try{
   await root.wait(`document.querySelectorAll('.task-row').length===27`);
   const layout=await root.evaluate(`(()=>{const e=document.querySelector('.task-scroll');return {scroll:e.scrollHeight>e.clientHeight,height:document.querySelector('.dashboard').getBoundingClientRect().height,horizontal:document.documentElement.scrollWidth>innerWidth};})()`);
   assert.equal(layout.scroll,true);assert.ok(layout.height<=620);assert.equal(layout.horizontal,false);
-  for(const [width,height] of [[412,620],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
+  for(const [width,height] of [[412,620],[371,558],[371,360],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.clearDeviceMetricsOverride');
   await root.wait(`innerWidth===412`);
   const nativeBounds=await root.invoke('plugin:window|outer_size',{label:'popup'}),nativePosition=await root.invoke('plugin:window|outer_position',{label:'popup'}),monitor=await root.invoke('plugin:window|current_monitor',{label:'popup'});
@@ -253,10 +253,21 @@ try{
   await root.invoke('test_notification');notice=await page('/notice');
   await notice.wait(`document.body.innerText.includes('测试')`);
   await checkScales(notice,'notice',320,132);
+  await root.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
+  await root.invoke('test_notification',{kind:'long_title'});
+  await notice.wait(`document.querySelector('.heading')?.textContent.includes('长标题排版验收（测试）')`);
+  await checkScales(notice,'notice',300,124);
+  const compactNoticeId=(await root.invoke('get_task_notice')).current.id;
+  const bounds=await notice.evaluate(`(()=>{const r=document.querySelector('.message').getBoundingClientRect();return {x:r.x+30,y:r.y+30};})()`);
+  await notice.send('Input.dispatchMouseEvent',{type:'mousePressed',...bounds,button:'left',clickCount:1});
+  await notice.send('Input.dispatchMouseEvent',{type:'mouseReleased',...bounds,button:'left',clickCount:1});
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.id!==${compactNoticeId})`);
+  await root.invoke('test_notification');
+  await notice.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
   await screenshot(notice,'notice-current',320,132);
   await root.wait(`__TAURI_INTERNALS__.invoke('get_notification_log').then(r=>r.some(r=>r.test&&r.stage==='rendered'))`);
   assert.equal((await root.invoke('get_agents')).length,count);
-  checks.push('real native test-notice rendering/delivery evidence without task import');
+  checks.push('native test-notice delivery and compact 300x124 long-title layout/pointer click without task import');
   assert.equal(errors.length,0,JSON.stringify(errors));
   if(process.argv.includes('--capture')){
     await mkdir('assets/screenshots',{recursive:true});

@@ -119,6 +119,10 @@ def smoke(dmg, version, arch, evidence):
                             raise RuntimeError("GUI instance did not acquire its isolated lock")
                         windows = run(str(probe), str(child.pid)).stdout
                         (evidence / f"{cycle}.windows.json").write_bytes(windows)
+                        # CoreGraphics reports logical points, independently of Retina.
+                        if not any(abs(window["width"] - 371) <= 1 and abs(window["height"] - 360) <= 1
+                                   for window in json.loads(windows)["windows"]):
+                            raise RuntimeError("Empty dashboard did not use the compact macOS size")
                         run(str(exe), "--show", env=env)
                         if not (profile / "gui.activate").is_file() or child.poll() is not None:
                             raise RuntimeError("Second launch did not activate the existing GUI")
