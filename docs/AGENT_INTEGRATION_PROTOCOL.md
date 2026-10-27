@@ -1,10 +1,12 @@
 # 通用 Agent 事件协议 v1
 
-实现入口：`integrations/event-v1.schema.json`、`src-tauri/src/integrations/`。本协议与旧 `.status`、`--claude-event` 并行，不迁移或重写旧来源。第一版通用 transport 仅支持 Windows 本机。
+实现入口：`integrations/event-v1.schema.json`、`src-tauri/src/integrations/`。本协议与旧 `.status`、`--claude-event` 并行，不迁移或重写旧来源。标准事件和 MCP stdio 都绑定已保存的本机来源；Windows/macOS 共用实现，Linux 原生验收仍待完成，不含通用 WSL/SSH/HTTP 传输。
 
 ## 生产者输入与身份
 
 每次启动已安装的 `agent-tray.exe --integration-event --source <来源ID> --adapter <描述ID>`，通过 UTF-8 stdin 传递**一个 JSON 对象**，随后关闭 stdin。不传命令参数中的完整 JSON，不启动 WebView、托盘或 watcher。内置接收端不需要额外安装 Python/Node。
+
+macOS 使用安装后的 `TaskPulse.app/Contents/MacOS/agent-tray`，其他参数相同。MCP 入口为 `--integration-mcp --source <来源ID>`，通过换行分隔的 JSON-RPC 持续收取 `taskpulse_report` 调用；工具参数不含 `schema_version` / `agent_id`，接收器从绑定来源补充，不允许模型覆盖来源。其余 session/turn/event/request/call 关联规则与本协议一致。MCP 断开不产生结束事件，报告证据为 `self_reported`。配置和宿主边界见[接入指南](AGENT_INTEGRATION_GUIDE.md#支持本机-mcp-的桌面或-cli-宿主)。
 
 ```json
 {"schema_version":1,"agent_id":"custom-agent","session_id":"stable-session","turn_id":"stable-turn","event_id":"stable-event","kind":"turn.started","payload":{"title":"真实会话标题","project":"项目名"}}
