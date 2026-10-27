@@ -1,3 +1,5 @@
+<div align="center">
+
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
@@ -8,45 +10,47 @@
 
 **专注写代码，其他 Agent 的进展交给 TaskPulse。**
 
-Windows 桌面托盘中的多 Coding Agent 任务监控器：统一查看 Codex、Claude Code、Hermes、DeepSeek Harness 等来源的运行状态，在**明确需要回答、审批或本轮结束**时提醒你。支持部分本机、WSL 和 SSH 工作流；不修改 Agent 的模型与审批权限。
+![Windows first](https://img.shields.io/badge/Windows-first-76DFCD?style=flat-square)
+![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square)
+[![MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
 
-[品牌资源与 Social Preview](assets/brand/README.md) · [English](README.en.md) · [使用指南](docs/INSTALL.md) · [兼容性](docs/AGENT_COMPATIBILITY.md) · [架构](docs/ARCHITECTURE.md) · [提交问题](https://github.com/qingtian-4/TaskPulse/issues)
+[English](README.en.md) · [快速开始](#快速开始) · [支持的 Agent](#支持的-agent) · [路线图](#路线图) · [反馈问题](https://github.com/qingtian-4/TaskPulse/issues)
 
-> **Windows 优先 · Alpha.8 候选测试。** 当前应用版本为 0.2.0-alpha.8，尚未公开发布。Windows EXE/MSI 和 Apple Silicon DMG 通过独立 CI 生成候选安装包，供维护者按准确提交下载验收；历史 Alpha.7 草稿不包含本次修复。[候选下载与测试](docs/CANDIDATE_TESTING.md) · [构建与发布规则](docs/RELEASING.md)。
+</div>
 
-## 一眼了解
+TaskPulse 是一个多 Coding Agent 任务监控器。把本机、WSL 和 SSH 环境中的任务汇总到桌面托盘，在 Agent **需要回答、等待批准或本轮结束**时提醒你，减少反复切换窗口查看进度。
 
-![TaskPulse Windows 原生任务面板](assets/screenshots/dashboard-current.png)
+> 当前为 **0.2.0-alpha.8**，尚未公开发布。[候选安装包与测试说明](docs/CANDIDATE_TESTING.md)。Windows 优先，macOS/Linux 为实验支持；手机 App 在规划中。
 
-*真实 Tauri/WebView2 窗口截图，使用隔离合成任务输入；不是实际 Agent 运行截图，也不代表所有适配器均通过宿主验收。*
+## 看一眼产品
 
-| 多任务关注 | 明确的人机请求 | 可恢复的结果 |
-|---|---|---|
-| 按 Agent、项目与来源查看运行中的任务 | 区分需要授权、等待回答和普通工具调用 | 独立提醒、未读、固定和重启恢复 |
-| 思考、等待模型和工具执行仍算运行 | 不把日志静默、工具完成或断连猜成结束 | 采集失败时保留上次状态，标记待更新 |
+<p align="center"><img src="assets/screenshots/dashboard-current.png" alt="TaskPulse 任务面板：进行中、待处理与待查看" width="412"></p>
 
-首页聚焦**进行中、待处理、待查看**；待处理属于进行中的一部分，计数不能相加。铃铛只统计未读消息；读消息不会解除原 Agent 的请求，也不会把任务结果标为已查看。
+| 等待你回答 | 等待你批准 |
+|---|---|
+| ![待输入弹窗](assets/screenshots/notice-question-current.png) | ![待批准弹窗](assets/screenshots/notice-approval-current.png) |
+
+*真实 Tauri/WebView2 截图，使用隔离合成任务测试。弹窗提醒你回到原 Agent 处理；关闭提醒不等于批准或解决请求。[素材与复现](assets/README.md)。*
 
 <details>
-<summary>查看更多：消息中心、来源管理与独立提醒（原生截图）</summary>
+<summary>消息中心与来源管理</summary>
 
-![消息中心：消息已读与任务待处理相互独立](assets/screenshots/message-center-current.png)
+![消息中心](assets/screenshots/message-center-current.png)
 
 ![来源管理](assets/screenshots/sources-current.png)
 
-![独立测试提醒](assets/screenshots/notice-current.png)
-
-截图均为真实 WebView2 渲染；来源与任务来自**隔离合成输入**，提醒为明确标注的测试提醒。旧 Alpha.7 截图保留为历史材料。[素材与复现说明](assets/README.md)。
-
 </details>
 
-### 一个典型使用场景
+## 核心特性
 
-你在本机让 Codex 改代码，同时让 Claude Code 审查，WSL 内另一个 Codex 运行测试。无需持续切换窗口：TaskPulse 汇总任务；真实审批、提问或结果出现时提醒你返回原 Agent。**TaskPulse 不代替原 Agent 批准操作或执行代码。**
+- **统一关注面板**：按 Agent、项目和来源查看进行中、待处理、失败与未查看结果。
+- **聚合托盘状态**：待处理优先于异常、未查看结果和运行中，多任务同时执行也能发现阻塞。
+- **明确事件提醒**：思考和工具执行仍算运行；日志静默、CPU 空闲或采集失败不会被当成完成。
+- **可恢复的关注记录**：未查看结果与固定任务跨重启保留；消息已读、结果已查看、请求已解决分别管理。
 
 ## 快速开始
 
-测试者按[候选下载说明](docs/CANDIDATE_TESTING.md)选择 Windows EXE 或 Mac arm64 DMG，无需安装开发工具。以下为 Windows 源码开发方式，需要 Rust 1.89+、Bun、Microsoft C++ Build Tools 和 [Tauri 2 先决条件](https://v2.tauri.app/start/prerequisites/)（含 WebView2）；Mac 开发见[专用指南](docs/MACOS_DEVELOPMENT.md)。
+测试者从[候选下载说明](docs/CANDIDATE_TESTING.md)获取 Windows EXE/MSI 或 Apple Silicon DMG。源码开发需要 Bun、Rust 1.89+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)：
 
 ```powershell
 git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
@@ -55,49 +59,43 @@ bun install --frozen-lockfile
 bun run tauri dev
 ```
 
-启动后：打开托盘中的**来源管理** → 选择/添加 Agent 来源与项目范围 → **保存并生效** → 在原 Agent 中开始任务 → 使用 `Ctrl+Shift+A` 查看关注面板。测试读取或测试提醒成功，不等于真实 Agent 生命周期已验收。WSL / SSH 来源需要分别启用；不会自动启动已停止的 WSL 或连接全部服务器。
+启动后打开 **来源管理 → 选择 Agent 与项目 → 保存并生效**，然后在原 Agent 中开始任务。使用 `Ctrl+Shift+A` 打开任务面板。
 
-[完整安装与配置](docs/INSTALL.md) · [面板使用说明](docs/PRODUCT_DASHBOARD.md) · [WSL 指南](docs/WSL_CODEX.md) · [排障与开发](docs/DEVELOPMENT.md)
+[安装与配置](docs/INSTALL.md) · [WSL 指南](docs/WSL_CODEX.md) · [Mac 开发](docs/MACOS_DEVELOPMENT.md) · [排障](docs/DEVELOPMENT.md)
 
-## 支持情况
+## 支持的 Agent
 
-| 来源 | 已有能力 | 限制 |
-|---|---|---|
-| **Codex** | 本机原生会话；独立 WSL 来源；SSH 会话采集 | 大历史日志首次追赶可能需要时间；WSL 需 Python 3，且仅采集已运行的发行版 |
-| **Claude Code** | 本机记录；可选、经用户确认的 Hook | WSL/SSH 无专用 Provider |
-| **Hermes** | 本机 SQLite 与运行租约 | 租约消失不等于任务完成 |
-| **DeepSeek Harness** | Desktop/CLI，及独立 WSL 来源 | 本机账号额度不代表远程额度 |
-| **Gemini CLI** | 基础 Hook / 进程扫描 | 非完整原生会话支持 |
-| **Kimi / TRAE / ZCode** | 部分声明式映射、fixture 测试 | 尚未完成真实宿主 Hook 验收 |
-| **WorkBuddy** | 候选入口 | 尚无事件适配器 |
-| **自定义 Agent** | 标准事件 v1 / 声明式 Manifest | 仅已有证据支持的能力；不提供通用可执行插件加载器 |
-| **普通代码运行** | SSH tmux / `tp-run` | 本机/WSL/SSH 统一运行工作流尚未交付；前台退出不证明后台、容器或 Slurm 任务结束 |
+| 来源 | 当前接入方式 |
+|---|---|
+| Codex | 本机原生会话、独立 WSL 来源、已配置的 SSH 会话 |
+| Claude Code | 本机只读记录、用户显式启用的官方 Hook |
+| Hermes / DeepSeek Harness | 本机原生数据；DeepSeek Harness 另有独立 WSL 来源 |
+| 豆包桌面（实验） | Windows 原生运行检查点；审批未适配，结束提醒不保证 |
+| Gemini CLI / SSH tmux / `tp-run` | 兼容 Hook、进程扫描或运行包装器 |
+| Kimi / TRAE / ZCode | 部分事件映射，fixture-tested，真实宿主验收待完成 |
+| 其他 Agent | 标准事件、声明式 Manifest；支持本机 MCP 的宿主可主动上报 |
 
-**“检测到来源”不等于“能可靠判定本轮结束”。** Kimi / TRAE / ZCode 当前为 **fixture-tested**，不代表 native-tested。Linux/macOS 仅提供可选实验构建，不具有 Windows 原生验收等级。更细的能力与不支持项见 [Agent 兼容性文档](docs/AGENT_COMPATIBILITY.md)。
+各来源的环境、事件覆盖与验证程度不同，详见[兼容性矩阵](docs/AGENT_COMPATIBILITY.md)。想接入更多 Agent，请看[接入指南](docs/AGENT_INTEGRATION_GUIDE.md)。
 
 ## 工作原理
 
-![TaskPulse 系统架构](assets/diagrams/taskpulse-architecture.svg)
+![TaskPulse 中文架构图](assets/diagrams/taskpulse-architecture-zh.svg)
 
-1. **Provider 采集**：独立 Worker 获取各来源的日志、Hook、SQLite 或远程只读证据，保留来源身份、采集健康和新鲜度。
-2. **统一状态与关注**：通过来源/项目过滤、TaskStore、AttentionTracker 管理 Session/Turn、待处理请求、未读与固定。
-3. **可信通知**：TransitionEngine 只对可信的状态迁移产生提醒；标准事件通道使用 Journal、Checkpoint、Outbox 支撑有序恢复与去重。
-4. **桌面展示**：Rust / Tauri 2 + Svelte 5 显示任务面板、独立消息中心、托盘状态和提醒；消息已读、结果待查看与请求待处理各自独立，stale 不冒充新的运行或完成事实。
+**采集来源 → 统一任务状态 → 筛选需要关注的任务 → 托盘、面板与事件提醒。**
 
-没有 TaskPulse 云账号或遥测服务。设置与关注通常保存在 `~/.taskpulse/`；本地活动和诊断可能包含路径、命令片段，请脱敏后分享。TaskPulse 不自动安装真实 Hook 或放宽审批策略。截图复现与录屏方案见 [演示说明](docs/DEMO_RECORDING_PLAN.md)。
+基于 Rust、Tauri 2 和 Svelte 5。当前状态保存在本机，无 TaskPulse 云账号要求；来源失联保留不确定状态，真实审批仍由原 Agent 处理。[详细架构](docs/ARCHITECTURE.md)。
 
-[详细架构](docs/ARCHITECTURE.md) · [第三方接入](docs/AGENT_INTEGRATION_GUIDE.md) · [事件协议](docs/AGENT_INTEGRATION_PROTOCOL.md)
+## 路线图
 
-## 当前状态与下一步
+- [ ] **手机 App**：在手机查看已配对电脑的任务，接收待回答、待批准、失败和完成提醒。
+- [ ] **更多 Coding Agent**：扩展官方事件、原生数据和 MCP 接入口，逐个补齐真实宿主验证。
+- [ ] **跨设备体验**：设备配对、断线状态、通知去重与阅读状态同步。
+- [ ] **桌面稳定性**：完善安装升级、多屏 DPI 与长期运行体验。
 
-- **已有**：代码、自动化测试、来源管理、Windows 原生 UI 验收，以及 Alpha.7 NSIS/MSI **候选安装器的 CI 级测试**。
-- **尚待公开发行验收**：在干净的 Windows 用户环境测试安装、升级、卸载；至少两类真实 Agent 的完整新任务/审批/通知链路与长时间稳定性；整理脱敏演示录屏。
-- **不会冒充已完成**：不把合成截图当真实宿主验收，不把没有证据的结束或输入请求当事实，不把 Draft Release 当公开下载。
+以上为规划，手机端和跨设备通知尚未实现。[需求范围与阶段划分](docs/ROADMAP.md)。
 
-[发布清单](docs/OPEN_SOURCE_CHECKLIST.md) · [安全审查](docs/internal/reports/SECURITY_AUDIT_2026-10.md) · [历史修复与验收](docs/internal)
+## 贡献与许可
 
-## 贡献与来源
+欢迎提交问题、文档和适配器改进。代码通过 **功能分支 → Pull Request → 检查与审查 → 合入 main** 协作。[贡献指南](CONTRIBUTING.md) · [合入 main 的说明](docs/GIT_WORKFLOW.md) · [安全反馈](SECURITY.md)。
 
-欢迎提交 Issue、文档修正和适配器贡献。提交问题时请注明操作系统、Agent/宿主版本、来源类型和脱敏复现步骤，**不要上传会话正文、私有路径或凭据**。[CONTRIBUTING](CONTRIBUTING.md) · [SECURITY](SECURITY.md) · [Code of Conduct](CODE_OF_CONDUCT.md)。
-
-本项目基于 [sprklai/agenttray](https://github.com/sprklai/agenttray) 二次开发，保留上游版权、致谢和历史，使用 [MIT License](LICENSE)。
+基于 [sprklai/agenttray](https://github.com/sprklai/agenttray) 开发，保留上游版权与历史，采用 [MIT License](LICENSE)。

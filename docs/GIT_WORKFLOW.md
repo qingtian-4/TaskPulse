@@ -1,6 +1,27 @@
 # TaskPulse 的 Git 与 PR 入门
 
-## 本次首页为何仍显示 AgentTray
+## 本轮 README 如何进入 main（2026-10-27）
+
+已通过 GitHub API 核对远端 `main` 为 `fe48e69`。本轮 README 整理开始时，
+`codex/p0-remote-acceptance` 为 `887a7f7`，包含 main，另外有 9 个提交，涉及候选文档、
+macOS 窗口、MCP、豆包与品牌集成；本轮 README 提交在其上继续。
+
+**推荐通过 PR 合入。PR 是审查入口，merge 是更新 main 的动作，不是二选一。**
+
+```text
+base：main                         ← 接收改动
+head：codex/p0-remote-acceptance   ← 提供改动
+```
+
+先提交并推送功能分支，再在 GitHub 创建上述方向的 PR，审查全部差异，等待 Windows Quality
+和 Security 检查通过，然后由维护者合并。合并后 GitHub 默认首页才会展示新版 README。
+本次编辑仅创建本地提交，没有替维护者推送、创建 PR、合并或发布。
+
+整分支 PR 会包含上述全部未合入提交。若只想更新首页，应从最新 main 创建专门文档分支，
+选择 README 提交并带齐依赖的 Logo、截图和说明文件；不能假设最后一个提交已经自带所有资源。
+不要将 main 合入功能分支后，误以为 main 已经收到这些修改。合入源码也不会自动发布新安装包。
+
+## 历史：首页为何仍显示 AgentTray（2026-10-11）
 
 截至 2026-10-11 排查时，仓库 `qingtian-4/TaskPulse` 是独立的 GitHub 仓库
 （并非 GitHub 平台标记的 fork），但保留了 AgentTray 的 Git 历史：
@@ -27,7 +48,7 @@ TaskPulse。贡献统计可能有缓存，原作者仍应保留，不需要删�
 `commit` 保存到本地 → `push` 上传该分支 → PR 提议合并 → 检查和审阅 →
 `merge` 更新目标分支。前两个步骤不会自动替代后两个步骤。
 
-### 本次 PR 的方向
+### 当时 PR 的方向
 
 ```text
 仓库：qingtian-4/TaskPulse（你的仓库）

@@ -1,6 +1,6 @@
 /** Native WebView2 product acceptance. Isolated synthetic public inputs, NOT Agent-host certification.
  * Run: bun scripts/native-product-smoke.ts --exe <unused-built-exe>
- * --capture writes three public PNGs only after privacy/layout assertions. Never installs Hooks. */
+ * --capture writes public PNGs only after privacy/layout assertions. Never installs Hooks. */
 import assert from 'node:assert/strict';
 import {mkdir,copyFile} from 'node:fs/promises';
 import {resolve,join,dirname} from 'node:path';
@@ -307,6 +307,29 @@ try{
   await root.wait(`__TAURI_INTERNALS__.invoke('get_notification_log').then(r=>r.some(r=>r.test&&r.stage==='rendered'))`);
   assert.equal((await root.invoke('get_agents')).length,count);
   checks.push('native test-notice delivery and compact 300x124 long-title layout/pointer click without task import');
+  await root.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
+  // Public screenshots of actual pending requests through the standard-event
+  // pipeline, in this isolated profile. Never inject/rewrite the rendered DOM.
+  for(const [kind,title,label] of [
+    ['question','确认下一步测试范围（合成示例）','等待输入'],
+    ['approval','批准运行回归测试（合成示例）','需要授权']
+  ]){
+    const session='readme-'+kind,requestId=session+'-request';
+    event(session,'turn.started',{title,project:'README 演示'});
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.session_id==='${session}'&&t.status==='running'))`);
+    const id=(await root.invoke('get_agents')).find((t:any)=>t.session_id===session).id;
+    event(session,'input.requested',{request_kind:kind},{request_id:requestId});
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.task_id==='${id}')`);
+    await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(label)})`);
+    assert.equal((await root.invoke('get_task_notice')).current.auto_dismiss_ms,null);
+    await screenshot(notice,'notice-'+kind+'-current',320,132);
+    await root.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
+    const pending=(await root.invoke('get_agents')).find((t:any)=>t.id===id);
+    assert.equal(pending.status,'waiting_input');assert.equal(pending.input_request_id,requestId);
+    event(session,'input.resolved',{}, {request_id:requestId});
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${id}'&&t.status==='running'))`);
+  }
+  checks.push('native question and approval screenshots: sticky request, dismissal preserves request ID, only matching resolution resumes running');
   // Drive the actual MCP entrypoint, then observe its events through the GUI's
   // real provider/store/attention pipeline. All input belongs to this test home.
   const mcpServer=mcpConfig.mcpServers.taskpulse;
@@ -347,7 +370,7 @@ try{
   assert.equal(errors.length,0,JSON.stringify(errors));
   if(process.argv.includes('--capture')){
     await mkdir('assets/screenshots',{recursive:true});
-    for(const name of ['dashboard-current','sources-current','notice-current'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
+    for(const name of ['dashboard-current','sources-current','notice-current','notice-question-current','notice-approval-current'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
   }
   const report={passed:true,checks,layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
