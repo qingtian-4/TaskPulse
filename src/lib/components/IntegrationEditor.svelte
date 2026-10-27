@@ -3,14 +3,17 @@
   import { invoke } from '@tauri-apps/api/core';
   import type { MonitorSource } from '$lib/types';
   type Capability={support:string;channel:string;validation:string;tested_versions:string[];limitations:string};
-  type Manifest={adapter_id:string;agent_id:string;display_name:string;product_form:string;official_sources:string[];supported_versions:string[];capabilities:Record<string,Capability>};
+  type Manifest={adapter_id:string;agent_id:string;display_name:string;product_form:string;systems:string[];official_sources:string[];supported_versions:string[];capabilities:Record<string,Capability>};
   type Preview={token:string;source_id:string;path:string;action:string;entries:unknown[];decoded_command:string;notes:string[]};
   let {source,dirty,changed}:{source:MonitorSource;dirty:boolean;changed:()=>void}=$props();
   let catalog=$state<Manifest[]>([]), text=$state(''), message=$state(''), error=$state(''), busy=$state(false);
   let preview=$state<Preview|null>(null), confirmed=$state(false), diagnostic=$state(''), exported=$state('');
   const adapter=$derived(catalog.find(m=>m.adapter_id===source.integration?.adapter_id));
   let advanced=$state(false);
-  const installable=$derived(['kimi-code-cli','trae-cn-ide','zcode-desktop'].includes(source.integration?.adapter_id??''));
+  let platform=$state(''), mcpConfig=$state('');
+  const standard=$derived(source.integration?.adapter_id==='standard-events');
+  const installable=$derived(platform==='windows' && ['kimi-code-cli','trae-cn-ide','zcode-desktop'].includes(source.integration?.adapter_id??''));
+  const platformName=$derived(({windows:'Windows',macos:'macOS',linux:'Linux'} as Record<string,string>)[platform]??'当前系统');
   const labels:Record<string,string>={session_discovery:'会话发现',title:'原生标题',project:'项目',turn_start:'执行开始',phase:'运行阶段',final_end:'最终本轮结束',failure:'本轮失败',approval_request:'批准请求',approval_resolution:'批准解除',question:'提问',focus:'原生跳转'};
   const supports:Record<string,string>={explicit:'明确事件',inferred:'受限关联',unsupported:'不支持'};
   const grades:Record<string,string>={documented:'文档核验', 'fixture-tested':'合成测试', 'native-tested':'实机验证'};
@@ -18,13 +21,15 @@
   function select(id:string){
     const m=catalog.find(m=>m.adapter_id===id);if(!m)return;
     source.integration={agent_id:m.agent_id,adapter_id:m.adapter_id,transport:'local',accept_since_ms:0};
-    source.name=m.display_name;preview=null;confirmed=false;changed();
+    source.name=m.display_name;preview=null;confirmed=false;mcpConfig='';changed();
   }
   async function action(fn:()=>Promise<void>){busy=true;error='';message='';try{await fn();}catch(e){error=String(e);}finally{busy=false;}}
   async function importManifest(){await action(async()=>{const m=await invoke<Manifest>('integration_import',{text});await load();message='描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。';if(!source.integration?.accept_since_ms)select(m.adapter_id);});}
   async function makePreview(remove:boolean){await action(async()=>{preview=await invoke<Preview>('integration_preview',{sourceId:source.id,remove});confirmed=false;});}
   async function apply(){if(!preview||!confirmed)return;await action(async()=>{message=await invoke<string>('integration_apply',{token:preview!.token,confirmed:true});preview=null;confirmed=false;});}
-  onMount(()=>{void load().catch(e=>error=String(e));});
+  async function exportMcp(){await action(async()=>{const result=await invoke<{mcp_config:unknown}>('integration_export',{sourceId:source.id});if(!result.mcp_config)throw Error('请新建标准事件来源');mcpConfig=JSON.stringify(result.mcp_config,null,2);});}
+  $effect(()=>{if(dirty)mcpConfig='';});
+  onMount(()=>{void Promise.all([load(),invoke<{platform:string}>('integration_environment').then(e=>platform=e.platform)]).catch(e=>error=String(e));});
 </script>
 
 <div class="integration-editor" data-integration-editor>
@@ -32,7 +37,23 @@
   <p>只关注确认后的新执行。Agent 身份与所用模型分开；这里没有通用进程猜测或任意插件代码。</p>
   <label>Agent / 适配描述<select aria-label="Agent 适配描述" value={source.integration?.adapter_id??'standard-events'} disabled={!!source.integration?.accept_since_ms} onchange={e=>select(e.currentTarget.value)}>{#each catalog as m}<option value={m.adapter_id}>{m.display_name}</option>{/each}</select></label>
   {#if source.integration}
-    <label>传输环境<select aria-label="通用事件传输" value="local"><option value="local">Windows 本机</option><option disabled>WSL（尚未实现）</option><option disabled>SSH（尚未实现）</option></select></label>
+    <label>传输环境<select aria-label="通用事件传输" value="local"><option value="local">{platformName} 本机</option><option disabled>WSL（尚未实现）</option><option disabled>SSH（尚未实现）</option></select></label>
+  {/if}
+  {#if standard}
+    <section class="universal tp-surface" aria-label="未适配 Agent 接入">
+      <h4>列表里没有你的 Agent？</h4>
+      <p>把来源名称改成实际宿主名称，再选择它提供的接入口。无需为每个品牌重新发布 TaskPulse。</p>
+      <ol>
+        <li><strong>支持自定义本机 MCP</strong>：保存来源后生成配置，合并到宿主已有的 MCP 设置；连接后由宿主调用 <code>taskpulse_report</code> 上报任务。</li>
+        <li><strong>支持 Hook / API / 脚本</strong>：导出标准接入说明，在真实生命周期事件发生时转发。</li>
+        <li><strong>没有开放接入口</strong>：暂时无法可靠监控其中的任务。打开桌面应用或网页不等于任务正在运行，也不能证明需要批准或已经完成。</li>
+      </ol>
+      <p>主动上报可能漏报，接收成功不等于完整自动采集；优先使用可用的原生日志或 Hook。豆包桌面的 MCP / 插件入口需按具体版本核对，本项目尚未完成豆包实机适配。</p>
+      <div class="actions"><button class="tp-btn" disabled={busy||dirty} onclick={exportMcp}>生成本机 MCP 配置</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);advanced=true;})}>导出标准接入说明</button></div>
+      {#if mcpConfig}<pre aria-label="MCP 接入配置">{mcpConfig}</pre><button class="tp-btn" onclick={()=>action(async()=>{await navigator.clipboard.writeText(mcpConfig);message='MCP 配置已复制。请合并到宿主配置；TaskPulse 没有改动任何宿主设置。';})}>复制 MCP 配置</button><p>支持 stdio 的 MCP 宿主可使用；仅支持远程 URL 或预置连接器的宿主不能直接粘贴这份配置。应用更新后若路径变化，请重新生成。</p>{/if}
+    </section>
+  {:else if adapter && platform && !adapter.systems.includes(platform)}
+    <p class="warning">该适配描述尚未支持 {platformName}；本平台不提供新增 Hook 操作。可新建“标准事件”来源接入。</p>
   {/if}
   <p class="warning">这些能力按项标注。文档或合成测试通过 ≠ 当前宿主版本实机通过；Stop 不会自动产生完成提醒。</p>
   {#if adapter}
@@ -49,7 +70,7 @@
   <div class="actions">
     <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{diagnostic=JSON.stringify(await invoke('integration_diagnose',{sourceId:source.id}),null,2);})}>接入诊断</button>
     <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);})}>导出标准接入说明</button>
-    {#if installable}<button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(false)}>预览新增 Hook</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(true)}>预览撤销 Hook</button>{:else}<p>此描述无已核验安装 recipe，仅提供标准事件接入 / 导出。WorkBuddy 桌面 Hook 载荷待核验。</p>{/if}
+    {#if installable}<button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(false)}>预览新增 Hook</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(true)}>预览撤销 Hook</button>{:else}<p>当前平台没有此描述的已核验 Hook 安装方式。标准事件 / MCP 需要宿主主动接入，不会自动安装。</p>{/if}
   </div>
   {#if dirty}<p>请先保存来源配置，再测试或生成配置差异。修改既有 Agent 身份请新建来源。</p>{/if}
   {#if preview}
@@ -69,6 +90,7 @@
 </div>
 
 <style>
+  .universal{padding:12px;margin:12px 0}.universal h4{margin:0;color:var(--tp-text)}.universal ol{padding-left:20px;font-size:12px;color:var(--tp-muted);line-height:1.7}.universal li{margin:8px 0}
   .integration-editor{border-top:1px solid var(--tp-border);border-bottom:1px solid var(--tp-border);margin:17px 0 12px;padding:15px 0 8px;font-size:11px;color:var(--tp-muted)}
   h3{font-size:12px;font-weight:600;color:var(--tp-text);margin:0 0 8px}
   p{line-height:1.8;overflow-wrap:anywhere;margin:8px 0}label{display:grid;gap:6px;margin:12px 0;color:var(--tp-muted)}

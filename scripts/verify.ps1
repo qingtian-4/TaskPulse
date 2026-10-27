@@ -74,6 +74,8 @@ try {
     if ($Frontend) {
         & $bun scripts/integration-bridge-smoke.ts --exe $taskPulseVerifyExe
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $taskPulsePython scripts/mcp-smoke.py --exe $taskPulseVerifyExe --out (Join-Path $taskPulseVerifyTarget 'mcp-smoke.json')
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 
 }

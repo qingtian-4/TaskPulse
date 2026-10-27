@@ -56,6 +56,10 @@ R2 修复不只改表格：mapper 不再把无可靠轮次的终态赋给最新 
 
 通用标准协议可显式表达全部生命周期，但证据为 **self_reported**，不等同于上述产品官方支持。CLI 接收/TaskPulse GUI 已测是平台能力，不是替宿主证明其 payload。
 
+2026-10-27 新增来源绑定的本机 MCP stdio 接入口：未列出的宿主若允许自定义本机 MCP，可使用同一个 `taskpulse_report` 工具，无需新增品牌枚举。它属于主动上报，可能漏报，不能自动观察宿主审批或替代可靠 Hook。Windows/macOS 共用接收器；Linux 原生验收仍待完成。内置三款 Hook 写入 recipe 仍仅支持 Windows，在其他平台禁止新增，撤销自有登记仍可执行。
+
+豆包桌面目前**没有 TaskPulse 原生适配或实机 MCP 验收**。官方开放平台的插件 / MCP 能力不能推广为任意版本都开放本机 stdio 配置。没有官方事件、可读日志或可用插件接口时，只能保持尚未接入，不制造运行/完成/批准状态。接入步骤见[通用指南](AGENT_INTEGRATION_GUIDE.md#支持本机-mcp-的桌面或-cli-宿主)。
+
 ## 官方依据
 
 - [Kimi Code CLI Hooks](https://www.kimi.com/code/docs/kimi-code-cli/customization/hooks.html)：新版 `.kimi-code`、TurnStarted、审批与 Stop/中断。不要混用旧 MoonshotAI/kimi-cli 的 `.kimi` 与 beta 事件。

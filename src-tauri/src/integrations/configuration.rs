@@ -414,6 +414,14 @@ pub fn prepare(source_id: &str, remove: bool) -> Result<Preview, String> {
     if manifest::builtin(&m.adapter_id).is_none() {
         return Err("imported_manifest_cannot_install_hooks".into());
     }
+    if !remove
+        && !m
+            .systems
+            .iter()
+            .any(|system| system == std::env::consts::OS)
+    {
+        return Err("hook_recipe_not_available_on_this_platform".into());
+    }
     let exe = if remove {
         existing.as_ref().map(|i| i.executable.clone())
     } else {

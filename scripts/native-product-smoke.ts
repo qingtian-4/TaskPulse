@@ -241,6 +241,14 @@ try{
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='测试事件接收（不创建任务）').click()`);
   await management.wait(`document.body.textContent.includes('尚未验证真实 Agent')`);
   assert.equal((await root.invoke('get_agents')).length,count);
+  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='生成本机 MCP 配置').click()`);
+  await management.wait(`!!document.querySelector('[aria-label="MCP 接入配置"]')`);
+  const mcpConfig=await management.evaluate(`JSON.parse(document.querySelector('[aria-label="MCP 接入配置"]').textContent)`);
+  assert.equal(resolve(mcpConfig.mcpServers.taskpulse.command),resolve(exe));
+  assert.deepEqual(mcpConfig.mcpServers.taskpulse.args,['--integration-mcp','--source',source.id]);
+  assert.equal(resolve(mcpConfig.mcpServers.taskpulse.env.TASKPULSE_HOME),resolve(home));
+  assert.equal((await root.invoke('get_agents')).length,count,'Export must not create a task');
+  checks.push('native MCP configuration export binds the saved source and isolated profile without host writes or fake tasks');
   await checkScales(management,'sources',1040,900);
   await management.send('Emulation.setDeviceMetricsOverride',{width:640,height:600,deviceScaleFactor:2,mobile:false});
   await Bun.sleep(150);
@@ -268,6 +276,43 @@ try{
   await root.wait(`__TAURI_INTERNALS__.invoke('get_notification_log').then(r=>r.some(r=>r.test&&r.stage==='rendered'))`);
   assert.equal((await root.invoke('get_agents')).length,count);
   checks.push('native test-notice delivery and compact 300x124 long-title layout/pointer click without task import');
+  // Drive the actual MCP entrypoint, then observe its events through the GUI's
+  // real provider/store/attention pipeline. All input belongs to this test home.
+  const mcpServer=mcpConfig.mcpServers.taskpulse;
+  const reportMcp=(kind:string,eventId:string,extra:Record<string,unknown>={})=>{
+    const messages=[
+      {jsonrpc:'2.0',id:1,method:'initialize',params:{protocolVersion:'2025-11-25',capabilities:{},clientInfo:{name:'native-public-fixture',version:'1'}}},
+      {jsonrpc:'2.0',method:'notifications/initialized'},
+      {jsonrpc:'2.0',id:2,method:'tools/call',params:{name:'taskpulse_report',arguments:{session_id:'mcp-native-public',turn_id:'mcp-turn',event_id:eventId,kind,...extra}}}
+    ];
+    const child=spawnSync(mcpServer.command,mcpServer.args,{input:messages.map(m=>JSON.stringify(m)+'\n').join(''),encoding:'utf8',env:{...env,...mcpServer.env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:''},windowsHide:true,timeout:10000});
+    if(child.error)throw child.error;assert.equal(child.status,0,child.stderr);
+    const replies=child.stdout.trim().split('\n').map(line=>JSON.parse(line));
+    assert.equal(replies.length,2);assert.equal(replies[1].result.isError,false,child.stdout);
+  };
+  const mcpTask=`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.find(t=>t.session_id==='mcp-native-public'))`;
+  reportMcp('turn.started','mcp-start',{payload:{title:'公开合成 MCP 任务',project:'MCP Demo'}});
+  await root.wait(`${mcpTask}.then(t=>t?.status==='running')`);
+  const mcpId=(await root.evaluate(mcpTask)).id;
+  reportMcp('input.requested','mcp-a',{request_id:'request-a',payload:{request_kind:'approval'}});
+  reportMcp('input.requested','mcp-b',{request_id:'request-b',payload:{request_kind:'question'}});
+  reportMcp('input.resolved','mcp-resolve-a',{request_id:'request-a'});
+  reportMcp('phase.changed','mcp-thinking',{payload:{phase:'thinking'}});
+  await root.wait(`${mcpTask}.then(t=>t?.status==='waiting_input'&&t.input_request_id==='request-b')`);
+  reportMcp('input.resolved','mcp-resolve-b',{request_id:'request-b'});
+  await root.wait(`${mcpTask}.then(t=>t?.status==='running')`);
+  reportMcp('turn.completed','mcp-end');
+  await root.wait(`${mcpTask}.then(t=>t?.waiting_reason==='turn_ended'&&t.unread)`);
+  // Viewed terminal tasks leave attention unless explicitly pinned.
+  await root.invoke('update_task_attention',{id:mcpId,action:'pin',pinned:true});
+  await root.invoke('update_task_attention',{id:mcpId,action:'viewed'});
+  reportMcp('turn.completed','mcp-end');
+  reportMcp('session.renamed','mcp-rename',{payload:{title:'公开合成 MCP 任务 · 已改名'}});
+  await root.wait(`${mcpTask}.then(t=>t?.name==='公开合成 MCP 任务 · 已改名')`);
+  const observedMcp=await root.evaluate(mcpTask);
+  assert.equal(observedMcp.id,mcpId);assert.equal(observedMcp.unread,false);
+  assert.equal(observedMcp.evidence_channel,'self_reported');
+  checks.push('real MCP events reach native task UI: stable identity, two explicit requests, matching resolution, thinking remains blocked, explicit end, rename and duplicate after viewed');
   assert.equal(errors.length,0,JSON.stringify(errors));
   if(process.argv.includes('--capture')){
     await mkdir('assets/screenshots',{recursive:true});

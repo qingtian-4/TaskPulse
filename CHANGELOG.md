@@ -4,6 +4,10 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 ## Unreleased
 
+- Add a source-bound local MCP stdio bridge and configuration export for unlisted
+  Agent hosts. Reports remain self-reported; connecting alone never creates tasks,
+  disconnecting never completes them, and unsupported desktop hosts stay unverified.
+
 - Reduce macOS dashboard dimensions by 10% and use a 300×124 reminder. Tighten
   narrow-layout spacing while retaining body text size and Windows defaults.
 

@@ -9,6 +9,7 @@ import plistlib
 import re
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
@@ -106,6 +107,9 @@ def smoke(dmg, version, arch, evidence):
                 raise RuntimeError(f"Version mismatch: {found}")
             result["checks"].extend(["strict ad-hoc signature", "bundle identity and native architecture",
                                      "packaged hook resources", "actual installed executable version"])
+            run(sys.executable, str(Path(__file__).with_name("mcp-smoke.py")), "--exe", str(exe),
+                "--out", str(evidence / "mcp.json"), env=env)
+            result["checks"].append("installed app MCP stdio source binding and lifecycle smoke")
             for cycle in ("first-launch", "restart"):
                 with (evidence / f"{cycle}.stdout.txt").open("wb") as out, (evidence / f"{cycle}.stderr.txt").open("wb") as err:
                     child = subprocess.Popen([str(exe), "--show"], env=env, stdout=out, stderr=err)

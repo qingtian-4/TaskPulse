@@ -33,6 +33,9 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if let Some(code) = integrations::mcp::cli(&std::env::args().collect::<Vec<_>>()) {
+        std::process::exit(code);
+    }
     if let Some(code) = integrations::bridge::cli(&std::env::args().collect::<Vec<_>>()) {
         std::process::exit(code);
     }

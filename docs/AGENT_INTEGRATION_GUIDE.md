@@ -1,6 +1,6 @@
 # 接入其他 Coding Agent
 
-这是**部分宿主适配 + 标准事件平台**，不是“任何 Agent 安装后自动全面支持”。先看[兼容矩阵](AGENT_COMPATIBILITY.md)，再选择接入方式。通用 transport 第一版仅 Windows 本机；现有 Codex WSL/SSH 来源不受影响。
+这是**部分宿主适配 + 标准事件 / MCP 接入平台**，不是“任何 Agent 安装后自动全面支持”。先看[兼容矩阵](AGENT_COMPATIBILITY.md)，再选择接入方式。标准事件 / MCP 使用本机进程通信，Windows、macOS 共用实现；Linux 有相同入口但本轮未做 Linux 原生验收。WSL/SSH 通用事件传输尚未实现；现有 Codex WSL/SSH 来源不受影响。
 
 ## 从界面接入
 
@@ -26,6 +26,24 @@
 删除来源后仍可在来源页下方“宿主 Hook 登记”查看“来源已移除”的登记，点击“预览撤销已登记 Hook”，核对实际自有条目并勾选确认。安装登记独立于来源配置；旧版本只有 hook-ownership.json 的安装也支持恢复撤销。不会自动改写宿主文件，不会恢复整份旧备份。文件在预览后有变化时必须重新预览。
 
 ## 没有内置品牌时
+
+### 支持本机 MCP 的桌面或 CLI 宿主
+
+1. 新建“其他 Agent · 通用事件”，保留“其他 Agent（标准事件）”，把来源名称改为实际宿主名称，保存。每个宿主单独建来源，便于停用和项目范围隔离。
+2. 点击“生成本机 MCP 配置”并复制，将其中的 `taskpulse` 条目合并到宿主已有的 `mcpServers`，保留其他服务。配置使用当前已安装应用的绝对路径；macOS 指向 `.app/Contents/MacOS/agent-tray`，不要求安装 Python、Bun 或另一个服务。
+3. 在宿主里确认并重载 MCP，验证能发现 `taskpulse_report`。TaskPulse 只导出配置，不自动修改宿主、不安装 Hook、不改变批准策略。
+4. 宿主或自动化框架在实际生命周期节点调用该工具。若只能让模型主动调用，应把它视为**可能漏报的协作上报**；MCP 连接本身不能自动观察宿主的对话、系统批准弹窗或最终结束。可靠的原生 Hook/日志优先于提示词要求模型上报。
+5. 先调用 `kind=connection.test` 验证接收（不会创建任务），再执行一次可核对的真实任务；仅工具列表可见或连接成功不能记为实机适配通过。
+
+工具参数沿用标准事件的 `session_id`、`turn_id`、`event_id`、`kind`、`request_id`、`call_id` 和最小 `payload`，**不要传 `agent_id`、来源 ID 或凭据**；它们由保存的来源绑定。会话 ID 跨轮次稳定，轮次 ID 每次新执行变化，事件 ID 对同一次事实/重试保持不变。每个批准/提问单独使用 request ID，只解除对应请求。只有明确的 `turn.completed` / `turn.failed` / `turn.interrupted` 能结束该轮；进程退出、MCP 断开和工具返回均不能代替结束事件。
+
+支持的 stdio 协议版本为 `2025-06-18`、`2025-11-25`；不开放 HTTP 端口，也不提供命令执行、批准、文件读取或其他来源任务查询工具。工具只接收来源绑定的最小状态事实，标记为 `self_reported`。来源停用后，已经运行的 MCP 子进程也会拒收新事件。来源重新命名不改变任务身份。
+
+豆包工作开放平台列出了插件 / MCP 接入方式，但这**不证明所有豆包桌面版本支持任意自定义本机 stdio 服务**。若客户端只允许远程 URL、预置连接器或审核后的插件，这份本机配置不能直接使用，需要其正式插件通道及对应宿主验证；目前不标记为“已支持豆包”。没有开放接入口的桌面/网页助手，不能通过进程名、截图、CPU 或静默时间可靠补出完整任务生命周期。
+
+依据：[MCP stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[MCP 生命周期与版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)、[豆包开放平台](https://open.doubao.com/)。这些协议资料不等于 TaskPulse 已通过真实宿主验收。
+
+### 支持 Hook / API / 脚本事件的宿主
 
 如果工具能产生[标准 v1 事件](AGENT_INTEGRATION_PROTOCOL.md)，新建来源选择“标准事件”，点击“导出标准接入说明”，使用其中**当前来源绑定的 argv 和 agent_id**。将事件写到 exe stdin 并关闭输入流。生产者应使用其真实 session/turn/event/request/call ID；不要让模型仅靠提示词自报结束来冒充官方生命周期。
 
