@@ -68,7 +68,7 @@ class InstallerTests(unittest.TestCase):
     def run_script(self, *args, success=True):
         self.sync()
         result = subprocess.run(['bash', str(SCRIPT), *args], cwd=self.root, env=self.environment,
-                                capture_output=True, text=True, timeout=60)
+                                capture_output=True, text=True, encoding="utf-8", errors="backslashreplace", timeout=60)
         if success: self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else: self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout + result.stderr
