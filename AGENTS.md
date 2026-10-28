@@ -36,8 +36,7 @@ Important locations:
 - `src/routes/+page.svelte` and `src/lib/components/`: popup UI.
 - `src/routes/manage/`: independent management window; permissions include both `popup` and `management`.
 - `docs/PRODUCT_DASHBOARD.md`: task-first presentation, source configuration, blocking vs normal end, notification rules.
-- `docs/ATTENTION_LIST.md`: attention-list product rules and provider degradation behavior.
-- `docs/ARCHITECTURE.md`: detailed backend architecture.
+- Lifecycle and provider degradation rules live below and in the corresponding backend tests; detailed maintainer notes stay local.
 
 Stable session/thread IDs are task identity. A title rename updates presentation only; it must not create a new task, reset lifecycle state, or send another notification. Project and task title remain separate model fields.
 
@@ -135,7 +134,7 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - Keep unrelated user changes intact. Start new feature/fix work on a short-lived `codex/*` branch from the latest `origin/main`. Review the code, run relevant tests and required checks, verify the app runs, then create small logical commits. Never commit a known failing change as a completed task.
 - The maintainer's standing workflow authorizes pushing completed repository work, opening a PR to `main`, merging after review and successful Windows quality/Security checks for the current PR head, then deleting the completed local/remote branch and returning to an updated local `main`. A later task-specific instruction can narrow this scope. This does not authorize releases, tags, installing Agent hooks, bypassing protections or discarding unrelated work.
 - Prefer merge commits to preserve dependency history. Before deleting a branch, verify its current tip is included in remote `main` and no uncommitted work is lost; inspect changed tips again instead of forcing deletion. Retain unfinished work. If local `main` diverges, inspect unique commits and patch equivalents rather than resetting it blindly.
-- Preserve the latest main-branch README, brand assets and screenshots when integrating older branches. Review both sides of conflicts and add only the feature's current documentation; never replace the README wholesale with an older branch copy. See `docs/GIT_WORKFLOW.md`.
+- Preserve the latest main-branch README, brand assets and screenshots when integrating older branches. Review both sides of conflicts and add only the feature's current documentation; never replace the README wholesale with an older branch copy.
 - Remove disposable intermediate logs and failed test artifacts only after validating their resolved paths and retaining useful final evidence, original-change backups and any running executable.
 
 ## Desktop releases and updates
