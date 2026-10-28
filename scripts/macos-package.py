@@ -2,6 +2,7 @@
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import platform
@@ -46,6 +47,21 @@ def stage(bundle_root, output, version, commit, arch, build_kind=None):
         "acceptance": "See separate CI evidence; user desktop acceptance still required",
     }, indent=2) + "\n", encoding="utf-8")
     return destination
+
+
+def compact_empty_dashboard(measurement):
+    area = measurement.get("work_area", {})
+    width, height = area.get("width", 0), area.get("height", 0)
+    if not all(isinstance(value, (int, float)) and math.isfinite(value) and value > 16
+               for value in (width, height)):
+        raise ValueError("Missing usable native display work area")
+    expected_width = min(368, max(320, width * .32), width - 16)
+    expected_height = min(400, height * .82, height - 16)
+    # CoreGraphics and NSScreen both use logical points. Allow pixel rounding,
+    # not the old platform-wide 0.9 scale or a larger fallback window.
+    return any(abs(window["width"] - expected_width) <= 1
+               and abs(window["height"] - expected_height) <= 1
+               for window in measurement.get("windows", []))
 
 
 def smoke(dmg, version, arch, evidence):
@@ -131,9 +147,8 @@ def smoke(dmg, version, arch, evidence):
                         windows = run(str(probe), str(child.pid)).stdout
                         (evidence / f"{cycle}.windows.json").write_bytes(windows)
                         # CoreGraphics reports logical points, independently of Retina.
-                        if not any(abs(window["width"] - 371) <= 1 and abs(window["height"] - 360) <= 1
-                                   for window in json.loads(windows)["windows"]):
-                            raise RuntimeError("Empty dashboard did not use the compact macOS size")
+                        if not compact_empty_dashboard(json.loads(windows)):
+                            raise RuntimeError("Empty dashboard geometry does not match the native work area: " + windows.decode())
                         run(str(exe), "--show", env=env)
                         if not (profile / "gui.activate").is_file() or child.poll() is not None:
                             raise RuntimeError("Second launch did not activate the existing GUI")

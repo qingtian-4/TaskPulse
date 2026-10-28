@@ -1,4 +1,5 @@
 // Read only this child application's on-screen window metadata, never other apps.
+import AppKit
 import CoreGraphics
 import Foundation
 
@@ -14,6 +15,10 @@ let owned = windows.compactMap { window -> [String: Any]? in
           width >= 200, height >= 100 else { return nil }
     return ["width": width, "height": height]
 }
-let data = try JSONSerialization.data(withJSONObject: ["pid": pid, "windows": owned])
+guard let screen = NSScreen.main else { fatalError("No display work area") }
+let frame = screen.visibleFrame
+let data = try JSONSerialization.data(withJSONObject: ["pid": pid, "windows": owned,
+    "work_area": ["width": Double(frame.width), "height": Double(frame.height)],
+    "scale_factor": Double(screen.backingScaleFactor)])
 FileHandle.standardOutput.write(data)
 if owned.isEmpty { exit(1) }

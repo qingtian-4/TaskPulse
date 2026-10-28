@@ -11,6 +11,18 @@ spec.loader.exec_module(package)
 
 
 class PackagingTests(unittest.TestCase):
+    def test_compact_empty_window_matches_available_screen_not_old_scale(self):
+        normal={"work_area":{"width":1440,"height":900},"windows":[{"width":368,"height":400}]}
+        small={"work_area":{"width":1024,"height":700},"windows":[{"width":328,"height":400}]}
+        short={"work_area":{"width":800,"height":440},"windows":[{"width":320,"height":361}]}
+        for value in [normal,small,short]:
+            self.assertTrue(package.compact_empty_dashboard(value))
+        for window in [{"width":371,"height":360},{"width":412,"height":620},{"width":368,"height":560}]:
+            self.assertFalse(package.compact_empty_dashboard({**normal,"windows":[window]}))
+        self.assertFalse(package.compact_empty_dashboard({**normal,"windows":[]}))
+        with self.assertRaisesRegex(ValueError,"work area"):
+            package.compact_empty_dashboard({"windows":[{"width":368,"height":400}]})
+
     def test_staging_and_stale_rejection(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

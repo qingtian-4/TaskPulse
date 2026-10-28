@@ -166,7 +166,7 @@
   $effect(()=>{
     if(!layoutReady)return;
     const expanded=showPrompts || !!selectedTask || showFilters || showArchive || quotaOpen || !!error || !!note;
-    const needed=tasks.length>1 || expanded ? 620 : 400;
+    const needed=tasks.length>1 || expanded ? 560 : 400;
     if(needed>sessionHeight)sessionHeight=needed;
   });
   $effect(()=>{
