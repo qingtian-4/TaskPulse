@@ -9,6 +9,27 @@
 [汇总草稿 Release](https://github.com/qingtian-4/TaskPulse/releases)（选择 Alpha.8）。
 Actions 附件解压后，Mac 文件位于 `dist/macos`；Release 中可以单独下载 DMG。
 
+## 当前 PR 的安装预览
+
+上方 Alpha.8 链接是历史标签证据，不能验收 PR #29 的模型、CLI 和新版 Logo。
+当前功能以 [PR #29](https://github.com/qingtian-4/TaskPulse/pull/29) 的最终完整 head SHA 为准。
+同仓库 PR 更新触发 **Installation preview**，无需新工作流先进入默认分支。
+
+| 平台 | 附件名 | 证据 |
+|---|---|---|
+| Windows x64 | `installation-preview-windows-x64-<SHA>` | `preview-evidence-windows-<nsis或msi>-<轮次>-<SHA>` |
+| Mac Apple Silicon | `installation-preview-macos-arm64-<SHA>` | `preview-evidence-macos-arm64-<SHA>` |
+| Mac Intel | `installation-preview-macos-x64-<SHA>` | `preview-evidence-macos-x64-<SHA>` |
+
+核对每个 manifest 的 commit 与 PR head，`build_kind=pr-preview`、`tag=null`；只接受该 SHA 的成功验收。
+流程只有 `contents: read` 和测试附件，不创建 tag/Release。公开 bootstrap 必须拒绝这些附件；CI 的
+受控下载响应只在测试进程中模拟公开元数据，生产脚本没有镜像或跳过校验参数。
+Windows 真包经过生产 bootstrap 下载/校验后，由既有独立安装验收执行器验证安装、UI/IPC、重装和卸载；
+Mac CLI 执行真实 `install.sh`、系统 DMG/签名工具。模拟旧 metadata 的替换/回滚不算真实跨版本升级。
+
+[本次记录与实机表](maintainers/INSTALLATION_PREVIEW_VALIDATION_2026-10-28.md)。尚未执行或失败的平台明确保留状态；
+维护者确认稳定前保留 Draft PR 和工作树，不合并、不清理、不公开发布。
+
 ## 下载入口
 
 登录维护者 GitHub 账号，打开 [Actions](https://github.com/qingtian-4/TaskPulse/actions)。

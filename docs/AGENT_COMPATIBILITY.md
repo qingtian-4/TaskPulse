@@ -37,7 +37,7 @@ Windows 原生界面合成测试不替代当前 PR 安装包或 Mac 真实 Agent
 
 ## 四款通用接入的验证等级
 
-核验日期：2026-10-21（R1–R4 修复后能力边界）。TaskPulse `0.2.0-alpha.7`、Windows 10 Pro 22H2 x64（19045）。**以下四款的宿主 Hook 实机验证版本均为“无”**。安装元数据不是事件验证；合成载荷测试与 TaskPulse 原生 WebView2/GUI exe 验收均不升级为宿主 native-tested。
+核验日期：2026-10-21（R1-R4 修复后能力边界）。TaskPulse `0.2.0-alpha.7`、Windows 10 Pro 22H2 x64（19045）。**以下四款的宿主 Hook 实机验证版本均为“无”**。安装元数据不是事件验证；合成载荷测试与 TaskPulse 原生 WebView2/GUI exe 验收均不升级为宿主 native-tested。
 
 等级：explicit=原生明确事件/字段；inferred=受限派生或唯一关联；unsupported=不提供该能力。以下 Hook 映射为文档依据的实现，`tested_versions=[]`；未知版本不代表兼容保证。完整逐项元数据也随 `integrations/*.json` 展示于管理界面。
 

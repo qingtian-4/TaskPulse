@@ -28,7 +28,7 @@ TaskPulse 是一个多 Coding Agent 任务监控器。把本机、WSL 和 SSH �
 
 | 等待你回答 | 等待你批准 |
 |---|---|
-| ![待输入弹窗](assets/screenshots/notice-question-current.png) | ![待批准弹窗](assets/screenshots/notice-approval-current.png) |
+|![待输入弹窗](assets/screenshots/notice-question-current.png) |![待批准弹窗](assets/screenshots/notice-approval-current.png) |
 
 *真实 Tauri/WebView2 截图，使用隔离合成任务测试。弹窗提醒你回到原 Agent 处理；关闭提醒不等于批准或解决请求。[素材与复现](assets/README.md)。*
 

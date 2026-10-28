@@ -72,6 +72,6 @@ bun scripts/native-message-center-smoke.ts --exe src-tauri/target/codex-check/de
 
 ## 模型显示合成图
 
-`screenshots/models-synthetic.png`：440×720，2026-10-28 原生 WebView2 验收截图，来自
+`screenshots/models-synthetic.png`：440×720，2026-10-28 接入 TP-03 后重新生成的原生 WebView2 验收截图，来自
 `scripts/native-model-smoke.ts` 的隔离合成 transcript。展示长模型、未知模型、独立阶段与计时；
 不含私人任务，不证明宿主真实事件覆盖。保留现有品牌和截图。

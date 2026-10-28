@@ -90,7 +90,7 @@ TEMP 常含 8.3 别名，同一文件的长短名称不能误报成无关进程�
 ### MSI 数字元信息
 
 MSI 不接受 `alpha.N`。应用、标签与四文件仍保持同一 SemVer；WiX 单独使用
-`major.minor.patch.build`，build=alpha 1000/beta 2000/rc 3000 + 序号（0–999），
+`major.minor.patch.build`，build=alpha 1000/beta 2000/rc 3000 + 序号（0-999），
 例如 alpha.2 为 `0.2.0.1002`。release:check/preflight 校验映射，manifest 记录
 msi_product_version；安装器验收读 MSI Property 和应用 --version，两者不混为一谈。
 
@@ -139,3 +139,18 @@ Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Ap
 发布前核对中英文用户说明、来源模型支持范围、已知限制、unsigned 提示、tag/四处版本一致性和当前 SHA 的 Windows/Security/独立 NSIS+MSI 验收。发布后再人工执行 `-Version <公开版本> -DownloadOnly` 核对匿名下载；未公开 Draft 无法完成该项真实下载验收，不应伪称通过。安装流程仍由现有安装器测试覆盖，命令行入口不能替代安装器验收。
 
 保持当前草稿预发布策略、固定 Actions SHA 和手动发布门禁；不沿用参考项目直接公开稳定 Release 的行为。新发布说明只维护简体中文与英文，不添加其他语言。参见 [参考项目对照](maintainers/AGENT_SPEED_REFERENCE.md) 与 [CLI 说明](CLI_INSTALL.md)。
+
+## PR 安装预览与实机确认
+
+[Installation preview](../.github/workflows/installation-preview.yml) 对同仓库 PR 的完整 head SHA 构建
+Windows x64 EXE/MSI、Mac arm64/x64 DMG，仅上传测试附件，不写 tag 或 Release。
+它不替代或放宽本文件既有正式 release.yml 的准确 main/tag、Security 和独立安装器门禁。
+预览 manifest 必须 `build_kind=pr-preview`、`tag=null`，公开 CLI 拒绝预览；Mac 旧 manifest 默认格式继续可读。
+
+新版本说明从[双语模板](releases/TEMPLATE.md)开始，核对架构、签名/公证、包/脚本/源码 SHA、
+安装与升级保留、支持程度和未验证范围。分别填写[安装预览实机记录](maintainers/INSTALLATION_PREVIEW_VALIDATION_2026-10-28.md)。
+macOS CLI 为 curl 下载补充并核验 quarantine；不清除安全属性、不关闭 Gatekeeper。
+CLI CI 仅替换传输，实际 app/DMG 验证用系统工具；CI 的模拟升级不等于真实版本升级或 Finder 体验。
+
+本轮保持 PR #29 为 Draft，收到维护者稳定确认且最终 head 的 Windows/Security/Mac 均通过后才合并。
+清理前核对分支 tip 已在 origin/main 且无未提交工作。发布仍需单独明确授权，不移动既有 Alpha.8 标签。

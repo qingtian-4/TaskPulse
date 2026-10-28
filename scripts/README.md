@@ -169,3 +169,12 @@ work-area bounds. Four viewport sizes (412×620, 380×640, 320×480, 440×720) a
 DPR emulation does not certify Windows display scaling or mixed-DPI monitors.
 `--capture` exports `*-current.png` after all checks; historical `*-alpha7.png`
 assets stay unchanged. All normal-run evidence remains in the ignored target tree.
+
+## Installation preview
+
+- `test-cli-install.py`: actual macOS bootstrap with offline system/transport doubles (Linux/macOS; Python is development-only).
+- `macos-cli-smoke.sh` / `macos-cli-smoke.py`: disposable native Mac CI; real install.sh, DMG tools, quarantine/assessment, state marker and simulated rollback.
+- `windows-cli-smoke.ps1`: disposable Windows CI; real bootstrap validator and download flow against actual preview NSIS bytes; installer execution remains in installer-smoke.ps1.
+- `installation-preview.test.ts`: immutable PR SHA, read-only permissions, preview markers, native architecture matrix and unchanged release-gate contracts.
+
+PR artifacts never become public releases. Native CI and physical-machine acceptance remain separate; see [candidate testing](../docs/CANDIDATE_TESTING.md).

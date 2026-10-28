@@ -18,8 +18,8 @@ TaskPulse 已有 macOS 扫描、AppleScript 聚焦、macOS 打包配置，以及
 
 ## 路线 A：下载测试包（常规测试推荐）
 
-macOS 紧凑布局候选（2026-10-27）把主面板从 412×400–620 调整为约
-371×360–558 逻辑像素，提醒从 320×132 调整为 300×124。正文保留字号，
+macOS 紧凑布局候选（2026-10-27）把主面板从 412×400-620 调整为约
+371×360-558 逻辑像素，提醒从 320×132 调整为 300×124。正文保留字号，
 通过缩短工具栏、统计卡和任务卡留白适配；Retina 屏幕仍由系统换算物理像素。
 Windows 默认尺寸保持原样。该修改属于 Alpha.8 之后的提交候选，下载时请核对
 Actions 的完整提交 SHA；旧 `v0.2.0-alpha.8` 标签和 DMG 不会被替换。
@@ -106,3 +106,11 @@ bun run tauri build --target aarch64-apple-darwin --features custom-protocol --b
 - [RustDesk 构建工作流](https://github.com/rustdesk/rustdesk/blob/master/.github/workflows/flutter-build.yml)按平台/架构运行不同构建任务，macOS 包含 ARM/Intel、DMG、签名和公证，另有 nightly/更新元数据流程。可借鉴平台矩阵和分发分层，无需照搬其全部复杂度。
 - [LocalSend 发布工作流](https://github.com/localsend/localsend/blob/main/.github/workflows/release.yml)复用各平台构建并汇总为草稿；[贡献说明](https://github.com/localsend/localsend/blob/main/CONTRIBUTING.md)明确包管理器维护者及尚未由流水线覆盖的手动构建。跨平台项目也可以逐步补齐自动化。
 - [Tauri 官方 GitHub 模板](https://v2.tauri.app/distribute/pipelines/github/)展示 macOS ARM/Intel、Windows、Linux 构建矩阵，适合沿用本项目现有技术栈。
+
+## 当前功能的 PR 安装验收
+
+以[候选说明](CANDIDATE_TESTING.md#当前-pr-的安装预览)中的 Installation preview 为准，
+arm64 与 x64 各在原生 runner 构建和测试。旧 Alpha.8 与开发启动不覆盖当前 PR。
+[macOS CLI](CLI_INSTALL.md#macos-apple-silicon-and-intel)消费相同 DMG，默认 `~/Applications`，
+保留 quarantine 与 Gatekeeper，支持失败恢复。[实机记录](maintainers/INSTALLATION_PREVIEW_VALIDATION_2026-10-28.md)
+将 Finder、菜单栏、Retina/多屏、通知焦点、真实 Agent 与升级保留逐项记录，未做不填写通过。

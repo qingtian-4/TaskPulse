@@ -85,7 +85,7 @@ tmux 外的 wrapper 记录仍由 tmux 来源读取，需要将 session/pane 限�
 ### 数据与隐私
 
 配置、关注/未读/固定、最近结果和通知去重分别保存在 `~/.taskpulse/` 的 config.toml、
-attention.json、recent.json、notifications.json。投递记录 notification-log.json 最多500条，
+attention.json、recent.json、notifications.json。投递记录 notification-log.json 最多 500 条，
 不证明用户已读。兼容旧 `~/.agent-monitor/*.status`；`tp-run` 使用服务器的
 `~/.local/state/taskpulse/runs/`。本机账号额度不是远程账号额度。
 

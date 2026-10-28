@@ -91,10 +91,19 @@ Installs into `~/Applications/TaskPulse.app` by default. Quit the running app be
 Same-volume staging, a target lock and rollback preserve the previous app on failure.
 Interrupted recovery directories require inspection before another install. Download-only never overwrites an existing version directory.
 
-不删除 TaskPulse 状态、不安装 Hook、不清除 quarantine、不关闭 Gatekeeper。
+不删除 TaskPulse 状态、不安装 Hook、不清除 quarantine、不关闭 Gatekeeper。curl 下载补充并核验 quarantine，暂存 app 同样核验。
 启动遭拦截保留错误并按 [Apple 官方步骤](https://support.apple.com/en-us/102445)核对。
 当前 PR 验证不代表 Finder 下载与真实 Agent 实机通过。
 
 State and hooks are untouched. Quarantine and Gatekeeper remain enabled.
 Follow [Apple's guidance](https://support.apple.com/en-us/102445) if launch is blocked; retain the actual error.
 PR CI acceptance does not replace physical Mac acceptance or an anonymous public download test.
+
+## PR preview acceptance / PR 预览验收
+
+公开入口拒绝 `build_kind=pr-preview` 和 Draft。测试包按[候选说明](CANDIDATE_TESTING.md#当前-pr-的安装预览)
+下载；受控传输仅在 CI 测试进程替换响应，不开放生产镜像、执行或跳过校验开关。
+Mac 的模拟旧 metadata 用例只证明事务回滚；真实跨版本升级另记。
+
+Public installers reject PR previews and Drafts. CI substitutes only transport responses for exact-SHA packages;
+no production mirror or validation bypass is added. Simulated replacement tests do not prove cross-version upgrades.

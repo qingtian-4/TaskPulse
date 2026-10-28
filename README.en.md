@@ -28,7 +28,7 @@ TaskPulse brings coding-agent tasks from local, WSL and SSH environments into on
 
 | Answer needed | Approval needed |
 |---|---|
-| ![Input request reminder](assets/screenshots/notice-question-current.png) | ![Approval reminder](assets/screenshots/notice-approval-current.png) |
+|![Input request reminder](assets/screenshots/notice-question-current.png) |![Approval reminder](assets/screenshots/notice-approval-current.png) |
 
 *Actual Tauri/WebView2 screenshots with isolated synthetic standard events. Respond in the original agent; dismissing a reminder does not approve or resolve its request. [Media and reproduction](assets/README.md).*
 
