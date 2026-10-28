@@ -1,7 +1,9 @@
 {
-  "name": "TaskPulse Brand and Tray State Icon Kit",
-  "version": "design-handoff-2026-10-27",
+  "name": "TaskPulse TP-03 Brand and Tray State Icon Kit",
+  "version": "design-handoff-2026-10-27-tp03",
   "status": "integrated-desktop-assets",
+  "design_variant": "03 / 明显的 T × P (balanced TP monogram)",
+  "based_on": "TaskPulse-OpenP-TP-Balanced.svg",
   "brand_source": "brand.svg",
   "wordmarks": {
     "dark": "wordmark-dark.svg",
@@ -39,11 +41,15 @@
   "shared_geometry": {
     "viewBox": "0 0 100 100",
     "tile_fill": "#101929",
-    "stem": "#EAF9F6",
-    "status_color_changes": "P loop only"
+    "t_glyph": "#EAF9F6",
+    "status_color_changes": "right-side P loop only; T stays white",
+    "t_path": "M20 30 H36 M36 30 V74",
+    "p_path": "M36 30 H57 C73 30 79 39 79 48 C79 59 71 64 58 64 H50",
+    "stroke_width": 11.5
   },
   "social_preview": "social-preview.png",
   "integration": "README.md",
+  "macos_app_icon": "../../src-tauri/icons/icon.icns",
   "handoff_raster_sizes": [
     16,
     20,
@@ -55,5 +61,35 @@
     256,
     1024
   ],
-  "runtime_tray_size": 32
+  "runtime_tray_size": 32,
+  "source_archive": "TaskPulse-TP-Logo-Kit.zip",
+  "source_archive_sha256": "b80b4ae98c5f884c30a09814b3a28cbf01a4b73dee2f6465b61e1e98fecf8fee",
+  "desktop_generation": "bun run tauri icon assets/brand/brand.svg --output <temporary-directory>; copy desktop files only",
+  "binary_assets_sha256": {
+    "src-tauri/icons/128x128.png": "3bee1d65cb64f914a6e1d01aecd63c9cb92dd97182063699d66abde9bc33d21e",
+    "src-tauri/icons/128x128@2x.png": "d5448741977da1c2fa71c6e5900e9b8cfe5e1a651fbe3cd1681c00b690e31355",
+    "src-tauri/icons/32x32.png": "ae65e4e2f47e4bb3b8f6b2e304bb4c0a11ee48e5e80116efeb5c7fea35cfea19",
+    "src-tauri/icons/64x64.png": "87b38e8fb1839158c3692c94bb251a0a8d3b200d98fc04a56a791bbe4d23d631",
+    "src-tauri/icons/icon.icns": "a239fcebe5a88c080533e53a1dba927a5b27a0b4c3bb1eeefd6501d57d8f0d30",
+    "src-tauri/icons/icon.ico": "5f755e9c9882acf411b47c7da14f9d6ba68e44665b05376fcb6956a2a44c132f",
+    "src-tauri/icons/icon.png": "9e41784b1db4ec8a35ff83a8795f4dec34832f13e2554589bbe4dca25daa40fd",
+    "src-tauri/icons/Square107x107Logo.png": "63ad3a1448f79f410c310903104c0282d557af925678c3b5cf4d126b5916ae90",
+    "src-tauri/icons/Square142x142Logo.png": "4fef00e79831a710f56f5c3f73ad84ffc80c63aa92a8b5d7eff38f38fbb0f286",
+    "src-tauri/icons/Square150x150Logo.png": "6a11ee4fbfd44ffcb3bc28a5bc704ec157266aae32710d39a316d4398a16a4c6",
+    "src-tauri/icons/Square284x284Logo.png": "93e8edf37ca649428c0ac8c9f5ee4d297fec0669eee879d37d10a716dc052320",
+    "src-tauri/icons/Square30x30Logo.png": "1ca9e4cd86b8cec748f2f8026cb235e62c92dbcc87af338a3e6d7f32d46a57c7",
+    "src-tauri/icons/Square310x310Logo.png": "85dbfd1589a3f6d1a89c664c50b579585605f399c78ec13c0218278e75339a5e",
+    "src-tauri/icons/Square44x44Logo.png": "0612119f7729d0bc8dd296a85b6a1541481a150366f7d7a258ac24f90efa4304",
+    "src-tauri/icons/Square71x71Logo.png": "8e626e836a30f9958c157ad7f6d99f6f52abe162d94800aeac3b9b38b94285af",
+    "src-tauri/icons/Square89x89Logo.png": "d7e52a75673a1b8886423ea20433eadd2dc7580319d4cf41430811250000ee71",
+    "src-tauri/icons/StoreLogo.png": "c18d8a5d549fe313a280a8519e5e36756dbb353672807f9565799ceea4ef4053",
+    "src-tauri/icons/tray-error.png": "78bd37037c28b2851a0b51b54902dbe4fa9a331684f7a0a4498a7cda8cf7e8b2",
+    "src-tauri/icons/tray-idle.png": "d494ca262cdf4cb4a53e58e19c68fe5f3c87185c2076d467f3f3df9f54c4d9fd",
+    "src-tauri/icons/tray-needs-input.png": "8a20312a61f8afefa8a5b66889a3678502fa788bf7e0c5f7e0c91a10fa27bf17",
+    "src-tauri/icons/tray-offline.png": "78bd37037c28b2851a0b51b54902dbe4fa9a331684f7a0a4498a7cda8cf7e8b2",
+    "src-tauri/icons/tray-review.png": "ce65aba9f2a88c1ce609546fee773c004d7f2cfb894d612b5fda057a68ab4ffc",
+    "src-tauri/icons/tray-starting.png": "78bd37037c28b2851a0b51b54902dbe4fa9a331684f7a0a4498a7cda8cf7e8b2",
+    "src-tauri/icons/tray-working.png": "b97aa3fee8c48d5e108e93e5b1ca6b3cdfe249f33724dab212c969bb67255337",
+    "assets/brand/social-preview.png": "714837281a8b3eab72ae35a18a720cfd0c926945c6e68cff3f399e9d48fbe165"
+  }
 }

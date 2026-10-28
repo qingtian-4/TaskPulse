@@ -2,7 +2,7 @@
 
 公开素材来自当前 TaskPulse 原生 WebView2，不拼接或重绘。原生截图代表真实应用渲染；使用隔离合成事件时必须注明，不能作为 Agent 宿主实机支持证据。
 
-## 下一候选源码预览（2026-10-27）
+## 下一候选源码预览（2026-10-28 · TP-03）
 
 以下 PNG 由隔离的真实 Tauri / Windows WebView2 直接输出，输入均为公开合成事件；未拼接、重绘或替换文字。截图不是实际 Agent 新任务或宿主兼容性证据。
 
@@ -30,8 +30,8 @@ bun scripts/native-message-center-smoke.ts --exe src-tauri/target/codex-check/de
 检查覆盖 412×620、380×640、320×480、440×720，WebView2 DPR 1 / 1.25 / 1.5 / 2，以及消息已读、请求解除、结果未查看和重启恢复。
 这不等同 Windows 实际改变显示比例、混合 DPI 显示器迁移或真实 Agent 生命周期验收。
 
-本次图片包含已确认的双色开口 P 品牌标记，原有界面尺寸和布局保持不变。
-[品牌资源与 Social Preview](brand/README.md) · [本次验收结果](../docs/BRAND_VALIDATION_2026-10-27.md)。
+本次 current 图片使用已确认的 TP-03（明显的 T × P）品牌标记，替代旧双色 P；原有界面尺寸和布局保持不变。
+[品牌资源与 Social Preview](brand/README.md) · [TP-03 验收结果](../docs/TP_LOGO_VALIDATION_2026-10-28.md)。
 
 ## 历史 Alpha.7 原生素材
 
