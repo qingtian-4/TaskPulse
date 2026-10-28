@@ -273,3 +273,12 @@ test('quick viewed action is only offered for explicit ended results',()=>{
   expect(isEndedResult({...base,status:'waiting_input',waiting_reason:'question'})).toBe(false);
   expect(isEndedResult({...base,status:'succeeded',stale:true})).toBe(false);
 });
+
+test('reported models are searchable without changing Agent identity or task ordering',()=>{
+  const task={...base,source:'claude_code' as const,model:'deepseek-v4-flash'};
+  expect(taskAgent(task)).toBe(taskAgent({...task,model:undefined}));
+  expect(filterTasks([task],{...EMPTY_FILTERS,query:'DEEPSEEK flash'})).toEqual([task]);
+  expect(filterTasks([base],{...EMPTY_FILTERS,query:'deepseek'})).toEqual([]);
+  expect(taskSection(task)).toBe(taskSection({...task,model:'another-model'}));
+  expect(compareTasks(task,{...task,model:'another-model'})).toBe(0);
+});

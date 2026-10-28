@@ -615,9 +615,9 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
             if let Some(model) = value
                 .pointer("/message/model")
                 .and_then(Value::as_str)
-                .filter(|model| !model.starts_with('<'))
+                .and_then(super::reported_model)
             {
-                task.model = Some(model.into());
+                task.model = Some(model);
             }
             if let Some(at) = at {
                 task.updated_at = at;
@@ -992,6 +992,38 @@ mod tests {
             root.path()
         ));
     }
+    #[test]
+    #[ignore = "read-only replay of native Claude logs, including old sessions; does not import them"]
+    fn live_claude_model_replay() {
+        let projects = default_root().join("projects");
+        let mut models = std::collections::BTreeSet::new();
+        for project in std::fs::read_dir(projects).unwrap().flatten() {
+            if !project.path().is_dir() {
+                continue;
+            }
+            for file in std::fs::read_dir(project.path()).unwrap().flatten() {
+                if file.path().extension().is_none_or(|e| e != "jsonl") {
+                    continue;
+                }
+                let mut state = Transcript::default();
+                let mut tail = JsonlTail::default();
+                tail.drain(&file.path(), |batch| {
+                    for line in batch.body.lines() {
+                        if let Ok(value) = serde_json::from_str::<Value>(line) {
+                            apply_record(&mut state, &value, "replay-only", SystemTime::now());
+                        }
+                    }
+                })
+                .unwrap();
+                if let Some(model) = state.task.and_then(|t| t.model) {
+                    models.insert(model);
+                }
+            }
+        }
+        println!("Claude native replay models={models:?}");
+        assert!(!models.is_empty());
+    }
+
     #[test]
     fn f04_claude_cold_parser_eviction_keeps_business_result_without_replay() {
         let root = tempfile::tempdir().unwrap();

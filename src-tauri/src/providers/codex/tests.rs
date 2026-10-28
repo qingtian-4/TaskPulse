@@ -1985,3 +1985,85 @@ fn custom_exec_call_is_exposed_as_current_activity() {
         Some("执行命令 · git diff --check")
     );
 }
+
+#[test]
+fn model_context_updates_presentation_without_lifecycle_or_clock_changes() {
+    let now = SystemTime::now();
+    let initial = parse_codex_rollout_unfiltered(
+        &format!(
+            "{}{}",
+            header("/project"),
+            turn_event("task_started", "current", 1)
+        ),
+        now,
+        "s",
+    )
+    .unwrap();
+    let context = |model: &str, turn: &str| {
+        serde_json::json!({
+        "type":"turn_context", "timestamp":recent_rfc3339(0),
+        "payload":{"model":model,"turn_id":turn}})
+        .to_string()
+    };
+    let mut state = initial.clone();
+    for model in ["gpt-5.4", "custom/provider-model"] {
+        state = apply_codex_rollout(&context(model, "current"), now, "s", Some(state)).unwrap();
+        assert_eq!(state.model.as_deref(), Some(model));
+        let mut without_model = state.clone();
+        without_model.model = None;
+        assert_eq!(without_model, initial);
+        let task = CodexProvider::with_root(PathBuf::new()).session_to_task(&state, None, now);
+        assert_eq!(task.model, state.model);
+        assert_eq!(task.source, TaskSource::Codex);
+    }
+    for (model, turn) in [
+        ("stale-model", "older"),
+        ("<synthetic>", "current"),
+        ("  ", "current"),
+        ("bad\nmodel", "current"),
+    ] {
+        let before = state.clone();
+        state = apply_codex_rollout(&context(model, turn), now, "s", Some(state)).unwrap();
+        assert_eq!(state, before);
+    }
+}
+
+#[test]
+#[ignore = "read-only real model evidence; requires TASKPULSE_CODEX_REPLAY_ROOT"]
+fn live_codex_model_replay() {
+    let root = PathBuf::from(
+        std::env::var_os("TASKPULSE_CODEX_REPLAY_ROOT").expect("explicit rollout root"),
+    );
+    let mut paths = walk(&root).unwrap();
+    paths.retain(|p| p.extension().is_some_and(|e| e == "jsonl"));
+    paths.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
+    let mut found = 0;
+    for path in paths.into_iter().rev().take(30) {
+        let mut provider = CodexProvider::with_root(root.clone());
+        if let Some(state) = provider.cached_session_state(&path, SystemTime::now()) {
+            if let Some(model) = &state.model {
+                println!("reported_model={model} status={:?}", state.status);
+                found += 1;
+            }
+        }
+    }
+    assert!(found > 0, "No real model metadata found");
+}
+
+#[test]
+fn remote_model_context_is_optional_and_preserves_task_identity() {
+    let id = "11111111-1111-7111-8111-111111111111";
+    let section = remote_origin_fixture(id, "Native title", None, None, "task_started", "t1");
+    let now = SystemTime::now();
+    let unknown = tasks_from_codex_section(&section, "Server3", "server3", now);
+    let context = serde_json::json!({"type":"turn_context","payload":{"turn_id":"t1","model":"remote-reported-model"}});
+    let known =
+        tasks_from_codex_section(&format!("{section}{context}\n"), "Server3", "server3", now);
+    assert_eq!(known.len(), 1);
+    assert!(unknown[0].model.is_none());
+    assert_eq!(known[0].model.as_deref(), Some("remote-reported-model"));
+    assert_eq!(known[0].id, unknown[0].id);
+    assert_eq!(known[0].turn_key, unknown[0].turn_key);
+    assert_eq!(known[0].started_at, unknown[0].started_at);
+    assert_eq!(known[0].updated_at, unknown[0].updated_at);
+}

@@ -496,6 +496,7 @@ impl CodexProvider {
         task.project_path = meta
             .and_then(|meta| meta.cwd.clone())
             .or_else(|| host.cwd.clone());
+        task.model = host.model.clone();
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
         task.quota_5h_used_pct = host.quota_5h_used_pct;
@@ -548,6 +549,7 @@ fn normalize_windows_path(path: &str) -> PathBuf {
 /// Derived live state of one Codex session.
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionState {
+    pub model: Option<String>,
     pub status: TaskStatus,
     pub waiting_reason: Option<crate::domain::WaitingReason>,
     pub input_request_id: Option<String>,
@@ -977,6 +979,7 @@ fn apply_codex_rollout(
         return previous;
     }
     let SessionState {
+        mut model,
         mut project,
         mut cwd,
         mut internal,
@@ -1001,6 +1004,7 @@ fn apply_codex_rollout(
         mut quota_1w_used_pct,
         mut quota_1w_resets_at,
     } = previous.unwrap_or_else(|| SessionState {
+        model: None,
         project: None,
         cwd: None,
         internal: false,
@@ -1139,6 +1143,25 @@ fn apply_codex_rollout(
                 session_id = id.to_owned();
             }
             internal |= payload.get("source").is_some_and(internal_codex_source);
+        }
+
+        // Model metadata is presentation only: no activity clock, turn or
+        // notification changes. Reject late contexts belonging to other turns.
+        let envelope = value.get("type").and_then(|v| v.as_str());
+        if (envelope == Some("turn_context") || is_session_meta && model.is_none())
+            && !payload
+                .get("turn_id")
+                .and_then(|v| v.as_str())
+                .zip(turn_key.as_deref())
+                .is_some_and(|(event, current)| event != current)
+        {
+            if let Some(reported) = payload
+                .get("model")
+                .and_then(|v| v.as_str())
+                .and_then(super::reported_model)
+            {
+                model = Some(reported);
+            }
         }
 
         // Extract project (cwd) + session id on ANY line that carries them
@@ -1454,6 +1477,7 @@ fn apply_codex_rollout(
     }
 
     let state = SessionState {
+        model,
         status,
         waiting_reason,
         input_request_id,
@@ -1873,6 +1897,7 @@ fn flush_codex(
         t.message = state.last_message;
         t.activity = state.activity;
         t.phase = state.phase;
+        t.model = state.model;
         t.cli = Some("codex".into());
         t.session_id = Some(sid);
         t.turn_key = state.turn_key;

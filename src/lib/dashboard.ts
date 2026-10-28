@@ -40,7 +40,7 @@ export function filterTasks(tasks: TaskSnapshot[], filters: DashboardFilters, se
     (!filters.location || (t.host ?? '本机') === filters.location) &&
     (filters.section === null || taskSection(t) === filters.section) &&
     (!filters.signal || matchesSignal(t,filters.signal)) && (!filters.unreadOnly || t.unread===true) &&
-    (!terms.length || terms.every(word=>[t.name,t.project,t.project_path,t.agent_name,SOURCE_LABEL[t.source],taskContext(t,settings),t.host,taskActivity(t)].filter(Boolean).join(' ').toLocaleLowerCase().includes(word))));
+    (!terms.length || terms.every(word=>[t.name,t.project,t.project_path,t.agent_name,t.model,SOURCE_LABEL[t.source],taskContext(t,settings),t.host,taskActivity(t)].filter(Boolean).join(' ').toLocaleLowerCase().includes(word))));
 }
 export function compareTasks(a:TaskSnapshot,b:TaskSnapshot):number {
   return sectionRank(a)-sectionRank(b) || Number(matchesSignal(b,'action'))-Number(matchesSignal(a,'action')) || (b.attention_since??b.updated_at)-(a.attention_since??a.updated_at) || a.id.localeCompare(b.id);

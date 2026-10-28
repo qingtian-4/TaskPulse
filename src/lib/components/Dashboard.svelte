@@ -141,7 +141,7 @@
     } catch(e) { error=String(e); }
   }
   async function copy(task:TaskSnapshot) {
-    try {await navigator.clipboard.writeText(`${task.name}\n${taskContext(task,settings)}\n${task.project_path ?? ''}\n${task.session_id ?? task.id}`);note='已复制任务标题、项目及会话 ID';}catch(e){error='复制失败：'+String(e);}
+    try {await navigator.clipboard.writeText(`${task.name}\n${taskContext(task,settings)}\n上报模型：${task.model ?? '来源未提供'}\n${task.project_path ?? ''}\n${task.session_id ?? task.id}`);note='已复制任务标题、项目、模型及会话 ID';}catch(e){error='复制失败：'+String(e);}
   }
   function resetFilters(){filterSource='';filterProject='';filterLocation='';filterSection=null;filterSignal=null;query='';unreadOnly=false;}
   function chooseSection(section:TaskSection){
@@ -257,7 +257,7 @@
     {#if uncertainTasks.length && !pendingRunning.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={()=>chooseSection('uncertain')}>状态待确认 {uncertainTasks.length}</button>{/if}
   </div>{/if}
   <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>全部 {confirmedTasks.length}</button>{#if archived.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>较早关注 {archived.length}</button>{/if}<button class="filter-toggle tp-btn" data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?'收起筛选':'筛选 / 分组'}</button></div>
-  <div class="search-bar"><label class="search"><Search size={14}/><input aria-label="搜索任务" placeholder="搜索任务、项目或 Agent   /" bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label="清除搜索">×</button>{/if}</label></div>
+  <div class="search-bar"><label class="search"><Search size={14}/><input aria-label="搜索任务" placeholder="搜索任务、项目、Agent 或模型   /" bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label="清除搜索">×</button>{/if}</label></div>
   {#if demo}<p class="notice">浏览器演示 · 以下均为示例，不是真实采集结果</p>{/if}
   {#if showPrompts}<MessageCenter center={messages} prompts={pendingPrompts} {now} onRead={readMessages} onClose={()=>showPrompts=false} onSelect={id=>void selectMessage(id)} onReopen={entry=>void reopenRequest(entry.task_id,entry.request_id,entry.turn_key)} onReopenPrompt={task=>void reopenRequest(task.id,task.input_request_id,task.turn_key)} onPrompt={task=>{showPrompts=false;selectTask(task);}} />{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
@@ -289,7 +289,8 @@
     <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label="任务详情">
       <div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span class="tp-chip">{taskLabel(selectedTask)}</span><button class="tp-icon" onclick={()=>selected=null} aria-label="关闭详情">×</button></div>
       <p>{taskContext(selectedTask,settings)}</p>
-      <details class="evidence tp-fold"><summary>状态依据与采集时间</summary><p>状态依据：{CONFIDENCE_LABEL[selectedTask.confidence]}{#if selectedTask.model} · 上报模型：{selectedTask.model}{/if}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} · 最后活动 {formatAgo(selectedTask.updated_at,now)}</p></details>
+      <p class="model-detail">上报模型：{selectedTask.model ?? '来源未提供'}</p>
+      <details class="evidence tp-fold"><summary>状态依据与采集时间</summary><p>状态依据：{CONFIDENCE_LABEL[selectedTask.confidence]}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} · 最后活动 {formatAgo(selectedTask.updated_at,now)}</p></details>
       <div class="command glass-scroll"><span>{selectedTask.stale?'上次观测活动（非实时）':selectedTask.status==='running'?'当前活动':'最近消息'}</span><pre>{taskActivity(selectedTask)}</pre></div>
       <div class="detail-actions">
         {#if selectedTask.can_focus}<button class="tp-btn" title="只聚焦宿主窗口，不标记已查看" onclick={()=>open(selectedTask!)}>{selectedTask.source==='claude_code'?'聚焦项目窗口':'聚焦运行窗口'}</button>{/if}
@@ -307,6 +308,7 @@
   </footer>
 </div>
 <style>
+  .model-detail{overflow-wrap:anywhere}
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}
   .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;color:var(--tp-text)}

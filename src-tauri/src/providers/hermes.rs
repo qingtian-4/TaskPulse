@@ -116,6 +116,7 @@ pub fn discover_db() -> Option<PathBuf> {
 
 /// One active session pulled from the DB.
 struct SessionRow {
+    model: Option<String>,
     id: String,
     name: Option<String>,
     title: Option<String>,
@@ -206,6 +207,7 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
     );
     task.stale = status == TaskStatus::Unknown;
     task.project = project;
+    task.model = row.model.as_deref().and_then(super::reported_model);
     task.project_path = row.cwd.clone().or_else(|| row.git_repo_root.clone());
     if task.status == TaskStatus::WaitingInput {
         task.waiting_reason = Some(if waiting_for_user {
@@ -364,12 +366,15 @@ impl Provider for HermesProvider {
             }
         };
 
+        // Older Hermes schemas have no model column; preserve their support.
+        let has_model = conn.prepare("SELECT model FROM sessions LIMIT 0").is_ok();
+        let model_column = if has_model { "model" } else { "NULL" };
         // Active sessions, newest activity first.
-        let mut stmt = match conn.prepare(
+        let mut stmt = match conn.prepare(&format!(
             "SELECT id, display_name, title, last_activity_at, started_at, cwd, git_repo_root, \
              ended_at, end_reason, archived, hidden, pinned, last_read_at, \
-             last_activity_description FROM sessions ORDER BY last_activity_at DESC",
-        ) {
+             last_activity_description, {model_column} FROM sessions ORDER BY last_activity_at DESC",
+        )) {
             Ok(stmt) => stmt,
             Err(error) => {
                 let error = format!("query sessions failed: {error}");
@@ -393,6 +398,7 @@ impl Provider for HermesProvider {
                 pinned: r.get(11)?,
                 last_read_at: r.get(12)?,
                 description: r.get(13)?,
+                model: r.get(14)?,
             })
         }) {
             Ok(mapped) => match mapped.collect::<rusqlite::Result<Vec<_>>>() {
@@ -490,6 +496,35 @@ mod tests {
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs_f64()
+    }
+
+    #[test]
+    fn optional_session_model_survives_schema_compatibility_and_switch() {
+        let now = now_secs();
+        let (_dir, db) = make_db(
+            &[("s1", "Session", now, "/project", false, 0.0)],
+            &[("s1", now + 300.0)],
+        );
+        let mut provider = HermesProvider::with_db_path(db.clone());
+        let before = provider.poll(SystemTime::now()).tasks.remove(0);
+        assert!(before.model.is_none());
+        let conn = rusqlite::Connection::open(db).unwrap();
+        conn.execute_batch(
+            "ALTER TABLE sessions ADD COLUMN model TEXT; UPDATE sessions SET model='proxy-model';",
+        )
+        .unwrap();
+        let after = provider.poll(SystemTime::now()).tasks.remove(0);
+        assert_eq!(after.model.as_deref(), Some("proxy-model"));
+        assert_eq!(before.id, after.id);
+        assert_eq!(before.status, after.status);
+        assert_eq!(before.turn_key, after.turn_key);
+        assert_eq!(before.started_at, after.started_at);
+        conn.execute("UPDATE sessions SET model='next-model'", [])
+            .unwrap();
+        assert_eq!(
+            provider.poll(SystemTime::now()).tasks[0].model.as_deref(),
+            Some("next-model")
+        );
     }
 
     #[test]
