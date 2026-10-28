@@ -50,6 +50,8 @@ TaskPulse 是一个多 Coding Agent 任务监控器。把本机、WSL 和 SSH �
 
 ## 快速开始
 
+新增 [PowerShell 命令行安装入口](docs/CLI_INSTALL.md)：校验 Release 后打开标准安装向导，支持显式 Alpha、指定版本和仅下载。须等待脚本合入主分支且版本公开；当前 Draft 不可通过命令安装。
+
 测试者从[候选下载说明](docs/CANDIDATE_TESTING.md)获取 Windows EXE/MSI 或 Apple Silicon DMG。源码开发需要 Bun、Rust 1.89+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)：
 
 ```powershell

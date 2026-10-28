@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {windowsTestProcess} from './windows-test-process';
 import './installer-webview.test';
+import './cli-install.test';
 import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, verifyChecksums } from './release';
 
 const version='0.2.0-alpha.1';

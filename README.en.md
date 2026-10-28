@@ -50,6 +50,8 @@ TaskPulse brings coding-agent tasks from local, WSL and SSH environments into on
 
 ## Quick start
 
+A [PowerShell installation entry point](docs/CLI_INSTALL.md) verifies release assets and opens the standard setup wizard, with explicit alpha selection, version pinning and download-only mode. It becomes usable after the script reaches main and a release is public; drafts are excluded.
+
 For Windows EXE/MSI or Apple Silicon DMG packages, follow the [candidate guide](docs/CANDIDATE_TESTING.md). Source development needs Bun, Rust 1.89+ and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/):
 
 ```powershell

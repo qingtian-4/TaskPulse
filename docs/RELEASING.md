@@ -131,3 +131,11 @@ Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Ap
 2026-10-19：旧草稿包含本次审计发现的旧依赖。Alpha.7 分支的安全修复不回写旧标签/
 安装包；新候选必须使用新标签重新验收。在完成
 [开源交付清单](OPEN_SOURCE_CHECKLIST.md) 前，不公开旧草稿来冒充修复后的版本。
+
+## 命令行安装兼容性
+
+根目录 `install.ps1` 消费公开 Release 的精确 Windows x64 NSIS 文件、`SHA256SUMS.txt` 和 `release-manifest.json`。更改包名、manifest 或校验和格式时运行 `bun run test:release`，其中包含 Windows PowerShell 离线安装入口回归。它不会执行真实安装器。
+
+发布前核对中英文用户说明、来源模型支持范围、已知限制、unsigned 提示、tag/四处版本一致性和当前 SHA 的 Windows/Security/独立 NSIS+MSI 验收。发布后再人工执行 `-Version <公开版本> -DownloadOnly` 核对匿名下载；未公开 Draft 无法完成该项真实下载验收，不应伪称通过。安装流程仍由现有安装器测试覆盖，命令行入口不能替代安装器验收。
+
+保持当前草稿预发布策略、固定 Actions SHA 和手动发布门禁；不沿用参考项目直接公开稳定 Release 的行为。新发布说明只维护简体中文与英文，不添加其他语言。参见 [参考项目对照](maintainers/AGENT_SPEED_REFERENCE.md) 与 [CLI 说明](CLI_INSTALL.md)。

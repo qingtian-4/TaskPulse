@@ -17,6 +17,10 @@ MSI 是可选安装格式，不要与 NSIS 同时安装。ZIP/Portable 尚未交
 安装版运行不需要 Rust/Bun/Node；需要 WebView2，缺少时安装器会联网下载运行时。
 离线环境应先安装 WebView2；不提供绕过系统安全提示的自动操作。
 
+## 命令行入口
+
+Windows x64 可使用 [PowerShell 安装说明](CLI_INSTALL.md)。它复用现有安装包与 SHA-256，不新增包管理器，也不绕过草稿发布门禁。
+
 ## 三步开始
 
 1. 安装候选包或从源码启动 TaskPulse，打开来源管理，发现或选择 Agent，先查看支持能力。
