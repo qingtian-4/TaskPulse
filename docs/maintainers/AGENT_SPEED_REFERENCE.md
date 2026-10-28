@@ -20,7 +20,7 @@ Agent Speed 的 macOS 前端为 SwiftUI/AppKit，Windows 为 WPF，核心解析�
 | 参考项目信息 | TaskPulse 决定 |
 | --- | --- |
 | 来源、项目、模型、执行阶段、子 Agent | 本次补模型；保留现有来源/项目/任务身份与阶段 |
-| 当前/峰值/平均 TPS、token、请求量 | 本次不新增，需独立计量规格与口径 |
+| 当前/峰值/平均 TPS、token、请求量 | 明确不纳入本次及后续补齐方案 |
 | API 等值费用、网络流量 | 本次不新增，无需价格网络请求、辅助服务或遥测 |
 | 日汇总、各模型历史、CSV | 保留 TaskPulse 关注/未读状态语义，不导入全量旧会话 |
 | 悬浮球和动态仪表盘 | 沿用紧凑任务列表，模型一行可见且长名称换行 |
@@ -34,3 +34,8 @@ Agent Speed 的 macOS 前端为 SwiftUI/AppKit，Windows 为 WPF，核心解析�
 [发布工作流](https://github.com/zoefix/agent-speed/blob/a94a67fcc78e5d8eea5f82d8d5e737bccf994e2c/.github/workflows/release.yml)在 tag 上验证版本、分别构建两平台、汇总资产和 SHA256，再组合版本说明与模板；若已有 draft 则留待人工发布。本项目已有更严格的 Windows 质量/安全/独立安装器门禁和 draft-only 策略，应保留。可学习固定资产命名、明确语言与升级说明；不引入直接公开、版本覆盖或实验平台稳定承诺。
 
 本次新增 `install.ps1`，仅简体中文/英文；默认 stable，显式 `-Prerelease` 或 `-Version` 可选择公开 Alpha，`-DownloadOnly` 用于审阅校验。当前候选仍为 Draft，真实公共下载路径须在未来明确批准公开后验收。未创建标签、发布 Release、合入 main 或清理本功能 worktree。
+
+## 后续补齐
+
+README 重整、macOS 命令行安装、当前 PR 双平台安装包及验收的具体范围见
+[后续执行方案](MODEL_INSTALL_FOLLOWUP_PLAN.md)。方案区分已经实现、仓库既有能力与待做事项，不新增测速功能。
