@@ -4,7 +4,13 @@ set -euo pipefail
 language=en
 case "${LANG:-}" in zh*) language=zh-CN;; esac
 version= prerelease=0 download_only=0 output_dir=. install_dir="${HOME}/Applications" no_launch=0
-work= stage= lock= recovery= target= attached=0 transaction=0 committed=0 incoming_id= old_id=
+work= stage= lock= recovery= target= attached=0 transaction=0 committed=0 incoming_id= old_id= finished=0
+version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$'
+tag_pattern="^v${version_pattern#^}"
+time_pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$'
+commit_pattern='^[a-f0-9]{40}$'
+digest_pattern='^[a-f0-9]{64}$'
+executable_pattern='^[A-Za-z0-9_-]+$'
 say() { if [ "$language" = zh-CN ]; then printf '%s\n' "$2"; else printf '%s\n' "$1"; fi; }
 fail() { say "Error: $1" "错误：${2:-$1}" >&2; exit 1; }
 usage() {
@@ -34,6 +40,8 @@ move_owned() {
 }
 cleanup() {
   local code=$? retain=0
+  # Older Bash can enter EXIT after a parse error with status zero.
+  if [ "$code" = 0 ] && [ "$finished" = 0 ]; then code=1; fi
   trap - EXIT INT TERM
   if [ "$transaction" = 1 ] && [ "$committed" = 0 ]; then
     if exists "$target"; then
@@ -52,7 +60,7 @@ cleanup() {
       rmdir "$recovery" || retain=1
     fi
     if [ "$retain" = 1 ]; then
-      say "Recovery required: $recovery (staging: $stage). Inspect before retrying." "需要恢复：$recovery（暂存：$stage）。核对后再重试。" >&2
+      say "Recovery required: $recovery (staging: $stage). Inspect before retrying." "需要恢复：${recovery}（暂存：${stage}）。核对后再重试。" >&2
     fi
   fi
   if [ "$attached" = 1 ]; then
@@ -80,7 +88,7 @@ while [ "$#" -gt 0 ]; do
     --prerelease) prerelease=1; shift;;
     --download-only) download_only=1; shift;;
     --no-launch) no_launch=1; shift;;
-    --help) usage; exit 0;;
+    --help) usage; finished=1; exit 0;;
     --version|--output-dir|--dir|--language)
       [ "$#" -ge 2 ] && [ -n "$2" ] && [[ "$2" != --* ]] || fail "Missing value: $1" "参数缺少值：$1"
       case "$1" in --version) version=${2#v};; --output-dir) output_dir=$2;; --dir) install_dir=$2;; --language) language=$2;; esac
@@ -89,7 +97,7 @@ while [ "$#" -gt 0 ]; do
   esac
 done
 case "$language" in en|zh-CN) ;; *) fail 'Language must be en or zh-CN.' '语言必须为 en 或 zh-CN。';; esac
-[ -z "$version" ] || [[ "$version" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$ ]] || fail 'Invalid version.' '版本无效。'
+[ -z "$version" ] || [[ "$version" =~ $version_pattern ]] || fail 'Invalid version.' '版本无效。'
 [ "$(uname -s)" = Darwin ] || fail 'This installer requires macOS.' '此脚本仅支持 macOS。'
 machine=$(uname -m)
 case "$machine" in
@@ -119,7 +127,7 @@ else
     field "$work/releases.json" "$i.tag_name" >/dev/null || break
     draft=$(required "$work/releases.json" "$i.draft")
     published=$(field "$work/releases.json" "$i.published_at" || true)
-    if [ "$draft" = false ] && [[ "$published" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] && [[ "$published" > "$newest" ]]; then newest=$published; index=$i; fi
+    if [ "$draft" = false ] && [[ "$published" =~ $time_pattern ]] && [[ "$published" > "$newest" ]]; then newest=$published; index=$i; fi
   done
   [ -n "$index" ] || fail 'No public release available. Drafts cannot be installed.' '无可用公开版本，不能安装草稿。'
   plutil -extract "$index" json -o "$work/release.json" "$work/releases.json"
@@ -127,9 +135,9 @@ fi
 release="$work/release.json"
 [ "$(required "$release" draft)" = false ] || fail 'Drafts cannot be installed.' '不能安装草稿。'
 published=$(required "$release" published_at)
-[[ "$published" =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}Z$ ]] || fail 'Release is not published.' '版本尚未公开。'
+[[ "$published" =~ $time_pattern ]] || fail 'Release is not published.' '版本尚未公开。'
 tag=$(required "$release" tag_name)
-[[ "$tag" =~ ^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$ ]] || fail 'Invalid release tag.' '版本标签无效。'
+[[ "$tag" =~ $tag_pattern ]] || fail 'Invalid release tag.' '版本标签无效。'
 if [ -n "$version" ]; then [ "$tag" = "v$version" ] || fail 'Release tag mismatch.' '版本标签不匹配。'
 elif [ "$prerelease" = 0 ]; then
   [ "$(required "$release" prerelease)" = false ] && [[ "$tag" != *-* ]] || fail 'Prerelease requires explicit selection.' '预发布须明确选择。'
@@ -161,7 +169,7 @@ if [ "$download_only" = 1 ]; then
   lock=$lock_candidate
   stage=$(mktemp -d "$output_dir/.taskpulse-download.XXXXXX")
 else stage="$work/assets"; mkdir "$stage"; fi
-say "Downloading TaskPulse $tag ($arch)" "正在下载 TaskPulse $tag（$arch）"
+say "Downloading TaskPulse $tag ($arch)" "正在下载 TaskPulse ${tag}（${arch}）"
 # curl does not attach browser download quarantine. Add it without replacing
 # any existing value, so CLI downloads receive the system's security assessment.
 quarantine() {
@@ -178,14 +186,14 @@ fetch "${urls[1]}" "$stage/$sums" 45
 fetch "${urls[2]}" "$stage/$manifest" 45
 metadata="$stage/$manifest"
 [ "$(required "$metadata" version)" = "$version" ] && [ "$(required "$metadata" platform)" = macos ] && [ "$(required "$metadata" architecture)" = "$arch" ] || fail 'Manifest version/platform/architecture mismatch.' 'manifest 版本、平台或架构不匹配。'
-[[ "$(required "$metadata" commit)" =~ ^[a-f0-9]{40}$ ]] || fail 'Invalid source SHA.' '源码 SHA 无效。'
+[[ "$(required "$metadata" commit)" =~ $commit_pattern ]] || fail 'Invalid source SHA.' '源码 SHA 无效。'
 [ "$(required "$metadata" assets.0)" = "$name" ] && ! field "$metadata" assets.1 >/dev/null || fail 'Unexpected manifest assets.' 'manifest 资产列表不符。'
 # Older public experimental manifests have no tag/build_kind; explicit preview/candidate markers are rejected.
 kind=$(field "$metadata" build_kind || true)
 [ -z "$kind" ] || [ "$kind" = release ] || fail 'Preview/candidate assets are not public releases.' '预览或候选附件不是公开 Release。'
 if field "$metadata" tag >/dev/null; then [ "$(field "$metadata" tag)" = "$tag" ] || fail 'Manifest tag mismatch.' 'manifest 标签不匹配。'; fi
 expected=$(required "$metadata" sha256)
-[[ "$expected" =~ ^[a-f0-9]{64}$ ]] || fail 'Invalid SHA-256.' 'SHA-256 无效。'
+[[ "$expected" =~ $digest_pattern ]] || fail 'Invalid SHA-256.' 'SHA-256 无效。'
 [ "$(cat "$stage/$sums")" = "$expected  $name" ] || fail 'Checksum manifest mismatch.' '校验文件不匹配。'
 actual=$(shasum -a 256 "$stage/$name"); actual=${actual%% *}
 [ "$actual" = "$expected" ] || fail 'SHA-256 mismatch.' 'SHA-256 不匹配。'
@@ -197,6 +205,7 @@ if [ "$download_only" = 1 ]; then
   move_owned "$stage" "$destination" || fail 'Download publication conflict; external data preserved.' '保存下载发生冲突，已保留外部数据。'
   stage=
   say "Verified download saved: $destination" "已保存验证后的下载：$destination"
+  finished=1
   exit 0
 fi
 mkdir -p "$install_dir"
@@ -226,7 +235,7 @@ verify_app() {
   bundle_version=$(required "$app/Contents/Info.plist" CFBundleShortVersionString)
   [ "$bundle_version" = "$version" ] || fail 'Application version mismatch.' '应用版本不匹配。'
   exe=$(required "$app/Contents/Info.plist" CFBundleExecutable)
-  [[ "$exe" =~ ^[A-Za-z0-9_-]+$ ]] && [ -f "$app/Contents/MacOS/$exe" ] && [ ! -L "$app/Contents/MacOS" ] && [ ! -L "$app/Contents/MacOS/$exe" ] || fail 'Invalid bundle executable.' '应用可执行文件无效。'
+  [[ "$exe" =~ $executable_pattern ]] && [ -f "$app/Contents/MacOS/$exe" ] && [ ! -L "$app/Contents/MacOS" ] && [ ! -L "$app/Contents/MacOS/$exe" ] || fail 'Invalid bundle executable.' '应用可执行文件无效。'
   architectures=$(lipo -archs "$app/Contents/MacOS/$exe")
   [ "$architectures" = "$binary_arch" ] || fail 'Binary architecture mismatch.' '实际二进制架构不匹配。'
   codesign --verify --deep --strict "$app"
@@ -256,6 +265,7 @@ if exists "$target"; then
   if [ "$(required "$target/Contents/Info.plist" CFBundleShortVersionString)" = "$version" ]; then
     verify_app "$target"
     say "Already installed: $version" "已安装此版本：$version"
+    finished=1
     exit 0
   fi
   old_id=$(directory_id "$target")
@@ -282,4 +292,6 @@ if [ -d "$recovery" ]; then
     rmdir "$recovery" || fail "Inspect retained recovery directory: $recovery" "请核对残留恢复目录：$recovery"
   else fail "Recovery ownership changed: $recovery" "恢复目录所有权发生变化：$recovery"; fi
 fi
-say "Installed TaskPulse $version: $target" "已安装 TaskPulse $version：$target"
+say "Installed TaskPulse $version: $target" "已安装 TaskPulse ${version}：$target"
+
+finished=1

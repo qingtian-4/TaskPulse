@@ -6,6 +6,7 @@ from pathlib import Path
 import plistlib
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -13,6 +14,7 @@ import unittest
 REPO = Path(__file__).resolve().parent.parent
 SCRIPT = REPO / 'install.sh'
 VERSION = '0.2.0-alpha.8'
+BASH = os.environ.get('TASKPULSE_TEST_BASH', '/bin/bash' if sys.platform == 'darwin' else 'bash')
 
 
 class InstallerTests(unittest.TestCase):
@@ -67,11 +69,21 @@ class InstallerTests(unittest.TestCase):
 
     def run_script(self, *args, success=True):
         self.sync()
-        result = subprocess.run(['bash', str(SCRIPT), *args], cwd=self.root, env=self.environment,
+        result = subprocess.run([BASH, str(SCRIPT), *args], cwd=self.root, env=self.environment,
                                 capture_output=True, text=True, encoding="utf-8", errors="backslashreplace", timeout=60)
-        if success: self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        if success:
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            if '--help' not in args: self.assertIn('SHA-256', result.stdout)
         else: self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout + result.stderr
+
+    def test_unicode_message_variables_have_explicit_boundaries(self):
+        import re
+        self.assertIsNone(re.search(r'\$[A-Za-z_][A-Za-z0-9_]*(?=[^\x00-\x7f])', SCRIPT.read_text()))
+
+    def test_bootstrap_parses_on_selected_shell(self):
+        result = subprocess.run([BASH, '-n', str(SCRIPT)], capture_output=True)
+        self.assertEqual(result.returncode, 0, repr(result.stderr))
 
     def test_tool_doubles_are_executable_and_selected(self):
         for name in ['uname', 'curl', 'plutil', 'mv', 'xattr', 'stat']:
@@ -190,7 +202,7 @@ class InstallerTests(unittest.TestCase):
     def test_concurrent_download(self):
         self.options['delay'] = 1
         self.sync()
-        command = ['bash', str(SCRIPT), '--prerelease', '--download-only']
+        command = [BASH, str(SCRIPT), '--prerelease', '--download-only']
         a = subprocess.Popen(command, cwd=self.root, env=self.environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         def stop():
             if a.poll() is None: a.kill()
