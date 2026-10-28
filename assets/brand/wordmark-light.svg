@@ -1,9 +1,9 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 210" role="img" aria-label="TaskPulse wordmark using refined open P on light background">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 820 210" role="img" aria-label="TaskPulse wordmark using balanced T and P monogram on light background">
   <rect width="820" height="210" rx="30" fill="#F4F7FA"/>
   <g transform="translate(23 22) scale(1.65)">
     <rect x="7" y="7" width="86" height="86" rx="23" fill="#101929"/>
-    <path d="M29 74 V30" fill="none" stroke="#EAF9F6" stroke-width="12" stroke-linecap="round"/>
-    <path d="M29 30 H54 C70 30 76 38 76 48 C76 59 69 64 55 64 H48" fill="none" stroke="#76DFCD" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M20 30 H36 M36 30 V74" fill="none" stroke="#EAF9F6" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M36 30 H57 C73 30 79 39 79 48 C79 59 71 64 58 64 H50" fill="none" stroke="#76DFCD" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/>
   </g>
   <text x="211" y="111" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="67" font-weight="760" letter-spacing="-2.6"><tspan fill="#15243A">Task</tspan><tspan fill="#108F7F">Pulse</tspan></text>
   <text x="215" y="150" font-family="Inter,Segoe UI,Arial,sans-serif" font-size="18" font-weight="600" letter-spacing="1.4" fill="#607187">YOUR AGENTS, ONE GLANCE.</text>

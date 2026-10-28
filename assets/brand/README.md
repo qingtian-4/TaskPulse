@@ -1,8 +1,9 @@
 # TaskPulse 品牌资源
 
-来源：维护者确认的 `TaskPulse-Logo-Kit.zip`，design-handoff-2026-10-27。
-`brand.svg` 是固定的双色开口 P 母版；其几何形状未修改。
-SVG 状态图只改变 P 的环颜色，应用/安装器/窗口图标始终使用固定品牌色。
+来源：维护者确认的 `TaskPulse-TP-Logo-Kit.zip`，design-handoff-2026-10-27-tp03。
+`brand.svg` 是 **03 / 明显的 T × P** 母版：白色 T 的横笔向左伸出，右侧为开口 P。
+本套资源整体替代旧版双色 P，母版几何未修改。SVG 状态图只改变右侧 P 的环颜色，
+白色 T 保持不变；应用/安装器/窗口图标始终使用固定品牌色。
 
 README 的 `<picture>` 使用 `wordmark-dark.svg` / `wordmark-light.svg`，浅色为回退。
 Dashboard、消息中心和来源管理通过 `BrandMark.svelte` 使用同一母版的副本
@@ -27,6 +28,11 @@ bun run tauri icon assets/brand/brand.svg --output src-tauri/target/brand-genera
 `tauri.conf.json` 既有 `bundle.icon`，NSIS `installerIcon` 也显式指向同一 ICO；identifier、upgradeCode、版本、安装模式、
 WebView2 策略和用户配置路径保持原样。生成时 Windows 字体枚举可能警告，
 品牌母版没有文本/字体依赖。macOS 彩色应用 ICNS 同步更新；菜单栏单色模板另行设计。
+
+`manifest.json` 记录 TP-03 的路径、描边、交付 ZIP SHA256，以及所有顶层桌面二进制
+资源和 Social Preview 的 SHA256。更新时同步清单，`scripts/brand.test.ts` 检查混用、
+ICO 目录及 ICNS 的原生/Retina 表示。历史验收报告与 Alpha.7 截图保留历史原貌；
+README 的 current 截图重新从新版原生应用捕获，不后期替换图标。
 
 托盘使用交付包原始 32px RGBA PNG，映射为 `tray-working`、`tray-needs-input`、
 `tray-error`、`tray-idle` 和 `tray-review`，全部编译时嵌入。
@@ -55,6 +61,7 @@ Windows Shell 负责把 32px 图像适配任务栏尺寸；不新增 DPI 轮询�
 
 ## 验收与回滚
 
-本次证据与未执行项见 [品牌集成验收记录](../../docs/BRAND_VALIDATION_2026-10-27.md)。
+本次证据与未执行项见 [TP-03 验收记录](../../docs/TP_LOGO_VALIDATION_2026-10-28.md)。
+旧 P 的 [2026-10-27 记录](../../docs/BRAND_VALIDATION_2026-10-27.md) 仅为历史证据。
 回滚时撤销本次品牌集成提交并重建应用；无需回滚/删除任何用户状态或修改 Agent 配置。
 安装器升级和 Windows 图标缓存必须在独立验收机器检查，不以开发机手动清缓存冒充升级通过。
