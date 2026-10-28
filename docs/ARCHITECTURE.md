@@ -133,3 +133,12 @@ Tail/parser 缓存有预算与 active 状态保护，冷历史逐步 catch-up；
 [Manage](../src/routes/manage/+page.svelte) 获取配置、发现目录、integration preview/confirmation；即时开关与未保存 editor draft 分离。[Notice](../src/routes/notice/+page.svelte) 获取 NoticeState 并回报 rendered，不改变 Attention 已读。Dashboard 展示 ongoing/results/uncertain/pinned；失败是结果，来源故障是不确定，thinking/model wait 仍 ongoing。
 
 浏览器 dev demo 不能验收 native IPC、CSP、窗口线程、焦点或宿主支持。native-product / native-integration / native-notice smoke 使用实际 WebView2 与隔离合成事件；installer CI 在独立 fresh runner 分别验收 NSIS/MSI。quality、security、release 工作流独立；release 只创建 draft prerelease，不自动公开。Linux/macOS 为 opt-in experimental，不能继承 Windows 验收。当前结果见 [本轮验证](maintainers/OPEN_SOURCE_READINESS_2026-10-23.md)。
+
+## 模型元数据与分发边界
+
+Provider 将可选 `model` 沿现有 TaskStore/Attention/IPC 链路传入 UI。Codex 原生上下文、
+Claude assistant、DSH 会话/日志与 Hermes SQLite 是证据来源，空值不推测。模型不参与稳定身份、
+生命周期或通知键；来源更新时间不替代本轮开始时间。实现与验证边界见[兼容矩阵](AGENT_COMPATIBILITY.md#模型信息与本轮计时)。
+
+安装 bootstrap 消费相同的 Release 安装器/DMG，PR preview 仅上传带精确 SHA 的测试附件。
+公开 CLI 拒绝 Draft 与 `pr-preview` manifest；正式标签/准确 main 校验仍由原发布流程执行。

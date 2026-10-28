@@ -69,3 +69,9 @@ bun scripts/native-message-center-smoke.ts --exe src-tauri/target/codex-check/de
 3. 通过标准事件入口投递公开合成标题、项目和命令，名称含“示例”；使用真实采集流水线，不以浏览器 mock 改写任务。
 4. 仅为该隔离进程临时开启 WebView2 CDP，拍摄 Dashboard、来源管理和测试通知，检查私人路径、账号、服务器、额度与对话泄露。
 5. 保存输入说明和结果；退出隔离进程，关闭调试端口。不安装真实 Hook，不运行真实 Agent 任务，不提高 fixture-tested 支持等级。
+
+## 模型显示合成图
+
+`screenshots/models-synthetic.png`：440×720，2026-10-28 原生 WebView2 验收截图，来自
+`scripts/native-model-smoke.ts` 的隔离合成 transcript。展示长模型、未知模型、独立阶段与计时；
+不含私人任务，不证明宿主真实事件覆盖。保留现有品牌和截图。

@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
-  <img alt="TaskPulse — Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
+  <img alt="TaskPulse: Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
 </picture>
 
 # TaskPulse
@@ -41,29 +41,28 @@ TaskPulse brings coding-agent tasks from local, WSL and SSH environments into on
 
 </details>
 
+## Quick start
+
+Packaged installs need no Bun, Rust or source checkout. **The candidate is not publicly released**; use [candidate downloads](docs/CANDIDATE_TESTING.md) for authenticated Actions artifacts at the exact source SHA. PR previews are test attachments, not public releases.
+
+| Platform | Package | Command-line entry | Availability |
+|---|---|---|---|
+| Windows 10/11 x64 | NSIS EXE / MSI | [`install.ps1`](docs/CLI_INSTALL.md#windows-1011-x64) | Primary platform; current PR packages need independent acceptance |
+| macOS Apple Silicon | arm64 DMG | [`install.sh`](docs/CLI_INSTALL.md#macos-apple-silicon-and-intel) | Experimental, ad-hoc signed, not notarized; current PR and physical Mac checks pending |
+| macOS Intel | x64 DMG | [`install.sh`](docs/CLI_INSTALL.md#macos-apple-silicon-and-intel) | Experimental; separate native build and physical Mac checks pending |
+
+CLI entries consume public release packages after the scripts reach main and a reviewed version is published. Stable is the default; alpha requires explicit selection. Drafts and PR previews are excluded. Linux remains experimental through [source development](docs/DEVELOPMENT.md).
+
+Open **source management → select an agent and projects → save and apply**, then start work in the original agent. Open the dashboard with `Ctrl+Shift+A`.
+
+[Installation and upgrades](docs/INSTALL.md) · [CLI options](docs/CLI_INSTALL.md) · [WSL](docs/WSL_CODEX.md) · [Mac](docs/MACOS_DEVELOPMENT.md)
+
 ## Features
 
 - **One attention dashboard** for running tasks, pending requests, failures and unviewed results, grouped by agent, project or source.
 - **Aggregate tray status** prioritizes requests over errors, unviewed results and running work across concurrent agents.
 - **Explicit event reminders** keep thinking and tools running; silence, low CPU or collection failure never imply completion.
 - **Recoverable attention** retains unviewed results and pins across restarts. Message seen, result viewed and request resolved stay separate.
-
-## Quick start
-
-A [PowerShell installation entry point](docs/CLI_INSTALL.md) verifies release assets and opens the standard setup wizard, with explicit alpha selection, version pinning and download-only mode. It becomes usable after the script reaches main and a release is public; drafts are excluded.
-
-For Windows EXE/MSI or Apple Silicon DMG packages, follow the [candidate guide](docs/CANDIDATE_TESTING.md). Source development needs Bun, Rust 1.89+ and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/):
-
-```powershell
-git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
-cd TaskPulse
-bun install --frozen-lockfile
-bun run tauri dev
-```
-
-Open **source management → select an agent and projects → save and apply**, then start work in the original agent. Open the dashboard with `Ctrl+Shift+A`.
-
-[Installation](docs/INSTALL.md) · [WSL](docs/WSL_CODEX.md) · [Mac development](docs/MACOS_DEVELOPMENT.md) · [Troubleshooting](docs/DEVELOPMENT.md)
 
 ## Supported agents
 
@@ -79,6 +78,16 @@ Open **source management → select an agent and projects → save and apply**, 
 
 Environment coverage, event support and validation differ by source. See the [compatibility matrix](docs/AGENT_COMPATIBILITY.md) and [integration guide](docs/AGENT_INTEGRATION_GUIDE.md).
 
+## Models and elapsed time
+
+Codex reports models from native metadata and rollout context; Claude Code from assistant records; DeepSeek Harness from session/log state; Hermes from SQLite session/messages. Missing, empty or unsupported values remain unknown. A reported or proxy model does not identify the underlying service, and changing it never changes task identity, unread state or notification deduplication.
+
+Turn elapsed time covers thinking, tools and model-response waits. It is not pure model computation time; missing start times are not invented. Source freshness is separate from execution time. Only explicit requests establish an approval wait. [Source details and validation](docs/AGENT_COMPATIBILITY.md#模型信息与本轮计时).
+
+![Synthetic model example](assets/screenshots/models-synthetic.png)
+
+*Native WebView2 capture from isolated synthetic transcripts, showing a reported model and a missing-model task. This is not real-host certification.*
+
 ## How it works
 
 ![TaskPulse architecture](assets/diagrams/taskpulse-architecture.svg)
@@ -86,6 +95,23 @@ Environment coverage, event support and validation differ by source. See the [co
 **Collect evidence → reconcile tasks → track attention → update the tray, dashboard and event reminders.**
 
 Built with Rust, Tauri 2 and Svelte 5. State stays local without a TaskPulse cloud account. Source failures remain uncertain, and approvals stay in the original agent. [Architecture details](docs/ARCHITECTURE.md).
+
+## Privacy
+
+TaskPulse reads configured local records and explicitly enabled WSL/SSH sources. Provider records may contain prompts, titles and paths; TaskPulse does not upload conversations to its own cloud or require a cloud account. GitHub installation downloads, system notifications and configured SSH still cross their respective network/system boundaries. TaskPulse keeps settings, attention and notification deduplication in `~/.taskpulse/`; review diagnostics before sharing. It never installs Agent hooks automatically or approves requests. [Data boundaries](docs/INSTALL.md#数据与隐私).
+
+## Source development
+
+Developers need Bun, Rust 1.89+ and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/):
+
+```sh
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
+cd TaskPulse
+bun install --frozen-lockfile
+bun run tauri dev
+```
+
+See [development and troubleshooting](docs/DEVELOPMENT.md). The installer does not require these tools. README and installer output support Simplified Chinese and English; full UI localization is outside this change.
 
 ## Roadmap
 

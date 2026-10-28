@@ -54,7 +54,7 @@ sw_vers
 uname -m
 
 # 在安装 rustup 与 Bun 后执行；先确认远端分支含有目标修复
-git clone --branch codex/p0-remote-acceptance https://github.com/qingtian-4/TaskPulse.git
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
 cd TaskPulse
 git switch -c codex/macos-alpha
 git rev-parse HEAD

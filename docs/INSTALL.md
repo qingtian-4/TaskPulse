@@ -19,7 +19,15 @@ MSI 是可选安装格式，不要与 NSIS 同时安装。ZIP/Portable 尚未交
 
 ## 命令行入口
 
-Windows x64 可使用 [PowerShell 安装说明](CLI_INSTALL.md)。它复用现有安装包与 SHA-256，不新增包管理器，也不绕过草稿发布门禁。
+Windows x64 和 macOS Apple Silicon/Intel 可使用[命令行安装说明](CLI_INSTALL.md)。它复用现有安装包与 SHA-256，不新增包管理器，也不绕过草稿发布门禁。
+
+## macOS 包安装
+
+Apple Silicon 使用 arm64 DMG，Intel 使用 x64 DMG。按对应的 `macos-<arch>-SHA256SUMS.txt`
+核验后只读打开 DMG，将 TaskPulse 拖入 Applications；用菜单栏退出旧实例后升级，保留
+`~/.taskpulse/`。当前包是实验 ad-hoc 签名且未公证，10.15 构建目标不代表各系统实测通过。
+Gatekeeper 提示按 [Apple 官方说明](https://support.apple.com/en-us/102445)处理；不要清除安全属性。
+当前 PR 的双架构包与真实 Mac 体验分别验收，详见 [Mac 指南](MACOS_DEVELOPMENT.md)。
 
 ## 三步开始
 

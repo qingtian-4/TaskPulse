@@ -20,6 +20,21 @@ UI / 原生截图验收见 [第二轮验证报告](UI_UX_VALIDATION_2026-10-21.m
 
 第一轮只读与原生平台验证见 [可靠性记录](internal/reports/RELIABILITY_OPTIMIZATION_2026-10.md)。这些记录不替下面四款宿主 Hook 背书，也不证明所有内置来源的新任务端到端时延。
 
+## 模型信息与本轮计时
+
+| 来源 | 模型证据 | 验证及边界 |
+|---|---|---|
+| Codex | 原生 thread/app-server 元数据、rollout turn context | 本机只读验证；WSL/SSH 共用 parser，不等于所有环境实机通过 |
+| Claude Code | assistant 消息的 model | 原生 parser 合成回放；当期无合格近期真实会话，代理后实际模型未知 |
+| DeepSeek Harness | 原生 session/log state 的 model | 本机只读验证；原生/WSL 分开，projection 不覆盖新日志状态 |
+| Hermes | SQLite session/message 模型字段 | 本机只读验证；兼容旧 schema，缺失保持未知 |
+| 其他/通用来源 | 仅来源明确提供的可选 model | 不按 Agent 品牌或项目名称猜测 |
+
+模型只作上下文，变化不重建稳定 task ID，不改生命周期、开始时间、未读或通知去重。
+空值/缺失显示未知；一个项目可同时使用多模型。模型报告不证明供应商或代理后的实际服务。
+本轮经过时间包括思考、工具和模型等待；开始证据缺失不造时间，采集刷新/重命名不续执行活跃期。
+Windows 原生界面合成测试不替代当前 PR 安装包或 Mac 真实 Agent 验收。
+
 ## 四款通用接入的验证等级
 
 核验日期：2026-10-21（R1–R4 修复后能力边界）。TaskPulse `0.2.0-alpha.7`、Windows 10 Pro 22H2 x64（19045）。**以下四款的宿主 Hook 实机验证版本均为“无”**。安装元数据不是事件验证；合成载荷测试与 TaskPulse 原生 WebView2/GUI exe 验收均不升级为宿主 native-tested。

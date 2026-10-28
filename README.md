@@ -3,7 +3,7 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
-  <img alt="TaskPulse — Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
+  <img alt="TaskPulse: Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
 </picture>
 
 # TaskPulse
@@ -41,29 +41,28 @@ TaskPulse 是一个多 Coding Agent 任务监控器。把本机、WSL 和 SSH �
 
 </details>
 
+## 快速开始
+
+安装版无需 Bun、Rust 或克隆源码。**候选尚未公开发布**；测试者按[候选下载说明](docs/CANDIDATE_TESTING.md)登录 Actions 获取精确源码 SHA 的附件。PR 预览仅为测试附件，不是公开版本。
+
+| 平台 | 安装包 | 命令行入口 | 当前阶段 |
+|---|---|---|---|
+| Windows 10/11 x64 | NSIS EXE / MSI | [`install.ps1`](docs/CLI_INSTALL.md#windows-1011-x64) | 主要平台；当前 PR 的包仍需独立验收 |
+| macOS Apple Silicon | arm64 DMG | [`install.sh`](docs/CLI_INSTALL.md#macos-apple-silicon-and-intel) | 实验、ad-hoc 签名、未公证；当前 PR 与实机检查待完成 |
+| macOS Intel | x64 DMG | [`install.sh`](docs/CLI_INSTALL.md#macos-apple-silicon-and-intel) | 实验；独立原生构建和实机检查待完成 |
+
+命令行复用公开 Release 的安装包，须等脚本合入 main 且版本经审查公开后使用。默认稳定版，Alpha 须明确选择；Draft 和 PR 预览不可安装。Linux 仍按[源码开发说明](docs/DEVELOPMENT.md)实验验证。
+
+启动后打开 **来源管理 → 选择 Agent 与项目 → 保存并生效**，然后在原 Agent 中开始任务。使用 `Ctrl+Shift+A` 打开任务面板。
+
+[安装与升级](docs/INSTALL.md) · [命令行参数](docs/CLI_INSTALL.md) · [WSL](docs/WSL_CODEX.md) · [Mac](docs/MACOS_DEVELOPMENT.md)
+
 ## 核心特性
 
 - **统一关注面板**：按 Agent、项目和来源查看进行中、待处理、失败与未查看结果。
 - **聚合托盘状态**：待处理优先于异常、未查看结果和运行中，多任务同时执行也能发现阻塞。
 - **明确事件提醒**：思考和工具执行仍算运行；日志静默、CPU 空闲或采集失败不会被当成完成。
 - **可恢复的关注记录**：未查看结果与固定任务跨重启保留；消息已读、结果已查看、请求已解决分别管理。
-
-## 快速开始
-
-新增 [PowerShell 命令行安装入口](docs/CLI_INSTALL.md)：校验 Release 后打开标准安装向导，支持显式 Alpha、指定版本和仅下载。须等待脚本合入主分支且版本公开；当前 Draft 不可通过命令安装。
-
-测试者从[候选下载说明](docs/CANDIDATE_TESTING.md)获取 Windows EXE/MSI 或 Apple Silicon DMG。源码开发需要 Bun、Rust 1.89+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)：
-
-```powershell
-git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
-cd TaskPulse
-bun install --frozen-lockfile
-bun run tauri dev
-```
-
-启动后打开 **来源管理 → 选择 Agent 与项目 → 保存并生效**，然后在原 Agent 中开始任务。使用 `Ctrl+Shift+A` 打开任务面板。
-
-[安装与配置](docs/INSTALL.md) · [WSL 指南](docs/WSL_CODEX.md) · [Mac 开发](docs/MACOS_DEVELOPMENT.md) · [排障](docs/DEVELOPMENT.md)
 
 ## 支持的 Agent
 
@@ -79,6 +78,16 @@ bun run tauri dev
 
 各来源的环境、事件覆盖与验证程度不同，详见[兼容性矩阵](docs/AGENT_COMPATIBILITY.md)。想接入更多 Agent，请看[接入指南](docs/AGENT_INTEGRATION_GUIDE.md)。
 
+## 模型信息与本轮计时
+
+Codex 从原生元数据和 rollout 上下文读取模型；Claude Code 从 assistant 记录读取；DeepSeek Harness 从会话/日志状态读取；Hermes 从 SQLite 会话/消息读取。缺失、空值或尚不支持的来源保持未知。报告或代理模型不证明背后的实际服务，模型变化不会改变任务身份、未读或通知去重。
+
+本轮经过时间包括思考、工具执行与等待模型响应，不是纯模型计算时长。开始时间缺失不补造，来源更新时间另行展示；只有明确请求才建立待批准状态。[来源与验证边界](docs/AGENT_COMPATIBILITY.md#模型信息与本轮计时)。
+
+![合成模型示例](assets/screenshots/models-synthetic.png)
+
+*隔离合成 transcript 的原生 WebView2 截图，展示已报告模型和未提供模型的任务，不代表真实宿主认证。*
+
 ## 工作原理
 
 ![TaskPulse 中文架构图](assets/diagrams/taskpulse-architecture-zh.svg)
@@ -86,6 +95,23 @@ bun run tauri dev
 **采集来源 → 统一任务状态 → 筛选需要关注的任务 → 托盘、面板与事件提醒。**
 
 基于 Rust、Tauri 2 和 Svelte 5。当前状态保存在本机，无 TaskPulse 云账号要求；来源失联保留不确定状态，真实审批仍由原 Agent 处理。[详细架构](docs/ARCHITECTURE.md)。
+
+## 隐私边界
+
+TaskPulse 读取配置范围内的本地记录及明确启用的 WSL/SSH 来源。原生记录可能含提示词、标题和路径；TaskPulse 不向自有云上传对话，也不要求云账号。GitHub 安装下载、系统通知和已配置 SSH 仍各有网络或系统边界。设置、关注和通知去重保存在 `~/.taskpulse/`，诊断分享前须核对。不会自动安装 Agent Hook 或代为批准请求。[数据边界](docs/INSTALL.md#数据与隐私)。
+
+## 源码开发
+
+开发者需要 Bun、Rust 1.89+ 和 [Tauri 环境](https://v2.tauri.app/start/prerequisites/)：
+
+```sh
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
+cd TaskPulse
+bun install --frozen-lockfile
+bun run tauri dev
+```
+
+见[开发与排障](docs/DEVELOPMENT.md)。普通安装无需这些工具。说明与安装输出维护简中/英文，全量界面国际化不在本次范围内。
 
 ## 路线图
 

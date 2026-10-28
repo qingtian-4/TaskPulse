@@ -52,4 +52,49 @@ The script verifies the repository asset URL, exact filename, tag, version, plat
 
 Current packages are unsigned. Checksums verify download integrity, not publisher identity or a compromised repository. The manifest and checksums share the release's trust boundary. Review the bootstrap before execution and pin its URL to a reviewed commit when desired.
 
-仅 Windows x64 接入此入口。macOS/Linux 继续按实验平台说明获取资产，不将实验构建自动提升为稳定安装渠道。完整发布门禁见 [RELEASING](RELEASING.md)。
+完整发布门禁见 [RELEASING](RELEASING.md)。Linux 暂无命令行安装入口。
+
+## macOS Apple Silicon and Intel
+
+本地审阅脚本后使用；远程 main URL 须等合入及公开版本存在后才能安装。
+Review the script first. The main URL requires a merged script and a public release.
+
+```sh
+curl --fail --location --proto '=https' --tlsv1.2 https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh -o install.sh
+less install.sh
+bash install.sh --prerelease --language zh-CN
+# Pin a public version, download without installing
+bash install.sh --version 0.2.0-alpha.8 --download-only --output-dir ./downloads --language en
+# Install into a writable directory, without launching
+bash install.sh --prerelease --dir "$HOME/Applications" --no-launch
+```
+
+参数：`--version`、`--prerelease`、`--download-only`、`--output-dir`、`--dir`、
+`--no-launch`、`--language en|zh-CN`、`--help`。默认公开稳定版；预发布明确选择，
+指定版本可含 v。预发布选择最近 100 条公开记录中的最新发布时间；缺包不自动跨架构回退。
+
+系统自带 Bash、curl、plutil、shasum、hdiutil、ditto、codesign 与 lipo 完成读取与验证，
+用户不需要 Python/jq/Bun/Rust。检测真实硬件，Rosetta 终端仍选 arm64；未知架构停止。
+核验 DMG、架构专用 manifest/校验文件、版本、仓库 URL、源 SHA 与 SHA-256，
+只读挂载后检查 bundle ID、版本、实际二进制架构和签名完整性。
+
+Uses macOS system tools, including in Rosetta terminals. Unknown architectures fail.
+The DMG, architecture-specific manifest and checksums must match the public release.
+Signature integrity does not imply Developer ID or notarization; current packages are ad-hoc and not notarized.
+
+默认到 `~/Applications/TaskPulse.app`，可用 `--dir` 指定已有写权限的位置，不自动 sudo。
+目标锁阻止并发；拒绝符号链接、其他产品和残留恢复目录。运行中须正常退出后重试。
+同文件系统暂存验证后替换，失败恢复旧 app；异常中断的恢复位置会保留并报告，须先核对。
+仅下载到 `TaskPulse-v<version>-macos-<arch>/`，同盘原子保存且不覆盖已有目录。
+
+Installs into `~/Applications/TaskPulse.app` by default. Quit the running app before upgrading.
+Same-volume staging, a target lock and rollback preserve the previous app on failure.
+Interrupted recovery directories require inspection before another install. Download-only never overwrites an existing version directory.
+
+不删除 TaskPulse 状态、不安装 Hook、不清除 quarantine、不关闭 Gatekeeper。
+启动遭拦截保留错误并按 [Apple 官方步骤](https://support.apple.com/en-us/102445)核对。
+当前 PR 验证不代表 Finder 下载与真实 Agent 实机通过。
+
+State and hooks are untouched. Quarantine and Gatekeeper remain enabled.
+Follow [Apple's guidance](https://support.apple.com/en-us/102445) if launch is blocked; retain the actual error.
+PR CI acceptance does not replace physical Mac acceptance or an anonymous public download test.

@@ -59,6 +59,9 @@ test('post-merge source instructions select main instead of the old candidate br
     const body=readFileSync(file,'utf8');
     const commands=[...body.matchAll(/^git clone .+$/gm)].map(match=>match[0].trim());
     expect(commands,file).toEqual(['git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git']);
+    expect(body.indexOf('windows_x64_setup')).toBe(-1);
+    expect(body.indexOf('| Windows 10/11 x64')).toBeLessThan(body.indexOf('git clone'));
+    for (const value of ['Apple Silicon','Intel','install.ps1','install.sh','models-synthetic.png']) expect(body).toContain(value);
     expect(body,file).not.toContain('尚未合入默认');
     expect(body,file).not.toContain('still on the candidate branch');
   }
