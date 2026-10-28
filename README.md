@@ -8,76 +8,85 @@
 
 **多个 Agent 同时跑，先看哪个需要你。**
 
-把本机、WSL 和 SSH 上的任务收进一个托盘面板。<br>谁在运行、谁等你处理、哪些结果还没看，一眼找到。
+在托盘里查看 AI 任务的状态、模型与运行时间。<br>完成、失败或需要你时，及时提醒。
 
-[English](README.en.md) · [安装](#安装) · [功能](#功能) · [支持的 Agent](#支持的-agent)
+[English](README.en.md) · [安装](#安装) · [支持的 Agent](#支持的-agent) · [使用指南](docs/README.md)
 
-<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS experimental" src="https://img.shields.io/badge/macOS-experimental-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a></p>
+<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a></p>
 
 </div>
 
+## 功能
+
+- **打开即关注**：自动发现本机 Agent，首次确认后跟踪新任务；也可接入 WSL 和 SSH 服务器。
+- **状态、模型、时间**：任务标题、项目、来源上报的模型和本轮耗时同屏展示，支持搜索与分组。
+- **需要你时提醒**：完成、失败、提问和授权请求分别提醒，点击后回到对应任务。
+- **结果不会错过**：未查看的结果持续保留，固定任务与未读状态可跨重启恢复。
+- **安静地常驻**：紧凑托盘面板适配笔记本与高分屏；思考和工具执行都属于运行中。
+- **数据留在本机**：无需 TaskPulse 云账号，不上传对话；不会代你批准 Agent 请求。
+
 ## 安装
 
-> **0.2.0-alpha.8 尚未公开发布。** [下载测试包](docs/CANDIDATE_TESTING.md)。以下一行命令面向后续公开稳定版。
+### 下载安装包
 
-**Windows 10 / 11（x64）**，打开 PowerShell：
+从 [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases) 选择对应系统：
+
+| 系统 | 安装包 |
+| --- | --- |
+| Windows 10 / 11 · x64 | `.exe` 安装向导，或 `.msi` |
+| macOS · Apple Silicon | `macos_arm64.dmg` |
+| macOS · Intel | `macos_x64.dmg` |
+
+### 一条命令安装
+
+**Windows** — 打开 PowerShell：
 
 ```powershell
 irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex
 ```
 
-**macOS（Apple Silicon / Intel，实验支持）**，打开终端：
+**macOS** — 打开终端：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-脚本下载对应平台的安装包，校验 SHA-256 后安装。也可以从 [Releases](https://github.com/qingtian-4/TaskPulse/releases) 手动下载 Windows EXE/MSI 或 Mac DMG，无需 Bun、Rust 或克隆源码。
+脚本选择对应架构、校验 SHA-256 并安装，无需 Bun、Rust 或克隆仓库。Mac 默认安装到 `~/Applications`。系统安全提示和指定版本等选项见[安装说明](docs/INSTALL.md)。
 
-首次启动后选择要关注的 Agent 和项目。日常从托盘打开面板，Windows 也可按 `Ctrl+Shift+A`。
+首次启动，确认发现的本机 Agent 并点击**开始监控**。之后从托盘查看任务；Windows 也可按 `Ctrl+Shift+A`。
 
-<details>
-<summary>升级、Alpha 与安装选项</summary>
-
-升级前从托盘退出 TaskPulse，再运行安装命令。Windows 会打开标准安装向导；Mac 默认安装到 `~/Applications`。当前候选未做发行者签名/Apple 公证，系统可能要求确认。
-
-公开 Alpha 使用 `-Prerelease`（Windows）或 `--prerelease`（Mac）显式选择。指定版本、仅下载、卸载和状态保留见[安装说明](docs/INSTALL.md)与[命令行选项](docs/CLI_INSTALL.md)。
-
-</details>
-
-## 功能
-
-- **一个面板，多处任务**：汇总本机、WSL 和已配置的 SSH 来源，按项目或 Agent 查找，不用逐个切换窗口。
-- **需要你时再提醒**：提问、批准、失败和本轮结束有独立提醒，提示你回到原 Agent 处理。
-- **结果留到你看过**：结束但未查看的任务保留在关注列表，固定和未读状态可跨重启恢复。
-- **模型与时间一起看**：任务标题、项目、来源上报的模型和本轮经过时间同屏展示，支持搜索模型名。
-- **思考中，仍是运行中**：工具执行和等待模型响应不会被误判为完成；来源失联会显示状态待更新。
+应用会自动检查新版本；在**管理 → 应用更新**中点击安装，下载和签名校验完成后重启。也可关闭自动检查或手动检查更新。
 
 ## 支持的 Agent
 
-| 来源 | 接入方式 |
+| Agent / 任务来源 | 接入方式 |
 | --- | --- |
-| Codex | 本机原生会话、独立 WSL 来源、已配置的 SSH 会话 |
-| Claude Code | 本机只读记录；精确事件可显式启用官方 Hook |
+| Codex | 本机自动发现；另支持独立 WSL 与 SSH 来源 |
+| Claude Code | 本机自动发现；可选官方 Hook 提供精确事件 |
 | Hermes | 本机原生数据库与运行状态 |
-| DeepSeek Harness | 本机 Desktop/CLI，另有独立 WSL 来源 |
-| 其他 Agent 与命令行任务 | 标准事件、MCP、兼容 Hook 和 `tp-run` |
+| DeepSeek Harness | 本机 Desktop / CLI；另支持独立 WSL 来源 |
+| ZCode | 本机原生会话、项目、模型与任务状态 |
+| 豆包 | 本机桌面端原生执行状态 |
+| Gemini CLI | 进程发现；任务事件可通过通用接入补充 |
+| Kimi Code CLI | 配置标准事件或 MCP 接入 |
+| WorkBuddy | 配置标准事件或 MCP 接入 |
+| TRAE 中国版 IDE | 配置标准事件或 MCP 接入 |
+| 其他 Agent / 命令行任务 | 标准事件、MCP、兼容 Hook、`tp-run` 和远程 tmux |
 
-豆包及部分扩展适配器仍属实验支持。各来源的事件覆盖不同，详见[兼容矩阵](docs/AGENT_COMPATIBILITY.md)；开发适配器可读[接入指南](docs/AGENT_INTEGRATION_GUIDE.md)。
+自动发现适用于已适配的本机数据格式；WSL、SSH 和事件接入按需配置。不同 Agent 提供的状态不同，未提供的模型或审批信息不会猜测。[兼容说明](docs/AGENT_COMPATIBILITY.md) · [接入指南](docs/AGENT_INTEGRATION_GUIDE.md)
 
-## 数据与隐私
+## 路线图
 
-TaskPulse 从本地记录和已配置的来源获取任务状态，保存在本机，不需要 TaskPulse 云账号，不向自有云上传对话。SSH 仅连接你配置的服务器；不会自动安装 Agent Hook，也不会替你批准请求。[工作原理](docs/ARCHITECTURE.md) · [数据说明](docs/INSTALL.md#数据与隐私)
-
-## 贡献与许可
-
-欢迎[反馈问题](https://github.com/qingtian-4/TaskPulse/issues)、改进文档或提交适配器。[贡献指南](CONTRIBUTING.md) · [路线图](docs/ROADMAP.md) · [安全反馈](SECURITY.md)
-
-基于 [AgentTray](https://github.com/sprklai/agenttray) 开发，保留原始版权与贡献历史，采用 [MIT License](LICENSE)。
+- [x] 本机、WSL 与远程任务统一查看
+- [x] 模型显示、运行计时、提醒与未读保留
+- [x] Windows / macOS 安装包与命令行安装
+- [x] 自动发现本机来源、应用内更新
+- [ ] 扩展更多 Agent 的原生自动接入
+- [ ] 简体中文 / English 界面切换
 
 ## 从源码构建
 
-需要 Bun、Rust 1.89+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)。
+需要 Bun、Rust 1.90+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)。
 
 ```sh
 git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
@@ -86,4 +95,10 @@ bun install --frozen-lockfile
 bun run tauri build
 ```
 
-安装包输出到 `src-tauri/target/release/bundle/`。开发时使用 `bun run tauri dev`，详见[开发指南](docs/DEVELOPMENT.md)。
+安装包位于 `src-tauri/target/release/bundle/`。本地运行使用 `bun run tauri dev`。
+
+## 贡献与许可
+
+欢迎[反馈问题](https://github.com/qingtian-4/TaskPulse/issues)、改进文档或贡献 Agent 适配器。[贡献指南](CONTRIBUTING.md) · [安全反馈](SECURITY.md)
+
+基于 [AgentTray](https://github.com/sprklai/agenttray) 开发，保留原始版权与贡献历史，采用 [MIT License](LICENSE)。

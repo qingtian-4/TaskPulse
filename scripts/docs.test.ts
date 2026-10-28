@@ -12,14 +12,14 @@ test('public documentation links resolve using tracked files, not local reports'
 test('both READMEs expose the actual one-line installation commands before source builds',()=>{
   const windows='irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex';
   const mac='curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash';
-  const version=JSON.parse(read('package.json')).version;
   for(const file of ['README.md','README.en.md']){
     const body=read(file);
     expect(body).toContain(windows);expect(body).toContain(mac);
     expect(body.indexOf(windows)).toBeLessThan(body.indexOf('git clone'));
     expect(body.indexOf(mac)).toBeLessThan(body.indexOf('git clone'));
-    expect(body).toContain(version);
-    expect(body).toContain('docs/CANDIDATE_TESTING.md');
+    expect(body).not.toContain('docs/CANDIDATE_TESTING.md');
+    expect(body).toContain('- [ ]');
+    expect(body).toContain('ZCode');expect(body).toContain('WorkBuddy');
     expect(body).toContain('Apple Silicon');expect(body).toContain('Intel');
     expect(body).toContain('bun run tauri build');
     expect(body).toContain('sprklai/agenttray');expect(body).toContain('(LICENSE)');
@@ -27,22 +27,14 @@ test('both READMEs expose the actual one-line installation commands before sourc
     expect(body).not.toMatch(/docs\/(?:internal|maintainers)\//);
     expect([...body.matchAll(/^git clone .+$/gm)].map(m=>m[0])).toEqual(['git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git']);
   }
-  expect(read('README.md')).toContain('尚未公开发布');
-  expect(read('README.en.md')).toContain('not publicly released');
+  expect(read('README.md').indexOf('## 从源码构建')).toBeLessThan(read('README.md').indexOf('## 贡献与许可'));
+  expect(read('README.en.md').indexOf('## Build from source')).toBeLessThan(read('README.en.md').indexOf('## Contributing and license'));
+  expect(read('README.md')).not.toMatch(/实验支持|测试版本|尚未公开发布|README 怎么呈现/);
+  expect(read('README.en.md')).not.toMatch(/experimental|test candidate/);
   // Preserve real command contracts: the Mac bootstrap requires Bash.
   expect(read('install.sh')).toStartWith('#!/bin/bash');
   expect(read('README.md')).not.toContain('install.sh | sh');
   expect(read('README.en.md')).not.toContain('install.sh | sh');
-});
-
-test('public release docs preserve gates without depending on dated acceptance reports',()=>{
-  const releasing=read('docs/RELEASING.md');
-  for(const required of ['Draft pre-release','main SHA','不可变','独立 fresh runner','medium integrity','8.3','build_kind=pr-preview','tag=null','维护者','未验证'])expect(releasing).toContain(required);
-  const candidate=read('docs/CANDIDATE_TESTING.md');
-  expect(candidate).toContain('installation-preview.yml');
-  expect(candidate).toContain('head SHA');expect(candidate).toContain('实机测试');
-  expect(candidate).toContain('未验证');expect(candidate).toContain('登录');
-  expect(read('docs/OPEN_SOURCE_CHECKLIST.md')).toContain('Rust 漏洞/撤回检查');
 });
 
 test('repository tests use exact root paths rather than collecting nested worktrees',()=>{

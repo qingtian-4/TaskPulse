@@ -57,7 +57,7 @@ Codex command permission parameters, slow tool results, silent logs and CPU acti
 - Codex: native thread/app-server metadata plus rollout logs; local and configured remote projects are supported.
 - Codex WSL: independent opt-in `codex_wsl` sources per running distro. Read metadata inside Linux using Python 3 / read-only SQLite plus `session_index.jsonl`; never open WSL SQLite/WAL through Windows UNC. Reuse the Codex incremental rollout parser via `\\wsl.localhost\<distro>`. IDs are `<source-instance>:codex:<thread-id>` and Linux project paths stay separate from Windows / SSH. Never auto-wake a stopped distro or query Windows account quota for WSL tasks. See `docs/WSL_CODEX.md`.
 - Claude Code: read-only `CLAUDE_CONFIG_DIR` (default `~/.claude`) projects/*.jsonl, sessions/*.json and IDE *.lock evidence; never read *.key. Native formats are best-effort/inferred. Explicit, reversible official hooks write a minimal event envelope to `~/.taskpulse/claude-events/`. Agent identity is independent from the reported/proxy model. Never auto-install hooks or overwrite statusLine/other hooks/proxy settings.
-  Hook envelopes use an OS-locked per-session JSONL journal with monotonic sequence; latest JSON is a compatibility checkpoint. PermissionRequest has no native call ID: associate only a unique preceding tool/input signature, preserve all explicit pending request IDs, and resolve only a matching call or explicit end. Native thinking/busy/idle metadata cannot clear an approval or prove turn end. Rust 1.89+ is required for File locking.
+  Hook envelopes use an OS-locked per-session JSONL journal with monotonic sequence; latest JSON is a compatibility checkpoint. PermissionRequest has no native call ID: associate only a unique preceding tool/input signature, preserve all explicit pending request IDs, and resolve only a matching call or explicit end. Native thinking/busy/idle metadata cannot clear an approval or prove turn end. File locking requires Rust 1.89+; the signed updater raises the project minimum to Rust 1.90.
 - Hermes: native SQLite session metadata and runtime lease state.
 - DeepSeek Harness: native Desktop/CLI `$DSH_HOME` (default `~/.dsh`, override with `TASKPULSE_DSH_HOME`) plus an independent WSL worker. Support both `session.jsonl.zstd` and `session.v4.jsonl.zstd`. Native v4 titles/state use `storages/session_projcache/sessions/<id>.json` (`version`/`record` envelope); legacy versions use `storages/session_projcache.json`. Projection event seq must not override a newer log state. Native IDs are `dsh-native:<session-id>`; existing WSL IDs stay `dsh:<session-id>`.
 - Remote: configured SSH hosts, projects, and tmux sessions/panes.
@@ -138,14 +138,16 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - Preserve the latest main-branch README, brand assets and screenshots when integrating older branches. Review both sides of conflicts and add only the feature's current documentation; never replace the README wholesale with an older branch copy. See `docs/GIT_WORKFLOW.md`.
 - Remove disposable intermediate logs and failed test artifacts only after validating their resolved paths and retaining useful final evidence, original-change backups and any running executable.
 
-## Windows Alpha releases
+## Desktop releases and updates
 
 - Versions in package.json, Cargo.toml, Cargo.lock and tauri.conf.json must match
-  the explicit pre-release tag. Run `bun run release:check` and `bun run test:release`.
+  the explicit SemVer tag. Run `bun run release:check` and `bun run test:release`.
 - release.yml builds Windows x64 MSVC, validates actual installers on a separate
-  runner and creates a **draft pre-release only**. Read docs/RELEASING.md before
-  tagging/publishing; no stable release or automatic version override is enabled.
-- Linux/macOS remain opt-in experimental artifact builds, independent of Windows.
+  runner, builds both macOS architectures, and creates a **draft only**. Stable
+  and pre-release versions require exact explicit tags; never override versions
+  or publish automatically. Local maintainer release notes are not public docs.
+- Tagged desktop releases require Windows and both macOS artifact/acceptance jobs.
+  Linux remains a separate opt-in artifact build.
 - NSIS/MSI acceptance runs on separate fresh Windows matrix runners with distinct
   evidence artifacts, and both must pass. Retained install-directory preferences
   make sequential formats a migration test; never delete user preferences to pass
@@ -180,3 +182,11 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
   nest into a concurrently created destination; never move or clean a colliding
   foreign directory. Retain and report ambiguous recovery state. Native CI and
   physical-machine/Finder/real-Agent acceptance are separate evidence gates.
+
+## Automatic discovery and application updates
+
+- Fresh onboarding confirms detected read-only local sources once. Automatic discovery preserves disabled/removed sources and explicit project scopes; WSL, SSH, hooks and event integrations stay opt-in. Existing installations keep their previous discovery preference.
+- ZCode reads its SQLite database read-only, uses the user message as turn identity and never treats tool completion as turn completion. Completed history belongs in the catalog, not the attention list. Agent name/model remain separate fields.
+- Application updates use the official Tauri updater, a compiled public key and an HTTPS GitHub feed. Check automatically, download/install only after a user click; never weaken signature, downgrade or OS security checks. Private keys stay outside Git and PR workflows.
+- Release staging must match version and commit across Windows NSIS/MSI and macOS arm64/x64, verify signatures against the compiled key, then assemble latest.json. Publishing a draft requires maintainer approval and platform acceptance.
+- Process reports and maintainer plans stay local/ignored; public docs are user and integration guides. Preserve originals before untracking. UI screenshots require explicit suitable user-provided assets; never publish private desktop captures.

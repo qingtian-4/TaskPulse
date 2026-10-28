@@ -58,9 +58,9 @@ Uses the macOS system Bash and tools. No Python, jq, Bun, or Rust is needed. Arc
 
 ## 升级与校验 / Updates and verification
 
-升级前正常退出 TaskPulse，备份 `~/.taskpulse/`，再运行安装命令。脚本核对来源、版本、平台、架构、manifest 和 SHA-256；失败时不执行新安装包。Mac 同盘暂存、目标锁和回滚保留旧 app；中断恢复目录须先核对再重试。
+也可在应用设置中检查并安装更新。使用脚本升级前，正常退出 TaskPulse，备份 `~/.taskpulse/`，再运行安装命令。脚本核对来源、版本、平台、架构、manifest 和 SHA-256；失败时不执行新安装包。Mac 同盘暂存、目标锁和回滚保留旧 app；中断恢复目录须先核对再重试。
 
-Quit TaskPulse and back up `~/.taskpulse/` before updating. Downloads are checked before installation. Mac updates use same-volume staging, a target lock and rollback. Inspect retained recovery directories after an interrupted update.
+You can also check and install updates in the application settings. For script-based updates, quit TaskPulse and back up `~/.taskpulse/` before updating. Downloads are checked before installation. Mac updates use same-volume staging, a target lock and rollback. Inspect retained recovery directories after an interrupted update.
 
 当前 Windows 包未做发行者签名，Mac 为 ad-hoc 签名、未公证。SHA-256 验证完整性，不替代发布者身份签名；校验文件与包共享同一仓库信任边界。可先下载审阅脚本，或将脚本 URL 的 main 换成已审阅的提交 SHA。
 

@@ -1,102 +1,69 @@
 # 安装与快速入门
 
-当前候选为 **0.2.0-alpha.8，尚未公开发布**。维护者按[候选下载与测试](CANDIDATE_TESTING.md)
-取得 Windows EXE/MSI 或 Apple Silicon DMG。安装版无需 Rust/Bun/Node，也不用每次 clone 项目。
-Windows Quality / Security CI 已通过不等于安装包已发布或真实宿主全面验收。
+## 下载安装包
 
-源码开发按 README 的 `--branch main` 命令克隆；
-已有克隆先用 `git status` 检查本地修改，不要为升级覆盖工作区。用 `git rev-parse HEAD` 核对实际提交，
-旧提交的 CI 不覆盖新的代码或最终 main SHA，以对应运行和包内 manifest 为准。
-源码合并、CI 通过、Draft pre-release 与公开可下载是四个不同状态；候选包的具体提交以 manifest 为准。
+打开 [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases)，按系统选择：
 
-未来在 [TaskPulse Releases](https://github.com/qingtian-4/TaskPulse/releases) 发布后，
-Windows 10/11 x64 可选择 `TaskPulse_<版本>_windows_x64_setup.exe`。
-`Source code.zip` 是源码，不是安装器；草稿对普通用户不可见，旧 AgentTray 包不是 TaskPulse。
+| 系统 | 文件 |
+| --- | --- |
+| Windows 10 / 11，x64 | `TaskPulse_<版本>_windows_x64_setup.exe` 或同版本 `.msi` |
+| macOS，Apple Silicon | `TaskPulse_<版本>_macos_arm64.dmg` |
+| macOS，Intel | `TaskPulse_<版本>_macos_x64.dmg` |
 
-MSI 是可选安装格式，不要与 NSIS 同时安装。ZIP/Portable 尚未交付。
-安装版运行不需要 Rust/Bun/Node；需要 WebView2，缺少时安装器会联网下载运行时。
-离线环境应先安装 WebView2；不提供绕过系统安全提示的自动操作。
+Windows 运行安装向导即可；无需 Rust、Bun 或 Node。缺少 WebView2 时，安装器会联网安装运行时。EXE 和 MSI 选择一种，切换格式前先卸载旧格式。
 
-## 命令行入口
+Mac 打开 DMG，将 TaskPulse 拖入 Applications。命令行安装默认使用 `~/Applications`。尚未经过发行者签名或 Apple 公证的包可能触发系统安全提示；请核对下载来源，并按照 [Apple 官方说明](https://support.apple.com/en-us/102445)操作。TaskPulse 不会自动关闭 Gatekeeper 或清除隔离属性。
 
-Windows x64 和 macOS Apple Silicon/Intel 可使用[命令行安装说明](CLI_INSTALL.md)。它复用现有安装包与 SHA-256，不新增包管理器，也不绕过草稿发布门禁。
+发布附件提供 SHA-256 校验文件。不要把旧 AgentTray 安装包当作 TaskPulse。
 
-## macOS 包安装
+## 命令行安装
 
-Apple Silicon 使用 arm64 DMG，Intel 使用 x64 DMG。按对应的 `macos-<arch>-SHA256SUMS.txt`
-核验后只读打开 DMG，将 TaskPulse 拖入 Applications；用菜单栏退出旧实例后升级，保留
-`~/.taskpulse/`。当前包是实验 ad-hoc 签名且未公证，10.15 构建目标不代表各系统实测通过。
-Gatekeeper 提示按 [Apple 官方说明](https://support.apple.com/en-us/102445)处理；不要清除安全属性。
-当前 PR 的双架构包与真实 Mac 体验分别验收，详见 [Mac 指南](MACOS_DEVELOPMENT.md)。
+Windows PowerShell：
 
-## 三步开始
+```powershell
+irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex
+```
 
-1. 安装候选包或从源码启动 TaskPulse，打开来源管理，发现或选择 Agent，先查看支持能力。
-2. 配置来源，选择“所有项目的新执行”或设置项目白名单，再保存。WSL/SSH 独立添加，不会
-   默认访问停止的发行版或所有服务器，也不自动修改 Agent 配置。
-3. 测试读取和提醒，然后在启用范围内执行真实任务。托盘或 `Ctrl+Shift+A` 打开面板。
+macOS 终端：
 
-发现 Agent 只是安装/数据存在的证据；保存只代表配置生效；读取正常不代表已经收到真实结束事件。
-测试提醒只验证通知链路，不验收 Agent。新执行的标题、运行阶段、真实结束和请求解除仍需在原 Agent 中核对。
+```sh
+curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
+```
 
-来源页顶部提供“测试读取来源”和“发送测试提醒”。前者等待所选来源本次返回，不使用旧成功替代；
-后者仅投递测试提醒。通用来源的“测试事件接收”也不会创建任务。Adapter ID、Hook 预览/撤销、
-Manifest 与诊断在高级区域；真实 Hook 写入仍需明确确认。界面操作与筛选说明见 [使用指南](PRODUCT_DASHBOARD.md#alpha7-界面操作)。
+脚本获取 Releases 中的最新正式版本，自动选择架构并校验 SHA-256。没有可用版本时会明确报错，不会改装其他软件。指定版本、仅下载和语言选项见[命令行选项](CLI_INSTALL.md)。
 
-思考、工具运行、等待模型响应都属于进行中；任务名称与项目名称分别展示。
-本轮结束不等于项目完成。需要授权时去原 Agent 处理，TaskPulse 不替你批准。
+## 开始监控
 
-关闭弹窗不等于已查看。右上角铃铛是消息中心，角标只计未读消息；实际显示的消息
-会标为已读，也可选择“全部标为已读”。阅读消息不查看任务结果，也不批准或解除请求。
-仍未解决的请求继续保留在“待处理”和消息中心的请求列表中；来源过期时显示上次记录，
-只能核对／刷新，不重新弹出尚未确认的请求。完成和失败在“待查看”中回查，重启不重发旧提醒。
+1. 启动 TaskPulse，确认自动发现的本机 Agent，点击**开始监控**。
+2. 回到 Agent 开始一个任务。任务会自动出现在托盘面板，不需要逐个添加对话。
+3. 点击托盘图标查看状态；Windows 也可以按 `Ctrl+Shift+A`。
+
+默认关注所有项目的新执行。可以在来源管理中限制项目或关闭来源；自动发现不会恢复你关闭、移除的来源，也不会覆盖已有项目范围。WSL、SSH、MCP 和需要修改 Agent 设置的 Hook 单独配置。
+
+任务进行中、结果待查看和状态待更新分别展示。思考、工具执行和等待模型响应都属于进行中；本轮结束不等于整个项目完成。详见[任务面板](PRODUCT_DASHBOARD.md)。
+
+## 应用更新
+
+默认自动检查新版本，只显示提示。打开**管理 → 应用更新**，点击**下载并安装 · 将重启**后，TaskPulse 才会下载和验证更新签名，然后安装并重启。
+
+- 自动检查可以在同一页关闭，也可随时手动检查。
+- 更新保留 `~/.taskpulse/` 中的配置与任务状态。
+- 网络或签名校验失败时显示错误，未通过验证的安装包不会运行。
+- 检查更新只访问 GitHub 的版本清单，不发送任务内容。
+- 旧版没有更新入口时，退出 TaskPulse 后重新运行安装命令或新版安装包。
 
 ## 找不到任务时
 
-- 先清除界面筛选；检查来源是否启用、项目是否在范围内，尤其是现有白名单。
-- Windows、WSL 与 SSH 是独立来源。WSL Codex 需要运行中的发行版和 Python 3。
-- SSH 先确认自己的别名可非交互连接；凭据交给系统 SSH，不填写进 Issue。
-- “刷新”等待来源真实返回；来源异常／状态待更新不能当作任务结束。
-- 原生格式和事件能力有版本差异，见 [支持矩阵](AGENT_COMPATIBILITY.md)。
+先清除面板筛选，确认来源已启用且项目在监控范围内。Windows、WSL 和 SSH 是独立来源；WSL Codex 需要运行中的发行版和 Python 3。SSH 使用你配置的别名和系统凭据。
 
-## 进阶配置
+“状态待更新”表示来源暂时不可读，不表示任务已结束。模型、审批或完成信息取决于 Agent 提供的记录，见[兼容说明](AGENT_COMPATIBILITY.md)。
 
-### Claude Code / CC Switch
+## 数据与隐私
 
-默认只读 `CLAUDE_CONFIG_DIR` 或 `~/.claude`。切换代理模型后 Agent 身份仍为 Claude Code，
-上报模型不保证代表代理背后的实际模型。需要显式事件时，在来源的高级接入设置中预览并确认
-TaskPulse Hook；保留其他 Hook、statusLine、代理和模型设置。不要只凭测试提醒宣布 Hook 已实测。
+配置、关注记录、最近结果和通知去重保存在本机 `~/.taskpulse/`。TaskPulse 不需要云账号，不向自有云上传对话。SSH 仅连接你添加的服务器，不会自动安装 Hook，也不会替你批准请求。
 
-### 远程代码运行
+任务标题和路径可能包含私人信息，请勿将整个状态目录上传到 Issue。通知投递日志最多保留 500 条，不包含命令或提示词，也不代表你已经阅读。
 
-添加自己的 SSH 别名与 tmux 来源，项目范围包含代码目录。在 tmux 中直接运行可以观察进程，
-`tp-run` 则记录被监督的前台命令与真实退出码（需要 Python 3）：
+## 卸载
 
-```bash
-# 在服务器的仓库目录中手动安装 wrapper
-mkdir -p ~/.local/bin
-install -m 755 scripts/tp-run ~/.local/bin/tp-run
-~/.local/bin/tp-run "训练实验" -- python train.py
-```
-
-tmux 外的 wrapper 记录仍由 tmux 来源读取，需要将 session/pane 限定留空。前台命令退出不等于
-后台、容器或 Slurm 作业完成。完整边界见 [使用指南](PRODUCT_DASHBOARD.md) 与 [架构](ARCHITECTURE.md)。
-
-### 数据与隐私
-
-配置、关注/未读/固定、最近结果和通知去重分别保存在 `~/.taskpulse/` 的 config.toml、
-attention.json、recent.json、notifications.json。投递记录 notification-log.json 最多 500 条，
-不证明用户已读。兼容旧 `~/.agent-monitor/*.status`；`tp-run` 使用服务器的
-`~/.local/state/taskpulse/runs/`。本机账号额度不是远程账号额度。
-
-默认 `--diagnose` 导出哈希身份、状态和耗时，不导出标题、路径、命令、错误原文或账号额度；
-诊断进程关闭其他日志输出，完整错误仍可在本机来源管理中核对。哈希可关联同一任务，仍应在分享前检查。
-新 Claude Hook v3 日志只保存工具活动类别和 config root hash；cwd、session/turn/call/request
-仍作为本地范围与审批关联元数据保存。旧日志不自动重写，原生任务、关注状态和其他专用诊断可能
-包含私人路径或标题，不要把整个状态目录上传到 Issue。v1/v2 Hook 信封继续可读；读取 v3 root 隔离应使用新版本。
-
-## 升级与卸载
-
-备份 `~/.taskpulse/`，从托盘退出后升级。切换 EXE/MSI 安装格式前卸载旧格式。
-卸载不删除 TaskPulse 用户状态；可自行保留备份。若曾明确安装 Claude Hook，
-先在来源管理中撤销接入，再卸载，避免 Agent 调用不存在的程序。
+先从托盘退出，然后使用系统卸载功能；Mac 可移除应用。用户状态默认保留，便于重新安装。若安装过 Agent Hook，先在来源管理中撤销，再卸载程序。

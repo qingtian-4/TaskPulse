@@ -159,4 +159,4 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 No dedicated Claude WSL/SSH or Hermes WSL adapter, universal run/attach CLI,
 executable plugin marketplace, or independent quota toggle. Source format and
-approval-event coverage is version-dependent. See [release notes](docs/releases/0.2.0-alpha.1.md).
+approval-event coverage is version-dependent. See [Agent compatibility](docs/AGENT_COMPATIBILITY.md).

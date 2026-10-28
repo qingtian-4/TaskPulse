@@ -69,7 +69,7 @@ test('local reports, captures, credentials and build files cannot enter the publ
   expect(ignored.status).toBe(0);
   expect(ignored.stdout.trim().split(/\r?\n/).sort()).toEqual([...candidates].sort());
   const publicFiles=['README.md','README.en.md','AGENTS.md','LICENSE','docs/INSTALL.md','docs/README.md',
-    'docs/releases/TEMPLATE.md','assets/brand/brand.svg','src-tauri/icons/icon.ico','package.json','bun.lock','src-tauri/Cargo.lock'];
+    'assets/brand/brand.svg','src-tauri/icons/icon.ico','package.json','bun.lock','src-tauri/Cargo.lock'];
   const allowed=spawnSync('git',['check-ignore','--no-index','--stdin'],{cwd:root,input:publicFiles.join('\n')+'\n',encoding:'utf8',windowsHide:true});
   expect(allowed.status).toBe(1);expect(allowed.stdout).toBe('');
 });
