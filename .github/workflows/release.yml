@@ -265,6 +265,12 @@ jobs:
         env:
           TASKPULSE_VERIFY_UPDATE_DIR: ${{ github.workspace }}/dist/release
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray signed_release_artifacts_match_embedded_key -- --ignored --nocapture
+      - name: Export architecture-specific dependency notices
+        run: |
+          bun scripts/dependency-notices.ts dist/notices-${{ matrix.arch }} ${{ matrix.target }}
+          for file in DEPENDENCIES.json SBOM.cdx.json THIRD_PARTY_NOTICES.txt; do
+            cp "dist/notices-${{ matrix.arch }}/$file" "dist/release/macos-${{ matrix.arch }}-$file"
+          done
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-package-macos-${{ matrix.arch }}
@@ -327,6 +333,9 @@ jobs:
             dist/release/latest.json
             dist/release/macos-*-SHA256SUMS.txt
             dist/release/macos-*-manifest.json
+            dist/release/macos-*-DEPENDENCIES.json
+            dist/release/macos-*-SBOM.cdx.json
+            dist/release/macos-*-THIRD_PARTY_NOTICES.txt
             dist/release/SHA256SUMS.txt
             dist/release/release-manifest.json
             dist/release/DEPENDENCIES.json
