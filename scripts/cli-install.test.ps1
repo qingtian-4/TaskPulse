@@ -97,7 +97,6 @@ try {
     $script:racePath=$null
     # Native preview probe must preserve its Version parameter while dot-sourcing
     # the production script. Downloads only: fixture MZ bytes are never executed.
-    Remove-Item Function:\Get-FileHash
     . (Join-Path $PSScriptRoot 'windows-cli-smoke.ps1') -Assets $root -Version '0.2.0-alpha.8'
     $manifest['tag']=$null
     $manifest['build_kind']='pr-preview'

@@ -26,6 +26,7 @@ class InstallerTests(unittest.TestCase):
         self.bin.mkdir()
         tool_source = self.root / 'tool.py'
         shutil.copy2(REPO / 'scripts/fixtures/cli-install/tool.py', tool_source)
+        tool_source.chmod(0o755)
         for tool in ['uname', 'sysctl', 'plutil', 'curl', 'hdiutil', 'ditto', 'codesign', 'lipo', 'ps', 'open', 'mv', 'xattr', 'uuidgen', 'stat']:
             (self.bin / tool).symlink_to(tool_source)
         self.options = {}
@@ -71,6 +72,11 @@ class InstallerTests(unittest.TestCase):
         if success: self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         else: self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout + result.stderr
+
+    def test_tool_doubles_are_executable_and_selected(self):
+        for name in ['uname', 'curl', 'plutil', 'mv', 'xattr', 'stat']:
+            self.assertEqual(shutil.which(name, path=self.environment['PATH']), str(self.bin / name))
+            self.assertTrue(os.access(self.bin / name, os.X_OK))
 
     def test_platform_architecture_and_language(self):
         for options in [{'os': 'Linux'}, {'machine': 'unknown'}, {'machine': 'x86_64', 'arm': None, 'translated': None}]:
