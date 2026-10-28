@@ -1,25 +1,26 @@
 # TaskPulse 的 Git 与 PR 入门
 
-## 本轮 README 如何进入 main（2026-10-27）
+## 当前整合基线（2026-10-28）
 
-已通过 GitHub API 核对远端 `main` 为 `fe48e69`。本轮 README 整理开始时，
-`codex/p0-remote-acceptance` 为 `887a7f7`，包含 main，另外有 9 个提交，涉及候选文档、
-macOS 窗口、MCP、豆包与品牌集成；本轮 README 提交在其上继续。
+[PR #26](https://github.com/qingtian-4/TaskPulse/pull/26) 已通过 merge commit
+`0bcecd8` 合入 `main`，包含 `2e8aebb` 及其之前全部 11 个开发提交：新 Logo、
+新版中英文 README、托盘状态、macOS 尺寸、MCP 和豆包实验适配均在其中。
+不存在需要把旧 README 再次覆盖回来的未合并功能。
 
-**推荐通过 PR 合入。PR 是审查入口，merge 是更新 main 的动作，不是二选一。**
+清理前的分支依赖与本地 `main` 分叉处理见
+[分支整合审计](maintainers/BRANCH_CONSOLIDATION_2026-10-28.md)。本地主分支可能与
+远端状态不同，开始任务时仍须 fetch 并核对；合入源码不等于发布新安装包。
 
-```text
-base：main                         ← 接收改动
-head：codex/p0-remote-acceptance   ← 提供改动
-```
+## README 冲突如何处理
 
-先提交并推送功能分支，再在 GitHub 创建上述方向的 PR，审查全部差异，等待 Windows Quality
-和 Security 检查通过，然后由维护者合并。合并后 GitHub 默认首页才会展示新版 README。
-本次编辑仅创建本地提交，没有替维护者推送、创建 PR、合并或发布。
+当前 `main` 的 README、Logo 和配套截图作为基准。先比较共同祖先与双方提交，
+保留主分支较新的产品介绍、下载入口和布局，只补入本功能确实新增或改变的内容。
+不要从旧分支整份复制 README，也不要不看差异就批量选择 ours/theirs。
+中英文文档与图片链接一起检查，并运行 `bun run test:docs` 和 `bun run test:repo`。
 
-整分支 PR 会包含上述全部未合入提交。若只想更新首页，应从最新 main 创建专门文档分支，
-选择 README 提交并带齐依赖的 Logo、截图和说明文件；不能假设最后一个提交已经自带所有资源。
-不要将 main 合入功能分支后，误以为 main 已经收到这些修改。合入源码也不会自动发布新安装包。
+如果 `git merge-base --is-ancestor <branch> origin/main` 成功，该分支已经被合入；
+不需要另建空 PR 或重复 cherry-pick。Git 合并会按历史整合变化，不按文件时间选择
+“最新版本”，所以没有冲突也仍要审查最终 diff。
 
 ## 历史：首页为何仍显示 AgentTray（2026-10-11）
 
@@ -88,7 +89,7 @@ git remote set-url --push upstream DISABLED
 “基于 AgentTray 的派生项目”不要求 GitHub 页面必须显示 fork 标签。已有独立仓库
 无需重新建仓库或抹去历史，也不需要给上游提交 PR 才能发布自己的 MIT 派生代码。
 
-## 以后每次开发的建议流程
+## 以后每次开发的固定流程
 
 先检查工作区，不覆盖或删除未提交文件；有改动时先安全提交或另行保存。
 
@@ -106,8 +107,29 @@ git push -u origin codex/short-topic
 ```
 
 在自己仓库创建 PR，base 选 `main`，head 选该功能分支，填写变更、验证、风险和
-迁移说明；通过 CI 后审阅并合并，再拉取最新 `main`，下一项任务另开短期分支。
-不要把所有后续开发永久堆进一个巨大的功能分支。
+迁移说明。维护者已授权将完成的仓库工作按此流程推送、建 PR、合并及清理，
+无需每次重复询问；任务另有要求时以该要求为准。发布版本与修改真实 Agent Hook
+不属于这项常规授权。
+
+审查最终差异，等待当前 PR head 的 Windows quality 和 Security checks 全部通过，
+遵循仓库保护规则后合并；发生新提交或 base 变化时重新确认检查与整合结果。
+有依赖的分支先合入基础分支，再将新 `main` 整合到后续分支验证；已经包含的提交
+不重复搬运。不能把失败或缺少真实来源证据的功能写成已稳定验收。
+
+合并后 fetch 并确认分支顶端已是 `origin/main` 的祖先，确认工作区干净、其他
+worktree 没有未提交改动，再删除该功能的远端和本地分支。删除前重新核对远端 SHA，
+避免误删他人刚推送的工作。本地 `main` 用快进更新；有独有提交先审查保留，
+不能通过强制 reset 丢弃。下一项任务从最新 `main` 另开短期分支。
+
+```powershell
+git fetch origin --prune
+git merge-base --is-ancestor codex/short-topic origin/main
+# 上一步必须成功，工作区也须干净；远端 tip 如已变化，重新检查。
+git switch main
+git merge --ff-only origin/main
+git push origin --delete codex/short-topic
+git branch -d codex/short-topic
+```
 
 初次整合 TaskPulse 采用 **Create a merge commit**：保留上游和你的逐次开发提交。
 Squash 会合成一个提交，Rebase 会改写提交 ID；它们各有用途，但不是修复贡献者
