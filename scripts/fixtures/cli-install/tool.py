@@ -89,13 +89,19 @@ elif name == 'ps':
 elif name == 'open':
     sys.exit(1 if option('launch_fail') else 0)
 elif name == 'xattr':
+    # Portable test metadata follows inode identity across mv. Native acceptance
+    # uses the real macOS xattr command, never this offline stand-in.
     path = args[-1]
-    key = b'user.com.apple.quarantine'
-    try:
-        if args[0] == '-p': print(os.getxattr(path, key).decode())
-        else: os.setxattr(path, key, args[-2].encode())
-    except OSError:
-        sys.exit(1)
+    value = os.stat(path, follow_symlinks=False)
+    key = f'{value.st_dev}:{value.st_ino}'
+    database = root / 'quarantine.json'
+    attributes = json.loads(database.read_text()) if database.exists() else {}
+    if args[0] == '-p':
+        if key not in attributes: sys.exit(1)
+        print(attributes[key])
+    else:
+        attributes[key] = args[-2]
+        database.write_text(json.dumps(attributes))
 elif name == 'stat':
     value = os.stat(args[-1], follow_symlinks=False)
     print(f'{value.st_dev}:{value.st_ino}')
