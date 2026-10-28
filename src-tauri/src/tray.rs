@@ -707,6 +707,11 @@ mod tests {
             let image = Image::from_bytes(icon_bytes(state)).unwrap();
             assert_eq!((image.width(), image.height()), (32, 32));
             assert_eq!(image.rgba()[3], 0);
+            // TP-03's white T extends left of the stem. The old plain-P export
+            // has only tile pixels here, so a mixed runtime asset must fail.
+            let t_bar = &image.rgba()[(9 * 32 + 6) * 4..(9 * 32 + 6) * 4 + 4];
+            assert!(t_bar[0] > 220 && t_bar[1] > 235 && t_bar[2] > 230);
+            assert_eq!(t_bar[3], 255);
             assert!(image.rgba().chunks_exact(4).any(|p| p[3] == 255));
             assert!(!pixels.contains(&image.rgba().to_vec()));
             pixels.push(image.rgba().to_vec());

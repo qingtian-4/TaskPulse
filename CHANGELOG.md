@@ -4,6 +4,11 @@ TaskPulse-specific changes. Upstream AgentTray history and attribution are retai
 
 ## Unreleased
 
+- Replace the plain-P brand with the selected TP-03 monogram across Windows/macOS
+  application icons, README wordmarks, dashboard branding and all five tray states.
+  Preserve UI geometry, lifecycle/notification logic and installer identity; add
+  asset consistency and ICNS checks, and refresh native screenshots.
+
 - Resolve Doubao task titles from native conversation metadata without importing
   idle history or treating a conversation name as a project. Unassociated Doubao
   tasks display as standalone conversations; renames preserve activity and alerts.

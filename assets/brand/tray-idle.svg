@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100" role="img" aria-label="TaskPulse verified idle state" color="#9EABBC">
   <rect x="7" y="7" width="86" height="86" rx="23" fill="#101929"/>
-  <path d="M29 74 V30" fill="none" stroke="#EAF9F6" stroke-width="12" stroke-linecap="round"/>
-  <path d="M29 30 H54 C70 30 76 38 76 48 C76 59 69 64 55 64 H48" fill="none" stroke="currentColor" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M20 30 H36 M36 30 V74" fill="none" stroke="#EAF9F6" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M36 30 H57 C73 30 79 39 79 48 C79 59 71 64 58 64 H50" fill="none" stroke="currentColor" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
