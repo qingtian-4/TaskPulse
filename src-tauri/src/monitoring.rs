@@ -14,6 +14,7 @@ use tauri::{AppHandle, Emitter};
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Doubao,
+    Zcode,
     Codex,
     CodexWsl,
     ClaudeCode,
@@ -59,6 +60,13 @@ fn poll_default() -> u64 {
 pub struct DashboardSettings {
     pub version: u8,
     pub onboarding_complete: bool,
+    /// Existing installs keep their explicit source choices until opted in.
+    #[serde(default)]
+    pub auto_discover_local: bool,
+    #[serde(default)]
+    pub auto_discovery_seen: Vec<String>,
+    #[serde(default = "yes")]
+    pub auto_check_updates: bool,
     pub sources: Vec<SourceConfig>,
     #[serde(default = "yes")]
     pub notifications: bool,
@@ -101,6 +109,7 @@ struct Runtime {
     config_error: Option<String>,
 }
 static RUNTIME: OnceLock<Mutex<Runtime>> = OnceLock::new();
+static SETTINGS_WRITER: Mutex<()> = Mutex::new(());
 fn runtime() -> &'static Mutex<Runtime> {
     RUNTIME.get_or_init(|| Mutex::new(Runtime::default()))
 }
@@ -135,7 +144,8 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         ),
         source("local_file", "通用 Hooks", SourceKind::Hooks, ""),
         source("scanner", "进程扫描", SourceKind::Scanner, ""),
-        source("doubao", "豆包 · 本机（实验）", SourceKind::Doubao, ""),
+        source("zcode", "ZCode · 本机", SourceKind::Zcode, ""),
+        source("doubao", "豆包 · 本机", SourceKind::Doubao, ""),
     ];
     for item in &mut sources {
         item.projects = match item.kind {
@@ -150,7 +160,10 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
             && !item.projects.is_empty()
             && !matches!(
                 item.kind,
-                SourceKind::ClaudeCode | SourceKind::CodexWsl | SourceKind::Doubao
+                SourceKind::ClaudeCode
+                    | SourceKind::CodexWsl
+                    | SourceKind::Doubao
+                    | SourceKind::Zcode
             );
     }
     for host in &cfg.remote_hosts {
@@ -185,6 +198,9 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
     DashboardSettings {
         version: 2,
         onboarding_complete: existing,
+        auto_discover_local: !existing,
+        auto_discovery_seen: vec![],
+        auto_check_updates: true,
         sources,
         notifications: true,
         notification_mode: notification_mode_default(),
@@ -328,6 +344,11 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
             return Err("请输入有效的 SSH 别名".into());
         }
         let location = match source.kind {
+            SourceKind::Zcode => Some(if source.location.is_empty() {
+                crate::providers::zcode::default_db()
+            } else {
+                PathBuf::from(&source.location)
+            }),
             SourceKind::Doubao => Some(if source.location.is_empty() {
                 crate::providers::doubao::default_root()
             } else {
@@ -446,8 +467,17 @@ pub fn write_settings(path: &Path, settings: &DashboardSettings) -> Result<(), S
 pub fn save_monitoring_settings(
     app: AppHandle,
     mut settings: DashboardSettings,
+    expected: Option<DashboardSettings>,
 ) -> Result<DashboardSettings, String> {
+    let _writer = SETTINGS_WRITER.lock().unwrap_or_else(|e| e.into_inner());
     let previous = get_monitoring_settings();
+    if expected
+        .as_ref()
+        .is_some_and(|expected| expected != &previous)
+    {
+        return Err("配置已更新，请重新加载后保存".into());
+    }
+    record_discovery_choices(&previous, &mut settings);
     for source in &mut settings.sources {
         if source.kind == SourceKind::GenericEvent {
             if let Some(integration) = &mut source.integration {
@@ -472,6 +502,13 @@ pub fn save_monitoring_settings(
             }
         }
     }
+    apply_settings(&app, settings)
+}
+
+fn apply_settings(
+    app: &AppHandle,
+    settings: DashboardSettings,
+) -> Result<DashboardSettings, String> {
     write_settings(&config::config_path(), &settings)?;
     {
         let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
@@ -481,12 +518,124 @@ pub fn save_monitoring_settings(
     }
     crate::watcher::request_refresh();
     if !settings.popup_notifications() {
-        crate::task_notice::clear(&app);
+        crate::task_notice::clear(app);
     } else {
-        crate::task_notice::retain_in_scope(&app);
+        crate::task_notice::retain_in_scope(app);
     }
     let _ = app.emit("monitoring-settings-updated", &settings);
     Ok(settings)
+}
+
+/// Only read-only native adapters are eligible. Remote/WSL, hooks and generic
+/// event integrations always remain explicit user choices.
+fn automatic_local(kind: SourceKind) -> bool {
+    matches!(
+        kind,
+        SourceKind::Codex
+            | SourceKind::ClaudeCode
+            | SourceKind::Hermes
+            | SourceKind::DeepseekDesktop
+            | SourceKind::Doubao
+            | SourceKind::Zcode
+    )
+}
+
+fn record_discovery_choices(previous: &DashboardSettings, next: &mut DashboardSettings) {
+    let mut seen: HashSet<String> = previous.auto_discovery_seen.iter().cloned().collect();
+    seen.extend(next.auto_discovery_seen.iter().cloned());
+    for old in &previous.sources {
+        let current = next.sources.iter().find(|s| s.id == old.id);
+        if current.is_none()
+            || current.is_some_and(|s| s != old)
+            || (previous.onboarding_complete
+                && !previous.auto_discover_local
+                && next.auto_discover_local)
+        {
+            seen.insert(old.id.clone());
+        }
+    }
+    for source in &next.sources {
+        if !previous.sources.iter().any(|s| s.id == source.id) {
+            seen.insert(source.id.clone());
+        }
+    }
+    // First-run discovery selection is explicit, including deselected installs.
+    if !previous.onboarding_complete
+        && next.onboarding_complete
+        && std::env::var_os("TASKPULSE_HOME").is_none()
+    {
+        for row in discover_source_rows_with_wsl(next, &[]) {
+            if row.available {
+                seen.insert(row.id);
+            }
+        }
+    }
+    next.auto_discovery_seen = seen.into_iter().collect();
+    next.auto_discovery_seen.sort();
+}
+
+fn merge_discovered(settings: &mut DashboardSettings, discoveries: Vec<SourceDiscovery>) -> bool {
+    if !settings.onboarding_complete || !settings.auto_discover_local {
+        return false;
+    }
+    let before = settings.clone();
+    for row in discoveries {
+        if !row.available || settings.auto_discovery_seen.contains(&row.id) {
+            continue;
+        }
+        let source = settings.sources.iter_mut().find(|s| s.id == row.id);
+        if let Some(source) = source {
+            if !automatic_local(source.kind) {
+                continue;
+            }
+            source.enabled = true;
+        } else if let Some(mut candidate) = row.candidate {
+            if !automatic_local(candidate.kind)
+                || settings.sources.iter().any(|s| s.kind == candidate.kind)
+            {
+                continue;
+            }
+            candidate.enabled = true;
+            settings.sources.push(candidate);
+        } else {
+            continue;
+        }
+        settings.auto_discovery_seen.push(row.id);
+    }
+    settings.auto_discovery_seen.sort();
+    *settings != before
+}
+
+pub fn start_auto_discovery(app: AppHandle) {
+    if std::env::var_os("TASKPULSE_HOME").is_some() {
+        return;
+    }
+    std::thread::spawn(move || loop {
+        let previous = get_monitoring_settings();
+        if previous.onboarding_complete
+            && previous.auto_discover_local
+            && get_monitoring_error().is_none()
+        {
+            // No WSL probing or process launch is needed for automatic local discovery.
+            let rows = discover_source_rows_with_wsl(&previous, &[]);
+            let mut next = previous.clone();
+            if merge_discovered(&mut next, rows) {
+                let _writer = SETTINGS_WRITER.lock().unwrap_or_else(|e| e.into_inner());
+                // Do not overwrite a concurrent UI save or an external config edit.
+                let disk = std::fs::read_to_string(config::config_path())
+                    .ok()
+                    .and_then(|text| toml::from_str::<toml::Value>(&text).ok())
+                    .and_then(|value| value.get("dashboard").cloned())
+                    .and_then(|value| value.try_into::<DashboardSettings>().ok());
+                if get_monitoring_settings() == previous && disk.as_ref() == Some(&previous) {
+                    if let Err(error) = apply_settings(&app, next) {
+                        log::warn!("自动发现来源保存失败: {error}");
+                    }
+                }
+            }
+        }
+        std::thread::sleep(std::time::Duration::from_secs(60));
+    });
 }
 
 pub fn source_id(task: &TaskSnapshot) -> String {
@@ -809,7 +958,6 @@ fn discover_source_rows_with_wsl(
     settings: &DashboardSettings,
     wsl: &[crate::providers::codex_wsl::WslCodexDiscovery],
 ) -> Vec<SourceDiscovery> {
-    let home = dirs_next::home_dir().unwrap_or_default();
     let mut sources = settings.sources.clone();
     for candidate in from_legacy(&TaskPulseConfig::default(), false).sources {
         if !sources.iter().any(|s| s.kind == candidate.kind) {
@@ -834,9 +982,13 @@ fn discover_source_rows_with_wsl(
         .iter()
         .map(|source| {
             let (available, detail) = match source.kind {
+                SourceKind::Zcode => {
+                    let path=if source.location.is_empty() {crate::providers::zcode::default_db()} else {PathBuf::from(&source.location)};
+                    (path.is_file(), path.display().to_string())
+                }
                 SourceKind::Doubao => {
                     let root=if source.location.is_empty() {crate::providers::doubao::default_root()} else {PathBuf::from(&source.location)};
-                    (crate::providers::doubao::available(&root),format!("{} · 原生执行检查点（实验）；审批提醒尚未适配",root.display()))
+                    (crate::providers::doubao::available(&root),format!("{} · 原生执行状态；不提供审批提醒",root.display()))
                 }
                 SourceKind::ClaudeCode => {
                     let root = if source.location.is_empty() {
@@ -849,10 +1001,11 @@ fn discover_source_rows_with_wsl(
                         format!("{} · 原生会话观测；可启用精确事件", root.display()),
                     )
                 }
-                SourceKind::Codex => (
-                    home.join(".codex").exists(),
-                    home.join(".codex").display().to_string(),
-                ),
+                SourceKind::Codex => {
+                    let root = std::env::var_os("CODEX_HOME").map(PathBuf::from)
+                        .unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default().join(".codex"));
+                    (root.join("sessions").is_dir(), root.display().to_string())
+                },
                 SourceKind::CodexWsl => wsl
                         .iter()
                         .find(|found| found.distro.eq_ignore_ascii_case(&source.location))
@@ -951,6 +1104,120 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn newly_saved_disabled_custom_sources_remain_disabled() {
+        let mut previous = from_legacy(&TaskPulseConfig::default(), false);
+        previous.onboarding_complete = true;
+        let mut next = previous.clone();
+        let mut custom = source(
+            "custom-zcode",
+            "ZCode custom",
+            SourceKind::Zcode,
+            "D:/custom.db",
+        );
+        custom.enabled = false;
+        next.sources.push(custom);
+        record_discovery_choices(&previous, &mut next);
+        assert!(next.auto_discovery_seen.contains(&"custom-zcode".into()));
+        assert!(!merge_discovered(
+            &mut next,
+            vec![SourceDiscovery {
+                id: "custom-zcode".into(),
+                available: true,
+                detail: String::new(),
+                candidate: None
+            }]
+        ));
+        assert!(!next.sources.last().unwrap().enabled);
+    }
+
+    #[test]
+    fn automatic_discovery_preserves_choices_and_only_enables_native_local_sources() {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), false);
+        let rows = || {
+            vec![
+                SourceDiscovery {
+                    id: "codex".into(),
+                    available: true,
+                    detail: String::new(),
+                    candidate: None,
+                },
+                SourceDiscovery {
+                    id: "codex-wsl:ubuntu".into(),
+                    available: true,
+                    detail: String::new(),
+                    candidate: None,
+                },
+                SourceDiscovery {
+                    id: "local_file".into(),
+                    available: true,
+                    detail: String::new(),
+                    candidate: None,
+                },
+            ]
+        };
+        assert!(!merge_discovered(&mut settings, rows()));
+        settings.onboarding_complete = true;
+        settings.sources[0].projects = vec!["D:/chosen".into()];
+        assert!(merge_discovered(&mut settings, rows()));
+        assert!(settings.sources[0].enabled);
+        assert_eq!(settings.sources[0].projects, vec!["D:/chosen"]);
+        assert!(settings
+            .sources
+            .iter()
+            .filter(|s| matches!(s.kind, SourceKind::CodexWsl | SourceKind::Hooks))
+            .all(|s| !s.enabled));
+        let previous = settings.clone();
+        settings.sources[0].enabled = false;
+        record_discovery_choices(&previous, &mut settings);
+        assert!(!merge_discovered(&mut settings, rows()));
+        let previous = settings.clone();
+        settings.sources.retain(|s| s.id != "codex");
+        record_discovery_choices(&previous, &mut settings);
+        let candidate = source("codex", "Codex", SourceKind::Codex, "");
+        assert!(!merge_discovered(
+            &mut settings,
+            vec![SourceDiscovery {
+                id: "codex".into(),
+                available: true,
+                detail: String::new(),
+                candidate: Some(candidate)
+            }]
+        ));
+    }
+
+    #[test]
+    fn legacy_opt_in_keeps_existing_disabled_sources_and_scope() {
+        let mut previous = from_legacy(&TaskPulseConfig::default(), true);
+        previous.sources[0].enabled = false;
+        previous.sources[0].projects = vec!["D:/explicit".into()];
+        let mut next = previous.clone();
+        next.auto_discover_local = true;
+        record_discovery_choices(&previous, &mut next);
+        assert!(next.auto_discovery_seen.contains(&"codex".into()));
+        assert!(!next.sources[0].enabled);
+        assert_eq!(next.sources[0].projects, previous.sources[0].projects);
+        let mut absent = from_legacy(&TaskPulseConfig::default(), false);
+        absent.onboarding_complete = true;
+        assert!(merge_discovered(
+            &mut absent,
+            vec![SourceDiscovery {
+                id: "zcode".into(),
+                available: true,
+                detail: String::new(),
+                candidate: None
+            }]
+        ));
+        assert!(
+            absent
+                .sources
+                .iter()
+                .find(|s| s.id == "zcode")
+                .unwrap()
+                .enabled
+        );
+    }
+
     #[test]
     fn wsl_discovery_requires_agent_evidence_and_preserves_saved_sources() {
         use crate::providers::codex_wsl::WslCodexDiscovery;

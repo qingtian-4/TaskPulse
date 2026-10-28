@@ -6,9 +6,11 @@ import { join, resolve } from 'node:path';
 
 export const ALPHA_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|beta|rc)\.(0|[1-9]\d*)$/;
 
+export const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
 export function validateRelease(tag: string, versions: string[]) {
   const version = tag.startsWith('v') ? tag.slice(1) : '';
-  if (!ALPHA_VERSION.test(version)) throw new Error('Use an explicit pre-release tag, e.g. v0.2.0-alpha.1. Stable publication is not enabled.');
+  if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Use an explicit SemVer tag, e.g. v0.2.0 or v0.2.0-rc.1.');
   if (versions.length !== 4 || versions.some(v => v !== version)) {
     throw new Error(`Tag ${tag} must match package.json, Cargo.toml, Cargo.lock and tauri.conf.json: ${versions.join(', ')}`);
   }
@@ -31,6 +33,11 @@ export function projectVersions(root: string): string[] {
 // Windows Installer cannot use SemVer's alpha.N identifier directly. Keep the
 // public/application version intact and validate a separate numeric Wix version.
 export function msiVersionFor(version:string):string {
+  const stable=STABLE_VERSION.exec(version);
+  if(stable){
+    if(Number(stable[1])>255 || Number(stable[2])>255 || Number(stable[3])>65535)throw Error('Version exceeds Windows Installer numeric limits');
+    return `${stable[1]}.${stable[2]}.${stable[3]}.65535`;
+  }
   const match=ALPHA_VERSION.exec(version);
   if(!match)throw new Error('Invalid pre-release version');
   const [,major,minor,patch,channel,sequence]=match;
@@ -47,7 +54,7 @@ export function validateMsiVersion(root:string,version:string):void {
 }
 
 export function installerNames(version: string) {
-  if (!ALPHA_VERSION.test(version)) throw new Error('Invalid pre-release version');
+  if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Invalid release version');
   return [`TaskPulse_${version}_windows_x64_setup.exe`, `TaskPulse_${version}_windows_x64.msi`];
 }
 
@@ -125,6 +132,7 @@ if (import.meta.main) {
       const commit = git(root, ['rev-parse', 'HEAD']);
       const tagged = git(root, ['rev-parse', '--verify', `${tag}^{commit}`]);
       if (commit !== tagged) throw new Error('Checkout must be the existing release tag, not a branch or another commit');
+      git(root,['merge-base','--is-ancestor',commit,'refs/remotes/origin/main']);
       // No shell interpolation of user-supplied refs; validated outputs are safe.
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\ncommit=${commit}\n`);
       console.log(`Validated ${tag} at ${commit}`);

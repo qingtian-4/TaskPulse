@@ -100,7 +100,7 @@ impl DoubaoProvider {
                     _ => None,
                 };
             }
-            t.message = Some("豆包原生执行检查点 · 实验观测；审批提醒尚未适配".into());
+            t.message = Some("豆包原生执行状态 · 不提供审批提醒".into());
             progress.insert(id.clone(), row["progress"].clone());
             current.insert(id, t);
         }

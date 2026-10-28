@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from 'svelte';
   import { Radio, Bell, Info } from '@lucide/svelte';
+  import AppUpdates from '$lib/components/AppUpdates.svelte';
   import BrandMark from '$lib/components/BrandMark.svelte';
   import IntegrationEditor from '$lib/components/IntegrationEditor.svelte';
   import IntegrationHookCleanup from '$lib/components/IntegrationHookCleanup.svelte';
@@ -15,7 +16,7 @@
   let settings=$state<DashboardSettings | null>(null);
   let discovery=$state<SourceDiscovery[]>([]);
   let health=$state<ProviderHealth[]>([]);
-  let tab=$state<'sources'|'sessions'|'notifications'>('sources');
+  let tab=$state<'sources'|'sessions'|'notifications'|'updates'>('sources');
   let selected=$state('');
   let query=$state('');
   let sessionSource=$state('');
@@ -25,6 +26,7 @@
   let notice=$state('');
   let buildInfo=$state<{version:string;commit:string;modified:boolean;profile:string;executable:string}|null>(null);
   let saving=$state(false);
+  let updating=$state(false);
   let loadingSessions=$state(false);
   let notificationError=$state('');
   let deliveryRecords=$state<DeliveryRecord[]>([]);
@@ -50,14 +52,14 @@
         await new Promise(r=>setTimeout(r,300));
         health=await invoke<ProviderHealth[]>('get_providers');
         const result=readTestResult(id,health,since);
-        if(result!=='pending'){readTest={id,passed:result==='passed',message:result==='passed'?'本次读取正常 · 不等于真实生命周期已验收':'本次读取失败 · 查看高级诊断'};return;}
+        if(result!=='pending'){readTest={id,passed:result==='passed',message:result==='passed'?'已连接，等待新任务':'本次读取失败 · 查看高级诊断'};return;}
       }
       readTest={id,message:'读取超时 · 保留原状态，不视为任务结束'};
     }catch(e){error=String(e);}finally{reading=false;}
   }
   let editor=$derived(settings?.sources.find(s=>s.id===selected) ?? null);
   const setupStep=$derived(sourceSetupStep(!!editor,dirty || !applied?.onboarding_complete,readTest?.id===editor?.id && readTest?.passed===true));
-  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'doubao',name:'豆包 · 本机（实验）'},{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
+  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'zcode',name:'ZCode · 本机'},{kind:'doubao',name:'豆包 · 本机'},{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
   const candidates=$derived(discovery.filter(d=>d.available && d.candidate && !settings?.sources.some(s=>s.id===d.candidate!.id || s.kind===d.candidate!.kind && s.location.toLowerCase()===d.candidate!.location.toLowerCase())));
   function addCandidate(candidate:MonitorSource) {
     if(!settings)return;
@@ -72,7 +74,7 @@
   function changed(){dirty=true;readTest=null;}
   function add(){
     if(!settings)return;
-    const builtin:Partial<Record<SourceKind,string>>={doubao:'doubao',codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
+    const builtin:Partial<Record<SourceKind,string>>={zcode:'zcode',doubao:'doubao',codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
     const candidate=builtin[addKind];
     if(['codex','hooks','scanner'].includes(addKind) && settings.sources.some(s=>s.kind===addKind)){selected=settings.sources.find(s=>s.kind===addKind)!.id;notice='本机来源已存在，请在左侧启用或编辑。';return;}
     const id=candidate && !settings.sources.some(s=>s.id===candidate) ? candidate : addKind+':'+crypto.randomUUID();
@@ -81,11 +83,12 @@
     settings.sources.push(source);selected=id;dirty=true;
   }
   function remove(id:string){if(!settings)return;settings.sources=settings.sources.filter(s=>s.id!==id);selected=settings.sources[0]?.id ?? '';dirty=true;}
+  function configError(e:unknown){error=String(e);if(error==='配置已更新，请重新加载后保存')conflict=true;}
   async function save(){
     if(!settings || !isTauri() || conflict)return;
     saving=true;error='';notice='';
-    try { settings.onboarding_complete=true;settings=await invoke<DashboardSettings>('save_monitoring_settings',{settings:$state.snapshot(settings)});applied=structuredClone($state.snapshot(settings));discovery=await invoke<SourceDiscovery[]>('discover_sources');dirty=false;notice='已保存并即时生效。受影响来源正在重新采集。'; }
-    catch(e){error=String(e);}finally{saving=false;}
+    try { settings.onboarding_complete=true;settings=await invoke<DashboardSettings>('save_monitoring_settings',{settings:$state.snapshot(settings),expected:applied ? $state.snapshot(applied) : null});applied=structuredClone($state.snapshot(settings));discovery=await invoke<SourceDiscovery[]>('discover_sources');dirty=false;notice='已保存并即时生效。受影响来源正在重新采集。'; }
+    catch(e){configError(e);}finally{saving=false;}
   }
   async function toggleSource(source:MonitorSource,enabled:boolean){
     if(!settings || saving || conflict)return;
@@ -94,14 +97,16 @@
     const previous=source.enabled;
     saving=true;error='';
     try {
-      const current=await invoke<DashboardSettings>('get_monitoring_settings');
+      const expected=structuredClone($state.snapshot(applied));
+      const current=structuredClone(expected);
       const target=current.sources.find(s=>s.id===source.id);
       if(!target)throw Error('来源已被移除，请重新打开配置');
       target.enabled=enabled;
-      const next=await invoke<DashboardSettings>('save_monitoring_settings',{settings:current});
+      const next=await invoke<DashboardSettings>('save_monitoring_settings',{settings:current,expected});
       applied=structuredClone(next);source.enabled=enabled;
+      if(!dirty)settings=structuredClone(next);
       notice=(enabled?'已启用：':'已停用：')+source.name+'。开关即时生效；其他编辑仍需保存。';
-    }catch(e){source.enabled=previous;error=String(e);}finally{saving=false;}
+    }catch(e){source.enabled=previous;configError(e);}finally{saving=false;}
   }
   function sourceState(source:MonitorSource){return sourceReadState(source,applied,health,now);}
   async function saveAndClose(){await save();if(!dirty && !error){closing=true;await getCurrentWindow().close();}}
@@ -134,12 +139,14 @@
     try {await invoke('update_task_attention',{id,action});notice=action==='follow'?'已加入关注，不补发历史通知':'会话设置已更新';await loadSessions();}
     catch(e){error=String(e);}
   }
-  async function testNotification(){try{await invoke('test_notification');notificationTest=true;await loadDelivery();notice='测试已提交；请确认是否看见提醒。投递成功不代表真实任务生命周期已验收。';}catch(e){error=String(e);}}
+  async function testNotification(){try{await invoke('test_notification');notificationTest=true;await loadDelivery();notice='测试提醒已发送。';}catch(e){error=String(e);}}
   onMount(()=>{
     if(!isTauri()){error='管理配置需要在 TaskPulse 托盘应用中打开。浏览器页面不会写入真实配置。';return;}
+    if(new URLSearchParams(location.search).get('section')==='updates')tab='updates';
     const cleanups:Array<()=>void>=[];let mounted=true;
     void(async()=>{
       try {
+        const sectionCleanup=await listen<string>('management-section',e=>{if(e.payload==='updates')tab='updates';});if(mounted)cleanups.push(sectionCleanup);else sectionCleanup();
         buildInfo=await invoke('get_build_info');
         settings=await invoke<DashboardSettings>('get_monitoring_settings');
         applied=structuredClone($state.snapshot(settings));
@@ -147,8 +154,10 @@
         discovery=await invoke<SourceDiscovery[]>('discover_sources');
         health=await invoke<ProviderHealth[]>('get_providers');
         notificationError=await invoke<string | null>('get_notification_error') ?? '';
-        if(!settings.onboarding_complete){for(const source of settings.sources){source.enabled=discovery.find(d=>d.id===source.id)?.available ?? false;}dirty=true;}
+        if(!settings.onboarding_complete){for(const source of settings.sources){source.enabled=['codex','claude_code','hermes','deepseek_desktop','doubao','zcode'].includes(source.kind) && (discovery.find(d=>d.id===source.id)?.available ?? false);}dirty=true;}
         selected=settings.sources[0]?.id ?? '';
+        const updateCleanup=await listen<{phase:string}>('application-update',e=>updating=['downloading','verifying','installing'].includes(e.payload.phase));if(mounted)cleanups.push(updateCleanup);else updateCleanup();
+        const currentUpdate=await invoke<{phase:string}>('get_update_status');updating=['downloading','verifying','installing'].includes(currentUpdate.phase);
         const cleanup=await listen<ProviderHealth[]>('providers-updated',e=>health=e.payload);if(mounted)cleanups.push(cleanup);else cleanup();
         const notificationCleanup=await listen<string>('notification-error',e=>notificationError=e.payload);if(mounted)cleanups.push(notificationCleanup);else notificationCleanup();
         const settingsCleanup=await listen<DashboardSettings>('monitoring-settings-updated',e=>{
@@ -167,16 +176,17 @@
 </script>
 
 <div class="manage tp-theme">
-  <header><div class="page-title"><span class="page-icon" aria-hidden="true"><BrandMark size={37}/></span><div><span class="eyebrow">TASKPULSE / SOURCES</span><h1>管理你的关注范围</h1><p>选择任务来源，交给 TaskPulse 跟踪新执行。</p></div></div><button class="primary tp-btn" data-variant="primary" disabled={saving || !dirty || !settings || conflict} onclick={save}>{saving?'保存中…':dirty?'保存并生效':'配置已保存'}</button></header>
+  <header><div class="page-title"><span class="page-icon" aria-hidden="true"><BrandMark size={37}/></span><div><span class="eyebrow">TASKPULSE / SOURCES</span><h1>管理你的关注范围</h1><p>选择任务来源，交给 TaskPulse 跟踪新执行。</p></div></div><button class="primary tp-btn" data-variant="primary" disabled={updating || saving || !dirty || !settings || conflict} onclick={save}>{saving?'保存中…':!applied?.onboarding_complete?'开始监控':dirty?'保存并生效':'配置已保存'}</button></header>
   {#if buildInfo}<details class="build-info tp-fold"><summary>关于 TaskPulse · {buildInfo.version}</summary><p class="help">构建 {buildInfo.commit.slice(0,12)}{buildInfo.modified?' · 含本地修改':''} · {buildInfo.profile}<br/>{buildInfo.executable}</p><button class="tp-btn" onclick={async()=>{try{await navigator.clipboard.writeText(JSON.stringify(buildInfo,null,2));notice='已复制构建信息';}catch{error='复制失败';}}}>复制构建信息</button></details>{/if}
-  <nav aria-label="管理页面"><button class="tp-btn" class:active={tab==='sources'} onclick={()=>tab='sources'}>监控来源</button><button class="tp-btn" class:active={tab==='sessions'} onclick={()=>{tab='sessions';void loadSessions();}}>已发现会话</button><button class="tp-btn" class:active={tab==='notifications'} onclick={()=>{tab='notifications';void loadDelivery();}}>通知与显示</button></nav>
+  <nav aria-label="管理页面"><button class="tp-btn" class:active={tab==='sources'} onclick={()=>tab='sources'}>监控来源</button><button class="tp-btn" class:active={tab==='sessions'} onclick={()=>{tab='sessions';void loadSessions();}}>已发现会话</button><button class="tp-btn" class:active={tab==='notifications'} onclick={()=>{tab='notifications';void loadDelivery();}}>通知与显示</button><button class="tp-btn" class:active={tab==='updates'} onclick={()=>tab='updates'}>应用更新</button></nav>
   {#if error}<div class="message error" role="alert">{error}<button class="tp-btn" onclick={()=>error=''} aria-label="关闭错误">×</button></div>{/if}
   {#if conflict}<div class="message"><button class="tp-btn" onclick={reloadSettings}>放弃未保存编辑，加载最新配置</button></div>{/if}
   {#if notice}<div class="message" role="status">{notice}<button class="tp-btn" onclick={()=>notice=''} aria-label="关闭提示">×</button></div>{/if}
-  {#if settings && !settings.onboarding_complete}<div class="welcome">首次设置：已预选发现的本机来源。确认需要的来源后，点击“保存并生效”。远程服务器由你主动添加。</div>{/if}
-  <main class="glass-scroll">
+  {#if settings && !settings.onboarding_complete}<div class="welcome">已找到本机 Agent。点击“开始监控”，后续新任务会自动出现。可随时修改来源和项目范围。</div>{/if}
+  <main class="glass-scroll"><fieldset disabled={updating}>
     {#if settings && tab==='sources'}
       <ol class="setup-flow" aria-label="来源接入步骤">{#each ['选择 Agent','能力与配置范围','保存并测试','等待真实任务事件'] as label,i}<li class:current={setupStep===i+1} aria-current={setupStep===i+1?'step':undefined}><span class="step-number">{i+1}</span><span class="step-label">{label}</span></li>{/each}</ol>
+      <label class="radio"><input type="checkbox" bind:checked={settings.auto_discover_local} onchange={changed}/>自动发现并启用新安装的本机 Agent</label><p class="help">首次确认后自动跟踪新任务。已关闭或移除的来源、项目范围会保留；WSL、SSH 和需要配置的接入单独添加。</p>
       <div class="source-layout"><aside aria-label="监控来源列表"><h2 class="sidebar-title">已保存与草稿来源 <span class="tp-chip">{settings.sources.length}</span></h2><div class="add"><select bind:value={addKind} aria-label="新增来源类型">{#each kinds as kind}<option value={kind.kind}>{kind.name}</option>{/each}</select><button class="tp-btn" onclick={add}>＋ 添加</button></div>
       {#each settings.sources as source (source.id)}
         <div class="source-item" class:chosen={selected===source.id}>
@@ -207,7 +217,7 @@
           <p class="help">推荐自动关注所有项目的新任务：只要来源启用，旧项目再次执行也会自动回来。主面板按最近 {settings.recent_days ?? 7} 天的执行活动显示，不复制历史会话。指定项目限制不会自动改写，可在上方取消。排除规则优先。</p>
           {#if !editor.projects.includes('*')}<label class="radio"><input type="checkbox" checked={editor.projects.includes('@unassociated')} onchange={e=>{editor!.projects=e.currentTarget.checked ? [...editor!.projects,'@unassociated'] : editor!.projects.filter(p=>p!=='@unassociated');changed();}}/>也包括未关联项目的会话</label>{/if}
           {#if editor.kind==='tmux'}<label>tmux session（留空表示全部，每行一个）<textarea value={editor.tmux_sessions.join('\n')} oninput={e=>{editor!.tmux_sessions=list(e.currentTarget.value);changed();}}></textarea></label><label>tmux pane（可选，每行一个）<textarea value={editor.tmux_panes.join('\n')} oninput={e=>{editor!.tmux_panes=list(e.currentTarget.value);changed();}}></textarea></label>{/if}
-          <p class="help">保存后，范围内的新执行会自动加入。测试只验证读取 / 提醒通道；请在 Agent 中启动一轮真实任务，核对开始、阶段、结束和提醒。没有真实宿主证据时，仍以能力矩阵的验证等级为准。</p>
+          <p class="help">保存后，范围内的新任务会自动出现。可以回到 Agent 开始一轮对话，随后在托盘查看状态。</p>
           <details class="advanced tp-fold"><summary>高级设置 · 排除、诊断与来源移除</summary>
           <label>排除项目（可选，每行一个）<textarea value={editor.excluded_projects.join('\n')} oninput={e=>{editor!.excluded_projects=list(e.currentTarget.value);changed();}}></textarea></label>
           {#if discovery.find(d=>d.id===editor!.id)}<p class="path">{discovery.find(d=>d.id===editor!.id)?.detail}</p>{/if}
@@ -226,13 +236,14 @@
     {:else if settings && tab==='notifications'}
       <section class="preferences"><h2>近期活动</h2><label>普通关注任务保留时间<select value={settings.recent_days ?? 7} onchange={e=>{settings!.recent_days=Number(e.currentTarget.value);changed();}}>{#each [3,7,14,30,0] as days}<option value={days}>{days ? '最近 '+days+' 天' : '全部关注，不按时间归档'}</option>{/each}</select></label><p class="help">按执行活动计算，不按刷新或重命名计算。运行中的任务、重新手动固定的任务始终显示；其他过期关注移入“较早关注”，保留未读状态，不删除记录。旧版本的固定标记会保留在归档中，可重新固定使其常驻。也可以切换到“全部关注”。</p><h2>任务提醒</h2>{#if notificationError}<p class="message error" role="alert">最近通知发送失败：{notificationError}</p>{/if}<label class="radio"><input type="checkbox" bind:checked={settings.notifications} onchange={changed}/>任务结束、失败或需要确认时提醒</label><label class="radio"><input type="checkbox" bind:checked={settings.sound} onchange={changed}/>播放通知声音</label><label>提醒方式<select value={settings.notification_mode ?? 'popup'} onchange={e=>{settings!.notification_mode=e.currentTarget.value as 'popup'|'system'|'both';changed();}}><option value="popup">TaskPulse 独立弹窗（推荐）</option><option value="system">Windows / 系统通知</option><option value="both">独立弹窗 + 系统通知</option></select></label><p class="help">普通结果在右下角显示 15 秒，悬停暂停；已确认的授权请求和结构化提问提醒持续保留，可切换下一条，不抢编辑焦点；关闭不等于已查看。每个任务分别提醒，不合并；同一事件只提醒一次。通知消失后，未查看结果仍保留在关注记录；铃铛可回查未解决请求，只有新鲜明确状态才能手动重开。系统勿扰设置可能隐藏横幅。</p><button class="secondary tp-btn" disabled={dirty} onclick={testNotification}>发送测试提醒</button><h2>默认视图</h2><label class="radio"><input type="radio" name="view" checked={settings.default_view==='tasks'} onchange={()=>{settings!.default_view='tasks';changed();}}/>任务优先：进行中、结果待查看、状态待更新</label><label class="radio"><input type="radio" name="view" checked={settings.default_view==='projects'} onchange={()=>{settings!.default_view='projects';changed();}}/>按项目分组</label></section>
     {/if}
+    {#if settings && tab==='updates'}<section class="preferences"><label class="radio"><input type="checkbox" bind:checked={settings.auto_check_updates} onchange={changed}/>自动检查更新，有新版本时提示我</label><p class="help">每天自动检查一次。只显示提示，由你决定何时安装。</p></section><AppUpdates blocked={dirty || saving || conflict}/>{/if}
     {#if tab==='notifications'}
       <section class="delivery"><h2>提醒行为与投递记录</h2><p class="help">完成提醒 15 秒后收起；已确认的授权请求和结构化提问提醒不会自动收起，可切换下一条，匹配请求处理后自动移除。不根据提权参数或命令耗时猜测授权状态，也不替你批准。来源不提供明确审批事件时，授权提醒可能无法检测。</p><button class="secondary tp-btn" onclick={()=>void loadDelivery()}>刷新投递记录</button><p class="help">“界面已渲染”不代表你已阅读；系统 API 接受也不证明横幅已出现。保存最近 500 条记录，不包含命令或提示词。</p>{#if deliveryError}<p role="alert" class="message error">{deliveryError}</p>{/if}
       {#each deliveryRecords.slice(0,25) as row}<div class="delivery-row"><time>{new Date(row.at).toLocaleString()}</time><strong title={row.task_id ?? ''}>{row.test?'测试 · ':''}{row.title}</strong><span>{row.channel} · {deliveryStage(row.stage)}</span></div>{/each}
       {#if !deliveryRecords.length && !deliveryError}<p class="help">尚无投递记录；升级前的弹窗无法追溯补录。</p>{/if}</section>
     {/if}
     {#if settings && tab==='sources'}<details class="hook-registry tp-fold"><summary>高级 · 宿主 Hook 登记与撤销（含已移除来源）</summary><IntegrationHookCleanup revision={applied?.sources.map(s=>s.id).join(',')??''}/></details>{/if}
-  </main>
+  </fieldset></main>
   {#if closePrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="close-title"><h2 id="close-title">还有未保存的配置</h2><p>启用开关已即时生效；项目范围和其他编辑尚未保存。</p><div><button class="tp-btn" onclick={()=>closePrompt=false}>继续编辑</button><button class="tp-btn" onclick={discardAndClose}>放弃未保存编辑</button><button class="primary tp-btn" data-variant="primary" disabled={saving || conflict} onclick={saveAndClose}>保存并关闭</button></div></dialog></div>{/if}
   {#if eventPrompt}<div class="modal"><dialog open use:focusTrap aria-modal="true" aria-labelledby="events-title"><h2 id="events-title">{eventPrompt.enabled?'启用 Claude 精确事件':'移除 Claude 精确事件'}</h2><p>这会修改所选 Claude 数据目录中的 settings.json，仅添加或移除 TaskPulse Hook。首次修改会备份；已有 Hook、statusLine、代理和模型设置保留。可随时移除。</p><div><button class="tp-btn" onclick={()=>eventPrompt=null}>取消</button><button class="primary tp-btn" data-variant="primary" onclick={confirmEvents}>确认{eventPrompt.enabled?'启用':'移除'}</button></div></dialog></div>{/if}
 </div>
@@ -245,6 +256,7 @@
   header>.primary{flex:none;font-size:11px}
   nav{display:flex;padding:0 24px;gap:20px;border-bottom:1px solid var(--tp-border);background:var(--tp-panel);flex:none}
   nav .tp-btn{border:0;border-bottom:2px solid transparent;box-shadow:none;border-radius:0;background:transparent;min-height:42px;padding:8px 0;font-size:12px;color:var(--tp-muted)}nav .active{border-bottom-color:var(--tp-accent);color:var(--tp-accent)}
+  fieldset{border:0;padding:0;margin:0;min-width:0}
   main{flex:1;min-height:0;overflow:auto;padding:20px 24px;overscroll-behavior:contain}
   .setup-flow{list-style:none;margin:0 0 20px;padding:0;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:1px;border:1px solid var(--tp-border);background:var(--tp-border);border-radius:var(--tp-radius-md);overflow:hidden}
   .setup-flow li{display:flex;gap:9px;align-items:center;padding:11px 12px;background:var(--tp-panel);min-width:0}

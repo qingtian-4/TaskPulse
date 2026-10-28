@@ -15,8 +15,8 @@ import time
 
 
 def stage(bundle_root, output, version, commit, arch, build_kind=None):
-    if not re.fullmatch(r"\d+\.\d+\.\d+-(alpha|beta|rc)\.\d+", version):
-        raise ValueError("An explicit pre-release version is required")
+    if not re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(alpha|beta|rc)\.(0|[1-9]\d*))?", version):
+        raise ValueError("An explicit SemVer version is required")
     if not re.fullmatch(r"[a-f0-9]{40}", commit) or arch not in ("arm64", "x64"):
         raise ValueError("Invalid source commit or architecture")
     if build_kind not in (None, "pr-preview"):

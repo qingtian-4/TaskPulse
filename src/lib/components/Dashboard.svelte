@@ -126,10 +126,13 @@
     }
     catch(e) { error='刷新失败：'+String(e); } finally { refreshing=false; }
   }
-  async function manage() {
+  let availableUpdate=$state('');
+  function manage(){return openManagement("sources");}
+  function manageUpdates(){return openManagement("updates");}
+  async function openManagement(section:string) {
     if (!isTauri()) { note='浏览器演示：真实设置请在托盘应用中打开'; return; }
     openingManagement=true;
-    try { await invoke('open_management'); } catch(e) { error=String(e);openingManagement=false; }
+    try { await invoke('open_management',{section}); } catch(e) { error=String(e);openingManagement=false; }
   }
   async function action(task: TaskSnapshot, name: string, value?: boolean) {
     if (!isTauri()) return;
@@ -213,6 +216,8 @@
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selectTask(e.payload)));
         await subscribe(listen<boolean>('pinned-changed',e=>pinned=e.payload));
         await subscribe(listen('popup-opened',()=>{if(!pinned)sessionHeight=400;}));
+        await subscribe(listen<{phase:string;version:string|null}>('application-update',e=>availableUpdate=e.payload.phase==='available' ? e.payload.version ?? '' : ''));
+        void invoke<{phase:string;version:string|null}>('get_update_status').then(s=>availableUpdate=s.phase==='available'?s.version ?? '':'');
         await subscribe(listen('management-closed',()=>openingManagement=false));
         await snapshots(); view=settings?.default_view ?? 'tasks';
         void discover();
@@ -263,6 +268,7 @@
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
   {#if note}<p class="notice" role="status">{note}<button class="dismiss" onclick={()=>note=''} aria-label="关闭提示">×</button></p>{/if}
   {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label="关闭刷新结果">×</button></p>{/if}
+  {#if availableUpdate}<p class="notice">TaskPulse {availableUpdate} 可更新<button class="link" onclick={manageUpdates}>查看更新</button></p>{/if}
   {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>选择你要关注的 Agent</strong><p>确认本机来源，或添加远程服务器。新任务会自动出现。</p><button onclick={manage}>设置监控来源</button></div>{/if}
   {#if settings?.onboarding_complete && newSources}<p class="notice">发现 {newSources} 个可监控来源<button class="link" onclick={manage}>选择添加</button></p>{/if}
   {#if refreshing}<p class="notice" role="status">刷新中：{progress.total-progress.pending.length} / {progress.total} 个来源已返回{#if progress.failed.length} · {progress.failed.length} 个失败{/if}</p>{/if}

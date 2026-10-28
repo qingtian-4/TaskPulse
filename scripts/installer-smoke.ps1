@@ -7,7 +7,7 @@ param(
 $ErrorActionPreference = 'Stop'
 # This installs/uninstalls software. Never run it against a developer's real profile.
 if ($env:GITHUB_ACTIONS -ne 'true') { throw 'Run only on a disposable GitHub Actions Windows runner. Use the manual acceptance checklist on a clean VM.' }
-if ($Version -notmatch '^\d+\.\d+\.\d+-(alpha|beta|rc)\.\d+$') { throw 'Invalid pre-release version' }
+if ($Version -notmatch '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-(alpha|beta|rc)\.(0|[1-9]\d*))?$') { throw 'Invalid release version' }
 $assetRoot = (Resolve-Path -LiteralPath $Assets).Path
 $evidence = Join-Path (Get-Location).Path 'dist\installer-smoke'
 New-Item -ItemType Directory -Path $evidence -Force | Out-Null

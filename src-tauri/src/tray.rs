@@ -47,8 +47,12 @@ static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 
 // Keep text readable; the narrow CSS layout reduces spacing instead of fonts.
 // Logical size preference is independent of the monitor's Retina/DPI scale.
-const DASHBOARD_SCALE: f64 = if cfg!(target_os = "macos") { 0.9 } else { 1.0 };
-const DASHBOARD_WIDTH: f64 = 412.0 * DASHBOARD_SCALE;
+const DASHBOARD_WIDTH: f64 = 368.0;
+const DASHBOARD_MIN_WIDTH: f64 = 320.0;
+const DASHBOARD_MIN_HEIGHT: u32 = 360;
+const DASHBOARD_MAX_HEIGHT: u32 = 560;
+static DASHBOARD_HEIGHT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(DASHBOARD_MAX_HEIGHT);
 
 /// Presentation only: consumes the same scoped, reconciled attention snapshot
 /// as the Dashboard. Never changes lifecycle, unread state or notifications.
@@ -226,6 +230,7 @@ pub fn toggle_popup(app: &AppHandle) {
             let _ = win.hide();
             return;
         }
+        let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true);
         set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
         let _ = win.show();
         let _ = app.emit("popup-opened", ());
@@ -240,6 +245,7 @@ pub fn toggle_popup(app: &AppHandle) {
 /// Notification activation must show, never toggle/hide an existing popup.
 pub fn show_popup(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("popup") {
+        let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true);
         set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
         let was_hidden = !win.is_visible().unwrap_or(false);
         let _ = win.show();
@@ -280,7 +286,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title("TaskPulse")
-        .inner_size(DASHBOARD_WIDTH, 620.0 * DASHBOARD_SCALE)
+        .inner_size(DASHBOARD_WIDTH, f64::from(DASHBOARD_MAX_HEIGHT))
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
         // keeps its native shadow. The transparent dashboard draws its own edge.
@@ -294,7 +300,7 @@ fn create_popup(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            let _ = fit_popup(&win, 620, false);
+            let _ = fit_popup(&win, DASHBOARD_MAX_HEIGHT, false);
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
@@ -310,12 +316,27 @@ fn create_popup(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub async fn open_management(app: AppHandle) -> Result<(), String> {
+pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<(), String> {
+    let updates = section.as_deref() == Some("updates");
     if let Some(win) = app.get_webview_window("management") {
+        if updates {
+            let _ = app.emit_to("management", "management-section", "updates");
+        }
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
     }
-    let builder = WebviewWindowBuilder::new(&app, "management", WebviewUrl::App("manage/".into()));
+    let builder = WebviewWindowBuilder::new(
+        &app,
+        "management",
+        WebviewUrl::App(
+            if updates {
+                "manage/?section=updates"
+            } else {
+                "manage/"
+            }
+            .into(),
+        ),
+    );
     let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
         builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
     } else {
@@ -392,10 +413,19 @@ fn popup_geometry(
     current: Option<(i32, i32)>,
 ) -> (u32, u32, i32, i32) {
     let (left, top, available_width, available_height) = area;
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
     let margin = (8.0 * scale).round() as i32;
-    let width = ((DASHBOARD_WIDTH * scale).round() as u32)
+    let logical_width =
+        (f64::from(available_width) / scale * 0.32).clamp(DASHBOARD_MIN_WIDTH, DASHBOARD_WIDTH);
+    let logical_height = f64::from(height.clamp(DASHBOARD_MIN_HEIGHT, DASHBOARD_MAX_HEIGHT))
+        .min(f64::from(available_height) / scale * 0.82);
+    let width = ((logical_width * scale).round() as u32)
         .min(available_width.saturating_sub((margin * 2) as u32).max(1));
-    let height = ((f64::from(height.clamp(400, 620)) * DASHBOARD_SCALE * scale).round() as u32)
+    let height = ((logical_height * scale).round() as u32)
         .min(available_height.saturating_sub((margin * 2) as u32).max(1));
     let min_x = left + margin.min(available_width.saturating_sub(width) as i32);
     let min_y = top + margin.min(available_height.saturating_sub(height) as i32);
@@ -443,6 +473,7 @@ fn fit_popup(
 #[tauri::command]
 pub async fn resize_dashboard(app: AppHandle, height: u32) -> Result<(), String> {
     let window = app.get_webview_window("popup").ok_or("任务窗口尚未创建")?;
+    DASHBOARD_HEIGHT.store(height, Ordering::SeqCst);
     fit_popup(&window, height, true)
 }
 
@@ -454,19 +485,20 @@ mod tests {
     #[test]
     fn popup_fits_work_area_at_scaled_and_negative_monitor_coordinates() {
         for scale in [1.0, 1.25, 1.5, 2.0] {
-            let (w, h, x, y) =
-                popup_geometry((-1920, 40, 1920, 1000), scale, 620, Some((-9999, 9999)));
-            assert_eq!(w, (DASHBOARD_WIDTH * scale).round() as u32);
-            assert_eq!(
-                h,
-                ((620.0 * DASHBOARD_SCALE * scale).round() as u32)
-                    .min(1000 - (16.0 * scale) as u32)
-            );
-            assert!(x >= -1920 && y >= 40);
-            assert!(x + w as i32 <= 0 && y + h as i32 <= 1040);
+            for (aw, ah) in [(1920, 1000), (1366, 728), (1536, 824), (2560, 1400)] {
+                let (w, h, x, y) =
+                    popup_geometry((-1920, 40, aw, ah), scale, 620, Some((-9999, 9999)));
+                assert!(f64::from(w) / scale <= DASHBOARD_WIDTH + 1.0);
+                assert!(f64::from(h) <= f64::from(ah) * 0.82 + 1.0);
+                assert!(x >= -1920 && y >= 40);
+                assert!(x + w as i32 <= -1920 + aw as i32 && y + h as i32 <= 40 + ah as i32);
+            }
         }
-        let (w, h, x, y) = popup_geometry((0, 0, 640, 480), 2.0, 620, None);
-        assert!(w <= 608 && h <= 448 && x >= 16 && y >= 16);
+        let large = popup_geometry((0, 0, 2560, 1400), 1.0, 620, None);
+        assert_eq!((large.0, large.1), (368, 560));
+        let laptop = popup_geometry((0, 0, 1536, 824), 1.5, 620, None);
+        assert_eq!(laptop.0, 492);
+        assert!(laptop.1 <= 676);
         let (w, h, x, y) = popup_geometry((0, 0, 10, 10), 1.0, 0, None);
         assert!(x >= 0 && y >= 0 && x + w as i32 <= 10 && y + h as i32 <= 10);
     }

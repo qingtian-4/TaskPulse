@@ -45,7 +45,7 @@ await withSmokeWorkspace('model-native',async({owned,evidenceDir,onStop})=>{
   assert.equal(before.source,'claude_code');
   await wait(`document.querySelector('.model')?.textContent.includes(${JSON.stringify(model)})`);
   const layouts=[];
-  for(const [width,height] of [[440,720],[320,420],[440,420],[320,720]]) {
+  for(const [width,height] of [[368,560],[320,420],[440,420],[320,720]]) {
     await send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});await Bun.sleep(150);
     const layout=await evaluate(`(()=>{const m=document.querySelector('.model'),b=m.getBoundingClientRect();return {width:innerWidth,height:innerHeight,overflow:document.documentElement.scrollWidth>innerWidth,modelClipped:m.scrollWidth>m.clientWidth,right:b.right,bottom:b.bottom};})()`);
     assert.equal(layout.overflow,false);assert.equal(layout.modelClipped,false);assert.ok(layout.right<=width);layouts.push(layout);
@@ -63,7 +63,33 @@ await withSmokeWorkspace('model-native',async({owned,evidenceDir,onStop})=>{
   await evaluate(`document.querySelector('[aria-label="清除搜索"]').click()`);await wait(`document.querySelectorAll('.task-row').length===2`);
   await evaluate(`[...document.querySelectorAll('.task-row')].find(e=>e.textContent.includes('来源未提供模型')).click()`);
   await wait(`document.querySelector('.model-detail')?.textContent.includes('来源未提供')`);
+  await send('Emulation.clearDeviceMetricsOverride');
+  const actual=await evaluate(`({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,overflow:document.documentElement.scrollWidth>innerWidth})`);
+  assert.ok(actual.width<=370,JSON.stringify(actual));assert.equal(actual.overflow,false);
+  const updateStatus=await invoke('get_update_status');assert.equal(updateStatus.can_install,false,'isolated app cannot install updates');
+  await evaluate(`__TAURI_INTERNALS__.invoke('open_management',{section:'updates'})`);
+  let management:any;
+  for(let n=0;n<100;n++){management=(await tabs()).find(t=>t.url.includes('/manage'));if(management)break;await Bun.sleep(100);}
+  assert.ok(management,'Management page missing');
+  const receive=ws!.onmessage;ws!.close();ws=new WebSocket(management.webSocketDebuggerUrl);
+  await new Promise<void>((ok,fail)=>{ws!.onopen=()=>ok();ws!.onerror=()=>fail(Error('Management CDP failed'));});ws.onmessage=receive;
+  await send('Runtime.enable');
+  await wait(`[...document.querySelectorAll('nav button')].some(b=>b.textContent.includes('应用更新'))`);
+  await wait(`document.querySelector('.updates')?.textContent.includes('应用更新')`);
+  const emitUpdate=(phase:string)=>evaluate(`window.__TAURI__.event.emit('application-update',${JSON.stringify({...updateStatus,phase,version:'99.0.0',can_install:true,notes:'Isolated update UI fixture'})})`);
+  await emitUpdate('available');
+  await wait(`[...document.querySelectorAll('.updates button')].some(b=>b.textContent.includes('下载并安装'))`);
+  await evaluate(`[...document.querySelectorAll('.preferences label')].find(l=>l.textContent.includes('自动检查更新')).querySelector('input').click()`);
+  await wait(`[...document.querySelectorAll('.updates button')].find(b=>b.textContent.includes('下载并安装'))?.disabled===true`);
+  await emitUpdate('downloading');await wait(`document.querySelector('main fieldset')?.disabled===true`);
+  await emitUpdate('error');await wait(`document.querySelector('main fieldset')?.disabled===false`);
+  await Bun.write(join(owned,'settings-updates.png'),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  const expected=await invoke('get_monitoring_settings');
+  const modified=structuredClone(expected);modified.auto_check_updates=!modified.auto_check_updates;
+  await evaluate(`__TAURI_INTERNALS__.invoke('save_monitoring_settings',{settings:${JSON.stringify(modified)},expected:${JSON.stringify(expected)}})`);
+  const staleRejected=await evaluate(`__TAURI_INTERNALS__.invoke('save_monitoring_settings',{settings:${JSON.stringify(expected)},expected:${JSON.stringify(expected)}}).then(()=>false,()=>true)`);
+  assert.equal(staleRejected,true,'stale settings cannot overwrite a concurrent save');
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['real Claude parser + native IPC + WebView2','reported model visible','missing model explicit in details','long names at normal/minimum width and height','model switch preserves lifecycle and start time','model search'],layouts,data:'isolated synthetic transcripts, not host certification'},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['real Claude parser + native IPC + WebView2','reported model visible','missing model explicit in details','long names at normal/minimum width and height','model switch preserves lifecycle and start time','model search','native compact window','update IPC and unsaved-setting protection','download locks settings; error unlocks','concurrent setting save rejects stale baseline'],actual,layouts,data:'isolated synthetic transcripts, not host certification'},null,2));
   console.log(JSON.stringify({passed:true,evidenceDir,layouts}));
 });

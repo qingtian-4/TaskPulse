@@ -47,7 +47,7 @@ class PackagingTests(unittest.TestCase):
     def test_bad_identity_and_malformed_or_duplicate_images(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            for version, commit, arch in [("0.2.0", "a" * 40, "arm64"),
+            for version, commit, arch in [("0.2.0-invalid", "a" * 40, "arm64"),
                                            ("0.2.0-alpha.8", "main", "arm64"),
                                            ("0.2.0-alpha.8", "a" * 40, "../x")]:
                 with self.assertRaises(ValueError):

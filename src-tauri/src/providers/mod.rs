@@ -15,6 +15,7 @@ mod parser_cache;
 pub mod remote_tmux;
 pub mod resources;
 pub mod worker;
+pub mod zcode;
 
 use std::time::SystemTime;
 

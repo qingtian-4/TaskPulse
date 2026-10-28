@@ -726,6 +726,21 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::Zcode => {
+                    let mut provider = crate::providers::zcode::ZcodeProvider::new(
+                        if source.location.is_empty() {
+                            crate::providers::zcode::default_db()
+                        } else {
+                            PathBuf::from(&source.location)
+                        },
+                    );
+                    provider.resume(known_sessions().into_iter().filter(|task| {
+                        task.source == TaskSource::NativeAgent
+                            && task.agent_id.as_deref() == Some("zcode")
+                            && task.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
                 SourceKind::Doubao => Box::new(crate::providers::doubao::DoubaoProvider::new(
                     if source.location.is_empty() {
                         crate::providers::doubao::default_root()

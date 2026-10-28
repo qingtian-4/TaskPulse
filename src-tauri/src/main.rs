@@ -24,6 +24,7 @@ mod store;
 mod task_notice;
 mod transition;
 mod tray;
+mod updates;
 mod watcher;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
@@ -93,11 +94,14 @@ fn main() {
         )
     };
     builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(move |app| {
             instance.listen(app.handle().clone());
             app.manage(instance);
             let handle = app.handle().clone();
             let first_setup = !monitoring::initialize().onboarding_complete;
+            monitoring::start_auto_discovery(app.handle().clone());
+            updates::start(app.handle().clone());
 
             // Spawn watcher on a dedicated OS thread (blocking loop)
             let h_watch = handle.clone();
@@ -191,6 +195,9 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             build_info::get_build_info,
+            updates::get_update_status,
+            updates::check_application_update,
+            updates::install_application_update,
             integrations::api::integration_catalog,
             integrations::api::integration_environment,
             integrations::api::integration_installations,

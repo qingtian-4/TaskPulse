@@ -30,5 +30,5 @@ test('manual test waits for a new matching success, never borrows stale success'
   expect(readTestResult(s.id,[{...h,last_attempt:90}],100)).toBe('pending');
   expect(readTestResult(s.id,[{...h,last_success:110}],100)).toBe('passed');
   expect(readTestResult(s.id,[{...h,provider:'other'}],100)).toBe('pending');
-  expect(sourceCapability('generic_event')).toContain('不等于真实宿主');
+  expect(sourceCapability('generic_event')).not.toMatch(/自动全面支持|无需配置/);
 });
