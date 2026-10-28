@@ -66,10 +66,17 @@ function Test-TaskPulseDownload {
     if ($checksums.Count -ne 1) { throw 'Missing, malformed or duplicate installer checksum.' }
     $expected = ($checksums[0] -split '\s+', 2)[0]
     $path = Join-Path $Directory $name
-    if ((Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash -ine $expected) { throw 'SHA-256 checksum mismatch. Nothing was installed.' }
     $stream = [IO.File]::OpenRead($path)
-    try { if ($stream.ReadByte() -ne 0x4d -or $stream.ReadByte() -ne 0x5a) { throw 'Not a Windows executable.' } }
-    finally { $stream.Dispose() }
+    try {
+        # Get-FileHash is a module-provided convenience command that is absent
+        # in some Windows PowerShell hosts. .NET SHA256 works in both PS 5/7.
+        $hasher = [Security.Cryptography.SHA256]::Create()
+        try { $actual = [BitConverter]::ToString($hasher.ComputeHash($stream)).Replace('-', '') }
+        finally { $hasher.Dispose() }
+        if ($actual -ine $expected) { throw 'SHA-256 checksum mismatch. Nothing was installed.' }
+        $stream.Position = 0
+        if ($stream.ReadByte() -ne 0x4d -or $stream.ReadByte() -ne 0x5a) { throw 'Not a Windows executable.' }
+    } finally { $stream.Dispose() }
     return $path
 }
 

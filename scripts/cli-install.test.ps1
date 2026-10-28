@@ -1,5 +1,7 @@
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot '..\install.ps1')
+# Reproduce hosts where this optional convenience command is unavailable.
+function Get-FileHash { throw 'Get-FileHash unavailable in this test host' }
 function Assert([bool]$Condition,[string]$Message) { if(-not $Condition){throw $Message} }
 function Reject([scriptblock]$Action,[string]$Message) {
     $rejected=$false
@@ -12,7 +14,8 @@ try {
     $tag='v0.2.0-alpha.8';$name='TaskPulse_0.2.0-alpha.8_windows_x64_setup.exe'
     $payload=Join-Path $root $name
     [IO.File]::WriteAllBytes($payload,[byte[]](77,90,1,2,3,4))
-    $sum=(Get-FileHash $payload -Algorithm SHA256).Hash
+    # Independently precomputed for the fixed six fixture bytes above.
+    $sum='128b1c2c6cbdd79a0cfa3bf69f8b2a7ecb7b07b64c22ad7791f9dff553aec477'
     $manifest=@{version='0.2.0-alpha.8';tag=$tag;platform='windows';architecture='x64';commit=('a'*40);assets=@($name)}
     $manifest | ConvertTo-Json | Set-Content (Join-Path $root 'release-manifest.json')
     "$sum  $name" | Set-Content (Join-Path $root 'SHA256SUMS.txt')
