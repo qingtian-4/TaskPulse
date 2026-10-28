@@ -5,7 +5,22 @@ import { join } from 'node:path';
 import {windowsTestProcess} from './windows-test-process';
 import './installer-webview.test';
 import './cli-install.test';
-import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, verifyChecksums } from './release';
+import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, validateTauriApiVersion, verifyChecksums } from './release';
+
+test('Tauri JavaScript API and locked Rust core have compatible major.minor versions',()=>{
+  expect(()=>validateTauriApiVersion(join(import.meta.dir,'..'))).not.toThrow();
+});
+test('preflight rejects a mismatched API before native packaging',()=>{
+  const root=mkdtempSync(join(tmpdir(),'tp-tauri-versions-'));
+  try {
+    mkdirSync(join(root,'src-tauri'));
+    writeFileSync(join(root,'src-tauri/Cargo.lock'),'[[package]]\nname="tauri"\nversion="2.12.5"\n');
+    writeFileSync(join(root,'bun.lock'),'{"packages":{"@tauri-apps/api":["@tauri-apps/api@2.10.1",""]}}');
+    expect(()=>validateTauriApiVersion(root)).toThrow('must match');
+    writeFileSync(join(root,'bun.lock'),'{"packages":{"@tauri-apps/api":["@tauri-apps/api@2.12.0",""]}}');
+    expect(()=>validateTauriApiVersion(root)).not.toThrow();
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
 
 const version='0.2.0-alpha.1';
 test('repository versions and desktop release workflow keep publication draft-only',()=>{

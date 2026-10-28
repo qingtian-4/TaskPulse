@@ -22,6 +22,14 @@ export function validateCandidateCommit(expected:string,head:string,main:string)
     throw new Error('Candidate requires a full SHA matching both checkout HEAD and current origin/main');
 }
 
+export function validateTauriApiVersion(root:string):void {
+  const lock=Bun.TOML.parse(readFileSync(join(root,'src-tauri/Cargo.lock'),'utf8')) as {package:Array<{name:string;version:string}>};
+  const core=lock.package.find(p=>p.name==='tauri')?.version;
+  const api=readFileSync(join(root,'bun.lock'),'utf8').match(/"@tauri-apps\/api":\s*\["@tauri-apps\/api@(\d+\.\d+\.\d+)/)?.[1];
+  if(!core || !api || core.split('.').slice(0,2).join('.')!==api.split('.').slice(0,2).join('.'))
+    throw Error(`Tauri Rust/JavaScript major.minor versions must match before packaging: Rust ${core??'missing'}, API ${api??'missing'}`);
+}
+
 export function projectVersions(root: string): string[] {
   const cargo = Bun.TOML.parse(readFileSync(join(root, 'src-tauri/Cargo.toml'), 'utf8')) as { package: {version:string} };
   const lock = Bun.TOML.parse(readFileSync(join(root, 'src-tauri/Cargo.lock'), 'utf8')) as {package:Array<{name:string;version:string}>};
@@ -112,6 +120,7 @@ if (import.meta.main) {
       if (i < 0 || !args[i+1] || args[i+1].startsWith('--')) throw new Error(`Missing ${name}`);
       return args[i+1];
     };
+    if(['check','candidate','preflight'].includes(command))validateTauriApiVersion(root);
     if (command === 'check') {
       const versions = projectVersions(root);
       const version = validateRelease(`v${versions[0]}`, versions);
