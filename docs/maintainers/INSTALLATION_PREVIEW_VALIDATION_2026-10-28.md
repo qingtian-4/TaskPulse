@@ -28,7 +28,7 @@
 
 - Windows 隔离 target：fmt、clippy `-D warnings`、完整 Rust 502 通过、27 项 opt-in 忽略；custom-protocol 构建通过。
 - 前端：check 无错误/警告，43 项 UI/品牌测试、build 通过；文档 8、仓库 4、发布 15、预览契约 3 项通过。
-- macOS bootstrap：Linux/旧 Bash 离线 22 项通过，含 Rosetta、双语、资产/校验、锁、并发外部目录、回滚、状态保留等；不等于 Mac 安装通过。
+- macOS bootstrap：Linux/旧 Bash 离线 23 项通过，含 Rosetta、双语、资产/校验、锁、并发外部目录、回滚、状态保留等；不等于 Mac 安装通过。
 - macOS staging：3 项通过，旧 manifest 默认兼容与 preview 标记分别覆盖。
 - Windows PowerShell：真实 bootstrap 下载验证探针在隔离 MZ fixture 上通过，未运行安装器。
 - 当前 TP-03 构建的原生模型 WebView2 验收通过，440/320 宽、720/420 高，无溢出/裁切，模型切换保持身份和计时。

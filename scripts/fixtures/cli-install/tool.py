@@ -23,7 +23,11 @@ if name == 'uname':
     print(option('os', 'Darwin') if args == ['-s'] else option('machine', 'arm64'))
 elif name == 'sysctl':
     value = option('translated', '0') if args[-1] == 'sysctl.proc_translated' else option('arm', '1')
+    if args[-1] == 'sysctl.proc_translated' and option('translated_error'):
+        print(option('translated_error'), file=sys.stderr)
+        sys.exit(1)
     if value is None:
+        print("sysctl: unknown oid '" + args[-1] + "'", file=sys.stderr)
         sys.exit(1)
     print(value)
 elif name == 'plutil':

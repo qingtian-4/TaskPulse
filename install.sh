@@ -103,10 +103,14 @@ machine=$(uname -m)
 case "$machine" in
   arm64) arch=arm64; binary_arch=arm64;;
   x86_64)
-    translated=$(sysctl -in sysctl.proc_translated 2>/dev/null || true)
+    # Apple documents ENOENT for sysctl.proc_translated as native execution.
+    # Read the diagnostic in C locale so missing keys differ from denied reads.
+    translated_ok=1
+    translated=$(LC_ALL=C sysctl -n sysctl.proc_translated 2>&1) || translated_ok=0
     arm=$(sysctl -in hw.optional.arm64 2>/dev/null || true)
     if [ "$translated" = 1 ] || [ "$arm" = 1 ]; then arch=arm64; binary_arch=arm64
-    elif [ "$arm" = 0 ] && { [ "$translated" = 0 ] || [ -z "$translated" ]; }; then arch=x64; binary_arch=x86_64
+    elif [ "$translated_ok" = 1 ] && [ "$translated" = 0 ]; then arch=x64; binary_arch=x86_64
+    elif [ "$translated_ok" = 0 ] && [[ "$translated" == *"unknown oid"*"sysctl.proc_translated"* ]]; then arch=x64; binary_arch=x86_64
     else fail 'Cannot determine physical architecture.' '无法确定真实硬件架构。'; fi;;
   *) fail 'Unsupported architecture.' '不支持此架构。';;
 esac

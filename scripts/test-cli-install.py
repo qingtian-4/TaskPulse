@@ -91,7 +91,7 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(os.access(self.bin / name, os.X_OK))
 
     def test_platform_architecture_and_language(self):
-        for options in [{'os': 'Linux'}, {'machine': 'unknown'}, {'machine': 'x86_64', 'arm': None, 'translated': None}]:
+        for options in [{'os': 'Linux'}, {'machine': 'unknown'}, {'machine': 'x86_64', 'arm': None, 'translated': None, 'translated_error': 'sysctl: Operation not permitted'}]:
             self.options = options
             self.run_script('--prerelease', success=False)
         self.options = {'machine': 'x86_64', 'translated': '1'}
@@ -100,6 +100,11 @@ class InstallerTests(unittest.TestCase):
 
     def test_intel(self):
         self.options = {'machine': 'x86_64', 'translated': None, 'arm': '0', 'binary_arch': 'x86_64'}
+        self.prepare_assets(arch='x64')
+        self.run_script('--version', VERSION, '--no-launch')
+
+    def test_intel_missing_arm_and_rosetta_keys(self):
+        self.options = {'machine': 'x86_64', 'translated': None, 'arm': None, 'binary_arch': 'x86_64'}
         self.prepare_assets(arch='x64')
         self.run_script('--version', VERSION, '--no-launch')
 
