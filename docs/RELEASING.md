@@ -1,156 +1,64 @@
 # Windows Alpha 发布流程
 
-正在准备的下一候选为 `0.2.0-alpha.8`，包含当前审计修复和独立 Apple Silicon DMG 验收。
-四处应用版本与 MSI 数值版本已同步；下文 Alpha.7 的标签、CI 和人工门禁属于历史证据，
-不能用于证明 Alpha.8 已通过。新包仍先作为候选供维护者下载测试，公开发布前记录本次准确 SHA 的结果。
-macOS 使用 [独立工作流](../.github/workflows/experimental-platforms.yml)，预发布标签默认选择
-Apple Silicon；手动运行可选择 Intel/Linux。DMG、架构专用校验和和 manifest 与 Windows 文件分开，
-只有该平台的全部检查成功才交付安装包。ad-hoc 签名不等于 Apple Developer ID 或公证，
-原生窗口存在、首次启动/重启检查也不等于真实宿主交互；见 [Mac 验收说明](MACOS_DEVELOPMENT.md)。
-
-CI 的 Actions 固定为完整提交 SHA，Bun / Rust 固定为经过验证的版本；升级通过普通变更审查完成。Windows 资产另外包含 `SBOM.cdx.json`（CycloneDX 1.6）、`DEPENDENCIES.json` 和 `THIRD_PARTY_NOTICES.txt`，由 `bun scripts/dependency-notices.ts dist/release x86_64-pc-windows-msvc` 从锁定依赖与本地许可证生成。清单注明源提交、锁文件哈希和范围，包含构建工具，不代表所有操作系统或原生捆绑组件已审完。公开发行前逐项处理 `reviewRequired`，核对许可证文本及原生组件的分发义务；生成成功本身不等于许可证审查通过。
-
-当前候选为 `0.2.0-alpha.7`；不可变标签 `v0.2.0-alpha.7` 已指向
-`b5dc64a760bae916c9d40b147616f9720405887b`。main 质量/安全 CI 和
-[发布运行 39636404358](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)
-均通过，生成的 Draft pre-release 仍未公开。资产校验、独立安装器 CI 与限制见
-[候选验收记录](ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md)。第 3 项独立实机验收
-已按维护者要求暂缓，不计为通过；不因此跳过下方人工门禁。
-
-版本与包名不沿用上游稳定发布语义；内部 executable 仍为 `agent-tray`，产品名/安装包为 TaskPulse。
+TaskPulse 的发布流程生成 **Draft pre-release**，公开发布由维护者单独确认。源码合并、CI 通过、测试附件和公开 Release 是不同状态。Linux/macOS 保持独立实验构建，不自动继承 Windows 的支持或验收结论。
 
 ## 发布前
 
-1. 在 codex/* 分支完成修改、验收、提交，经 PR、Windows quality 和 Security checks 合入 main。
-   保留上游版权和提交历史，不直接覆盖默认分支或强推。
-2. 同步 `package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock` 与
-   `src-tauri/tauri.conf.json`；更新 `docs/releases/<版本>.md` 和 CHANGELOG。
-3. 执行 `bun run release:check`、`bun run test:release`、完整质量检查和原生验收。
-   **不能用版本输入仅修改 Release 标题。**
-4. 确认远端 main 包含对应提交并取得维护者明确确认后，对明确的 main SHA 创建不可变标签。
-   以下仅为后续新版本模板；Alpha.7 已有标签，不要重复创建、移动或覆盖它：
+1. 在功能分支完成审查、测试和适用实机验收。当前 PR head 的 Windows quality / Security 必须通过；维护者要求测试后合并时保持 Draft。
+2. 四处版本保持一致：`package.json`、`src-tauri/Cargo.toml`、`src-tauri/Cargo.lock`、`src-tauri/tauri.conf.json`。同步 WiX 数值版本、CHANGELOG 和 `docs/releases/<版本>.md`，参考[说明模板](releases/TEMPLATE.md)。
+3. 运行 `bun run release:check`、`bun run test:release`、完整质量检查、`bun audit`、`bun run audit:frontend`、`bun run audit:rust` 和 `bun run audit:secrets`。
+4. 审阅完整审计结果：阈值通过不等于零风险；Rust 注册表检查不完整必须阻止候选发布。维护/unsound 告警保留并审阅。密钥扫描覆盖完整 Git 历史且输出脱敏。
+5. 核对准确的 main SHA，并取得维护者对版本和发布动作的明确确认后，创建新的不可变预发布 tag。不要移动旧标签或覆盖已公开资产。
 
-```bash
-git tag -a <next-pre-release-tag> <verified-main-sha> -m "TaskPulse <next-version>"
-git push origin refs/tags/<next-pre-release-tag>
-```
-
-不要移动已经发布的标签。失败时修复新版本，或只重跑同一个未发布标签的构建。
-生成 Release 的手动运行仍必须提供已经存在的标签，不能用 main 作为版本。
-`scripts/release.sh` 现在只是只读检查入口，不再替维护者提交/打标签/推送。
-
-仅构建 CI 附件时，在 `Windows Alpha release` 的 `commit` 输入填写完整的当前
-main SHA（40 位）；它优先于 `tag` 输入。preflight 必须确认 checkout、origin/main
-和输入完全一致，随后执行相同的安全检查、MSVC 构建及 NSIS/MSI 独立安装验收。
-该模式跳过 Draft job，不创建 Tag 或 Release；manifest 的 `tag=null`、
-`build_kind=commit-candidate` 和完整源 SHA 区分同版本的开发构建。
-四处应用版本及 MSI 映射仍须一致；这不是新版本发布，也不证明旧 Alpha.7 的升级兼容。
-
-仅修复验收探针时，CI 附件模式可指定 `probe_commit`：必须是当前工作流自身的完整
-SHA，并同时提供有效的 main `commit`；标签发布拒绝该覆盖。产品构建仍使用 main SHA，
-只有安装验收脚本使用该探针提交，证据分别记录产品 manifest 与 `probe_commit`。
-NSIS/MSI 各运行两轮，每轮是独立 fresh runner，不能将重跑失败 job 计为连续通过。
-探针只在 IPC 前等待已复现的 CDP 导航上下文销毁；真实 IPC、JS 异常和业务断言失败不重试。
+`scripts/release.sh` 是只读检查入口，不代替维护者提交、打标签或推送。手动运行 release.yml 也必须提供已存在的预发布标签；不得只覆盖 Release 标题的版本号。
 
 ## 工作流交付
 
-`preflight → Rust/Git 安全检查 → Windows 完整质量门禁/MSVC 构建 → 每种安装格式独立 runner 验收 → 草稿预发布`。
-普通 build jobs 仅有 contents:read；只有最后草稿 job 有 contents:write。
-版本/标签/SHA 不一致、缺失/重复安装包、校验失败、安装验收失败都阻止草稿生成。
+`preflight → 安全检查 → Windows 质量检查与 MSVC 构建 → 独立安装器验收 → 草稿预发布`。
 
-文件统一为 `TaskPulse_<版本>_windows_x64_setup.exe`、
-`TaskPulse_<版本>_windows_x64.msi`，附平铺 `SHA256SUMS.txt` 和源 SHA manifest。
-没有验证 Portable，不发布改名的 Debug EXE。代码签名与 SHA256 是不同保证；
-当前没有配置签名证书，发布说明必须诚实说明未知发布者提示。
+Actions 固定完整提交 SHA，Bun/Rust 固定版本。常规 jobs 只有 `contents: read`，最后草稿 job 才有发布所需写权限。版本/标签/SHA 不匹配、缺包、重复包、校验失败或安装验收失败都阻止草稿生成。
 
-安装器以正常安装权限运行；原生应用的启动、IPC 和重启验收通过 CI 专用 gsudo
-子进程降到普通用户权限。WebView2 150+ 在提权进程中忽略环境调试参数，不能把
-调试端口连接超时直接断言为应用故障，也不能因此跳过 UI/IPC 门禁。此做法与
-[Tauri 官方验收](https://github.com/tauri-apps/tauri/blob/dev/.github/workflows/test-api-e2e.yml)
-一致；不降级运行时、不改产品 CSP/安全策略、不在用户电脑安装 gsudo。
-失败时上传分阶段结果、应用 stdout/stderr、最后一次端口查询与页面信息；即使
-首个检查失败，result.json 也必须存在。安装器和启动等待都有时限。
+Windows 文件名：
 
-NSIS 和 MSI 使用 fail-fast=false 的独立 runner 矩阵，各自从干净配置开始，证据
-分别为 windows-installer-evidence-nsis/msi。Tauri 安装器会保留目录偏好，MSI 可
-从注册表复用上次 NSIS 路径；在同一环境先装 NSIS 再装 MSI 是跨格式迁移测试，
-不能冒充两个独立的首次安装。不要为测试删除用户偏好。两种格式全部通过才允许
-草稿；跨格式目录/状态迁移和自定义目录优先级仍需单独验收。
+- `TaskPulse_<版本>_windows_x64_setup.exe`
+- `TaskPulse_<版本>_windows_x64.msi`
+- `SHA256SUMS.txt`、`release-manifest.json`
+- `SBOM.cdx.json`、`DEPENDENCIES.json`、`THIRD_PARTY_NOTICES.txt`
 
-安装器和版本命令统一由持有原生 Process 句柄的 `installer-process.ps1` 等待并
-读取真实退出码；不能把 Start-Process 快速退出后返回的 null ExitCode 当成失败
-或成功。`installer-process.test.ps1` 在 Windows CI/本机检查快速零/非零退出、
-输出和超时，不执行任何安装器。版本输出和退出码均保存在证据中。
+依赖清单由 `scripts/dependency-notices.ts` 按锁文件及实际平台生成。公开前逐项处理 `reviewRequired`，核对原生组件和许可证分发要求。不要把 Debug EXE 改名当作 Portable 发布。SHA-256 不是发布者签名；当前未配置 Windows 签名证书，说明必须保留未知发布者提示。
 
-自有进程检查使用文件句柄解析的最终路径，而非仅 GetFullPath 字串；Windows
-TEMP 常含 8.3 别名，同一文件的长短名称不能误报成无关进程。不允许退化为按
-进程名停止。IPC 证据只允许一个已验证结果对象；异步 .NET 调用必须抑制辅助
-返回值。重启前等待旧 CDP 端点关闭，避免误连上一次浏览器实例。
+## 合并前预览与 main 候选
+
+`installation-preview.yml` 对同仓库 PR 的准确 head SHA 构建，只输出 CI artifacts。manifest 标记 `build_kind=pr-preview`、`tag=null`，不创建 Tag 或 Release。公共 CLI 拒绝这些预览；测试传输替身只在 CI 进程内生效，不给生产脚本增加跳过校验或任意镜像入口。
+
+`release.yml` 的 `commit` 输入接受完整的当前 main SHA，优先于 tag。preflight 核对 checkout、origin/main 与输入完全一致，然后运行与标签模式相同的安全、构建和独立安装验收。输出 `build_kind=commit-candidate`、`tag=null`，跳过 Draft job。这不是新版本，也不证明旧包升级兼容。
+
+仅修复验收探针时可以提供 `probe_commit`：它必须等于当前工作流的完整 SHA，并同时提供有效 main `commit`；标签发布禁止覆盖。产品源码和探针源码分别记录。不能把预览路径变成绕过正式 main/tag 校验的入口。
+
+## Windows 安装器验收
+
+- NSIS/MSI 使用 `fail-fast=false` 的独立 fresh runner 矩阵，每种格式两轮。各自产生 evidence artifact，两种格式全部通过才允许草稿生成。
+- Tauri 安装器会保留安装目录偏好。同一环境顺序安装 NSIS/MSI 属于跨格式迁移，不能冒充两个独立首次安装；不要删除偏好来让测试通过。
+- 安装器保持正常安装权限；已安装应用的启动、IPC 和重启探针通过 CI 专用 gsudo 在 medium integrity 运行。WebView2 150+ 在提权进程中可能忽略调试开关，不能为此弱化 CSP 或跳过原生验收。
+- 使用 `installer-process.ps1` 持有真实 Process 句柄并读取退出码，有界等待。快速退出后的 null ExitCode 不是成功或失败证据。
+- 所有停止/清理操作只针对当前 CI 拥有的程序，按文件句柄解析的最终路径比较，包含 Windows 8.3 别名；不按进程名批量停止。
+- 原生 IPC 验证返回一个结果对象，不接受 .NET 异步辅助返回值形成的数组。真实 IPC/业务断言失败不自动重试；仅等待已复现的导航上下文销毁。
+- 失败保留分阶段 result/error、应用输出、端口和页面信息；重启前等待旧 CDP 端点关闭。非安装回归由 `installer-process.test.ps1` 和发布测试集覆盖。
 
 ### MSI 数字元信息
 
-MSI 不接受 `alpha.N`。应用、标签与四文件仍保持同一 SemVer；WiX 单独使用
-`major.minor.patch.build`，build=alpha 1000/beta 2000/rc 3000 + 序号（0-999），
-例如 alpha.2 为 `0.2.0.1002`。release:check/preflight 校验映射，manifest 记录
-msi_product_version；安装器验收读 MSI Property 和应用 --version，两者不混为一谈。
+应用/tag/四处版本使用同一 SemVer。MSI 使用 `major.minor.patch.build`，build 为 alpha 1000、beta 2000 或 rc 3000 加序号（0–999）。例如 `0.2.0-alpha.8` 映射为 `0.2.0.1008`。
 
-Windows Installer 的升级比较忽略第四字段；这个映射不是跨预发布升级顺序的保证。
-必须实际验收同核心版本升级/重装以及稳定版本迁移，不能因为 build 数字递增就
-勾选升级通过。参见 [Tauri WiX 配置](https://v2.tauri.app/reference/config/#wixconfig)
-与 [Microsoft ProductVersion](https://learn.microsoft.com/en-us/windows/win32/msi/productversion)。
+Windows Installer 升级比较忽略第四字段，因此数字递增不能替代跨预发布升级验收。版本检查、manifest 和实际安装的 `--version`/MSI Property 分别核对。
 
-Linux/macOS 改为独立的手动 experimental artifact 工作流，不依赖 Apple 证书，
-不阻断 Windows；这些构建不等于安装/签名/公证或稳定支持验收。
+## macOS 与命令行安装
+
+macOS ARM/Intel 在对应原生 runner 构建；DMG、架构专用 manifest/校验和及许可证清单使用不同文件名，避免覆盖 Windows 资产。ad-hoc 签名不等于 Developer ID 或 Apple 公证，详见 [Mac 开发指南](MACOS_DEVELOPMENT.md)。
+
+`install.ps1` 和 `install.sh` 消费同一批公开 Release 产物，默认稳定版，预发布显式选择。资产命名或格式变化必须同步脚本和 `bun run test:release`。离线测试不等于真实公开下载安装；发布后人工核对匿名 `--download-only`/`-DownloadOnly` 路径。
 
 ## 从草稿到可下载 Alpha 的人工门禁
 
-- [x] 发布候选依赖审计：执行 `bun audit` 并记录全部告警，`bun run audit:frontend`
-  阻止中等及以上告警；`bun run audit:rust` 和 `bun run audit:secrets` 另行门控。
-  Alpha.7 main 和标签运行通过；仍有前端 1 low、Rust 10 maintenance / 2 unsound 告警，
-  见[安全审查](internal/reports/SECURITY_AUDIT_2026-10.md)。不能把阈值通过称为零风险。
-- [x] Alpha.7 准确候选提交 `b5dc64a` 的 main 质量/安全检查及两种安装器独立 CI 验收通过。
-  见[发布运行](https://github.com/qingtian-4/TaskPulse/actions/runs/39636404358)和
-  [原始证据索引](ALPHA7_CANDIDATE_VALIDATION_2026-10-22.md)，不复用 Alpha.6 结果。
-- [ ] 干净 Windows 10/11 VM：无开发工具，检查 WebView2 有/无与网络受限场景。
-- [ ] 上一可安装版本升级：来源、白名单、未读、固定、去重状态保留。
-- [ ] EXE/MSI 格式迁移：卸载后目录偏好、显式自定义目录优先级、用户状态保留。
-- [ ] 真 Agent 新任务：开始、思考、明确结束、失败、重命名、真实批准与解除。
-- [ ] 多任务与失联：不漏掉范围内新执行、不把源错误/内部 Guardian 当完成。
-- [ ] 长运行、多个提醒、重启恢复回查；记录事件到 UI/通知的 P50/P95 与样本数量。
-- [x] 明确 unsigned 边界；安装器均为 `NotSigned`，四项资产 SHA/大小与 Draft 一致，
-  应用 `0.2.0-alpha.7` / MSI `0.2.0.1007` 已核对。SHA256 不等于签名或维护者风险接受。
-- [ ] 记录系统/Agent 版本、日期、证据及未验收限制，再手动 Publish pre-release。
+按[公开发布清单](OPEN_SOURCE_CHECKLIST.md)完成干净机器、真实 Agent、升级、焦点与长运行测试。每项记录候选 SHA、包哈希、OS/Agent 版本、步骤和实际结果。暂缓、不适用和未验证要明确记录，不能写成通过。
 
-上述干净系统、升级/格式迁移与真实 Agent 项目目前暂缓，不计为通过。尚无新的焦点、
-长运行或真实事件延迟样本；测试 fixture 和 CI 初始空状态重启不能补足它们。
-当前决策是保持 Draft，未公开；Publish 需要维护者另行明确确认。
-
-自动化同版本重装不是跨版本升级，GUI 渲染不是焦点验证，单元测试不是实机事件。
-任何未完成项要记录原因和范围；不自动发布稳定版，也不把缺少证据写成通过。
-
-2026-10-19：旧草稿包含本次审计发现的旧依赖。Alpha.7 分支的安全修复不回写旧标签/
-安装包；新候选必须使用新标签重新验收。在完成
-[开源交付清单](OPEN_SOURCE_CHECKLIST.md) 前，不公开旧草稿来冒充修复后的版本。
-
-## 命令行安装兼容性
-
-根目录 `install.ps1` 消费公开 Release 的精确 Windows x64 NSIS 文件、`SHA256SUMS.txt` 和 `release-manifest.json`。更改包名、manifest 或校验和格式时运行 `bun run test:release`，其中包含 Windows PowerShell 离线安装入口回归。它不会执行真实安装器。
-
-发布前核对中英文用户说明、来源模型支持范围、已知限制、unsigned 提示、tag/四处版本一致性和当前 SHA 的 Windows/Security/独立 NSIS+MSI 验收。发布后再人工执行 `-Version <公开版本> -DownloadOnly` 核对匿名下载；未公开 Draft 无法完成该项真实下载验收，不应伪称通过。安装流程仍由现有安装器测试覆盖，命令行入口不能替代安装器验收。
-
-保持当前草稿预发布策略、固定 Actions SHA 和手动发布门禁；不沿用参考项目直接公开稳定 Release 的行为。新发布说明只维护简体中文与英文，不添加其他语言。参见 [参考项目对照](maintainers/AGENT_SPEED_REFERENCE.md) 与 [CLI 说明](CLI_INSTALL.md)。
-
-## PR 安装预览与实机确认
-
-[Installation preview](../.github/workflows/installation-preview.yml) 对同仓库 PR 的完整 head SHA 构建
-Windows x64 EXE/MSI、Mac arm64/x64 DMG，仅上传测试附件，不写 tag 或 Release。
-它不替代或放宽本文件既有正式 release.yml 的准确 main/tag、Security 和独立安装器门禁。
-预览 manifest 必须 `build_kind=pr-preview`、`tag=null`，公开 CLI 拒绝预览；Mac 旧 manifest 默认格式继续可读。
-
-新版本说明从[双语模板](releases/TEMPLATE.md)开始，核对架构、签名/公证、包/脚本/源码 SHA、
-安装与升级保留、支持程度和未验证范围。分别填写[安装预览实机记录](maintainers/INSTALLATION_PREVIEW_VALIDATION_2026-10-28.md)。
-macOS CLI 为 curl 下载补充并核验 quarantine；不清除安全属性、不关闭 Gatekeeper。
-CLI CI 仅替换传输，实际 app/DMG 验证用系统工具；CI 的模拟升级不等于真实版本升级或 Finder 体验。
-
-本轮保持 PR #29 为 Draft，收到维护者稳定确认且最终 head 的 Windows/Security/Mac 均通过后才合并。
-清理前核对分支 tip 已在 origin/main 且无未提交工作。发布仍需单独明确授权，不移动既有 Alpha.8 标签。
+维护者确认后才手动 Publish pre-release。发布说明仅简体中文/英文，包含变化、系统要求、安装/升级、签名状态、已知限制和测试范围。应用缺少的能力留在[路线图](ROADMAP.md)，不写成已交付。

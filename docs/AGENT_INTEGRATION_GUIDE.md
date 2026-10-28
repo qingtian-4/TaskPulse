@@ -88,4 +88,4 @@ seen 去重上限不会清空旧账本；达到后拒绝普通新事实，但幂
 
 ## 维护者隔离验收
 
-见[验证报告](AGENT_INTEGRATION_VALIDATION.md)。脚本自动生成独立 TASKPULSE_HOME、host-sandbox 与 WebView2 数据目录，显示合成任务，不碰真实宿主文件。真实宿主验收必须另行显示差异并获确认；没装/没授权不自动安装、登录或发任务。
+验证脚本自动生成独立 TASKPULSE_HOME、host-sandbox 与 WebView2 数据目录，显示合成任务，不碰真实宿主文件。真实宿主验收必须另行显示差异并获确认；没装/没授权不自动安装、登录或发任务。

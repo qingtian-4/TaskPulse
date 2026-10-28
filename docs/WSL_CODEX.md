@@ -46,14 +46,14 @@ TaskPulse 只检查已运行的发行版，不自动启动停止的 WSL。Python
 只读复现现有日志（无需发起 Agent 任务，不启动停止的发行版）：
 
 ```powershell
-$env:CARGO_TARGET_DIR = 'D:\Project\agenttray\src-tauri\target\codex-check'
+$env:CARGO_TARGET_DIR = Join-Path $PWD 'src-tauri\target\codex-check'
 cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_wsl_continuity_diagnostics -- --ignored --nocapture
 # 输出脱敏摘要，完整证据位于该 target 的 ui-smoke/evidence/wsl-continuity-*.json。
 # 纯隔离元数据测试，在已有 Python 3 环境执行，不接触真实 Codex 目录：
 python3 scripts/wsl-metadata.test.py
 ```
 
-详细根因、测量口径、故障注入与实机边界见 [连续性验证报告](WSL_CONTINUITY_VALIDATION_2026-10-23.md)。修复不会热替换运行中的旧托盘；正常退出并启动新构建后才会生效。
+连续性测试按[开发检查](DEVELOPMENT.md)与对应 CI 证据验证。修复不会热替换运行中的旧托盘；正常退出并启动新构建后才会生效。
 
 ## 验证
 

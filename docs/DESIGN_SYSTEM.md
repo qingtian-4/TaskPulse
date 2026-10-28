@@ -42,4 +42,4 @@
 
 `scripts/visual.test.ts` 检查常用前景/背景至少 4.5:1、token 和焦点/减弱动画约束。`native-product-smoke.ts` 检查真实 WebView2 在 DPR 1/1.5/2 的布局、控件命中与截图，并加测低逻辑高度小窗。DPR 模拟不能代替真正改 Windows 显示比例、混合 DPI 跨屏、系统文字放大、屏幕阅读器和高对比度实机验收。
 
-素材必须是原生窗口直接捕获，并标注合成事件；详见[当前视觉验收](VISUAL_POLISH_VALIDATION_2026-10-21.md)和[素材说明](../assets/README.md)。
+素材必须是原生窗口直接捕获，并标注合成事件；详见[素材说明](../assets/README.md)。

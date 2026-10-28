@@ -31,8 +31,7 @@ WebView2 策略和用户配置路径保持原样。生成时 Windows 字体枚�
 
 `manifest.json` 记录 TP-03 的路径、描边、交付 ZIP SHA256，以及所有顶层桌面二进制
 资源和 Social Preview 的 SHA256。更新时同步清单，`scripts/brand.test.ts` 检查混用、
-ICO 目录及 ICNS 的原生/Retina 表示。历史验收报告与 Alpha.7 截图保留历史原貌；
-README 的 current 截图重新从新版原生应用捕获，不后期替换图标。
+ICO 目录及 ICNS 的原生/Retina 表示。原始验收截图保存在本地；公开截图从当前原生应用捕获，不后期替换图标。
 
 托盘使用交付包原始 32px RGBA PNG，映射为 `tray-working`、`tray-needs-input`、
 `tray-error`、`tray-idle` 和 `tray-review`，全部编译时嵌入。
@@ -61,7 +60,6 @@ Windows Shell 负责把 32px 图像适配任务栏尺寸；不新增 DPI 轮询�
 
 ## 验收与回滚
 
-本次证据与未执行项见 [TP-03 验收记录](../../docs/TP_LOGO_VALIDATION_2026-10-28.md)。
-旧 P 的 [2026-10-27 记录](../../docs/BRAND_VALIDATION_2026-10-27.md) 仅为历史证据。
+测试证据保存在本地或对应 CI artifacts，不作为品牌源文件提交。
 回滚时撤销本次品牌集成提交并重建应用；无需回滚/删除任何用户状态或修改 Agent 配置。
 安装器升级和 Windows 图标缓存必须在独立验收机器检查，不以开发机手动清缓存冒充升级通过。

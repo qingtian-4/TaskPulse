@@ -1,6 +1,6 @@
 # TaskPulse Architecture
 
-按 `5e9c083` 运行实现核对，2026-10-23 更新。TaskPulse 是 Windows 优先的 Tauri 2 托盘应用；Svelte 5 展示观察结果，Rust 负责采集、身份、关注和通知。支持与验收等级见 [兼容性](AGENT_COMPATIBILITY.md)，风险见 [维护者审查](maintainers/CODEBASE_REVIEW.md)。
+TaskPulse 是 Windows 优先的 Tauri 2 托盘应用；Svelte 5 展示观察结果，Rust 负责采集、身份、关注和通知。支持与验收等级见 [兼容性](AGENT_COMPATIBILITY.md)。
 
 ## 入口、托盘与窗口
 
@@ -132,7 +132,7 @@ Tail/parser 缓存有预算与 active 状态保护，冷历史逐步 catch-up；
 
 [Manage](../src/routes/manage/+page.svelte) 获取配置、发现目录、integration preview/confirmation；即时开关与未保存 editor draft 分离。[Notice](../src/routes/notice/+page.svelte) 获取 NoticeState 并回报 rendered，不改变 Attention 已读。Dashboard 展示 ongoing/results/uncertain/pinned；失败是结果，来源故障是不确定，thinking/model wait 仍 ongoing。
 
-浏览器 dev demo 不能验收 native IPC、CSP、窗口线程、焦点或宿主支持。native-product / native-integration / native-notice smoke 使用实际 WebView2 与隔离合成事件；installer CI 在独立 fresh runner 分别验收 NSIS/MSI。quality、security、release 工作流独立；release 只创建 draft prerelease，不自动公开。Linux/macOS 为 opt-in experimental，不能继承 Windows 验收。当前结果见 [本轮验证](maintainers/OPEN_SOURCE_READINESS_2026-10-23.md)。
+浏览器 dev demo 不能验收 native IPC、CSP、窗口线程、焦点或宿主支持。native-product / native-integration / native-notice smoke 使用实际 WebView2 与隔离合成事件；installer CI 在独立 fresh runner 分别验收 NSIS/MSI。quality、security、release 工作流独立；release 只创建 draft prerelease，不自动公开。Linux/macOS 为 opt-in experimental，不能继承 Windows 验收。具体构建结果以对应 CI 的源码 SHA 和 evidence artifacts 为准。
 
 ## 模型元数据与分发边界
 

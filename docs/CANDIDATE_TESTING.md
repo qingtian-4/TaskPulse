@@ -1,73 +1,32 @@
-# 候选安装包下载与测试
+# 下载测试包
 
-当前候选版本：`0.2.0-alpha.8`。公开稳定版尚未发布；旧 Alpha.7 草稿不是本次修复版。
-2026-10-27 两平台准确标签构建及自动验收均已通过，源 SHA 为 `fe48e69b9864eeaddcd68e84a4928c6b4176500c`。
-详见[验收记录](ALPHA8_CANDIDATE_VALIDATION_2026-10-27.md)。
-
-直接下载：[Windows EXE/MSI 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274223/artifacts/12668203350) ·
-[Apple Silicon DMG 附件](https://github.com/qingtian-4/TaskPulse/actions/runs/40360274417/artifacts/12668502437) ·
-[汇总草稿 Release](https://github.com/qingtian-4/TaskPulse/releases)（选择 Alpha.8）。
-Actions 附件解压后，Mac 文件位于 `dist/macos`；Release 中可以单独下载 DMG。
+TaskPulse 当前为未公开的 Alpha。开发者源码、PR 测试附件和公开 Release 是不同的交付渠道。
 
 ## 当前 PR 的安装预览
 
-上方 Alpha.8 链接是历史标签证据，不能验收 PR #29 的模型、CLI 和新版 Logo。
-当前功能以 [PR #29](https://github.com/qingtian-4/TaskPulse/pull/29) 的最终完整 head SHA 为准。
-同仓库 PR 更新触发 **Installation preview**，无需新工作流先进入默认分支。
+1. 打开 [Installation preview 工作流](https://github.com/qingtian-4/TaskPulse/actions/workflows/installation-preview.yml)，选择目标 PR 的成功运行。
+2. 核对该运行的完整 head SHA，登录 GitHub 后下载对应平台的 artifact。
+3. Windows x64 选择 EXE 或 MSI；Mac 根据芯片选择 arm64 或 x64 DMG。两种 Windows 安装格式不要同时安装。
+4. 解压后核对 manifest 的源码 SHA、版本、平台和架构，并验证附带 SHA-256。PR 预览标记为 `build_kind=pr-preview`。
+5. 正常退出旧实例后安装。Windows 使用安装向导；Mac 打开 DMG 并复制 app。首次运行核对“关于”中的版本、SHA 和程序路径。
 
-| 平台 | 附件名 | 证据 |
-|---|---|---|
-| Windows x64 | `installation-preview-windows-x64-<SHA>` | `preview-evidence-windows-<nsis或msi>-<轮次>-<SHA>` |
-| Mac Apple Silicon | `installation-preview-macos-arm64-<SHA>` | `preview-evidence-macos-arm64-<SHA>` |
-| Mac Intel | `installation-preview-macos-x64-<SHA>` | `preview-evidence-macos-x64-<SHA>` |
+附件有保留期限，并需要登录。原生 runner 的验收结果在同一次运行的 evidence artifacts 中；检查实际 result JSON，不能只看绿色工作流图标。公共一行安装入口拒绝 PR 预览和 Draft。
 
-核对每个 manifest 的 commit 与 PR head，`build_kind=pr-preview`、`tag=null`；只接受该 SHA 的成功验收。
-流程只有 `contents: read` 和测试附件，不创建 tag/Release。公开 bootstrap 必须拒绝这些附件；CI 的
-受控下载响应只在测试进程中模拟公开元数据，生产脚本没有镜像或跳过校验参数。
-Windows 真包经过生产 bootstrap 下载/校验后，由既有独立安装验收执行器验证安装、UI/IPC、重装和卸载；
-Mac CLI 执行真实 `install.sh`、系统 DMG/签名工具。模拟旧 metadata 的替换/回滚不算真实跨版本升级。
+## 实机测试
 
-[本次记录与实机表](maintainers/INSTALLATION_PREVIEW_VALIDATION_2026-10-28.md)。尚未执行或失败的平台明确保留状态；
-维护者确认稳定前保留 Draft PR 和工作树，不合并、不清理、不公开发布。
+使用独立测试配置，或先备份 `~/.taskpulse/`。不要为通过测试删除真实状态或更改 Agent 的审批策略。
 
-## 下载入口
+- 真实任务：开始、思考、工具调用、明确提问/批准及匹配解除、完成与失败。
+- 展示：项目、标题、模型、计时、改名，以及来源断连后的不确定状态。
+- 关注：未读、固定、手动已查看、重启恢复，以及不重复提醒。
+- 安装：首次安装、正常退出、重启、同格式升级、卸载后状态保留。
+- Windows：WebView2 缺失/网络受限、不同 DPI、多屏和提醒焦点。
+- Mac：Finder 启动、Gatekeeper、菜单栏、Retina/多屏和通知焦点。
 
-登录维护者 GitHub 账号，打开 [Actions](https://github.com/qingtian-4/TaskPulse/actions)。
-只使用指定完整提交对应的成功运行；失败运行的中间文件不能当作验收通过的安装包。
+跨版本升级与 EXE/MSI 迁移需要单列验证。Mac ad-hoc 签名不等于 Developer ID 或公证；按 [Apple 指引](https://support.apple.com/en-us/102445)处理单应用提示，不关闭系统安全检查。
 
-| 设备 | 工作流 / 附件 | 解压后选择 |
-|---|---|---|
-| Windows 10/11 x64 | Windows Alpha release / `windows-installers` | `TaskPulse_0.2.0-alpha.8_windows_x64_setup.exe`（推荐）或 `.msi`，二选一 |
-| Apple Silicon Mac | Experimental Linux and macOS bundles / `experimental-macos-arm64-<SHA>` | `TaskPulse_0.2.0-alpha.8_macos_arm64.dmg` |
+每项记录系统/架构、源码 SHA、包 SHA-256、步骤、预期、实际结果及通过/失败/未验证。详细过程和原始截图保存在本地，向 Issue 提交时只附脱敏的最小复现。
 
-GitHub 把 Actions 附件包装成 ZIP，先解压；`Source code.zip` 是源码，不是安装器。
-Windows 发布工作流通过安装测试后会另建 Draft pre-release，维护者可在
-[Releases](https://github.com/qingtian-4/TaskPulse/releases) 查看。草稿对普通访客不可见；
-Actions 附件也需要登录且有保留期限。正式公开预览版前仍需维护者核对实机结果和发布门禁。
+## 发布状态
 
-## Mac 上的最短测试路径
-
-1. 下载 arm64 附件，解压。在该目录运行 `shasum -a 256 -c macos-arm64-SHA256SUMS.txt`。
-2. 打开 DMG，将 TaskPulse 拖到 Applications。先退出旧实例，再从 Finder 打开。
-3. 本轮采用 ad-hoc 签名，未 Apple 公证。若提示开发者无法验证，确认来源和校验和后，按
-   [Apple 官方步骤](https://support.apple.com/en-us/102445)在“系统设置 → 隐私与安全性 → 仍要打开”处理。
-   若提示损坏或仍无法启动，反馈原提示；不要全局关闭系统安全功能。
-4. 打开菜单栏 TaskPulse，进入来源管理，在“关于 TaskPulse”核对 `0.2.0-alpha.8`、SHA 和应用路径。
-5. 先测试面板开关、来源管理和“发送测试提醒”；再明确添加一个真实本机 Agent 来源。
-6. 在原 Agent 开始任务，依次观察运行、真实提问/审批、处理后恢复、明确结束与结果待查看。
-   审批只在原 Agent 完成；Hook 需另行预览和授权，Windows WSL Hook 不会自动安装到 Mac。
-7. 退出并重启，检查来源范围、固定、未读和通知去重；至少持续使用一轮真实工作任务。
-
-无需安装 Rust、Bun、Xcode 或 Codex 来单纯测试安装包。只有需要修改代码或排查平台问题时，
-再按 [Mac 开发指南](MACOS_DEVELOPMENT.md)克隆仓库。
-
-反馈格式：macOS 版本、芯片、TaskPulse 版本/SHA、操作步骤、期望/实际结果和脱敏截图。
-请勿附完整 Agent 日志、命令、提示词或凭据。CI 原生窗口/启动检查不能替代上述实机交互。
-
-## Windows 验收边界
-
-发布 CI 在四个独立 runner 上分别完成 NSIS/MSI 两轮安装、实际应用 UI/IPC、重启、重装和卸载。
-它不能替代干净 Windows 10/11、缺少 WebView2、网络受限、跨版本/格式迁移和真实 Agent 的实机测试。
-安装器未代码签名；更换版本前退出旧实例并备份 `~/.taskpulse/`，不要删除配置来制造“干净通过”。
-
-公开发行要求见 [发布流程](RELEASING.md)与[开源清单](OPEN_SOURCE_CHECKLIST.md)。
+测试者确认稳定后才合并待测试 PR；公开发布还需维护者单独确认。Draft、暂缓和未验证都不等于已公开或已通过。完整门禁见 [发布流程](RELEASING.md)。

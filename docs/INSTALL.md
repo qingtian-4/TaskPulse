@@ -6,7 +6,7 @@ Windows Quality / Security CI 已通过不等于安装包已发布或真实宿�
 
 源码开发按 README 的 `--branch main` 命令克隆；
 已有克隆先用 `git status` 检查本地修改，不要为升级覆盖工作区。用 `git rev-parse HEAD` 核对实际提交，
-旧提交的 CI 不覆盖新的文档修复或最终 main SHA，详见[候选状态](ALPHA7_CANDIDATE_STATUS.md)。
+旧提交的 CI 不覆盖新的代码或最终 main SHA，以对应运行和包内 manifest 为准。
 源码合并、CI 通过、Draft pre-release 与公开可下载是四个不同状态；候选包的具体提交以 manifest 为准。
 
 未来在 [TaskPulse Releases](https://github.com/qingtian-4/TaskPulse/releases) 发布后，

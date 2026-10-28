@@ -30,7 +30,7 @@ does not verify focus preservation against an external editor.
 
 These exercise real TaskPulse binaries, **not actual Agent hosts**. No real host
 configuration is modified. For actual host tests, first show the exact diff and
-obtain confirmation. See [integration validation](../docs/AGENT_INTEGRATION_VALIDATION.md).
+obtain confirmation. See [integration testing](../docs/AGENT_INTEGRATION_GUIDE.md).
 
 When a tray is running, `verify.ps1 -TargetDir src-tauri/target/<isolated-target>`
 can select an owned verification target; the script refuses a target containing
@@ -160,7 +160,7 @@ parallel request IDs, source failure/recovery, restart persistence and 412×620 
 or installers. Screenshots, assertions and cleanup evidence stay under ignored
 `src-tauri/target/ui-smoke/evidence/`. It never changes real Agent configuration.
 
-- Release process: [../docs/maintainers/releasing.md](../docs/RELEASING.md)
+- Release process: [Release process](../docs/RELEASING.md)
 
 `native-product-smoke.ts` exercises empty/one-result 412×400 and standard 412×620,
 long Chinese/English tasks, details, composed filters, quota, pin/reopen and native
