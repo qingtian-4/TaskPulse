@@ -12,6 +12,7 @@
     "test:ui-model": "bun test ./scripts/dashboard.test.ts ./scripts/notice.test.ts ./scripts/source-setup.test.ts ./scripts/visual.test.ts ./scripts/brand.test.ts",
     "test:docs": "bun test ./scripts/docs.test.ts",
     "test:repo": "bun test ./scripts/repository.test.ts",
+    "test:installation-preview": "bun test ./scripts/installation-preview.test.ts",
     "test:release": "bun test ./scripts/release.test.ts",
     "audit:frontend": "bun audit --audit-level=moderate",
     "audit:rust": "bun scripts/security.ts rust",

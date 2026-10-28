@@ -1,0 +1,271 @@
+name: Installation preview
+
+# Same-repository PR updates work before this file is present on main.
+# No tags, releases, credentials, environment secrets or branch writes.
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: installation-preview-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  prepare:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    outputs:
+      commit: ${{ steps.source.outputs.commit }}
+      version: ${{ steps.source.outputs.version }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - run: bun scripts/release.ts check
+      - id: source
+        env:
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, re, subprocess
+          head = subprocess.check_output(['git', 'rev-parse', 'HEAD'], text=True).strip()
+          if not re.fullmatch('[a-f0-9]{40}', os.environ['PR_HEAD_SHA']) or head != os.environ['PR_HEAD_SHA']:
+              raise SystemExit('Full PR head SHA must exactly match the checkout')
+          version = json.load(open('package.json'))['version']
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('commit=' + head + '\nversion=' + version + '\n')
+          PYTHON
+      - run: python3 scripts/test-cli-install.py
+      - run: python3 scripts/test-macos-package.py
+      - run: bun run test:installation-preview
+
+  security:
+    needs: prepare
+    uses: ./.github/workflows/security.yml
+    with:
+      ref: ${{ needs.prepare.outputs.commit }}
+
+  windows:
+    name: Build PR Windows x64 MSVC installers
+    needs: [prepare, security]
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
+          targets: x86_64-pc-windows-msvc
+          components: rustfmt, clippy
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - name: Install locked frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Audit frontend dependencies (moderate and above)
+        run: bun run audit:frontend
+      # Each native command has its own step; a later success cannot hide failure.
+      - name: Check frontend
+        run: bun run check
+      - name: Test documentation links and candidate source instructions
+        run: bun run test:docs
+      - name: Audit tracked documentation, media and ignored outputs
+        run: bun run test:repo
+      - name: Test read-only WSL source detection (offline fixtures)
+        run: python scripts/test-wsl-discovery.py
+      - name: Test remote Codex metadata schemas (offline fixtures)
+        run: python scripts/test-codex-metadata.py
+      - name: Test opt-in Codex approval observer and reversible installation
+        run: python scripts/test-codex-observer.py
+      - name: Test WSL metadata freshness and read failures (offline fixtures)
+        run: python scripts/wsl-metadata.test.py
+      - name: Test frontend models
+        run: bun run test:ui-model
+      - name: Test integration contracts
+        run: bun run test:integration-contract
+      - name: Test smoke evidence and bounded owned-directory cleanup
+        run: bun run test:smoke-cleanup
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Lint Rust
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+      - name: Test Rust
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
+      - name: Build NSIS and MSI installers
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        with:
+          tauriScript: bun run tauri
+          args: --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
+      - name: Test the actual GUI-subsystem release bridge with redirected stdin
+        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
+      - name: Test MCP in the GUI-subsystem executable
+        run: python scripts/mcp-smoke.py --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe
+      - name: Normalize asset names and generate flat checksums
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: bun scripts/release.ts stage --bundle-root src-tauri/target/x86_64-pc-windows-msvc/ci-release/bundle --out dist/release --version "$env:RELEASE_VERSION" --commit "$env:RELEASE_COMMIT" --untagged --pr-preview
+      - name: Export dependency inventory and license texts
+        run: bun scripts/dependency-notices.ts dist/release x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: installation-preview-windows-x64-${{ needs.prepare.outputs.commit }}
+          path: dist/release/*
+          if-no-files-found: error
+
+  installer-smoke:
+    name: Verify ${{ matrix.installer }} on a fresh Windows runner (round ${{ matrix.round }})
+    needs: [prepare, windows]
+    runs-on: windows-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        installer: [nsis, msi]
+        round: [1, 2]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: installation-preview-windows-x64-${{ needs.prepare.outputs.commit }}
+          path: dist/release
+      - name: Prepare ordinary-user WebView2 acceptance on the disposable runner
+        shell: pwsh
+        run: |
+          $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
+          if ($gsudo) { $gsudoPath = $gsudo.Source } else {
+            winget install --id gerardog.gsudo --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install CI de-elevation helper' }
+            $gsudoPath = Join-Path $env:ProgramFiles 'gsudo\Current\gsudo.exe'
+          }
+          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing CI de-elevation helper' }
+          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
+          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not grant the runner account access to acceptance evidence' }
+      - name: Probe the production bootstrap with controlled transport and actual packages
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/windows-cli-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION"
+      - name: Exercise the real installer (not the build-tree executable)
+        env:
+          RELEASE_VERSION: ${{ needs.prepare.outputs.version }}
+          INSTALLER_KIND: ${{ matrix.installer }}
+          TASKPULSE_PROBE_COMMIT: ${{ needs.prepare.outputs.commit }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND"
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: preview-evidence-windows-${{ matrix.installer }}-${{ matrix.round }}-${{ needs.prepare.outputs.commit }}
+          path: dist/installer-smoke/
+          if-no-files-found: warn
+
+  macos:
+    needs: [prepare, security]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: macos-15, platform: macos-arm64, target: aarch64-apple-darwin, arch: arm64, bundles: 'app,dmg'}
+          - {os: macos-15-intel, platform: macos-x64, target: x86_64-apple-darwin, arch: x64, bundles: 'app,dmg'}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.prepare.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
+          components: rustfmt, clippy
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - run: bun install --frozen-lockfile
+      - run: bun run audit:frontend
+      - run: bun run release:check
+      - run: bun run check
+      - run: bun run test:ui-model
+      - run: bun run test:release
+      - run: bun run test:installation-preview
+      - run: python3 scripts/test-cli-install.py
+      - run: python3 scripts/test-macos-package.py
+      - run: python3 scripts/test-codex-observer.py
+      - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
+      - name: Build preview DMGs (ad-hoc signed)
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+        with:
+          tauriScript: bun run tauri
+          args: --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} --features custom-protocol -- --profile ci-release --locked
+      - name: Stage macOS preview DMG
+        id: stage
+        env:
+          SOURCE_COMMIT: ${{ needs.prepare.outputs.commit }}
+          MAC_ARCH: ${{ matrix.arch }}
+          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/ci-release/bundle/dmg
+        run: python3 scripts/macos-package.py --bundle-root "$BUNDLE_ROOT" --arch "$MAC_ARCH" --commit "$SOURCE_COMMIT" --out dist/macos --pr-preview
+      - name: Verify packaged macOS app and restart
+        env:
+          MAC_ARCH: ${{ matrix.arch }}
+        run: |
+          python3 - <<'PYTHON'
+          import json, os, runpy
+          from pathlib import Path
+          package = runpy.run_path('scripts/macos-package.py')
+          arch = os.environ['MAC_ARCH']
+          manifest = json.loads(Path(f'dist/macos/macos-{arch}-manifest.json').read_text())
+          image = Path('dist/macos') / manifest['assets'][0]
+          package['smoke'](image, manifest['version'], arch, Path('dist/macos-evidence'))
+          PYTHON
+      - name: Run production macOS bootstrap against the actual DMG with controlled transport
+        env:
+          MAC_ARCH: ${{ matrix.arch }}
+        run: bash scripts/macos-cli-smoke.sh dist/macos "$MAC_ARCH" dist/macos-cli-evidence
+      - name: Export macOS dependency inventory and license texts
+        run: bun scripts/dependency-notices.ts dist/macos ${{ matrix.target }}
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always() && steps.stage.outcome == 'success'
+        with:
+          name: installation-preview-${{ matrix.platform }}-${{ needs.prepare.outputs.commit }}
+          if-no-files-found: error
+          path: |
+            dist/macos/*
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: preview-evidence-${{ matrix.platform }}-${{ needs.prepare.outputs.commit }}
+          path: |
+            dist/macos-evidence/
+            dist/macos-cli-evidence/
+          if-no-files-found: warn

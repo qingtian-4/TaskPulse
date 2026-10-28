@@ -143,6 +143,10 @@ test('installer assets are flattened, hashed and versioned, and corruption or st
     const candidate=join(root,'candidate');stageInstallers(bundle,candidate,version,'a'.repeat(40),{tagged:false});
     const manifest=JSON.parse(readFileSync(join(candidate,'release-manifest.json'),'utf8'));
     expect(manifest.tag).toBeNull();expect(manifest.build_kind).toBe('commit-candidate');verifyChecksums(candidate,version);
+    const preview=join(root,'preview');stageInstallers(bundle,preview,version,'a'.repeat(40),{tagged:false,buildKind:'pr-preview'});
+    const pm=JSON.parse(readFileSync(join(preview,'release-manifest.json'),'utf8'));
+    expect(pm.tag).toBeNull();expect(pm.build_kind).toBe('pr-preview');verifyChecksums(preview,version);
+    expect(()=>stageInstallers(bundle,join(root,'invalid-preview'),version,'a'.repeat(40),{buildKind:'pr-preview'})).toThrow('untagged');
     expect(()=>stageInstallers(bundle,out,version,'a'.repeat(40))).toThrow('empty');
     const exe=join(out,installerNames(version)[0]);
     writeFileSync(exe,'corrupted');expect(()=>verifyChecksums(out,version)).toThrow('Checksum mismatch');

@@ -166,3 +166,17 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
   unknown/stale/inferred/internal/disabled/ignored requests must not be reopened.
 - Semantic dashboard sections are ongoing/results/uncertain/pinned; thinking and
   model waits stay ongoing. Failures are results, source faults are uncertainty.
+
+## Installation preview and macOS bootstrap
+
+- Same-repository PR installation previews pin the full PR head SHA, use only
+  `contents: read`, and upload SHA-named test artifacts. Keep `build_kind=pr-preview`
+  and `tag=null`; public bootstraps reject previews. Do not relax release.yml's
+  existing tag/exact-main checks or publish a release through the preview path.
+- macOS CLI downloads reuse the architecture-specific DMG, manifest and checksums.
+  Preserve/add and verify quarantine; never remove security attributes or disable
+  Gatekeeper. Signature integrity is separate from Developer ID/notarization.
+- Directory replacement/rollback must verify device/inode ownership. BSD mv can
+  nest into a concurrently created destination; never move or clean a colliding
+  foreign directory. Retain and report ambiguous recovery state. Native CI and
+  physical-machine/Finder/real-Agent acceptance are separate evidence gates.

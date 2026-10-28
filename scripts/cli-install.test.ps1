@@ -36,6 +36,11 @@ try {
     }
     $manifest | ConvertTo-Json | Set-Content (Join-Path $root 'release-manifest.json')
     Reject {Test-TaskPulseDownload $root '../escape'} 'Traversal tag accepted'
+    $manifest['build_kind']='pr-preview'
+    $manifest | ConvertTo-Json | Set-Content (Join-Path $root 'release-manifest.json')
+    Reject {Test-TaskPulseDownload $root $tag} 'Preview accepted as a public release'
+    $manifest.Remove('build_kind')
+    $manifest | ConvertTo-Json | Set-Content (Join-Path $root 'release-manifest.json')
     $script:release=[pscustomobject]@{tag_name=$tag;draft=$false;prerelease=$true;published_at='2026-10-28T00:00:00Z';assets=@(
         @($name,'SHA256SUMS.txt','release-manifest.json') | ForEach-Object { [pscustomobject]@{name=$_;browser_download_url="https://github.com/qingtian-4/TaskPulse/releases/download/$tag/$_"} }
     )}
@@ -90,5 +95,16 @@ try {
     Assert ((Get-Content (Join-Path $script:racePath 'sentinel.txt')) -eq 'previous download') 'Concurrent data lost'
     Assert (@(Get-ChildItem -LiteralPath $raceRoot).Count -eq 1) 'Owned staging leaked after conflict'
     $script:racePath=$null
+    # Native preview probe must preserve its Version parameter while dot-sourcing
+    # the production script. Downloads only: fixture MZ bytes are never executed.
+    Remove-Item Function:\Get-FileHash
+    . (Join-Path $PSScriptRoot 'windows-cli-smoke.ps1') -Assets $root -Version '0.2.0-alpha.8'
+    $manifest['tag']=$null
+    $manifest['build_kind']='pr-preview'
+    $manifest | ConvertTo-Json | Set-Content (Join-Path $root 'release-manifest.json')
+    $probeEvidence=Join-Path $root 'probe-evidence'
+    Invoke-TaskPulseBootstrapProbe -Assets $root -Version '0.2.0-alpha.8' -Evidence $probeEvidence
+    $probe=Get-Content -LiteralPath (Join-Path $probeEvidence 'bootstrap.json') -Raw | ConvertFrom-Json
+    Assert ($probe.passed -and $probe.source_commit -eq ('a'*40)) 'Native preview bootstrap probe failed'
     Write-Output 'PASS: release selection, draft rejection, asset origin, manifest, checksum, corruption, download-only and bilingual output; no installer executed.'
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }

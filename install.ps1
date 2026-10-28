@@ -56,6 +56,7 @@ function Test-TaskPulseDownload {
     $name = "TaskPulse_${version}_windows_x64_setup.exe"
     $manifest = Get-Content -LiteralPath (Join-Path $Directory 'release-manifest.json') -Raw | ConvertFrom-Json
     if ($manifest.version -cne $version -or $manifest.tag -cne $Tag -or
+        ($manifest.build_kind -and $manifest.build_kind -cne 'release') -or
         $manifest.platform -cne 'windows' -or $manifest.architecture -cne 'x64' -or
         $manifest.commit -cnotmatch '^[0-9a-f]{40}$' -or @($manifest.assets) -cnotcontains $name) {
         throw 'Release manifest does not match the requested Windows x64 version.'

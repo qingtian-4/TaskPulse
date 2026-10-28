@@ -28,6 +28,22 @@ class PackagingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "stale"):
                 package.stage(bundle, output, "0.2.0-alpha.8", "a" * 40, "arm64")
 
+    def test_preview_marker_is_explicit_and_legacy_default_is_preserved(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            bundle = root / "bundle"
+            bundle.mkdir()
+            (bundle / "image.dmg").write_bytes(b"payload" + b"koly" + bytes(508))
+            package.stage(bundle, root / "preview", "0.2.0-alpha.8", "a" * 40, "x64", "pr-preview")
+            preview = json.loads((root / "preview/macos-x64-manifest.json").read_text())
+            self.assertEqual(preview["build_kind"], "pr-preview")
+            self.assertIsNone(preview["tag"])
+            package.stage(bundle, root / "legacy", "0.2.0-alpha.8", "a" * 40, "x64")
+            legacy = json.loads((root / "legacy/macos-x64-manifest.json").read_text())
+            self.assertNotIn("build_kind", legacy)
+            with self.assertRaisesRegex(ValueError, "kind"):
+                package.stage(bundle, root / "invalid", "0.2.0-alpha.8", "a" * 40, "x64", "release")
+
     def test_bad_identity_and_malformed_or_duplicate_images(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

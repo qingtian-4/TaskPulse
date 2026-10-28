@@ -68,8 +68,9 @@ export function verifyChecksums(directory: string, version: string): void {
   }
 }
 
-export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string, options:{tagged?:boolean}={}): void {
+export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string, options:{tagged?:boolean;buildKind?:'pr-preview'}={}): void {
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('A full source commit SHA is required');
+  if(options.buildKind && options.tagged!==false)throw new Error('PR preview must be untagged');
   if (existsSync(out) && readdirSync(out).length) throw new Error('Output directory must be empty; refusing stale assets');
   const names = installerNames(version);
   const sources = [['nsis', '.exe'], ['msi', '.msi']].map(([subdir, extension]) => {
@@ -85,7 +86,7 @@ export function stageInstallers(bundleRoot: string, out: string, version: string
   mkdirSync(out, {recursive:true});
   sources.forEach((file, index) => copyFileSync(file, join(out, names[index])));
   writeFileSync(join(out, 'SHA256SUMS.txt'), names.map(name => `${sha256(readFileSync(join(out, name)))}  ${name}\n`).join(''));
-  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:options.tagged===false?null:`v${version}`, ...(options.tagged===false?{build_kind:'commit-candidate'}:{}), msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
+  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:options.tagged===false?null:`v${version}`, ...(options.tagged===false?{build_kind:options.buildKind??'commit-candidate'}:{}), msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
   verifyChecksums(out, version);
 }
 
@@ -128,11 +129,11 @@ if (import.meta.main) {
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\ncommit=${commit}\n`);
       console.log(`Validated ${tag} at ${commit}`);
     } else if (command === 'stage') {
-      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'),{tagged:!args.includes('--untagged')});
+      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'),{tagged:!args.includes('--untagged'),...(args.includes('--pr-preview')?{buildKind:'pr-preview' as const}:{})});
     } else if (command === 'verify') {
       verifyChecksums(resolve(argument('--out')), argument('--version'));
     } else {
-      throw new Error('Usage: bun scripts/release.ts check | candidate --commit MAIN_SHA | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA [--untagged] | verify --out DIR --version VERSION');
+      throw new Error('Usage: bun scripts/release.ts check | candidate --commit MAIN_SHA | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA [--untagged] [--pr-preview] | verify --out DIR --version VERSION');
     }
   } catch (error) { console.error(String(error)); process.exit(1); }
 }

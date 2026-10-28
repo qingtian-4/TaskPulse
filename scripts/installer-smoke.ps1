@@ -83,6 +83,8 @@ try {
         Invoke-Installer $installer $arguments
         if (-not (Test-Path -LiteralPath $marker)) { throw 'Reinstall removed user data' }
         $signature = (Get-AuthenticodeSignature -FilePath $package).Status.ToString()
+        $applicationHash=(Get-FileHash -LiteralPath $exe -Algorithm SHA256).Hash.ToLowerInvariant()
+        $packageHash=(Get-FileHash -LiteralPath $package -Algorithm SHA256).Hash.ToLowerInvariant()
         $phase = "$kind-uninstall"
         Write-Host "[$kind] uninstall"
         if ($kind -eq 'nsis') {
@@ -95,7 +97,7 @@ try {
         for($n=0;$n -lt 50 -and (Test-Path -LiteralPath $exe);$n++){Start-Sleep -Milliseconds 200}
         if (Test-Path -LiteralPath $exe) { throw 'Uninstall left the application executable installed' }
         if (-not (Test-Path -LiteralPath $marker)) { throw 'Uninstall removed user state without permission' }
-        $results += @{kind=$kind;version=$Version;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';format_migration='not_verified';focus='not_verified'}
+        $results += @{kind=$kind;version=$Version;source_commit=$manifest.commit;os=[Environment]::OSVersion.VersionString;architecture='x64';installation_method=$kind;script_sha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();package_sha256=$packageHash;application_sha256=$applicationHash;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';format_migration='not_verified';focus='not_verified'}
     }
     $phase = 'passed'
 } catch {
