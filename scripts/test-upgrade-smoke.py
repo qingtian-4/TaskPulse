@@ -16,6 +16,11 @@ spec.loader.exec_module(upgrade)
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_nsis_passive_update_cannot_open_language_selector_after_silent_install(self):
+        config = json.loads((upgrade.REPO / "src-tauri/tauri.conf.json").read_text())
+        self.assertEqual(config["bundle"]["windows"]["nsis"]["languages"], ["English", "SimpChinese"])
+        self.assertFalse(config["bundle"]["windows"]["nsis"]["displayLanguageSelector"])
+
     def test_msi_property_quotes_value_for_unicode_space_install_directory(self):
         command = upgrade.msi_command(["/i", r"C:\fixture\old.msi", "/qn"], {"INSTALLDIR": r"C:\测试 install"})
         self.assertIn(' INSTALLDIR="C:\\测试 install"', command)

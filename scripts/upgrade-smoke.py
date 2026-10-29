@@ -66,13 +66,15 @@ def next_version(old):
     return ".".join(match.groups()[:3]) + "-alpha." + str(int(match[4]) + 1)
 
 
-def overlay(source, public, endpoint, version, original_version):
+def overlay(source, public, endpoint, version, original_version, msi_log=None):
     config_path = source / "src-tauri/tauri.conf.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config["version"] = version
     config["bundle"]["windows"]["wix"]["version"] = version.split("-")[0] + "." + str(1000 + int(version.split(".")[-1]))
     config["bundle"]["createUpdaterArtifacts"] = True
     config["plugins"]["updater"].update(pubkey=public, endpoints=[endpoint], dangerousInsecureTransportProtocol=True)
+    if msi_log is not None:
+        config["plugins"]["updater"]["windows"]["installerArgs"] = ["/L*vx!", '"' + str(msi_log) + '"']
     config_path.write_text(json.dumps(config, indent=2) + "\n")
     package = source / "package.json"
     data = json.loads(package.read_text(encoding="utf-8"))
@@ -212,7 +214,8 @@ def prepare(kind, target, evidence):
                CARGO_TARGET_DIR=str(REPO / "src-tauri/target"), APPLE_SIGNING_IDENTITY="-")
     env.pop("TAURI_CONFIG", None)
     for label, version, previous in [("old", old, old), ("new", new, old)]:
-        overlay(source, public, endpoint, version, previous)
+        overlay(source, public, endpoint, version, previous,
+                evidence.resolve() / "msi-update.log" if kind == "msi" else None)
         # Save exact overlays as reviewable evidence; public key only.
         changed = []
         allowed = {"package.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/main.rs", "src-tauri/src/updates.rs"}
@@ -248,6 +251,29 @@ def prepare(kind, target, evidence):
         shutil.copy2(str(candidates[0]) + ".sig", str(payload) + ".sig")
         if kind != "macos":
             info[label + "_exe_sha256"] = digest(windows_payload_exe(payload, output / "extracted", kind))
+        if kind == "msi":
+            metadata = run("powershell.exe", "-NoProfile", "-Command", r'''
+$ErrorActionPreference='Stop'
+[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new()
+$installer=New-Object -ComObject WindowsInstaller.Installer
+$database=$installer.OpenDatabase($env:TASKPULSE_MSI_PACKAGE,0)
+$properties=@{}
+foreach($name in @('ProductCode','UpgradeCode','ProductVersion','ProductLanguage','ALLUSERS')){
+  $view=$database.OpenView("SELECT Value FROM Property WHERE Property='$name'")
+  $view.Execute();$row=$view.Fetch()
+  if($row){$properties[$name]=$row.StringData(1)}
+  $view.Close()
+}
+$upgrades=@()
+$view=$database.OpenView('SELECT UpgradeCode,VersionMin,VersionMax,Attributes,ActionProperty FROM Upgrade')
+$view.Execute()
+while($row=$view.Fetch()){
+  $upgrades+=@{code=$row.StringData(1);min=$row.StringData(2);max=$row.StringData(3);attributes=$row.IntegerData(4);property=$row.StringData(5)}
+}
+$view.Close()
+@{properties=$properties;upgrade_table=$upgrades}|ConvertTo-Json -Depth 5
+''', env=dict(os.environ, TASKPULSE_MSI_PACKAGE=str(payload)))
+            (evidence / f"{label}-msi-metadata.json").write_bytes(metadata.stdout)
         info[label + "_payload"] = str(payload)
         info[label + "_sha256"] = digest(payload)
     if any(digest(REPO / name) != value for name, value in hashes.items()):
@@ -591,8 +617,9 @@ def supervise(plan):
         except Exception as probe_error:
             result["installed_version_probe_error"] = str(probe_error)
         if platform.system() == "Windows":
+            save(evidence / "failure-products.json", installed_products())
             diagnostic = run("powershell.exe", "-NoProfile", "-Command",
-                "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|msiexec|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
+                "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|msiexec|consent|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
             (evidence / "failure-processes.json").write_bytes(diagnostic.stdout)
             processes = json.loads(diagnostic.stdout.decode("utf-8-sig") or "[]")
             if isinstance(processes, dict):
@@ -673,8 +700,15 @@ def install_and_test(plan):
     if info["kind"] == "macos":
         supervise(plan)
     else:
-        run(os.environ["GSUDO_EXE"], "--integrity", "Medium", "--direct", sys.executable,
-            Path(__file__).resolve(), "supervise", "--plan", plan, timeout=600, capture=False)
+        try:
+            run(os.environ["GSUDO_EXE"], "--integrity", "Medium", "--direct", sys.executable,
+                Path(__file__).resolve(), "supervise", "--plan", plan, timeout=600, capture=False)
+        finally:
+            if info["kind"] == "msi":
+                # Read from the privileged CI parent: the live app remains medium.
+                events = run("powershell.exe", "-NoProfile", "-Command",
+                    "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-WinEvent -FilterHashtable @{LogName='Application';ProviderName='MsiInstaller';StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Depth 4")
+                (Path(info["evidence"]) / "msi-system-events.json").write_bytes(events.stdout)
 
 
 if __name__ == "__main__":
