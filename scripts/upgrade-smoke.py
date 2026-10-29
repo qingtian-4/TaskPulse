@@ -203,7 +203,9 @@ def prepare(kind, target, evidence):
     replace_once(main, 'Ok(None) => return,', 'Ok(None) => { upgrade_probe::record_entry("lock-busy"); return; },')
     replace_once(main, 'updates::start(app.handle().clone());', 'updates::start(app.handle().clone());\n            upgrade_probe::start(app.handle().clone());')
     shutil.copy2(REPO / "scripts/upgrade-probe.rs", source / "src-tauri/src/upgrade_probe.rs")
-    shutil.copy2(REPO / "scripts/upgrade-probe.rs", evidence / "upgrade-probe.rs.txt")
+    replace_once(source / "src-tauri/src/upgrade_probe.rs", 'const DIAGNOSTIC_ROOT: &str = "";',
+                 'const DIAGNOSTIC_ROOT: &str = ' + json.dumps(str(root), ensure_ascii=False) + ';')
+    shutil.copy2(source / "src-tauri/src/upgrade_probe.rs", evidence / "upgrade-probe.rs.txt")
     old = json.loads((REPO / "package.json").read_text(encoding="utf-8"))["version"]
     new = next_version(old)
     info = dict(root=str(root), source=str(source), kind=kind, target=target, port=port,
@@ -392,6 +394,14 @@ def wait_for(predicate, timeout=90):
     raise TimeoutError("Timed out waiting for native upgrade evidence")
 
 
+def automatic_boot(root, version):
+    records = [json.loads(path.read_text(encoding="utf-8")) for path in root.glob(f"boot-{version}-*.json")]
+    automatic = [record for record in records if not record.get("diagnostic_launch", False)]
+    if len(automatic) > 1:
+        raise RuntimeError("Multiple automatic boots; refusing ambiguous restart evidence")
+    return automatic[0] if automatic else None
+
+
 class NativeProcess:
     """Hold Windows process identity; on macOS verify PID/start/path before signalling."""
     def __init__(self, pid, exe):
@@ -486,6 +496,34 @@ def windows_dialogs(pids):
     return result
 
 
+def diagnostic_shell_launch(exe, arguments):
+    """Diagnostic-only ShellExecute with a retained handle; never counts as restart."""
+    from ctypes import wintypes
+    class ShellInfo(ctypes.Structure):
+        _fields_ = [("cbSize", wintypes.DWORD), ("fMask", wintypes.ULONG), ("hwnd", wintypes.HWND),
+                    ("lpVerb", wintypes.LPCWSTR), ("lpFile", wintypes.LPCWSTR),
+                    ("lpParameters", wintypes.LPCWSTR), ("lpDirectory", wintypes.LPCWSTR),
+                    ("nShow", ctypes.c_int), ("hInstApp", wintypes.HINSTANCE), ("lpIDList", ctypes.c_void_p),
+                    ("lpClass", wintypes.LPCWSTR), ("hkeyClass", wintypes.HKEY), ("dwHotKey", wintypes.DWORD),
+                    ("hIcon", wintypes.HANDLE), ("hProcess", wintypes.HANDLE)]
+    shell = ctypes.WinDLL("shell32", use_last_error=True)
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    shell.ShellExecuteExW.argtypes = [ctypes.POINTER(ShellInfo)]
+    kernel.GetProcessId.argtypes = [wintypes.HANDLE]
+    kernel.GetProcessId.restype = wintypes.DWORD
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    info = ShellInfo(cbSize=ctypes.sizeof(ShellInfo), fMask=0x40, lpVerb="open", lpFile=str(exe),
+                     lpParameters=subprocess.list2cmdline(arguments), nShow=1)
+    if not shell.ShellExecuteExW(ctypes.byref(info)):
+        raise OSError(ctypes.get_last_error(), "Diagnostic ShellExecute failed")
+    if not info.hProcess:
+        raise RuntimeError("Diagnostic ShellExecute returned no process handle")
+    try:
+        return kernel.GetProcessId(info.hProcess)
+    finally:
+        kernel.CloseHandle(info.hProcess)
+
+
 def supervise(plan):
     require_ci()
     info = owned_plan(plan)
@@ -516,8 +554,7 @@ def supervise(plan):
             return response
 
     def boot(version):
-        files = list(root.glob(f"boot-{version}-*.json"))
-        return json.loads(files[-1].read_text(encoding="utf-8")) if files else None
+        return automatic_boot(root, version)
 
     try:
         old_hash = digest(exe)
@@ -625,6 +662,35 @@ def supervise(plan):
             if isinstance(processes, dict):
                 processes = [processes]
             save(evidence / "failure-dialogs.json", windows_dialogs({p["ProcessId"] for p in processes}))
+            # Preserve the original FAILED verdict. These manual launches only
+            # distinguish payload startup from automatic installer relaunch.
+            if info["kind"] == "nsis" and result.get("installed_exe_sha256_after_failure") == info["new_exe_sha256"]:
+                attempts = []
+                for method in ("direct", "shell"):
+                    record = {"method": method, "automatic_restart": False}
+                    diagnostic_process = None
+                    try:
+                        arguments = ["--show", "--upgrade-probe-root", str(root), "--diagnostic-launch=" + method]
+                        if method == "direct":
+                            with (evidence / "diagnostic-direct.stderr.log").open("wb") as errors:
+                                launched = subprocess.Popen([str(exe), *arguments], stdout=subprocess.DEVNULL, stderr=errors)
+                            pid = launched.pid
+                        else:
+                            pid = diagnostic_shell_launch(exe, arguments)
+                        record["pid"] = pid
+                        diagnostic_process = NativeProcess(pid, exe)
+                        observed = root / f"boot-{info['new']}-{pid}.json"
+                        wait_for(observed.exists, timeout=30)
+                        record["boot_observed"] = True
+                        command("exit", wait=False)
+                        wait_for(diagnostic_process.exited, timeout=15)
+                    except Exception as diagnostic_error:
+                        record["error"] = repr(diagnostic_error)
+                    finally:
+                        if diagnostic_process is not None:
+                            diagnostic_process.close()
+                        attempts.append(record)
+                save(evidence / "manual-launch-diagnostics.json", attempts)
         else:
             diagnostic = run("ps", "ax", "-o", "pid,ppid,stat,command").stdout.decode()
             (evidence / "failure-processes.txt").write_text("\n".join(line for line in diagnostic.splitlines() if "agent-tray" in line or "TaskPulse.app" in line))
@@ -655,6 +721,8 @@ def supervise(plan):
             for path in root.glob("boot-*.json"):
                 shutil.copy2(path, evidence / path.name)
             for path in root.glob("entry-*.json"):
+                shutil.copy2(path, evidence / path.name)
+            for path in root.glob("panic-*.txt"):
                 shutil.copy2(path, evidence / path.name)
             if (root / "events.jsonl").exists():
                 shutil.copy2(root / "events.jsonl", evidence / "events.jsonl")

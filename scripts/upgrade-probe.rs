@@ -3,6 +3,9 @@ use serde_json::json;
 use std::{fs, io::Write, path::PathBuf, time::Duration};
 use tauri::{Listener, Manager};
 
+// Populated only in the CI source copy. Entry diagnostics must survive lost argv.
+const DIAGNOSTIC_ROOT: &str = "";
+
 fn write(root: &std::path::Path, name: &str, value: serde_json::Value) {
     let mut temp = tempfile::NamedTempFile::new_in(root).unwrap();
     temp.write_all(serde_json::to_string_pretty(&value).unwrap().as_bytes())
@@ -12,12 +15,23 @@ fn write(root: &std::path::Path, name: &str, value: serde_json::Value) {
 
 pub fn record_entry(stage: &str) {
     let args: Vec<_> = std::env::args().collect();
-    let Some(index) = args.iter().position(|a| a == "--upgrade-probe-root") else {
+    let root = PathBuf::from(DIAGNOSTIC_ROOT);
+    if DIAGNOSTIC_ROOT.is_empty() {
         return;
-    };
-    let root = PathBuf::from(&args[index + 1]);
+    }
     if !root.join("ci-owned.json").is_file() {
         return;
+    }
+    if stage == "main" {
+        let panic_root = root.clone();
+        let previous = std::panic::take_hook();
+        std::panic::set_hook(Box::new(move |panic| {
+            let _ = fs::write(
+                panic_root.join(format!("panic-{}.txt", std::process::id())),
+                panic.to_string(),
+            );
+            previous(panic);
+        }));
     }
     write(
         &root,
@@ -32,6 +46,7 @@ pub fn record_entry(stage: &str) {
             "ci_environment_present": std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"),
             "exe": std::env::current_exe().ok(),
             "taskpulse_home_override": std::env::var_os("TASKPULSE_HOME").is_some()
+            ,"args": args
         }),
     );
 }
@@ -89,6 +104,7 @@ pub fn start(app: tauri::AppHandle) {
             ),
             json!({
                 "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
+                "diagnostic_launch": std::env::args().any(|arg| arg.starts_with("--diagnostic-launch=")),
                 "exe": std::env::current_exe().unwrap().canonicalize().unwrap(),
                 "elevated": elevated, "status": crate::updates::get_update_status(),
                 "bundle": format!("{:?}", tauri::utils::platform::bundle_type()),

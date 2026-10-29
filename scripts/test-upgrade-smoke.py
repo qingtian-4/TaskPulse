@@ -16,6 +16,17 @@ spec.loader.exec_module(upgrade)
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_manual_diagnostic_boot_cannot_count_as_automatic_restart(self):
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp)
+            upgrade.save(root / "boot-1.0.0-1.json", {"pid": 1, "diagnostic_launch": True})
+            self.assertIsNone(upgrade.automatic_boot(root, "1.0.0"))
+            upgrade.save(root / "boot-1.0.0-2.json", {"pid": 2, "diagnostic_launch": False})
+            self.assertEqual(upgrade.automatic_boot(root, "1.0.0")["pid"], 2)
+            upgrade.save(root / "boot-1.0.0-3.json", {"pid": 3, "diagnostic_launch": False})
+            with self.assertRaises(RuntimeError):
+                upgrade.automatic_boot(root, "1.0.0")
+
     def test_nsis_passive_update_cannot_open_language_selector_after_silent_install(self):
         config = json.loads((upgrade.REPO / "src-tauri/tauri.conf.json").read_text())
         self.assertEqual(config["bundle"]["windows"]["nsis"]["languages"], ["English", "SimpChinese"])
