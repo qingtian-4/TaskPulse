@@ -16,6 +16,13 @@ spec.loader.exec_module(upgrade)
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_msi_property_quotes_value_for_unicode_space_install_directory(self):
+        command = upgrade.msi_command(["/i", r"C:\fixture\old.msi", "/qn"], {"INSTALLDIR": r"C:\测试 install"})
+        self.assertIn(' INSTALLDIR="C:\\测试 install"', command)
+        self.assertNotIn('"INSTALLDIR=', command)
+        with self.assertRaises(ValueError):
+            upgrade.msi_command([], {"INSTALLDIR": 'bad"value'})
+
     def test_never_installs_on_developer_or_self_hosted_machine(self):
         for variables in ({}, {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "self-hosted"},
                           {"GITHUB_ACTIONS": "true", "RUNNER_ENVIRONMENT": "github-hosted", "TASKPULSE_HOME": "test"}):

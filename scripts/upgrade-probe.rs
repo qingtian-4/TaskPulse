@@ -10,7 +10,33 @@ fn write(root: &std::path::Path, name: &str, value: serde_json::Value) {
     temp.persist(root.join(name)).unwrap();
 }
 
+pub fn record_entry(stage: &str) {
+    let args: Vec<_> = std::env::args().collect();
+    let Some(index) = args.iter().position(|a| a == "--upgrade-probe-root") else {
+        return;
+    };
+    let root = PathBuf::from(&args[index + 1]);
+    if !root.join("ci-owned.json").is_file() {
+        return;
+    }
+    write(
+        &root,
+        &format!(
+            "entry-{}-{}-{stage}.json",
+            env!("CARGO_PKG_VERSION"),
+            std::process::id()
+        ),
+        json!({
+            "stage": stage, "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id(),
+            "ci_environment_present": std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"),
+            "exe": std::env::current_exe().ok(),
+            "taskpulse_home_override": std::env::var_os("TASKPULSE_HOME").is_some()
+        }),
+    );
+}
+
 pub fn start(app: tauri::AppHandle) {
+    record_entry("setup");
     let args: Vec<_> = std::env::args().collect();
     let Some(index) = args.iter().position(|a| a == "--upgrade-probe-root") else {
         return;

@@ -88,11 +88,26 @@ def windows_payload_exe(package, output, kind):
         sevenzip = Path(os.environ["ProgramFiles"]) / "7-Zip/7z.exe"
         run(sevenzip, "x", package, "-o" + str(output), "-y")
     else:
-        run("msiexec.exe", "/a", package, "/qn", "TARGETDIR=" + str(output))
+        run_msi(["/a", str(package), "/qn"], {"TARGETDIR": str(output)})
     executables = list(output.rglob("agent-tray.exe"))
     if len(executables) != 1:
         raise RuntimeError("Expected one actual packaged executable")
     return executables[0]
+
+
+def msi_command(arguments, properties):
+    # Windows Installer properties quote the VALUE, not the entire NAME=value.
+    # Python's list2cmdline quotes the whole token when a directory has spaces.
+    for key, value in properties.items():
+        if not re.fullmatch("[A-Z_]+", key) or any(c in value for c in ('"', '\n', '\r')):
+            raise ValueError("Invalid MSI property")
+    return subprocess.list2cmdline(["msiexec.exe", *arguments]) + "".join(
+        f' {key}="{value}"' for key, value in properties.items())
+
+
+def run_msi(arguments, properties):
+    subprocess.run(msi_command(arguments, properties), check=True, timeout=180,
+                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
 
 def installed_products():
@@ -175,6 +190,8 @@ def prepare(kind, target, evidence):
     replace_once(updates, '/qingtian-4/TaskPulse/releases/download/v', f'/{route}/v')
     main = source / "src-tauri/src/main.rs"
     replace_once(main, 'mod updates;', 'mod updates;\nmod upgrade_probe;')
+    replace_once(main, 'fn main() {', 'fn main() {\n    upgrade_probe::record_entry("main");')
+    replace_once(main, 'Ok(None) => return,', 'Ok(None) => { upgrade_probe::record_entry("lock-busy"); return; },')
     replace_once(main, 'updates::start(app.handle().clone());', 'updates::start(app.handle().clone());\n            upgrade_probe::start(app.handle().clone());')
     shutil.copy2(REPO / "scripts/upgrade-probe.rs", source / "src-tauri/src/upgrade_probe.rs")
     shutil.copy2(REPO / "scripts/upgrade-probe.rs", evidence / "upgrade-probe.rs.txt")
@@ -524,6 +541,19 @@ def supervise(plan):
         result["passed"] = True
     except Exception as error:
         result["error"] = repr(error)
+        result["old_process_exit"] = child.poll() if child else None
+        result["installed_exe_sha256_after_failure"] = digest(exe) if exe.is_file() else None
+        try:
+            result["installed_version_after_failure"] = run(exe, "--version", timeout=15).stdout.decode().strip()
+        except Exception as probe_error:
+            result["installed_version_probe_error"] = str(probe_error)
+        if platform.system() == "Windows":
+            diagnostic = run("powershell.exe", "-NoProfile", "-Command",
+                "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|msiexec|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
+            (evidence / "failure-processes.json").write_bytes(diagnostic.stdout)
+        else:
+            diagnostic = run("ps", "ax", "-o", "pid,ppid,stat,command").stdout.decode()
+            (evidence / "failure-processes.txt").write_text("\n".join(line for line in diagnostic.splitlines() if "agent-tray" in line or "TaskPulse.app" in line))
         raise
     finally:
         cleanup_errors = []
@@ -549,6 +579,8 @@ def supervise(plan):
             server.server_close()
             save(evidence / "requests.json", shared["requests"])
             for path in root.glob("boot-*.json"):
+                shutil.copy2(path, evidence / path.name)
+            for path in root.glob("entry-*.json"):
                 shutil.copy2(path, evidence / path.name)
             if (root / "events.jsonl").exists():
                 shutil.copy2(root / "events.jsonl", evidence / "events.jsonl")
@@ -583,8 +615,8 @@ def install_and_test(plan):
             subprocess.run(subprocess.list2cmdline([package, "/S"]) + " /D=" + str(install),
                            check=True, timeout=180)
         else:
-            run("msiexec.exe", "/i", package, "/qn", "/norestart", "INSTALLDIR=" + str(install),
-                "/L*v", str(Path(info["evidence"]) / "msi-initial.log"))
+            run_msi(["/i", package, "/qn", "/norestart", "/L*v",
+                     str(Path(info["evidence"]) / "msi-initial.log")], {"INSTALLDIR": str(install)})
         exe = install / "agent-tray.exe"
     assert exe.is_file(), str(exe)
     info["installed_exe"] = str(exe)
