@@ -3,6 +3,29 @@ import {readFileSync} from 'node:fs';
 const read=(name:string)=>readFileSync(new URL('../'+name,import.meta.url),'utf8');
 const workflow=Bun.YAML.parse(read('.github/workflows/installation-preview.yml')) as any;
 
+test('installed upgrade acceptance cannot publish or consume production signing secrets',()=>{
+  const text=read('.github/workflows/upgrade-acceptance.yml');
+  const upgrade=Bun.YAML.parse(text) as any;
+  expect(upgrade.on).not.toHaveProperty('pull_request_target');
+  expect(upgrade.permissions).toEqual({contents:'read'});
+  expect(text).not.toMatch(/secrets\.|contents: write|gh release|git push|git tag|action-gh-release/);
+  expect(upgrade.jobs.security.if).toContain('head.repo.full_name == github.repository');
+  expect(upgrade.jobs.upgrade.needs).toBe('security');
+  expect(upgrade.jobs.upgrade.strategy.matrix.include).toHaveLength(4);
+  for(const step of upgrade.jobs.upgrade.steps){
+    expect(step['continue-on-error']).not.toBe(true);
+    if(step.uses)expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
+    if(step.uses?.startsWith('actions/checkout')){
+      expect(step.with.ref).toBe('${{ github.event.pull_request.head.sha }}');
+      expect(step.with['persist-credentials']).toBe(false);
+    }
+    if(step.uses?.startsWith('actions/upload-artifact')){
+      expect(step.with.path).toBe('dist/upgrade-evidence/');
+      expect(step.with.name).toContain('github.event.pull_request.head.sha');
+    }
+  }
+});
+
 test('preview runs for same-repository PR updates, with immutable head and read-only permissions',()=>{
   expect(workflow.on.pull_request.types).toContain('synchronize');
   expect(workflow.on).not.toHaveProperty('pull_request_target');
