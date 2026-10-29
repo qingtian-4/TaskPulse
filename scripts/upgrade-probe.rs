@@ -28,6 +28,7 @@ pub fn record_entry(stage: &str) {
         ),
         json!({
             "stage": stage, "version": env!("CARGO_PKG_VERSION"), "pid": std::process::id(),
+            "epoch_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_millis(),
             "ci_environment_present": std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true"),
             "exe": std::env::current_exe().ok(),
             "taskpulse_home_override": std::env::var_os("TASKPULSE_HOME").is_some()

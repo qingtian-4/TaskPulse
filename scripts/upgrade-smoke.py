@@ -153,6 +153,13 @@ def prepare(kind, target, evidence):
     require_ci()
     evidence.mkdir(parents=True, exist_ok=True)
     root = Path(tempfile.mkdtemp(prefix="taskpulse-upgrade-", dir=os.environ["RUNNER_TEMP"]))
+    if platform.system() == "Windows":
+        # The hosted runner creates this root elevated. MSI's SYSTEM service
+        # otherwise inherits administrator-only access in its output directory.
+        # Grant only this CI account on this newly owned tree, before installing.
+        account = run("whoami.exe").stdout.decode().strip()
+        run("icacls.exe", root, "/grant", account + ":(OI)(CI)M")
+        (evidence / "owned-root-acl.txt").write_bytes(run("icacls.exe", root).stdout)
     source = root / "source"
     source.mkdir()
     # Copy only git-listed source files. Secrets, caches and build products cannot enter.
@@ -420,6 +427,39 @@ class NativeProcess:
                 self.kernel.CloseHandle(self.handle)
 
 
+def windows_dialogs(pids):
+    from ctypes import wintypes
+    user = ctypes.WinDLL("user32", use_last_error=True)
+    callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    user.EnumWindows.argtypes = [callback, wintypes.LPARAM]
+    user.EnumChildWindows.argtypes = [wintypes.HWND, callback, wintypes.LPARAM]
+    user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
+    user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
+    user.IsWindowVisible.argtypes = [wintypes.HWND]
+    result = []
+    def title(hwnd):
+        buffer = ctypes.create_unicode_buffer(2048)
+        user.GetWindowTextW(hwnd, buffer, len(buffer))
+        return buffer.value
+    @callback
+    def window(hwnd, _):
+        pid = wintypes.DWORD()
+        user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
+        if pid.value in pids and user.IsWindowVisible(hwnd):
+            children = []
+            @callback
+            def child(control, _):
+                text = title(control)
+                if text:
+                    children.append(text)
+                return True
+            user.EnumChildWindows(hwnd, child, 0)
+            result.append(dict(pid=pid.value, title=title(hwnd), text=children))
+        return True
+    user.EnumWindows(window, 0)
+    return result
+
+
 def supervise(plan):
     require_ci()
     info = owned_plan(plan)
@@ -542,15 +582,22 @@ def supervise(plan):
     except Exception as error:
         result["error"] = repr(error)
         result["old_process_exit"] = child.poll() if child else None
-        result["installed_exe_sha256_after_failure"] = digest(exe) if exe.is_file() else None
+        try:
+            result["installed_exe_sha256_after_failure"] = digest(exe) if exe.is_file() else None
+        except OSError as probe_error:
+            result["installed_hash_probe_error"] = str(probe_error)
         try:
             result["installed_version_after_failure"] = run(exe, "--version", timeout=15).stdout.decode().strip()
         except Exception as probe_error:
             result["installed_version_probe_error"] = str(probe_error)
         if platform.system() == "Windows":
             diagnostic = run("powershell.exe", "-NoProfile", "-Command",
-                "Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|msiexec|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
+                "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|msiexec|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
             (evidence / "failure-processes.json").write_bytes(diagnostic.stdout)
+            processes = json.loads(diagnostic.stdout.decode("utf-8-sig") or "[]")
+            if isinstance(processes, dict):
+                processes = [processes]
+            save(evidence / "failure-dialogs.json", windows_dialogs({p["ProcessId"] for p in processes}))
         else:
             diagnostic = run("ps", "ax", "-o", "pid,ppid,stat,command").stdout.decode()
             (evidence / "failure-processes.txt").write_text("\n".join(line for line in diagnostic.splitlines() if "agent-tray" in line or "TaskPulse.app" in line))
@@ -619,6 +666,8 @@ def install_and_test(plan):
                      str(Path(info["evidence"]) / "msi-initial.log")], {"INSTALLDIR": str(install)})
         exe = install / "agent-tray.exe"
     assert exe.is_file(), str(exe)
+    if info["kind"] != "macos":
+        (Path(info["evidence"]) / "installed-acl.txt").write_bytes(run("icacls.exe", exe).stdout)
     info["installed_exe"] = str(exe)
     save(plan, info)
     if info["kind"] == "macos":
