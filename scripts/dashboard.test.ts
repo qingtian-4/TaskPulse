@@ -1,12 +1,45 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import {observedDashboardTasks,shouldApplyDashboardSnapshot,preferredDashboardHeight} from '../src/lib/dashboard';
+import {observedDashboardTasks,shouldApplyDashboardSnapshot,preferredDashboardHeight,dashboardCandidates,defaultDashboardTasks} from '../src/lib/dashboard';
 import {acceptMessageState,unreadMessageIds,messageStatus} from '../src/lib/messages';
 import type {MessageCenterState} from '../src/lib/types';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('anonymous scanner processes are discovery evidence, not independent task cards',()=>{
+  const process:TaskSnapshot={...base,id:'scan:codex:process',source_instance:'scanner',name:'unknown',confidence:'inferred'};
+  const named={...process,id:'scan:codex:named',name:'Actual project'};
+  const native={...base,id:'codex:session',name:'unknown',session_id:'stable'};
+  const internal={...base,id:'child',internal:true};
+  const original=structuredClone([process,named,native,internal]);
+  expect(dashboardCandidates(original).map(t=>t.id)).toEqual([named.id,native.id]);
+  expect(dashboardCandidates([{...process,pinned:true}])).toHaveLength(1);
+  expect(dashboardCandidates([{...process,name:'  UNKNOWN  ',stale:true}])).toEqual([]);
+  expect(dashboardCandidates([{...process,name:'',status:'unknown'}])).toEqual([]);
+  expect(dashboardCandidates([{...process,session_id:'session'}])).toHaveLength(1);
+  expect(dashboardCandidates([{...process,project:'Known'}])).toHaveLength(1);
+  expect(dashboardCandidates([{...process,project_path:'D:/Known'}])).toHaveLength(1);
+  expect(original).toEqual([process,named,native,internal]);
+});
+
+test('default attention shows current work, unread results and explicit pins; uncertainty stays retrievable',()=>{
+  const running={...base,id:'running'};
+  const blocker={...base,id:'approval',status:'waiting_input' as const,waiting_reason:'approval' as const,input_request_id:'request'};
+  const result={...base,id:'result',status:'failed' as const};
+  const stale={...running,id:'uncertain',name:'Offline task',stale:true};
+  const unknown={...base,id:'unknown',status:'unknown' as const};
+  const seen={...result,id:'seen',unread:false};
+  const pinned={...stale,id:'pin',pinned:true};
+  const all=[running,blocker,result,stale,unknown,seen,pinned];
+  expect(defaultDashboardTasks(all).map(t=>t.id)).toEqual(['running','approval','result','pin']);
+  expect(filterTasks(dashboardCandidates(all),{...EMPTY_FILTERS,section:'uncertain'}).map(t=>t.id)).toEqual(['uncertain','unknown','pin']);
+  expect(filterTasks(dashboardCandidates(all),{...EMPTY_FILTERS,query:'offline'})).toEqual([stale,pinned]);
+  expect(stale.status).toBe('running');expect(stale.unread).toBe(true);expect(pinned.pinned).toBe(true);
+  expect(defaultDashboardTasks([{...result,unread:false}])).toEqual([]);
+  expect(defaultDashboardTasks([{...stale,stale:false}])).toEqual([{...stale,stale:false}]);
+});
 
 test('Doubao conversation titles remain separate from project membership and filters',()=>{
   const task:TaskSnapshot={...base,source:'doubao',name:'真实会话名称'};

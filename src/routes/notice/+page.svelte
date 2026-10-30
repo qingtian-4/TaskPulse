@@ -105,10 +105,10 @@
   .test-badge{flex-shrink:0;padding:0 4px;border-radius:3px;font-size:9px;line-height:14px;white-space:nowrap}
   .heading{margin-top:4px;font-size:12.5px;font-weight:600;line-height:18px;overflow-wrap:anywhere;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;letter-spacing:.005em}
   .summary{display:block;margin-top:4px;font-size:11px;line-height:16px;color:var(--tone);overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
-  footer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 8px 5px 12px;border-top:1px solid var(--tp-border);background:#10171c55;flex:none}
-  .hint{min-width:0;color:var(--tp-quiet);font-size:9px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  footer{display:flex;align-items:center;justify-content:space-between;gap:6px;padding:4px 8px 5px 12px;border-top:1px solid var(--tp-border);background:var(--tp-card);color:var(--tp-text);flex:none}
+  .hint{min-width:0;color:var(--tp-muted);font-size:9px;line-height:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
   .pending{color:var(--tp-muted);padding:2px 0;font-size:9px;line-height:16px}
-  .actions{display:flex;align-items:center;gap:2px;flex-shrink:0}.actions .tp-btn{min-height:24px;gap:3px;padding:3px 5px;border-radius:var(--tp-radius-sm);font-size:10px;line-height:16px}.actions .primary{color:var(--tp-accent);font-weight:550}.actions .primary:hover{background:var(--tp-accent-soft)}
+  .actions{display:flex;align-items:center;gap:2px;flex-shrink:0}.actions .tp-btn{min-height:24px;gap:3px;padding:3px 5px;border-radius:var(--tp-radius-sm);font-size:10px;line-height:16px}.actions .later{color:var(--tp-text)}.actions .primary{color:var(--tp-accent);font-weight:550}.actions .primary:hover{background:var(--tp-accent-soft)}
   .progress-track{position:absolute;bottom:0;left:0;right:0;height:1px;background:var(--tp-border)}.progress{height:100%;background:var(--tone);opacity:.6;transition:width .2s linear}
   .error{color:var(--tp-danger)}.empty-error{padding:28px 14px;font-size:11px;color:var(--tp-danger);overflow-wrap:anywhere}
   @media(max-height:124px){.message{padding-top:8px;padding-bottom:6px;gap:8px}.heading,.summary{margin-top:2px}}

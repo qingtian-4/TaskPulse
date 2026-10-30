@@ -27,7 +27,7 @@
 - **状态、模型、时间**：任务标题、项目、来源上报的模型和本轮耗时同屏展示，支持搜索与分组。
 - **需要你时提醒**：完成、失败、提问和授权请求分别提醒，点击后回到对应任务。
 - **结果不会错过**：未查看的结果持续保留，固定任务与未读状态可跨重启恢复。
-- **安静地常驻**：紧凑托盘面板适配笔记本与高分屏；思考和工具执行都属于运行中。
+- **按你的习惯显示**：支持浅色、深色与跟随系统，可切换简体中文 / English，并设置登录启动、面板信息和通知方式。
 - **数据留在本机**：无需 TaskPulse 云账号，不上传对话；不会代你批准 Agent 请求。
 
 ## 任务提醒
@@ -79,7 +79,9 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 首次启动，确认发现的本机 Agent 并点击**开始监控**。之后从托盘查看任务；Windows 也可按 `Ctrl+Shift+A`。
 
-应用会自动检查新版本；在**管理 → 应用更新**中点击安装，下载和签名校验完成后重启。也可关闭自动检查或手动检查更新。
+默认面板展示运行中、明确待处理、结果未查看和手动固定的任务。来源暂未更新的任务可按需查看，未读状态会继续保留。
+
+应用会自动检查新版本；在**设置 → 应用更新**中点击安装，下载和签名校验完成后重启。也可关闭自动检查或手动检查更新。
 
 ## 支持的 Agent
 
@@ -107,7 +109,9 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 - [x] Windows / macOS 安装包与命令行安装
 - [x] 自动发现本机来源、应用内更新
 - [ ] 扩展更多 Agent 的原生自动接入
-- [ ] 简体中文 / English 界面切换
+- [x] 浅色 / 深色主题、简体中文 / English 界面切换
+- [ ] 桌面端稳定后推出 Android / iOS App，随时查看任务与提醒
+- [ ] 支持在智能手表、手环上查看任务进度与提醒
 
 ## 从源码构建
 
@@ -124,6 +128,6 @@ bun run tauri build
 
 ## 贡献与许可
 
-欢迎[反馈问题](https://github.com/qingtian-4/TaskPulse/issues)、改进文档或贡献 Agent 适配器。[贡献指南](CONTRIBUTING.md) · [安全反馈](SECURITY.md)
+欢迎[反馈问题](https://github.com/qingtian-4/TaskPulse/issues)、改进文档或贡献 Agent 适配器。[贡献指南](CONTRIBUTING.md) · [安全反馈](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
 
 基于 [AgentTray](https://github.com/sprklai/agenttray) 开发，保留原始版权与贡献历史，采用 [MIT License](LICENSE)。

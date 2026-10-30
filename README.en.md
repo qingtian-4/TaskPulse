@@ -27,7 +27,7 @@ See AI task status, model and elapsed time from your system tray.<br>Get notifie
 - **Status, model and time together**: see task titles, projects, reported models and turn duration, with search and grouping.
 - **Know when to return**: separate notifications for completion, failure, questions and permission requests.
 - **Keep results in view**: unread results remain available; pins and unread state survive restarts.
-- **Stay out of the way**: a compact tray panel fits laptops and high-DPI displays. Thinking and tool execution remain running states.
+- **Make it yours**: choose light, dark or system appearance, switch between English and Simplified Chinese, and customize login startup, task details and notifications.
 - **Keep your data local**: no TaskPulse cloud account or conversation uploads. TaskPulse never approves Agent requests for you.
 
 ## Task notifications
@@ -77,9 +77,11 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 The scripts select your architecture, verify SHA-256 and install the package. No Bun, Rust or repository checkout is needed. On Mac, the default destination is `~/Applications`. See [installation details](docs/INSTALL.md) for system security prompts and version options.
 
-On first launch, confirm the detected local agents and click **开始监控** (Start monitoring). Open the tray panel to see tasks; Windows also supports `Ctrl+Shift+A`.
+On first launch, confirm the detected local agents and click **Start monitoring**. Open the tray panel to see tasks; Windows also supports `Ctrl+Shift+A`.
 
-TaskPulse automatically checks for new versions. In **Settings → Application updates**, click to download, verify the signature and install. You can turn automatic checks off or check manually. The application interface currently uses Simplified Chinese.
+The default panel shows running tasks, explicit requests, unread results and manually pinned tasks. Tasks awaiting fresh source data are available in a separate view, with unread state preserved.
+
+TaskPulse automatically checks for new versions. In **Settings → Application updates**, click to download, verify the signature and install. You can turn automatic checks off or check manually.
 
 ## Supported agents
 
@@ -107,7 +109,9 @@ Automatic discovery covers supported native data formats. WSL, SSH and event int
 - [x] Windows / macOS packages and command-line installation
 - [x] Automatic local discovery and in-app updates
 - [ ] Native automatic connections for more agents
-- [ ] Simplified Chinese / English interface switch
+- [x] Light / dark themes and Simplified Chinese / English interface switch
+- [ ] Android / iOS apps for tasks and notifications after the desktop app is stable
+- [ ] Task progress and notifications on smartwatches and fitness bands
 
 ## Build from source
 
@@ -124,6 +128,6 @@ Packages are written to `src-tauri/target/release/bundle/`. Use `bun run tauri d
 
 ## Contributing and license
 
-[Report an issue](https://github.com/qingtian-4/TaskPulse/issues), improve the docs or contribute an Agent adapter. [Contributing guide](CONTRIBUTING.md) · [Security](SECURITY.md)
+[Report an issue](https://github.com/qingtian-4/TaskPulse/issues), improve the docs or contribute an Agent adapter. [Contributing guide](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md)
 
 Built on [AgentTray](https://github.com/sprklai/agenttray), preserving its copyright and contribution history. Licensed under the [MIT License](LICENSE).

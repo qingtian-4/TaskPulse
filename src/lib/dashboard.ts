@@ -142,6 +142,23 @@ export function taskSection(task: TaskSnapshot): TaskSection {
   if (task.status === 'unknown' || task.status === 'disconnected' || task.status === 'waiting_input') return 'uncertain';
   return 'pinned';
 }
+
+// Process detection alone does not establish a named user task. Keep these
+// observations in the source catalog without manufacturing attention cards.
+// Never classify a native session or a subagent from its display name alone.
+export function dashboardCandidates(tasks:TaskSnapshot[]):TaskSnapshot[] {
+  return tasks.filter(task=>!task.internal && (task.pinned || !(
+    task.confidence==='inferred' && (task.source_instance==='scanner' || task.id.startsWith('scan:')) &&
+    !task.session_id?.trim() && !task.project?.trim() && !task.project_path?.trim() &&
+    (!task.name.trim() || task.name.trim().toLowerCase()==='unknown')
+  )));
+}
+
+// This is a view, never an acknowledgement, deletion or lifecycle transition.
+// Source filters/search and the uncertainty tab can still reach other records.
+export function defaultDashboardTasks(tasks:TaskSnapshot[]):TaskSnapshot[] {
+  return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task));
+}
 export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
   const explicit = settings?.sources.find(s => s.id === task.source_instance);
   const nativeId = task.source === 'deepseek_harness'

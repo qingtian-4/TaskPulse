@@ -134,10 +134,10 @@ poll_interval_ms=3000
   await ui.evaluate(`document.querySelector('.source-expand').click()`);
   await ui.wait(`!!document.querySelector('.source-editor textarea')`);
   await ui.evaluate(`(()=>{const field=document.querySelector('.source-editor textarea');field.value='draft-only-project';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-  await ui.wait(`document.querySelector('.settings-save').textContent.includes('未应用')`);
+  await ui.wait(`!!document.querySelector('.source-pending')`);
   console.log('settings smoke: source draft, switching language');await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
   await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='en';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-  await ui.wait(`document.querySelector('.settings-heading h1').textContent==='General' && !document.querySelector('.settings-save').textContent.includes('Saving')`);
+  await ui.wait(`document.querySelector('.settings-heading h1').textContent==='General' && document.querySelector('.settings-status').textContent===''`);
   assert.equal(await root.evaluate(`document.documentElement.lang`),'en');
   console.log('settings smoke: language passed, switching theme');await ui.evaluate(`document.querySelector('[data-preview="dark"] input').click()`);
   await ui.wait(`document.documentElement.dataset.theme==='dark'`);
@@ -154,7 +154,7 @@ poll_interval_ms=3000
   assert.equal(await ui.evaluate(`document.querySelector('.settings-heading h1').textContent`),'Sources');
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
   await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').click()`);
-  await ui.wait(`document.querySelector('[aria-label="Show task model"]').checked===false && document.querySelector('.settings-save').textContent.includes('Saved')`);
+  await ui.wait(`document.querySelector('[aria-label="Show task model"]').checked===false && document.querySelector('.settings-status').textContent===''`);
   saved=await root.invoke('get_monitoring_settings');assert.equal(saved.preferences.show_model,false);
   assert.deepEqual(saved.sources[0].projects,['protected-project']);assert.equal(saved.sources[0].enabled,false);
   assert.ok((await Bun.file(join(home,'config.toml')).text()).includes('custom_preserved = "keep-me"'));
@@ -172,7 +172,7 @@ poll_interval_ms=3000
   await chmod(join(home,'config.toml'),0o444);
   try{
     await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').click()`);
-    await ui.wait(`!!document.querySelector('.settings-inline-error') && !document.querySelector('.settings-save').textContent.includes('Saving')`);
+    await ui.wait(`!!document.querySelector('.settings-inline-error') && document.querySelector('.settings-status').textContent===''`);
     assert.equal(await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').checked`),false,'Rejected save must restore the last confirmed control value');
     assert.equal((await root.invoke('get_monitoring_settings')).preferences.show_model,false);
   }finally{await chmod(join(home,'config.toml'),0o666);}

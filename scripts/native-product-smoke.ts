@@ -230,7 +230,7 @@ try{
   await root.wait(`document.querySelector('.unread-filter').getAttribute('aria-pressed')==='true'`);
   assert.ok(await root.evaluate(`[...document.querySelectorAll('.task-row')].every(r=>!!r.querySelector('.unread'))`));
   await input(root,'[aria-label="搜索任务"]','UI Sandbox');
-  await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.filter-note').textContent.includes('仅未查看')`);
+  await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.unread-filter').getAttribute('aria-pressed')==='true'&&!document.querySelector('.filter-note')`);
   await Bun.write(join(owned,'search-filter-368x560.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await click(root,'.all-tasks');
   await click(root,'.filter-toggle');
@@ -248,16 +248,12 @@ try{
   const nativeBounds=await root.invoke('plugin:window|outer_size',{label:'popup'}),nativePosition=await root.invoke('plugin:window|outer_position',{label:'popup'}),monitor=await root.invoke('plugin:window|current_monitor',{label:'popup'});
   assert.deepEqual(nativeBounds,await root.invoke('plugin:window|inner_size',{label:'popup'}));
   assert.ok(nativePosition.x>=monitor.workArea.position.x&&nativePosition.y>=monitor.workArea.position.y&&nativePosition.x+nativeBounds.width<=monitor.workArea.position.x+monitor.workArea.size.width&&nativePosition.y+nativeBounds.height<=monitor.workArea.position.y+monitor.workArea.size.height);
-  await click(root,'.quota summary');await root.wait(`document.querySelector('.quota').open`);
-  const quotaBounds=await root.evaluate(`(()=>{const r=document.querySelector('.quota p').getBoundingClientRect();return {top:r.top,bottom:r.bottom,right:r.right,left:r.left,height:innerHeight};})()`);
-  assert.ok(quotaBounds.top>=0&&quotaBounds.bottom<=quotaBounds.height&&quotaBounds.left>=0&&quotaBounds.right<=nativeLayout.width);
-  await Bun.write(join(owned,'quota-expanded-native.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await click(root,'.quota summary');
+  assert.equal(await root.evaluate(`!!document.querySelector('.quota')`),false,'Local quota is hidden');
   await root.invoke('toggle_pin');assert.equal(await root.invoke('get_pinned'),false);
   await root.invoke('plugin:window|hide',{label:'popup'});await root.invoke('plugin:window|show',{label:'popup'});
   await root.invoke('plugin:window|set_focus',{label:'popup'});await root.invoke('toggle_pin');
   assert.equal(await root.invoke('get_pinned'),true);assert.deepEqual(await root.invoke('plugin:window|outer_size',{label:'popup'}),nativeBounds);
-  checks.push('pin/grow-only refresh, unpin/hide/reopen; real native work-area bounds/client equality; quota expansion within panel');
+  checks.push('pin/grow-only refresh, unpin/hide/reopen; real native work-area bounds/client equality; local quota remains hidden');
   checks.push('27 native tasks remain rendered with bounded vertical scrolling and no horizontal overflow');
   await root.invoke('open_management');management=await page('/manage');
   await management.wait(`!!document.querySelector('.setup-flow')`);

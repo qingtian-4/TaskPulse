@@ -1,6 +1,6 @@
 <script lang="ts">
   import {onMount,tick} from 'svelte';
-  import {SlidersHorizontal,PanelsTopLeft,RadioTower,Bell,RefreshCw,Info,Check,ShieldCheck} from '@lucide/svelte';
+  import {SlidersHorizontal,PanelsTopLeft,RadioTower,Bell,RefreshCw,Info,ShieldCheck} from '@lucide/svelte';
   import {listen} from '@tauri-apps/api/event';
   import {isTauri,invoke} from '@tauri-apps/api/core';
   import BrandMark from '$lib/components/BrandMark.svelte';
@@ -40,7 +40,7 @@
     <nav class="settings-nav" aria-label={$t('设置分类')}>{#each sections as [id,label,,Icon]}<a href={'#'+id} aria-current={section===id?'page':undefined} onclick={e=>{e.preventDefault();void navigate(id);}}><Icon size={17} aria-hidden="true"/><span>{$t(label)}</span></a>{/each}</nav>
     <div class="settings-footnote"><span><ShieldCheck size={14} aria-hidden="true"/> {$t('任务数据保存在本机')}</span><span>TaskPulse</span></div>
   </aside>
-  <main class="settings-main"><header class="settings-heading"><div><h1>{$t(current[1])}</h1><p>{$t(current[2])}</p></div><span class="settings-save" role="status" aria-live="polite"><Check size={14} aria-hidden="true"/>{$t($preferencePending?'保存中…':sourceDirty?'来源有未应用更改':$preferenceError?'保存失败':'已保存')}</span></header>
+  <main class="settings-main"><header class="settings-heading"><div><h1>{$t(current[1])}</h1><p>{$t(current[2])}</p></div></header>
     <div class="settings-content glass-scroll" bind:this={scroll}>
       {#if $preferenceError||loadError}<div class="settings-inline-error" role="alert">{$t($preferenceError||loadError)} <button class="tp-btn" onclick={reload}>{$t('重新加载')}</button></div>{/if}
       {#if !$appSettings}<p role="status">{$t(isTauri()?'正在读取设置…':'请在 TaskPulse 应用中打开设置。')}</p>{:else}
