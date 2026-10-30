@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing version tag (must match all version files)'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
       commit:
         description: 'Optional full current main SHA: CI artifacts only, overrides tag; no Tag or Release created'
         required: false

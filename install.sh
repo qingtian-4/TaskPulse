@@ -18,7 +18,13 @@ usage() {
       'TaskPulse macOS 安装：--version 版本 --prerelease --download-only --output-dir 目录 --dir 目录 --no-launch --language en|zh-CN --help'
 }
 # Fixed JSON paths only. Never evaluate JSON as shell code.
-field() { plutil -extract "$2" raw -o - "$1" 2>/dev/null; }
+field() {
+  local value
+  # plutil may write a missing-key diagnostic to stdout even with -o -.
+  # Only successful extraction is data; failed optional queries must stay empty.
+  value=$(plutil -extract "$2" raw -o - "$1" 2>/dev/null) || return 1
+  printf '%s' "$value"
+}
 required() { local value; value=$(field "$1" "$2") || fail "Missing JSON field: $2" "JSON 缺少字段：$2"; printf '%s' "$value"; }
 exists() { [ -e "$1" ] || [ -L "$1" ]; }
 directory_id() { [ ! -L "$1" ] && stat -f '%d:%i' "$1"; }

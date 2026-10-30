@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Current public stable tag to validate through README commands'
         required: true
-        default: 'v1.0.0'
+        default: 'v1.0.1'
 
 permissions:
   contents: read

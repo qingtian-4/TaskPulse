@@ -55,6 +55,8 @@ elif name == 'plutil':
         else:
             Path(dest).write_text(out)
     except (OSError, ValueError, KeyError, IndexError):
+        if option('missing_key_diagnostic'):
+            print('Could not extract value, error: No value at that key path.')
         sys.exit(1)
 elif name == 'curl':
     dest = Path(args[args.index('--output') + 1])
