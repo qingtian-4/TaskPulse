@@ -1,4 +1,6 @@
 <script lang="ts">
+  import {t} from '$lib/i18n';
+  import {preferences} from '$lib/preferences';
   import { onMount, tick } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { emit, listen } from '@tauri-apps/api/event';
@@ -237,80 +239,80 @@
   });
 </script>
 
-<div bind:this={panel} role="region" aria-label="TaskPulse 任务监控" class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(tasks,filtered))} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
+<div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(tasks,filtered))} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><BrandMark />TaskPulse</span>
     <div class="header-actions">
-      <button class="tp-btn tp-icon" data-variant="ghost" onclick={()=>showPrompts=!showPrompts} aria-expanded={showPrompts} title={'消息中心 · '+messages.unread+' 条未读'} aria-label={'消息中心：'+messages.unread+' 条未读'}><Bell size={15}/>{#if messages.unread}<span>{messages.unread}</span>{/if}</button>
-      <button class="tp-btn tp-icon" data-variant="ghost" onclick={manage} title="管理监控来源" aria-label="管理监控来源"><Settings size={15}/></button>
-      <button class="tp-btn tp-icon" data-variant="ghost" onclick={refresh} disabled={refreshing || demo} title="立即刷新" aria-label="立即刷新"><RefreshCw size={15} class={refreshing?'animate-spin':''}/></button>
-      <button class="tp-btn tp-icon" data-variant="ghost" disabled={demo} onclick={()=>invoke('toggle_pin')} title={pinned?'取消固定窗口':'固定窗口'} aria-label={pinned?'取消固定窗口':'固定窗口'}>{#if pinned}<Pin size={15}/>{:else}<PinOff size={15}/>{/if}</button>
+      <button class="tp-btn tp-icon" data-variant="ghost" onclick={()=>showPrompts=!showPrompts} aria-expanded={showPrompts} title={$t('消息中心 · {count} 条未读',{count:messages.unread})} aria-label={$t('消息中心：{count} 条未读',{count:messages.unread})}><Bell size={15}/>{#if messages.unread}<span>{messages.unread}</span>{/if}</button>
+      <button class="tp-btn tp-icon" data-variant="ghost" onclick={manage} title={$t("管理监控来源")} aria-label={$t("管理监控来源")}><Settings size={15}/></button>
+      <button class="tp-btn tp-icon" data-variant="ghost" onclick={refresh} disabled={refreshing || demo} title={$t("立即刷新")} aria-label={$t("立即刷新")}><RefreshCw size={15} class={refreshing?'animate-spin':''}/></button>
+      <button class="tp-btn tp-icon" data-variant="ghost" disabled={demo} onclick={()=>invoke('toggle_pin')} title={pinned?$t('取消固定窗口'):$t('固定窗口')} aria-label={pinned?$t('取消固定窗口'):$t('固定窗口')}>{#if pinned}<Pin size={15}/>{:else}<PinOff size={15}/>{/if}</button>
     </div>
   </header>
-  <div class="counts" aria-label="任务概览" aria-describedby="count-help">
-    <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title="来源新鲜的运行任务，包含明确待处理请求" onclick={()=>chooseSection('ongoing')}><span>进行中</span><b>{confirmedTasks.filter(t=>taskSection(t)==='ongoing').length}</b></button>
-    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title="进行中的子集：明确待批准、待回答或额度耗尽" onclick={()=>chooseSignal('action')}><span>待处理</span><b>{confirmedTasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
-    <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title="尚未查看的本轮结果，包括失败" onclick={()=>chooseSection('results')}><span>待查看</span><b>{confirmedTasks.filter(t=>taskSection(t)==='results').length}</b></button>
+  <div class="counts" aria-label={$t("任务概览")} aria-describedby="count-help">
+    <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title={$t("来源新鲜的运行任务，包含明确待处理请求")} onclick={()=>chooseSection('ongoing')}><span>{$t("进行中")}</span><b>{confirmedTasks.filter(t=>taskSection(t)==='ongoing').length}</b></button>
+    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title={$t("进行中的子集：明确待批准、待回答或额度耗尽")} onclick={()=>chooseSignal('action')}><span>{$t("待处理")}</span><b>{confirmedTasks.filter(t=>matchesSignal(t,'action')).length}</b></button>
+    <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title={$t("尚未查看的本轮结果，包括失败")} onclick={()=>chooseSection('results')}><span>{$t("待查看")}</span><b>{confirmedTasks.filter(t=>taskSection(t)==='results').length}</b></button>
   </div>
-  <p id="count-help" class="sr-only">待处理包含在进行中，计数不相加。</p>
-  {#if pendingRunning.length}<p class="notice pending-running" role="status">上次运行 {pendingRunning.length} · 当前采集待更新，不代表结束<button class="link" onclick={()=>{showArchive=false;resetFilters();filterSection='uncertain';}}>查看待确认任务</button></p>{/if}
+  <p id="count-help" class="sr-only">{$t("待处理包含在进行中，计数不相加。")}</p>
+  {#if pendingRunning.length}<p class="notice pending-running" role="status">{$t("上次运行")} {pendingRunning.length} {$t("· 当前采集待更新，不代表结束")}<button class="link" onclick={()=>{showArchive=false;resetFilters();filterSection='uncertain';}}>{$t("查看待确认任务")}</button></p>{/if}
   {#if confirmedTasks.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed')) || degraded.length || uncertainTasks.length}<div class="signals">
-    {#if confirmedTasks.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>待批准 {confirmedTasks.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
-    {#if confirmedTasks.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>待回答 {confirmedTasks.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
-    {#if confirmedTasks.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>失败结果 {confirmedTasks.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
-    {#if degraded.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={manage}>来源待更新 {degraded.length}</button>{/if}
-    {#if uncertainTasks.length && !pendingRunning.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={()=>chooseSection('uncertain')}>状态待确认 {uncertainTasks.length}</button>{/if}
+    {#if confirmedTasks.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>{$t("待批准")} {confirmedTasks.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
+    {#if confirmedTasks.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>{$t("待回答")} {confirmedTasks.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
+    {#if confirmedTasks.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>{$t("失败结果")} {confirmedTasks.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
+    {#if degraded.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={manage}>{$t("来源待更新")} {degraded.length}</button>{/if}
+    {#if uncertainTasks.length && !pendingRunning.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={()=>chooseSection('uncertain')}>{$t("状态待确认")} {uncertainTasks.length}</button>{/if}
   </div>{/if}
-  <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>全部 {confirmedTasks.length}</button>{#if archived.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>较早关注 {archived.length}</button>{/if}<button class="filter-toggle tp-btn" data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?'收起筛选':'筛选 / 分组'}</button></div>
-  <div class="search-bar"><label class="search"><Search size={14}/><input aria-label="搜索任务" placeholder="搜索任务、项目、Agent 或模型   /" bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label="清除搜索">×</button>{/if}</label></div>
-  {#if demo}<p class="notice">浏览器演示 · 以下均为示例，不是真实采集结果</p>{/if}
+  <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>{$t("全部")} {confirmedTasks.length}</button>{#if archived.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>{$t("较早关注")} {archived.length}</button>{/if}<button class="filter-toggle tp-btn" data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?$t('收起筛选'):$t('筛选 / 分组')}</button></div>
+  <div class="search-bar"><label class="search"><Search size={14}/><input aria-label={$t("搜索任务")} placeholder={$t("搜索任务、项目、Agent 或模型   /")} bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label={$t("清除搜索")}>×</button>{/if}</label></div>
+  {#if demo}<p class="notice">{$t("浏览器演示 · 以下均为示例，不是真实采集结果")}</p>{/if}
   {#if showPrompts}<MessageCenter center={messages} prompts={pendingPrompts} {now} onRead={readMessages} onClose={()=>showPrompts=false} onSelect={id=>void selectMessage(id)} onReopen={entry=>void reopenRequest(entry.task_id,entry.request_id,entry.turn_key)} onReopenPrompt={task=>void reopenRequest(task.id,task.input_request_id,task.turn_key)} onPrompt={task=>{showPrompts=false;selectTask(task);}} />{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
-  {#if note}<p class="notice" role="status">{note}<button class="dismiss" onclick={()=>note=''} aria-label="关闭提示">×</button></p>{/if}
-  {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label="关闭刷新结果">×</button></p>{/if}
-  {#if availableUpdate}<p class="notice">TaskPulse {availableUpdate} 可更新<button class="link" onclick={manageUpdates}>查看更新</button></p>{/if}
-  {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>选择你要关注的 Agent</strong><p>确认本机来源，或添加远程服务器。新任务会自动出现。</p><button onclick={manage}>设置监控来源</button></div>{/if}
-  {#if settings?.onboarding_complete && newSources}<p class="notice">发现 {newSources} 个可监控来源<button class="link" onclick={manage}>选择添加</button></p>{/if}
-  {#if refreshing}<p class="notice" role="status">刷新中：{progress.total-progress.pending.length} / {progress.total} 个来源已返回{#if progress.failed.length} · {progress.failed.length} 个失败{/if}</p>{/if}
-  {#if showArchive}<p class="notice">较早关注保留原状态和未读标记，不占近期面板；可重新加入或固定。</p>{/if}
-  {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?'已隐藏本轮':'已停止监控此会话'}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>撤销</button></div>{/if}
+  {#if note}<p class="notice" role="status">{$t(note)}<button class="dismiss" onclick={()=>note=''} aria-label={$t("关闭提示")}>×</button></p>{/if}
+  {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label={$t("关闭刷新结果")}>×</button></p>{/if}
+  {#if availableUpdate}<p class="notice">TaskPulse {availableUpdate} {$t("可更新")}<button class="link" onclick={manageUpdates}>{$t("查看更新")}</button></p>{/if}
+  {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>{$t("选择你要关注的 Agent")}</strong><p>{$t("确认本机来源，或添加远程服务器。新任务会自动出现。")}</p><button onclick={manage}>{$t("设置监控来源")}</button></div>{/if}
+  {#if settings?.onboarding_complete && newSources}<p class="notice">{$t("发现")} {newSources} {$t("个可监控来源")}<button class="link" onclick={manage}>{$t("选择添加")}</button></p>{/if}
+  {#if refreshing}<p class="notice" role="status">{$t("刷新中：")}{progress.total-progress.pending.length} / {progress.total} {$t("个来源已返回")}{#if progress.failed.length} · {progress.failed.length} {$t("个失败")}{/if}</p>{/if}
+  {#if showArchive}<p class="notice">{$t("较早关注保留原状态和未读标记，不占近期面板；可重新加入或固定。")}</p>{/if}
+  {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?$t('已隐藏本轮'):$t('已停止监控此会话')}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>{$t("撤销")}</button></div>{/if}
   {#if showFilters}
   <div class="filters">
-    <select bind:value={filterSource} aria-label="筛选来源"><option value="">全部来源</option>{#each settings?.sources.filter(s=>s.enabled) ?? [] as s}<option value={s.id}>{s.name}</option>{/each}</select>
-    <select bind:value={filterProject} aria-label="筛选项目"><option value="">全部项目</option>{#each projects as p}<option value={p.key}>{p.label}</option>{/each}</select>
-    {#if locations.length>1}<select bind:value={filterLocation} aria-label="筛选位置"><option value="">全部位置</option>{#each locations as location}<option>{location}</option>{/each}</select>{/if}
-    <button class="view-toggle" onclick={()=>view=view==='tasks'?'projects':'tasks'} title="切换任务/项目视图">{view==='tasks'?'按项目':'按任务'}</button>
-    <button class="unread-filter tp-chip tp-tone" data-tone="unread" class:active={unreadOnly} aria-pressed={unreadOnly} onclick={()=>unreadOnly=!unreadOnly} title="筛选所有尚未查看的任务，含运行中任务；不同于上方的结果待查看计数">仅未查看 {displayed.filter(t=>t.unread).length}</button>
+    <select bind:value={filterSource} aria-label={$t("筛选来源")}><option value="">{$t("全部来源")}</option>{#each settings?.sources.filter(s=>s.enabled) ?? [] as s}<option value={s.id}>{s.name}</option>{/each}</select>
+    <select bind:value={filterProject} aria-label={$t("筛选项目")}><option value="">{$t("全部项目")}</option>{#each projects as p}<option value={p.key}>{p.label}</option>{/each}</select>
+    {#if locations.length>1}<select bind:value={filterLocation} aria-label={$t("筛选位置")}><option value="">{$t("全部位置")}</option>{#each locations as location}<option>{location}</option>{/each}</select>{/if}
+    <button class="view-toggle" onclick={()=>view=view==='tasks'?'projects':'tasks'} title={$t("切换任务/项目视图")}>{view==='tasks'?$t('按项目'):$t('按任务')}</button>
+    <button class="unread-filter tp-chip tp-tone" data-tone="unread" class:active={unreadOnly} aria-pressed={unreadOnly} onclick={()=>unreadOnly=!unreadOnly} title={$t("筛选所有尚未查看的任务，含运行中任务；不同于上方的结果待查看计数")}>{$t("仅未查看")} {displayed.filter(t=>t.unread).length}</button>
   </div>
   {/if}
-  {#if filterSource || filterProject || filterLocation || filterSection!==null || filterSignal || query.trim() || unreadOnly}<div class="filter-note"><div><span>当前筛选 {filtered.length} / {displayed.length} 项</span><p>{filterText}</p></div><button class="link" onclick={resetFilters}>清除筛选</button></div>{/if}
-  {#if outsideRunning.length}<p class="notice outside-running" role="status">{outsideRunning.length} 个运行任务在当前视图之外<button class="link" onclick={showRunning}>查看全部运行任务</button></p>{/if}
-  <main class="glass-scroll task-scroll" aria-label="关注任务">
-    {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?'当前筛选没有任务':'当前没有需要关注的任务'}</strong><p>{displayed.length?'任务已采集，但不符合上方筛选条件。':'已启用范围内的新执行会自动加入；旧项目再次执行也会回来。'}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>清除筛选，查看全部任务</button>{:else}<button onclick={manage}>查看来源与已发现会话</button>{/if}</div>
+  {#if filterSource || filterProject || filterLocation || filterSection!==null || filterSignal || query.trim() || unreadOnly}<div class="filter-note"><div><span>{$t("当前筛选")} {filtered.length} / {displayed.length} {$t("项")}</span><p>{filterText}</p></div><button class="link" onclick={resetFilters}>{$t("清除筛选")}</button></div>{/if}
+  {#if outsideRunning.length}<p class="notice outside-running" role="status">{outsideRunning.length} {$t("个运行任务在当前视图之外")}<button class="link" onclick={showRunning}>{$t("查看全部运行任务")}</button></p>{/if}
+  <main class="glass-scroll task-scroll" aria-label={$t("关注任务")}>
+    {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manage}>{$t("查看来源与已发现会话")}</button>{/if}</div>
     {:else if view==='tasks'}
-      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{SECTION_NAMES[section]}<span>{group.length}</span></h2><TaskList tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
+      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
     {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/each}{/if}
   </main>
   {#if selectedTask}
-    <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label="任务详情">
-      <div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span class="tp-chip">{taskLabel(selectedTask)}</span><button class="tp-icon" onclick={()=>selected=null} aria-label="关闭详情">×</button></div>
+    <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label={$t("任务详情")}>
+      <div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span class="tp-chip">{$t(taskLabel(selectedTask))}</span><button class="tp-icon" onclick={()=>selected=null} aria-label={$t("关闭详情")}>×</button></div>
       <p>{taskContext(selectedTask,settings)}</p>
-      <p class="model-detail">上报模型：{selectedTask.model ?? '来源未提供'}</p>
-      <details class="evidence tp-fold"><summary>状态依据与采集时间</summary><p>状态依据：{CONFIDENCE_LABEL[selectedTask.confidence]}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} · 最后活动 {formatAgo(selectedTask.updated_at,now)}</p></details>
-      <div class="command glass-scroll"><span>{selectedTask.stale?'上次观测活动（非实时）':selectedTask.status==='running'?'当前活动':'最近消息'}</span><pre>{taskActivity(selectedTask)}</pre></div>
+      {#if $preferences.show_model}<p class="model-detail">{$t("上报模型：")}{selectedTask.model ?? $t('来源未提供')}</p>{/if}
+      <details class="evidence tp-fold"><summary>{$t("状态依据与采集时间")}</summary><p>{$t("状态依据：")}{$t(CONFIDENCE_LABEL[selectedTask.confidence])}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} {$t("· 最后活动")} {$t(formatAgo(selectedTask.updated_at,now))}</p></details>
+      <div class="command glass-scroll"><span>{selectedTask.stale?$t('上次观测活动（非实时）'):selectedTask.status==='running'?$t('当前活动'):$t('最近消息')}</span><pre>{taskActivity(selectedTask)}</pre></div>
       <div class="detail-actions">
-        {#if selectedTask.can_focus}<button class="tp-btn" title="只聚焦宿主窗口，不标记已查看" onclick={()=>open(selectedTask!)}>{selectedTask.source==='claude_code'?'聚焦项目窗口':'聚焦运行窗口'}</button>{/if}
-        <button class="tp-btn" data-variant="ghost" onclick={()=>copy(selectedTask!)}>复制任务信息</button>
-        {#if selectedTask.unread}<button class="tp-btn" data-variant="primary" title="更新本轮已查看标记，不代表批准或项目完成" onclick={()=>action(selectedTask!,'viewed')}>已查看</button>{/if}
-        {#if showArchive}<button class="tp-btn" onclick={()=>action(selectedTask!,'follow')}>重新加入</button>{/if}
-        <button class="tp-btn" data-variant="ghost" onclick={()=>action(selectedTask!,'pin',showArchive ? true : !selectedTask!.pinned)}>{showArchive?'固定到近期面板':selectedTask.pinned?'取消固定':'固定'}</button>
-        <details class="more tp-fold"><summary>更多关注操作</summary>{#if selectedTask.status!=='running'}<button onclick={()=>action(selectedTask!,'hide')}>隐藏本轮（新执行会恢复）</button>{/if}<button onclick={()=>action(selectedTask!,'ignore')}>停止监控此会话（需手动恢复）</button></details>
+        {#if selectedTask.can_focus}<button class="tp-btn" title={$t("只聚焦宿主窗口，不标记已查看")} onclick={()=>open(selectedTask!)}>{selectedTask.source==='claude_code'?$t('聚焦项目窗口'):$t('聚焦运行窗口')}</button>{/if}
+        <button class="tp-btn" data-variant="ghost" onclick={()=>copy(selectedTask!)}>{$t("复制任务信息")}</button>
+        {#if selectedTask.unread}<button class="tp-btn" data-variant="primary" title={$t("更新本轮已查看标记，不代表批准或项目完成")} onclick={()=>action(selectedTask!,'viewed')}>{$t("已查看")}</button>{/if}
+        {#if showArchive}<button class="tp-btn" onclick={()=>action(selectedTask!,'follow')}>{$t("重新加入")}</button>{/if}
+        <button class="tp-btn" data-variant="ghost" onclick={()=>action(selectedTask!,'pin',showArchive ? true : !selectedTask!.pinned)}>{showArchive?$t('固定到近期面板'):selectedTask.pinned?$t('取消固定'):$t('固定')}</button>
+        <details class="more tp-fold"><summary>{$t("更多关注操作")}</summary>{#if selectedTask.status!=='running'}<button onclick={()=>action(selectedTask!,'hide')}>{$t("隐藏本轮（新执行会恢复）")}</button>{/if}<button onclick={()=>action(selectedTask!,'ignore')}>{$t("停止监控此会话（需手动恢复）")}</button></details>
       </div>
     </aside>
   {/if}
   <footer>
-    <button class:degraded={degraded.length>0} onclick={manage} title="管理来源；任务详情可查看采集时间">{settings?.sources.filter(s=>s.enabled).length ?? 0} 个来源{degraded.length ? ' · '+degraded.length+' 个待检查' : ' · 正常'}</button>
-    {#if !demo}<details class="quota" bind:open={quotaOpen}><summary title="本机 Codex 账号额度，不代表 WSL 或远程账号">本地额度 <span>{quota?.refreshing?'更新中…':quota?.quota ? '5h '+Math.round(100-quota.quota.used_5h_pct)+'%'+(quota.stale?' · 待更新':''):quota?.error?'待检查':'暂无数据'}</span></summary><p>{#if quota?.quota}5h 剩余 {Math.round(100-quota.quota.used_5h_pct)}% · 7天剩余 {Math.round(100-quota.quota.used_1w_pct)}%{#if quota.quota.resets_5h_at}<br/>5h 重置：{new Date(quota.quota.resets_5h_at*1000).toLocaleString()}{/if}{#if quota.quota.resets_1w_at}<br/>7天重置：{new Date(quota.quota.resets_1w_at*1000).toLocaleString()}{/if}{#if quota.observed_at}<br/>读取于 {formatAgo(quota.observed_at,now)}{/if}{:else}尚未获得本机账号额度{/if}{#if quota?.error}<br/>{quota.error}{/if}<br/>不代表 WSL 或远程服务器账号额度。</p></details>{/if}
+    <button class:degraded={degraded.length>0} onclick={manage} title={$t("管理来源；任务详情可查看采集时间")}>{settings?.sources.filter(s=>s.enabled).length ?? 0} {$t("个来源")}{degraded.length ? ' · '+degraded.length+' 个待检查' : $t(' · 正常')}</button>
+    {#if !demo}<details class="quota" bind:open={quotaOpen}><summary title={$t("本机 Codex 账号额度，不代表 WSL 或远程账号")}>{$t("本地额度")} <span>{quota?.refreshing?$t('更新中…'):quota?.quota ? '5h '+Math.round(100-quota.quota.used_5h_pct)+'%'+(quota.stale?$t(' · 待更新'):''):quota?.error?$t('待检查'):$t('暂无数据')}</span></summary><p>{#if quota?.quota}{$t("5h 剩余")} {Math.round(100-quota.quota.used_5h_pct)}{$t("% · 7天剩余")} {Math.round(100-quota.quota.used_1w_pct)}%{#if quota.quota.resets_5h_at}<br/>{$t("5h 重置：")}{new Date(quota.quota.resets_5h_at*1000).toLocaleString()}{/if}{#if quota.quota.resets_1w_at}<br/>{$t("7天重置：")}{new Date(quota.quota.resets_1w_at*1000).toLocaleString()}{/if}{#if quota.observed_at}<br/>{$t("读取于")} {$t(formatAgo(quota.observed_at,now))}{/if}{:else}{$t("尚未获得本机账号额度")}{/if}{#if quota?.error}<br/>{quota.error}{/if}<br/>{$t("不代表 WSL 或远程服务器账号额度。")}</p></details>{/if}
   </footer>
 </div>
 <style>

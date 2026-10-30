@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {t} from '$lib/i18n';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   let {revision}:{revision:string}=$props();
@@ -12,19 +13,19 @@
   $effect(()=>{void revision;void load().catch(e=>error=String(e));});
 </script>
 
-<section class="cleanup" aria-label="已登记 Hook 清理">
-  <h3>宿主 Hook 登记</h3>
-  <p>移除监控来源不会自动改写宿主。已安装的 Hook 在此独立保留，可随时预览并确认撤销。</p>
-  <button class="tp-btn" disabled={busy} onclick={()=>void load().catch(e=>error=String(e))}>刷新 Hook 登记</button>
+<section class="cleanup" aria-label={$t("已登记 Hook 清理")}>
+  <h3>{$t("宿主 Hook 登记")}</h3>
+  <p>{$t("移除监控来源不会自动改写宿主。已安装的 Hook 在此独立保留，可随时预览并确认撤销。")}</p>
+  <button class="tp-btn" disabled={busy} onclick={()=>void load().catch(e=>error=String(e))}>{$t("刷新 Hook 登记")}</button>
   {#each records as record (record.source_id)}
-    <div class="record"><span>{record.adapter_id} · {record.source_id}{record.orphaned?' · 来源已移除':''}</span><button class="tp-btn" disabled={busy} onclick={()=>void prepare(record.source_id)}>预览撤销已登记 Hook</button></div>
+    <div class="record"><span>{record.adapter_id} · {record.source_id}{record.orphaned?$t(' · 来源已移除'):''}</span><button class="tp-btn" disabled={busy} onclick={()=>void prepare(record.source_id)}>{$t("预览撤销已登记 Hook")}</button></div>
   {/each}
   {#if preview}
-    <section class="preview" aria-label="已移除来源 Hook 撤销差异">
-      <h4>仅撤销 TaskPulse 自有条目</h4><p>{preview.path}</p><pre>{JSON.stringify(preview.entries,null,2)}</pre>
+    <section class="preview" aria-label={$t("已移除来源 Hook 撤销差异")}>
+      <h4>{$t("仅撤销 TaskPulse 自有条目")}</h4><p>{preview.path}</p><pre>{JSON.stringify(preview.entries,null,2)}</pre>
       {#each preview.notes as note}<p>{note}</p>{/each}
-      <label><input type="checkbox" bind:checked={confirmed}/>我已审阅位置和条目，同意撤销这次差异</label>
-      <button class="tp-btn" disabled={busy||!confirmed} onclick={apply}>确认撤销这次差异</button><button class="tp-btn" onclick={()=>{preview=null;confirmed=false;}}>取消，不修改文件</button>
+      <label><input type="checkbox" bind:checked={confirmed}/>{$t("我已审阅位置和条目，同意撤销这次差异")}</label>
+      <button class="tp-btn" disabled={busy||!confirmed} onclick={apply}>{$t("确认撤销这次差异")}</button><button class="tp-btn" onclick={()=>{preview=null;confirmed=false;}}>{$t("取消，不修改文件")}</button>
     </section>
   {/if}
   {#if error}<p role="alert">{error}</p>{/if}{#if message}<p role="status">{message}</p>{/if}

@@ -343,18 +343,62 @@ pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<
         builder
     };
     let window = builder
-        .title("TaskPulse · 管理监控来源")
-        .inner_size(900.0, 640.0)
-        .min_inner_size(720.0, 520.0)
-        .resizable(true)
+        .title(format!("TaskPulse · {}", crate::localization::text("设置")))
+        .inner_size(960.0, 704.0)
+        .resizable(false)
+        .maximizable(false)
+        .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+    fit_management(&window)?;
+    window.show().map_err(|e| e.to_string())?;
+    let fitted = window.clone();
     window.on_window_event(move |event| {
+        if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
+            let _ = fit_management(&fitted);
+        }
         if matches!(event, tauri::WindowEvent::Destroyed) {
             let _ = app.emit("management-closed", ());
         }
     });
     Ok(())
+}
+
+fn fit_management(window: &tauri::WebviewWindow) -> Result<(), String> {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or("Cannot read monitor work area")?;
+    let scale = monitor.scale_factor().max(0.1);
+    let area = monitor.work_area();
+    let inner = window.inner_size().map_err(|e| e.to_string())?;
+    let outer = window.outer_size().map_err(|e| e.to_string())?;
+    let decoration = (
+        outer.width.saturating_sub(inner.width),
+        outer.height.saturating_sub(inner.height),
+    );
+    let width =
+        (area.size.width.saturating_sub(decoration.0) as f64 / scale - 32.0).clamp(1.0, 960.0);
+    let height =
+        (area.size.height.saturating_sub(decoration.1) as f64 / scale - 32.0).clamp(1.0, 704.0);
+    window
+        .set_size(tauri::LogicalSize::new(width, height))
+        .map_err(|e| e.to_string())?;
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let size = window.outer_size().map_err(|e| e.to_string())?;
+    let x = position.x.clamp(
+        area.position.x,
+        (area.position.x + area.size.width as i32 - size.width as i32).max(area.position.x),
+    );
+    let y = position.y.clamp(
+        area.position.y,
+        (area.position.y + area.size.height as i32 - size.height as i32).max(area.position.y),
+    );
+    window
+        .set_position(tauri::PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
 }
 
 fn emit_current_state(app: &AppHandle) {

@@ -60,6 +60,8 @@ fn poll_default() -> u64 {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DashboardSettings {
+    #[serde(default)]
+    pub preferences: crate::preferences::Preferences,
     pub version: u8,
     pub onboarding_complete: bool,
     /// Existing installs keep their explicit source choices until opted in.
@@ -202,6 +204,11 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         sources.push(tmux);
     }
     DashboardSettings {
+        preferences: if existing {
+            Default::default()
+        } else {
+            crate::preferences::Preferences::fresh()
+        },
         version: 2,
         onboarding_complete: existing,
         auto_discover_local: !existing,
@@ -302,6 +309,7 @@ pub fn revision() -> u64 {
 }
 
 fn validate(settings: &DashboardSettings) -> Result<(), String> {
+    settings.preferences.validate()?;
     if settings.version != 2 {
         return Err("不支持的配置版本".into());
     }
@@ -519,6 +527,25 @@ pub fn save_monitoring_settings(
         }
     }
     apply_settings(&app, settings)
+}
+
+pub fn save_preference_values(
+    app: AppHandle,
+    values: crate::preferences::PreferenceValues,
+    expected: crate::preferences::PreferenceValues,
+) -> Result<DashboardSettings, String> {
+    let _writer = SETTINGS_WRITER.lock().unwrap_or_else(|e| e.into_inner());
+    let previous = get_monitoring_settings();
+    if crate::preferences::PreferenceValues::from(&previous) != expected {
+        return Err("配置已更新，请重新加载后保存".into());
+    }
+    let mut next = previous.clone();
+    values.apply(&mut next);
+    record_discovery_choices(&previous, &mut next);
+    let saved = apply_settings(&app, next)?;
+    crate::preferences::apply_theme(&app, &saved.preferences);
+    crate::localization::refresh_native(&app);
+    Ok(saved)
 }
 
 fn apply_settings(

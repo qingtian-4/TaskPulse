@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {t} from '$lib/i18n';
   import BrandMark from './BrandMark.svelte';
   import {getCurrentWindow} from '@tauri-apps/api/window';
   import {isTauri} from '@tauri-apps/api/core';
@@ -41,22 +42,22 @@
   }
 </script>
 
-<dialog use:modal class="message-center glass-panel" aria-label="消息中心" oncancel={event=>{event.preventDefault();onClose();}}>
-  <header><h2><BrandMark size={18}/> 消息中心 <span>{center.unread} 条未读</span></h2><button class="link" disabled={!center.unread} onclick={()=>onRead(unreadMessageIds(center))}>全部标为已读</button><button class="tp-btn tp-icon" aria-label="关闭消息中心" onclick={onClose}>×</button></header>
-  <p class="explanation">显示的消息标为已读；不会查看任务结果，也不会批准或解除请求。</p>
+<dialog use:modal class="message-center glass-panel" aria-label={$t("消息中心")} oncancel={event=>{event.preventDefault();onClose();}}>
+  <header><h2><BrandMark size={18}/> {$t("消息中心")} <span>{center.unread} {$t("条未读")}</span></h2><button class="link" disabled={!center.unread} onclick={()=>onRead(unreadMessageIds(center))}>{$t("全部标为已读")}</button><button class="tp-btn tp-icon" aria-label={$t("关闭消息中心")} onclick={onClose}>×</button></header>
+  <p class="explanation">{$t("显示的消息标为已读；不会查看任务结果，也不会批准或解除请求。")}</p>
   {#if center.error}<p class="message-error" role="alert">{center.error}</p>{/if}
-  <div class="message-scroll glass-scroll" aria-label="最近消息">
+  <div class="message-scroll glass-scroll" aria-label={$t("最近消息")}>
     {#each center.entries as entry (entry.id)}
       <article class:unseen={!entry.seen} data-message-id={entry.id} data-seen={entry.seen} use:readWhenVisible={entry}>
-        <div class="event-line"><strong>{MESSAGE_LABELS[entry.kind]}</strong><span>{entry.seen?'已读':'未读'} · {formatAgo(entry.at,now)}</span></div>
+        <div class="event-line"><strong>{$t(MESSAGE_LABELS[entry.kind])}</strong><span>{entry.seen?$t('已读'):$t('未读')} · {$t(formatAgo(entry.at,now))}</span></div>
         <button class="task-link" onclick={()=>onSelect(entry.task_id)}>{entry.task_name}</button>
         <p class="context">{entry.agent_name??SOURCE_LABEL[entry.source]}{entry.project?' · '+entry.project:''}</p>
-        <div class="state-line"><span>{messageStatus(entry)}</span>{#if entry.can_reopen}<button class="link" onclick={()=>onReopen(entry)}>重新打开提醒</button>{/if}</div>
+        <div class="state-line"><span>{$t(messageStatus(entry))}</span>{#if entry.can_reopen}<button class="link" onclick={()=>onReopen(entry)}>{$t("重新打开提醒")}</button>{/if}</div>
       </article>
-    {:else}<p class="empty">暂无新消息。历史待核对请求不会补算为新通知。</p>{/each}
-    {#if prompts.length}<details class="pending-history tp-fold"><summary>当前与待核对请求 {prompts.length}</summary><p>这里记录原 Agent 的请求，与消息已读无关。</p>{#each prompts as task (task.id)}<div class="pending-item" data-prompt-id={task.id}><button class="task-link" onclick={()=>onPrompt(task)}>{task.name}</button><span>{task.stale?'来源待确认，请在原 Agent 核对':'请在原 Agent 核对是否仍待处理'}{task.input_request_ids?.length ? ' · '+task.input_request_ids.length+' 个请求':''}</span>{#if !task.stale && task.confidence!=='inferred'}<button class="link" onclick={()=>onReopenPrompt(task)}>重新打开提醒</button>{/if}</div>{/each}</details>{/if}
+    {:else}<p class="empty">{$t("暂无新消息。历史待核对请求不会补算为新通知。")}</p>{/each}
+    {#if prompts.length}<details class="pending-history tp-fold"><summary>{$t("当前与待核对请求")} {prompts.length}</summary><p>{$t("这里记录原 Agent 的请求，与消息已读无关。")}</p>{#each prompts as task (task.id)}<div class="pending-item" data-prompt-id={task.id}><button class="task-link" onclick={()=>onPrompt(task)}>{task.name}</button><span>{task.stale?$t('来源待确认，请在原 Agent 核对'):$t('请在原 Agent 核对是否仍待处理')}{task.input_request_ids?.length ? ' · '+task.input_request_ids.length+' 个请求':''}</span>{#if !task.stale && task.confidence!=='inferred'}<button class="link" onclick={()=>onReopenPrompt(task)}>{$t("重新打开提醒")}</button>{/if}</div>{/each}</details>{/if}
   </div>
-  <footer>最多保留最近 200 条；旧消息不会因打开提醒而变成新消息。</footer>
+  <footer>{$t("最多保留最近 200 条；旧消息不会因打开提醒而变成新消息。")}</footer>
 </dialog>
 
 <style>

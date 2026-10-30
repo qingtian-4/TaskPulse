@@ -84,6 +84,13 @@ impl Notifier for DesktopNotifier {
 
         let (title, body) = notification_copy(event);
 
+        let title = crate::localization::text(&title);
+        let body = if matches!(event, NotifyEvent::Test) {
+            crate::localization::text(&body)
+        } else {
+            body
+        };
+
         let identifier = app.config().identifier.clone();
         let app = app.clone();
         let task = match event {

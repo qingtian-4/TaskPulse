@@ -87,6 +87,7 @@ export interface MonitorSource {
   integration?:{agent_id:string;adapter_id:string;transport:string;host_version?:string;accept_since_ms:number};
 }
 export interface DashboardSettings {
+  preferences?: import('./preferences').Preferences;
   version: number; onboarding_complete: boolean; sources: MonitorSource[];
   auto_discover_local?: boolean; auto_discovery_seen?: string[]; auto_check_updates?: boolean;
   notifications: boolean; sound: boolean; default_view: 'tasks' | 'projects';

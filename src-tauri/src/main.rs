@@ -11,14 +11,17 @@ mod heuristics;
 mod history;
 mod instance;
 mod integrations;
+mod localization;
 mod message_center;
 mod monitoring;
 mod notification_log;
 mod notifier;
+mod preferences;
 mod privacy;
 mod process;
 mod providers;
 mod scanner;
+mod source_catalog;
 mod state_file;
 mod store;
 mod task_notice;
@@ -95,11 +98,17 @@ fn main() {
     };
     builder
         .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_autostart::init(
+            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+            None,
+        ))
         .setup(move |app| {
             instance.listen(app.handle().clone());
             app.manage(instance);
             let handle = app.handle().clone();
-            let first_setup = !monitoring::initialize().onboarding_complete;
+            let settings = monitoring::initialize();
+            let first_setup = !settings.onboarding_complete;
+            preferences::apply_theme(app.handle(), &settings.preferences);
             monitoring::start_auto_discovery(app.handle().clone());
             updates::start(app.handle().clone());
 
@@ -118,6 +127,14 @@ fn main() {
                 MenuItem::with_id(app, "test-notification", "发送测试提醒", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
             let quit_item = MenuItem::with_id(app, "quit", "退出 TaskPulse", true, None::<&str>)?;
+            app.manage(localization::TrayLabels(vec![
+                show_item.clone(),
+                pin_item.clone(),
+                hide_item.clone(),
+                test_notification_item.clone(),
+                quit_item.clone(),
+            ]));
+            localization::refresh_native(app.handle());
             let menu = Menu::with_items(
                 app,
                 &[
@@ -187,7 +204,10 @@ fn main() {
             }
 
             // Useful for first launch and desktop smoke verification.
-            if first_setup || std::env::args().any(|arg| arg == "--show") {
+            if first_setup
+                || settings.preferences.show_on_start
+                || std::env::args().any(|arg| arg == "--show")
+            {
                 tray::show_popup(app.handle());
             }
 
@@ -195,6 +215,10 @@ fn main() {
         })
         .invoke_handler(tauri::generate_handler![
             build_info::get_build_info,
+            source_catalog::get_source_catalog,
+            preferences::save_preferences,
+            preferences::get_autostart,
+            preferences::set_autostart,
             updates::get_update_status,
             updates::check_application_update,
             updates::install_application_update,

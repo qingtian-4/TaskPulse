@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {t} from '$lib/i18n';
   import { onMount } from 'svelte';
   import { Activity, CircleAlert, CircleCheck, ArrowUpRight, X } from '@lucide/svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
@@ -62,8 +63,8 @@
   });
 </script>
 
-<div class="notice-window tp-theme tp-tone" data-tone={content?.tone==='attention'?'action':content?.tone==='info'?'brand':content?.tone ?? 'neutral'} role="region" aria-label="TaskPulse 任务提醒" onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
-  <button class="close tp-icon" aria-label="关闭提醒（保持未查看）" title="关闭提醒，任务仍未查看" disabled={busy || !noticeState.current} onclick={()=>void dismiss()}><X size={16} strokeWidth={1.7}/></button>
+<div class="notice-window tp-theme tp-tone" data-tone={content?.tone==='attention'?'action':content?.tone==='info'?'brand':content?.tone ?? 'neutral'} role="region" aria-label={$t("TaskPulse 任务提醒")} onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
+  <button class="close tp-icon" aria-label={$t("关闭提醒（保持未查看）")} title={$t("关闭提醒，任务仍未查看")} disabled={busy || !noticeState.current} onclick={()=>void dismiss()}><X size={16} strokeWidth={1.7}/></button>
   {#if noticeState.current && content}
     {#key noticeState.current.id}
       <button class="message" disabled={busy} aria-label={'查看任务详情：'+content.heading} onclick={open}>
@@ -71,21 +72,21 @@
         <span class="copy">
           <span class="sender-line">
             <span class="sender" title={content.sender}>{content.sender}</span>
-            {#if noticeState.current.test}<span class="test-badge tp-chip">测试提醒</span>{/if}
+            {#if noticeState.current.test}<span class="test-badge tp-chip">{$t("测试提醒")}</span>{/if}
           </span>
-          <span class="heading" role="heading" aria-level={1} title={content.heading}>{content.heading}</span>
-          <span class={'summary '+content.tone} role="status" title={content.summary}>{content.summary}</span>
+          <span class="heading" role="heading" aria-level={1} title={noticeState.current.context ? content.heading : $t(content.heading)}>{noticeState.current.context ? content.heading : $t(content.heading)}</span>
+          <span class={'summary '+content.tone} role="status" title={$t(content.summary)}>{$t(content.summary)}</span>
         </span>
       </button>
     {/key}
     <footer>
-      <div class="hint" title="自动收起或稍后处理都不会标记任务已查看">
+      <div class="hint" title={$t("自动收起或稍后处理都不会标记任务已查看")}>
         {#if error}<span class="error" role="alert">{error}</span>
-        {:else if noticeState.pending}<button class="pending" disabled={busy} onclick={next} title="切换下一条，当前提醒仍保留">下一条 · 还有 {noticeState.pending} 条</button>
-        {:else if noticeTimeout(noticeState.current)===null}<span>等待处理，不会自动收起</span>
-        {:else}<span>{hovered?'鼠标移开后自动收起':Math.ceil(remaining/1000)+' 秒后收起'}</span>{/if}
+        {:else if noticeState.pending}<button class="pending" disabled={busy} onclick={next} title={$t("切换下一条，当前提醒仍保留")}>{$t("下一条 · 还有")} {noticeState.pending} {$t("条")}</button>
+        {:else if noticeTimeout(noticeState.current)===null}<span>{$t("等待处理，不会自动收起")}</span>
+        {:else}<span>{hovered?$t('鼠标移开后自动收起'):$t('{seconds} 秒后收起',{seconds:Math.ceil(remaining/1000)})}</span>{/if}
       </div>
-      <div class="actions"><button class="later tp-btn" data-variant="ghost" title="收起提醒，保持未查看" disabled={busy} onclick={()=>void dismiss()}>稍后处理</button><button class="primary tp-btn" data-variant="ghost" disabled={busy} onclick={open}>查看详情<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
+      <div class="actions"><button class="later tp-btn" data-variant="ghost" title={$t("收起提醒，保持未查看")} disabled={busy} onclick={()=>void dismiss()}>{$t("稍后处理")}</button><button class="primary tp-btn" data-variant="ghost" disabled={busy} onclick={open}>{$t("查看详情")}<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
     </footer>
     {#if noticeTimeout(noticeState.current)!==null}<div class="progress-track" aria-hidden="true"><div class="progress" style:width={(remaining/(noticeTimeout(noticeState.current) ?? 15000)*100)+'%'}></div></div>{/if}
   {:else if error}

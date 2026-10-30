@@ -11,3 +11,7 @@
 `package.json` lists the supported check, build, test and audit commands. `verify.ps1` uses a separate Windows Cargo target directory to avoid overwriting the running tray executable. See [contributing](../CONTRIBUTING.md).
 
 Native smoke scripts use isolated profiles and preserve evidence under ignored output directories. They do not replace your own TaskPulse state. Release scripts validate exact versions and stage artifacts; the GitHub workflow creates a draft and never publishes automatically.
+
+### Settings acceptance
+
+`bun scripts/native-settings-smoke.ts --exe <unused-built-exe>` runs the settings UI through real Windows WebView2 and IPC. It checks fixed dimensions across all six sections, source drafts, preference synchronization, native close confirmation and restart persistence. It uses a disposable profile; login-start registration and real Agent hooks are excluded.

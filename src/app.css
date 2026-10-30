@@ -67,10 +67,10 @@ button, input, select, textarea, summary { font: inherit; }
   font-size: 12px; line-height: 1.5; cursor: pointer; text-decoration: none;
   transition: background .12s, border-color .12s;
 }
-.tp-btn:hover:not(:disabled) { background: var(--tp-raised); border-color: #ffffff38; }
+.tp-btn:hover:not(:disabled) { background: var(--tp-raised); border-color: var(--tp-border-strong); }
 .tp-btn:disabled { cursor: default; opacity: .45; }
 .tp-btn[data-variant=primary] { background: var(--tp-accent); border-color: var(--tp-accent); color: var(--tp-on-accent); font-weight: 600; }
-.tp-btn[data-variant=primary]:hover:not(:disabled) { background: #92e1d2; border-color: #92e1d2; color: var(--tp-on-accent); }
+.tp-btn[data-variant=primary]:hover:not(:disabled) { background: var(--tp-accent); border-color: var(--tp-accent); color: var(--tp-on-accent); }
 .tp-btn[data-variant=ghost] { background: transparent; border-color: transparent; color: var(--tp-muted); }
 .tp-btn[data-variant=ghost]:hover:not(:disabled) { background: var(--tp-hover); color: var(--tp-text); }
 .tp-btn[data-variant=danger] { color: var(--tp-danger); border-color: #f09ba72e; background: #f09ba707; }
@@ -88,7 +88,7 @@ button, input, select, textarea, summary { font: inherit; }
   padding: 2px 6px; font-size: 10px; font-weight: 500; line-height: 1.6; overflow-wrap: anywhere;
 }
 .tp-surface { background: var(--tp-card); border: 1px solid var(--tp-border); border-radius: var(--tp-radius-lg); box-shadow: var(--tp-shadow-card); }
-.tp-fold { background: #10171c55; border: 1px solid var(--tp-border); border-radius: var(--tp-radius-md); }
+.tp-fold { background: var(--tp-panel); border: 1px solid var(--tp-border); border-radius: var(--tp-radius-md); }
 .tp-fold > summary { cursor: pointer; padding: 10px 12px; color: var(--tp-muted); line-height: 1.6; }
 .tp-fold > summary:hover { color: var(--tp-text); background: var(--tp-hover); border-radius: inherit; }
 .tp-fold[open] > summary { border-bottom: 1px solid var(--tp-border); color: var(--tp-accent); }
@@ -121,5 +121,9 @@ html, body {
 .glass-scroll { scrollbar-gutter: stable; }
 .glass-scroll::-webkit-scrollbar { width: 6px; height: 6px; }
 .glass-scroll::-webkit-scrollbar-track { background: transparent; }
-.glass-scroll::-webkit-scrollbar-thumb { background: #ffffff29; border-radius: 4px; }
-.glass-scroll::-webkit-scrollbar-thumb:hover { background: #ffffff47; }
+.glass-scroll::-webkit-scrollbar-thumb { background: var(--tp-border-strong); border-radius: 4px; }
+.glass-scroll::-webkit-scrollbar-thumb:hover { background: var(--tp-muted); }
+
+/* The same tokens drive settings, task cards, notices and the inbox. */
+:root[data-theme=light]{color-scheme:light;--tp-bg:#ffffff;--tp-panel:#f1f4f4;--tp-card:#f6f8f8;--tp-raised:#ffffff;--tp-input:#ffffff;--tp-text:#20312f;--tp-muted:#64726f;--tp-quiet:#667973;--tp-accent:#167e6c;--tp-on-accent:#ffffff;--tp-accent-soft:#e2f1ed;--tp-accent-line:#167e6c55;--tp-running:#306d99;--tp-action:#8a611c;--tp-unread:#167e6c;--tp-stale:#64726f;--tp-danger:#a2424e;--tp-success:#28714f;--tp-border:#e2e8e6;--tp-border-strong:#cad5d1;--tp-hover:#20312f08;--tp-shadow-card:0 1px 4px #00000008;--tp-shadow-window:0 10px 32px #00000018;--tp-glow:none}
+:root[data-theme=dark]{color-scheme:dark}

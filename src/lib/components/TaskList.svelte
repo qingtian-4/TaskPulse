@@ -1,4 +1,6 @@
 <script lang="ts">
+  import {t} from '$lib/i18n';
+  import {preferences} from '$lib/preferences';
   import type { TaskSnapshot, DashboardSettings, ProviderHealth } from '$lib/types';
   import { formatElapsed } from '$lib/types';
   import { taskContext, taskProjectLabel, taskLabel, taskAgent, taskSummary, taskSource, sourceFreshness, isEndedResult, matchesSignal, taskTone } from '$lib/dashboard';
@@ -16,19 +18,19 @@
 </script>
 <ul class="m-0 p-0 list-none">
   {#each tasks as task (task.id)}
-    <li class="task-item tp-tone" data-tone={taskTone(task)}>
+    <li class="task-item tp-tone" class:compact={$preferences.panel_density==='compact'} data-tone={taskTone(task)}>
       <button type="button" data-task-id={task.id} class:selected={selectedId===task.id} class:action-needed={matchesSignal(task,'action')} class="task-row" onclick={()=>onSelect(task)} onkeydown={navigate} aria-pressed={selectedId===task.id}>
         <span class="dot" class:running={task.status==='running' && !task.stale} class:failed={task.status==='failed'} class:waiting={task.status==='waiting_input'} class:stale={task.stale}></span>
         <span class="row-copy">
           <span class="row-title" title={task.name}>{task.name}</span>
-          <span class="context" title={taskContext(task,settings)+(task.project_path?' · '+task.project_path:'')}><span class="agent">{taskAgent(task)}</span><span class="project">{taskProjectLabel(task)}</span><span class="location">{task.remote ? 'SSH · '+(task.host ?? '远程') : taskSource(task,settings??undefined)?.kind.endsWith('_wsl') ? 'WSL · '+taskSource(task,settings??undefined)?.location : '本机'}</span></span>
-          {#if task.model}<span class="model" title={'来源最近上报的模型：'+task.model}><span>模型</span> {task.model}</span>{/if}
-          <span class="activity" title={taskSummary(task)}>{taskSummary(task)}</span>
-          {#if task.stale || sourceFreshness(task,settings,providers,now).startsWith('来源数据待更新')}<span class="freshness" title={sourceFreshness(task,settings,providers,now)}>来源数据待更新</span>{/if}
+          <span class="context" title={taskContext(task,settings)+(task.project_path?' · '+task.project_path:'')}><span class="agent">{taskAgent(task)}</span><span class="project">{taskProjectLabel(task)}</span><span class="location">{task.remote ? 'SSH · '+(task.host ?? $t('远程')) : taskSource(task,settings??undefined)?.kind.endsWith('_wsl') ? 'WSL · '+taskSource(task,settings??undefined)?.location : $t('本机')}</span></span>
+          {#if task.model && $preferences.show_model}<span class="model" title={'来源最近上报的模型：'+task.model}><span>{$t("模型")}</span> {task.model}</span>{/if}
+          <span class="activity" title={task.message && !task.stale && task.status!=='running' ? taskSummary(task) : $t(taskSummary(task))}>{task.message && !task.stale && task.status!=='running' ? taskSummary(task) : $t(taskSummary(task))}</span>
+          {#if task.stale || sourceFreshness(task,settings,providers,now).startsWith('来源数据待更新')}<span class="freshness" title={sourceFreshness(task,settings,providers,now)}>{$t("来源数据待更新")}</span>{/if}
         </span>
-        <span class="row-status"><span class="status-label tp-chip">{taskLabel(task)}</span><span class="markers">{#if task.pinned}<Pin size={11} aria-label="固定"/>{/if}{#if task.unread}<span class="unread" title="尚未查看" aria-label="尚未查看"></span>{/if}</span>{#if task.status==='running' && !task.stale && task.started_at}<span class="elapsed">{formatElapsed(task.started_at,now)}</span>{/if}</span>
+        <span class="row-status"><span class="status-label tp-chip">{$t(taskLabel(task))}</span><span class="markers">{#if task.pinned}<Pin size={11} aria-label={$t("固定")}/>{/if}{#if task.unread}<span class="unread" title={$t("尚未查看")} aria-label={$t("尚未查看")}></span>{/if}</span>{#if $preferences.show_elapsed && task.status==='running' && !task.stale && task.started_at}<span class="elapsed">{formatElapsed(task.started_at,now)}</span>{/if}</span>
       </button>
-      {#if onViewed && isEndedResult(task)}<button class="viewed tp-btn" onclick={()=>onViewed?.(task)} title="标记本轮已查看" aria-label={'标记已查看：'+task.name}><Check size={14}/>已查看</button>{/if}
+      {#if onViewed && isEndedResult(task)}<button class="viewed tp-btn" onclick={()=>onViewed?.(task)} title={$t("标记本轮已查看")} aria-label={'标记已查看：'+task.name}><Check size={14}/>{$t("已查看")}</button>{/if}
     </li>
   {/each}
 </ul>
@@ -59,4 +61,5 @@
   .viewed{position:absolute;right:12px;bottom:12px;min-height:28px;padding:4px 8px;gap:4px;font-size:11px;color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line)}
   @media(max-width:380px){.task-row{padding-top:8px;padding-bottom:8px}.dot{top:16px}.viewed{bottom:8px}}
   @media(max-width:350px){.task-row{padding:8px 8px 8px 20px;gap:4px 6px}.dot{left:8px;top:16px}.status-label{max-width:90px;padding:2px 4px}.context{gap:4px}.project{padding-left:4px}.viewed{right:8px;bottom:8px}}
+  .compact .task-row{padding-top:8px;padding-bottom:8px}.compact .dot{top:16px}.compact .viewed{bottom:8px}
 </style>

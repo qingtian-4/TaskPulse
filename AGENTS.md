@@ -195,3 +195,10 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - NSIS installed-upgrade CI uses a disposable standard account, asserting the old/new process SID and TokenElevation=0. A gsudo restricted administrator can still report an elevated token to the official NSIS launcher and is not equivalent. Keep test-account passwords off argv/env/artifacts, remove ephemeral signing keys before granting access, and stop account-owned processes before restoring desktop ACLs/removing the account. MSI UAC acceptance remains a separate interactive-machine gate; never relax installer policy to pass CI.
 - Release staging must match version and commit across Windows NSIS/MSI and macOS arm64/x64, verify signatures against the compiled key, then assemble latest.json. Publishing a draft requires maintainer approval and platform acceptance.
 - Process reports and maintainer plans stay local/ignored; public docs are user and integration guides. Preserve originals before untracking. UI screenshots require explicit suitable user-provided assets; never publish private desktop captures.
+
+## Settings presentation
+
+- The management window uses one close-request owner in SourceSettings. Tauri's onCloseRequested destroys the window independently per listener unless prevented; additional listeners must not bypass source drafts or pending preference saves.
+- Save preferences through their compare-and-swap endpoint. Preserve unsaved source arrays when preference-only settings broadcasts refresh the editor baseline; real source changes require conflict resolution.
+- Translate only application-owned copy. Never translate or rewrite native task titles, project paths, source names chosen by the user or reported model IDs. Both locale catalogs must retain matching keys.
+- Native settings acceptance: run `bun scripts/native-settings-smoke.ts --exe <unused-built-exe>` on Windows. It uses an isolated profile and never registers login startup or installs Agent hooks.
