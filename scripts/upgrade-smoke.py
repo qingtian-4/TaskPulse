@@ -524,6 +524,61 @@ def diagnostic_shell_launch(exe, arguments):
         kernel.CloseHandle(info.hProcess)
 
 
+def diagnostic_nsis_launch(root, exe, arguments, evidence):
+    """Isolate the exact official launch plugin; performs no installation."""
+    tools = Path(os.environ["LOCALAPPDATA"]) / "tauri/NSIS"
+    compiler = tools / "makensis.exe"
+    plugin = tools / "Plugins/x86-unicode/additional/nsis_tauri_utils.dll"
+    # SHA-256 of the files in Tauri's checksum-verified NSIS 3.13 archive
+    # and its checksum-verified nsis_tauri_utils 0.5.3 release.
+    expected = {compiler: "4ec390d0f96f9728507fbc2f4e91311dd90bfc6c8ddfe2159357b3651ae151c0",
+                tools / "Bin/makensis.exe": "65343c225ec88393cc4453b0963caf63f763f42f48cb55736d51893ff2e29d4a",
+                plugin: "5ba143b5db4a87d32d6e7802e033330aae56cbceabe0d1e3ba41948385ad4709"}
+    for file, checksum in expected.items():
+        if digest(file) != checksum:
+            raise RuntimeError("NSIS diagnostic tool differs from Tauri CLI's pinned tool")
+    quote = lambda value: '"' + str(value).replace('$', '$$').replace('"', '$\\"') + '"'
+    log = evidence / "nsis-launch-plugin.txt"
+    output = root / "launch-plugin-probe.exe"
+    text = f'''Unicode true
+RequestExecutionLevel user
+SilentInstall silent
+Name "TaskPulse launch diagnostic"
+OutFile {quote(output)}
+!addplugindir /x86-unicode {quote(plugin.parent)}
+Section
+  FileOpen $9 {quote(log)} w
+  System::Call 'shell32::IsUserAnAdmin() i .r0'
+  FileWrite $9 "admin=$0$\\r$\\n"
+  System::Call 'kernel32::GetCurrentProcess() p .r0'
+  System::Call 'advapi32::OpenProcessToken(p r0, i 8, *p .r1) i .r2'
+  FileWrite $9 "open_token=$2$\\r$\\n"
+  System::Call 'advapi32::GetTokenInformation(p r1, i 20, *i .r2, i 4, *i .r3) i .r4'
+  FileWrite $9 "elevation_query=$4;token_elevated=$2$\\r$\\n"
+  System::Call 'advapi32::GetTokenInformation(p r1, i 18, *i .r2, i 4, *i .r3) i .r4'
+  FileWrite $9 "elevation_type_query=$4;elevation_type=$2$\\r$\\n"
+  System::Call 'advapi32::GetTokenInformation(p r1, i 12, *i .r2, i 4, *i .r3) i .r4'
+  FileWrite $9 "session_query=$4;session=$2$\\r$\\n"
+  System::Call 'kernel32::CloseHandle(p r1)'
+  System::Call 'user32::GetShellWindow() p .r5'
+  FileWrite $9 "shell_window=$5$\\r$\\n"
+  FileClose $9
+  nsis_tauri_utils::RunAsUser {quote(exe)} {quote(subprocess.list2cmdline(arguments))}
+  Pop $8
+  FileOpen $9 {quote(log)} a
+  FileWrite $9 "plugin_result=$8$\\r$\\n"
+  FileClose $9
+SectionEnd
+'''
+    script = root / "launch-plugin-probe.nsi"
+    script.write_text(text, encoding="utf-8")
+    run(compiler, "-INPUTCHARSET", "UTF8", "-V2", script)
+    run(output, timeout=30)
+    # NSIS FileWrite uses the current ANSI page; this report is ASCII only.
+    if "plugin_result=0" not in log.read_text(encoding="ascii", errors="replace"):
+        raise RuntimeError("Official NSIS RunAsUser reported launch failure; see token evidence")
+
+
 def supervise(plan):
     require_ci()
     info = owned_plan(plan)
@@ -666,7 +721,7 @@ def supervise(plan):
             # distinguish payload startup from automatic installer relaunch.
             if info["kind"] == "nsis" and result.get("installed_exe_sha256_after_failure") == info["new_exe_sha256"]:
                 attempts = []
-                for method in ("direct", "shell"):
+                for method in ("direct", "shell", "nsis-plugin"):
                     record = {"method": method, "automatic_restart": False}
                     diagnostic_process = None
                     try:
@@ -675,8 +730,17 @@ def supervise(plan):
                             with (evidence / "diagnostic-direct.stderr.log").open("wb") as errors:
                                 launched = subprocess.Popen([str(exe), *arguments], stdout=subprocess.DEVNULL, stderr=errors)
                             pid = launched.pid
-                        else:
+                        elif method == "shell":
                             pid = diagnostic_shell_launch(exe, arguments)
+                        else:
+                            diagnostic_nsis_launch(root, exe, arguments, evidence)
+                            def plugin_entry():
+                                for path in root.glob(f"entry-{info['new']}-*-main.json"):
+                                    value = json.loads(path.read_text(encoding="utf-8"))
+                                    if "--diagnostic-launch=nsis-plugin" in value.get("args", []):
+                                        return value["pid"]
+                                return None
+                            pid = wait_for(plugin_entry, timeout=30)
                         record["pid"] = pid
                         diagnostic_process = NativeProcess(pid, exe)
                         observed = root / f"boot-{info['new']}-{pid}.json"
