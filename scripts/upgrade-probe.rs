@@ -6,6 +6,62 @@ use tauri::{Listener, Manager};
 // Populated only in the CI source copy. Entry diagnostics must survive lost argv.
 const DIAGNOSTIC_ROOT: &str = "";
 
+#[cfg(windows)]
+fn token_identity() -> serde_json::Value {
+    use windows_sys::Win32::{
+        Foundation::{CloseHandle, LocalFree},
+        Security::{GetTokenInformation, TokenElevation, TokenUser, TOKEN_QUERY, TOKEN_USER},
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    #[link(name = "advapi32")]
+    extern "system" {
+        fn ConvertSidToStringSidW(sid: *mut std::ffi::c_void, text: *mut *mut u16) -> i32;
+    }
+    unsafe {
+        let mut token = std::ptr::null_mut();
+        assert_ne!(
+            OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token),
+            0
+        );
+        let mut elevated = 0u32;
+        let mut length = 0u32;
+        assert_ne!(
+            GetTokenInformation(
+                token,
+                TokenElevation,
+                (&mut elevated as *mut u32).cast(),
+                4,
+                &mut length
+            ),
+            0
+        );
+        GetTokenInformation(token, TokenUser, std::ptr::null_mut(), 0, &mut length);
+        let mut buffer = vec![0usize; (length as usize).div_ceil(std::mem::size_of::<usize>())];
+        assert_ne!(
+            GetTokenInformation(
+                token,
+                TokenUser,
+                buffer.as_mut_ptr().cast(),
+                length,
+                &mut length
+            ),
+            0
+        );
+        let user = &*(buffer.as_ptr().cast::<TOKEN_USER>());
+        let mut text = std::ptr::null_mut();
+        assert_ne!(ConvertSidToStringSidW(user.User.Sid, &mut text), 0);
+        let mut size = 0;
+        while *text.add(size) != 0 {
+            size += 1;
+            assert!(size < 256);
+        }
+        let sid = String::from_utf16_lossy(std::slice::from_raw_parts(text, size));
+        LocalFree(text.cast());
+        CloseHandle(token);
+        json!({"sid": sid, "elevated": elevated != 0})
+    }
+}
+
 fn write(root: &std::path::Path, name: &str, value: serde_json::Value) {
     let mut temp = tempfile::NamedTempFile::new_in(root).unwrap();
     temp.write_all(serde_json::to_string_pretty(&value).unwrap().as_bytes())
@@ -88,6 +144,10 @@ pub fn start(app: tauri::AppHandle) {
         #[cfg(not(windows))]
         let elevated = unsafe { libc::geteuid() == 0 };
         assert!(!elevated, "installed app must run without elevation");
+        #[cfg(windows)]
+        let token = token_identity();
+        #[cfg(not(windows))]
+        let token = serde_json::Value::Null;
         // Do not replay the old process's install command after updater restart.
         let mut last = fs::read(root.join("control.json"))
             .ok()
@@ -106,7 +166,7 @@ pub fn start(app: tauri::AppHandle) {
                 "pid": std::process::id(), "version": env!("CARGO_PKG_VERSION"),
                 "diagnostic_launch": std::env::args().any(|arg| arg.starts_with("--diagnostic-launch=")),
                 "exe": std::env::current_exe().unwrap().canonicalize().unwrap(),
-                "elevated": elevated, "status": crate::updates::get_update_status(),
+                "elevated": elevated, "token": token, "status": crate::updates::get_update_status(),
                 "bundle": format!("{:?}", tauri::utils::platform::bundle_type()),
                 "settings": crate::monitoring::get_monitoring_settings()
             }),

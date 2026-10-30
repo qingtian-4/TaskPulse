@@ -6,6 +6,7 @@ binary or private key is exported. Published-channel and OS trust UI are separat
 """
 import argparse
 import ctypes
+import csv
 import difflib
 import hashlib
 import http.server
@@ -14,6 +15,7 @@ import os
 from pathlib import Path
 import platform
 import re
+import secrets
 import shutil
 import signal
 import socket
@@ -211,7 +213,7 @@ def prepare(kind, target, evidence):
     info = dict(root=str(root), source=str(source), kind=kind, target=target, port=port,
                 route=route, endpoint=endpoint, old=old, new=new,
                 commit=run("git", "rev-parse", "HEAD", cwd=REPO).stdout.decode().strip(),
-                private_key=str(key), evidence=str(evidence.resolve()))
+                evidence=str(evidence.resolve()))
     env = dict(os.environ, TAURI_SIGNING_PRIVATE_KEY=str(key), TAURI_SIGNING_PRIVATE_KEY_PASSWORD="",
                CARGO_TARGET_DIR=str(REPO / "src-tauri/target"), APPLE_SIGNING_IDENTITY="-")
     env.pop("TAURI_CONFIG", None)
@@ -297,6 +299,9 @@ $view.Close()
         run("bun", "run", "tauri", "signer", "sign", "-f", signer, "--app-version", version, copy, cwd=REPO)
         signatures[scenario] = Path(str(copy) + ".sig").read_text(encoding="utf-8").strip()
     info["negative_signatures"] = signatures
+    # No private signing material is needed by an installed-app test account.
+    key.unlink()
+    wrong_key.unlink()
     save(root / "ci-owned.json", {"purpose": "TaskPulse isolated installed upgrade acceptance", "commit": info["commit"]})
     save(root / "plan.json", info)
     # Upload manifest deliberately excludes local key paths/signatures and generated binaries.
@@ -621,6 +626,9 @@ def supervise(plan):
         initial = wait_for(lambda: boot(info["old"]))
         save(evidence / "old-boot.json", initial)
         assert initial["status"]["can_install"] and not initial["elevated"]
+        if info["kind"] == "nsis":
+            assert initial["token"]["sid"] == info["standard_user_sid"] and not initial["token"]["elevated"]
+            result["account_mode"] = "dedicated-standard-user"
         assert os.path.samefile(initial["exe"], exe)
         if info["kind"] != "macos":
             assert info["kind"].lower() in initial["bundle"].lower()
@@ -662,6 +670,8 @@ def supervise(plan):
         updated = wait_for(lambda: boot(info["new"]), timeout=180)
         save(evidence / "new-boot.json", updated)
         assert updated["pid"] != initial["pid"] and not updated["elevated"]
+        if info["kind"] == "nsis":
+            assert updated["token"]["sid"] == info["standard_user_sid"] and not updated["token"]["elevated"]
         assert updated["status"]["can_install"] and updated["bundle"] == initial["bundle"]
         assert os.path.samefile(updated["exe"], exe)
         restarted = NativeProcess(updated["pid"], exe)
@@ -798,9 +808,21 @@ def supervise(plan):
             raise RuntimeError("Owned process cleanup failed; see result.json")
 
 
-def install_and_test(plan):
+def install_and_test(plan, standard_user=False):
     require_ci()
     info = owned_plan(plan)
+    if standard_user and (info["kind"] != "nsis" or not info.get("standard_user_sid")):
+        raise RuntimeError("Standard-account mode requires its NSIS account-bound plan")
+    if standard_user:
+        actual_sid = next(csv.reader([run("whoami.exe", "/user", "/fo", "csv", "/nh").stdout.decode().strip()]))[-1]
+        if actual_sid != info["standard_user_sid"] or ctypes.windll.shell32.IsUserAnAdmin():
+            raise RuntimeError("Refusing installation under an unexpected or administrator account")
+    if info["kind"] == "nsis" and not standard_user:
+        # A genuine standard account, not gsudo's restricted administrator token.
+        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                        str(REPO / "scripts/upgrade-standard-user.ps1"), "-Plan", str(plan), "-Python", sys.executable],
+                       input=secrets.token_urlsafe(32) + "Aa1!", text=True, check=True, timeout=720)
+        return
     root = Path(info["root"])
     install = root / "Applications" / "测试 install"
     install.mkdir(parents=True)
@@ -829,7 +851,7 @@ def install_and_test(plan):
         (Path(info["evidence"]) / "installed-acl.txt").write_bytes(run("icacls.exe", exe).stdout)
     info["installed_exe"] = str(exe)
     save(plan, info)
-    if info["kind"] == "macos":
+    if info["kind"] == "macos" or standard_user:
         supervise(plan)
     else:
         try:
@@ -845,7 +867,7 @@ def install_and_test(plan):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("action", choices=["build", "test", "supervise"])
+    parser.add_argument("action", choices=["build", "test", "supervise", "user-test"])
     parser.add_argument("--kind", choices=["nsis", "msi", "macos"])
     parser.add_argument("--target")
     parser.add_argument("--plan", type=Path)
@@ -857,5 +879,20 @@ if __name__ == "__main__":
             output.write(f"TASKPULSE_UPGRADE_PLAN={plan}\n")
     elif options.action == "test":
         install_and_test(options.plan)
+    elif options.action == "user-test":
+        require_ci()
+        if platform.system() != "Windows":
+            raise RuntimeError("Standard-account acceptance is Windows only")
+        from ctypes import wintypes
+        shell = ctypes.WinDLL("shell32", use_last_error=True)
+        shell.SHGetFolderPathW.argtypes = [wintypes.HWND, ctypes.c_int, wintypes.HANDLE, wintypes.DWORD, wintypes.LPWSTR]
+        for name, folder in (("USERPROFILE", 40), ("APPDATA", 26), ("LOCALAPPDATA", 28)):
+            buffer = ctypes.create_unicode_buffer(32768)
+            if shell.SHGetFolderPathW(None, folder | 0x8000, None, 0, buffer) != 0:
+                raise RuntimeError("Could not load standard-account known folder")
+            os.environ[name] = buffer.value
+        os.environ["TEMP"] = os.environ["TMP"] = str(Path(os.environ["LOCALAPPDATA"]) / "Temp")
+        Path(os.environ["TEMP"]).mkdir(exist_ok=True)
+        install_and_test(options.plan, standard_user=True)
     else:
         supervise(options.plan)

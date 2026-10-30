@@ -16,6 +16,19 @@ spec.loader.exec_module(upgrade)
 
 
 class UpgradeTests(unittest.TestCase):
+    def test_nsis_standard_account_secret_uses_stdin_not_arguments(self):
+        with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value={"kind": "nsis"}), patch.object(upgrade.subprocess, "run") as child:
+            upgrade.install_and_test(Path("fixture-plan.json"))
+            arguments = child.call_args.args[0]
+            password = child.call_args.kwargs["input"]
+            self.assertGreater(len(password), 32)
+            self.assertNotIn(password, " ".join(map(str, arguments)))
+            self.assertNotIn("env", child.call_args.kwargs)
+            self.assertIn("upgrade-standard-user.ps1", " ".join(map(str, arguments)))
+        with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value={"kind": "msi"}):
+            with self.assertRaises(RuntimeError):
+                upgrade.install_and_test(Path("fixture-plan.json"), standard_user=True)
+
     def test_manual_diagnostic_boot_cannot_count_as_automatic_restart(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
