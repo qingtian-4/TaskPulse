@@ -45,7 +45,9 @@ test('queued saves use the latest baseline, preserve sources, and recover after 
   expect(calls[1].expected.preferences.theme).toBe('light');
   expect(saved.preferences!.language).toBe('en');expect(saved.sources).toEqual(fixture().sources);
   expect(calls.every(call=>!('sources' in call.values))).toBe(true);
-  fail=true;await expect(savePreference({preferences:{show_model:false}})).rejects.toThrow('disk write failed');
+  const failedControl={type:'checkbox',checked:false} as HTMLInputElement;
+  fail=true;await expect(savePreference({preferences:{show_model:false}},failedControl)).rejects.toThrow('disk write failed');
+  expect(failedControl.checked).toBe(true);
   expect(get(appSettings)!.preferences!.show_model).toBe(true);expect(get(preferencePending)).toBe(false);
   expect(get(preferenceError)).toContain('disk write failed');
   await savePreference({preferences:{show_elapsed:false}});

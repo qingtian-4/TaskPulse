@@ -1,6 +1,6 @@
 /** Native WebView2 settings acceptance with an isolated profile. Never registers login startup or installs Agent hooks. */
 import assert from 'node:assert/strict';
-import {mkdir,copyFile} from 'node:fs/promises';
+import {mkdir,copyFile,chmod} from 'node:fs/promises';
 import {resolve,join,dirname} from 'node:path';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
@@ -116,6 +116,17 @@ poll_interval_ms=3000
     assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.source-message')?.textContent??'')`),false,'Application save feedback must follow the selected language');
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
+  // Windows read-only replacement fails through the real Rust persistence path.
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
+  await chmod(join(home,'config.toml'),0o444);
+  try{
+    await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').click()`);
+    await ui.wait(`!!document.querySelector('.settings-inline-error') && !document.querySelector('.settings-save').textContent.includes('Saving')`);
+    assert.equal(await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').checked`),false,'Rejected save must restore the last confirmed control value');
+    assert.equal((await root.invoke('get_monitoring_settings')).preferences.show_model,false);
+  }finally{await chmod(join(home,'config.toml'),0o666);}
+  await ui.evaluate(`document.querySelector('.settings-inline-error button').click()`);
+  await ui.wait(`!document.querySelector('.settings-inline-error')`);
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
   await Bun.write(join(owned,'settings-general-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
@@ -124,6 +135,6 @@ poll_interval_ms=3000
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors},null,2));
-  console.log('Native settings acceptance passed (11 checks).');
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors},null,2));
+  console.log('Native settings acceptance passed (12 checks).');
 });

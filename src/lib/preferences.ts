@@ -16,7 +16,25 @@ export function preferenceValues(s:DashboardSettings){return {preferences:{...LE
 export type PreferenceValues=ReturnType<typeof preferenceValues>;
 export type PreferencePatch=Omit<Partial<PreferenceValues>,'preferences'>&{preferences?:Partial<Preferences>};
 let queue:Promise<void>=Promise.resolve(), pending=0;
-export function savePreference(patch:PreferencePatch):Promise<void>{
+export function savePreference(patch:PreferencePatch,control?:HTMLInputElement|HTMLSelectElement):Promise<void>{
+  // Native controls change before onchange runs. Keep the last confirmed value
+  // visible until persistence succeeds; Svelte caches checked/value properties
+  // and cannot restore an unchanged model value after a rejected write.
+  const confirmed=get(appSettings);
+  if(control && confirmed){
+    const values=preferenceValues(confirmed);
+    const changes=patch.preferences??patch;
+    const key=Object.keys(changes)[0];
+    const previous=patch.preferences
+      ? values.preferences[key as keyof Preferences]
+      : values[key as keyof PreferenceValues];
+    if(control.type==='checkbox') (control as HTMLInputElement).checked=Boolean(previous);
+    else if(control.type==='radio'){
+      for(const radio of (control.getRootNode() as Document|ShadowRoot).querySelectorAll<HTMLInputElement>('input[type="radio"]')){
+        if(radio.name===control.name)radio.checked=radio.value===String(previous);
+      }
+    }else control.value=String(previous);
+  }
   pending++;preferencePending.set(true);
   const work=queue.then(async()=>{
     preferenceError.set('');
