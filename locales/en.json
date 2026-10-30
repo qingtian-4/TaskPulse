@@ -547,5 +547,15 @@
   "不支持": "Unsupported",
   "主动上报可能漏报，接收成功不等于完整自动采集；优先使用可用的原生日志或 Hook。豆包可另选“豆包 · 本机”读取原生执行检查点；此处 MCP 接入仍需核对宿主能力。": "Reports may be incomplete. Prefer native logs or hooks when available. Doubao also has a native local reader. MCP capabilities depend on the host.",
   "正在保存设置，请稍候再关闭。": "Saving preferences. Please wait before closing.",
-  "请在已安装的 TaskPulse 中设置登录启动。": "Configure login startup in the installed TaskPulse application."
+  "请在已安装的 TaskPulse 中设置登录启动。": "Configure login startup in the installed TaskPulse application.",
+  "已保存并即时生效。受影响来源正在重新采集。": "Saved and applied. Affected sources are refreshing.",
+  "已放弃未保存编辑，并加载最新配置": "Unsaved edits discarded. Latest settings loaded.",
+  "来源开关已即时生效，其他编辑仍需应用。": "Source switch applied. Other edits still need to be applied.",
+  "隔离状态目录；未探测真实 Agent 数据": "Isolated state directory; real Agent data was not probed",
+  "请先应用或取消当前来源的更改。": "Apply or cancel the current source changes first.",
+  "来源已被移除，请重新打开配置": "Source removed. Reopen settings.",
+  "描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。": "Adapter imported. No hooks were installed and no sources were enabled.",
+  "测试事件接收成功（不创建任务）。尚未验证真实 Agent 的开始、结束或审批事件。": "Test event received without creating a task. Host lifecycle events are not verified by this test.",
+  "已加入关注，不补发历史通知": "Following this task without replaying historical notifications",
+  "会话设置已更新": "Session settings updated"
 }

@@ -112,7 +112,7 @@
       const next=await invoke<DashboardSettings>('save_monitoring_settings',{settings:current,expected});
       applied=structuredClone(next);source.enabled=enabled;
       if(!dirty)settings=structuredClone(next);
-      notice=(enabled?'已启用：':'已停用：')+source.name+'。开关即时生效；其他编辑仍需保存。';
+      notice='来源开关已即时生效，其他编辑仍需应用。';
     }catch(e){source.enabled=previous;configError(e);}finally{saving=false;}
   }
   function sourceState(source:MonitorSource){return sourceReadState(source,applied,health,now);}
@@ -213,7 +213,7 @@
 
 <div class="source-settings">
   <div class="settings-tabs" role="group" aria-label={$t("来源类型")}>{#each [['local',$t('本机 Agent')],['remote',platform==='windows'?$t('WSL 与远程'):$t('远程来源')],['custom',$t('自定义接入')]] as [id,label]}<button class="settings-tab" aria-pressed={category===id&&tab==='sources'} onclick={()=>{category=id;tab='sources';}}>{label}</button>{/each}<button class="settings-tab" aria-pressed={tab==='sessions'} onclick={showSessions}>{$t("已发现会话")}</button></div>
-  {#if error}<div class="settings-inline-error" role="alert">{error}<button class="tp-btn" onclick={()=>error=''} aria-label={$t("关闭错误")}>×</button></div>{/if}
+  {#if error}<div class="settings-inline-error" role="alert">{$t(error)}<button class="tp-btn" onclick={()=>error=''} aria-label={$t("关闭错误")}>×</button></div>{/if}
   {#if conflict}<button class="tp-btn" onclick={reloadSettings}>{$t("放弃未保存编辑，加载最新配置")}</button>{/if}
   {#if notice}<p class="source-message" role="status">{$t(notice)}</p>{/if}
   {#if settings && !settings.onboarding_complete}<div class="welcome"><p>{$t("首次确认后，开始关注所选来源的新执行。")}</p><button class="tp-btn" data-variant="primary" disabled={saving||conflict} onclick={save}>{$t("开始监控")}</button></div>{/if}
@@ -229,7 +229,7 @@
           {#if readTest?.id===editor.id}<p class="read-result" role="status">{$t(readTest.message)}</p>{/if}
           {#if editor.kind==='generic_event'}{#key editor.id}<IntegrationEditor source={editor} {dirty} changed={changed}/>{/key}
           {:else if definitionFor(editor).location_kind!=='none'}<label>{definitionFor(editor).location_kind==='host'?$t('SSH 配置别名'):definitionFor(editor).location_kind==='distro'?$t('WSL 发行版'):$t('数据位置')}<input bind:value={editor.location} oninput={changed} placeholder={$t("留空使用自动发现的位置")}/></label>
-          {:else}<p class="help">{discovery.find(d=>d.id===editor!.id)?.detail??$t('使用本机默认配置')}</p>{/if}
+          {:else}<p class="help">{$t(discovery.find(d=>d.id===editor!.id)?.detail??'使用本机默认配置')}</p>{/if}
           <h3>{$t("项目范围")}</h3>
           <label class="radio"><input type="radio" name="scope" checked={editor.projects.includes('*')} onchange={()=>{editor!.projects=['*'];changed();}}/>{$t("自动关注所有项目的新任务")}</label>
           <label class="radio"><input type="radio" name="scope" checked={!editor.projects.includes('*')} onchange={()=>{editor!.projects=[];changed();}}/>{$t("只关注指定项目")}</label>
@@ -240,7 +240,7 @@
           <p class="help">{$t("保存后，范围内的新任务会自动出现。可以回到 Agent 开始一轮对话，随后在托盘查看状态。")}</p>
           <details class="advanced tp-fold"><summary>{$t("高级设置 · 排除、诊断与来源移除")}</summary>
           <label>{$t("排除项目（可选，每行一个）")}<textarea value={editor.excluded_projects.join('\n')} oninput={e=>{editor!.excluded_projects=list(e.currentTarget.value);changed();}}></textarea></label>
-          {#if discovery.find(d=>d.id===editor!.id)}<p class="path">{discovery.find(d=>d.id===editor!.id)?.detail}</p>{/if}
+          {#if discovery.find(d=>d.id===editor!.id)}<p class="path">{$t(discovery.find(d=>d.id===editor!.id)?.detail??'')}</p>{/if}
           {#if health.find(h=>h.provider===editor!.id)?.message}<p class="message error">{health.find(h=>h.provider===editor!.id)?.message}</p>{/if}
           {#if editor.kind==='claude_code'}<h3>{$t("自愿接入精确事件")}</h3><p class="help">{$t("不会覆盖 statusLine 或其他 Hook；需逐次明确确认，不自动修改审批策略。")}</p><button class="tp-btn" disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:true}}>{$t("启用精确事件…")}</button><button class="tp-btn" disabled={dirty || saving} onclick={()=>eventPrompt={sourceId:editor!.id,enabled:false}}>{$t("移除精确事件…")}</button>{/if}
           <p class="path">{$t("来源 ID：")}{editor.id} {$t("· 类型：")}{editor.kind}</p>

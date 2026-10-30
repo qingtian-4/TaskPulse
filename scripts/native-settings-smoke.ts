@@ -113,6 +113,7 @@ poll_interval_ms=3000
     await ui.evaluate(`(()=>{const field=document.querySelector('.source-editor textarea');field.value=${JSON.stringify(project)};field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await ui.evaluate(`[...document.querySelectorAll('.source-editor .settings-actions button')].find(b=>b.textContent==='Apply changes').click()`);
     await ui.wait(`!document.querySelector('.source-pending')`);
+    assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.source-message')?.textContent??'')`),false,'Application save feedback must follow the selected language');
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
