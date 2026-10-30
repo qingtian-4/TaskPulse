@@ -2,6 +2,7 @@
 use crate::monitoring::DashboardSettings;
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, WebviewWindow};
+#[cfg(not(windows))]
 use tauri_plugin_autostart::ManagerExt;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,8 +114,14 @@ pub fn get_autostart(app: AppHandle) -> Result<AutostartStatus, String> {
             available: false,
         });
     }
-    app.autolaunch()
-        .is_enabled()
+    #[cfg(windows)]
+    let enabled = crate::windows_startup::enabled(
+        &app.package_info().name,
+        &std::env::current_exe().map_err(|e| e.to_string())?,
+    );
+    #[cfg(not(windows))]
+    let enabled = app.autolaunch().is_enabled().map_err(|e| e.to_string());
+    enabled
         .map(|enabled| AutostartStatus {
             enabled,
             available: true,
@@ -130,13 +137,32 @@ pub fn set_autostart(
     if window.label() != "management" || !startup_available() {
         return Err("Open startup settings in the installed TaskPulse application".into());
     }
-    if enabled {
+    #[cfg(windows)]
+    crate::windows_startup::set_enabled(
+        &app.package_info().name,
+        &std::env::current_exe().map_err(|e| e.to_string())?,
+        enabled,
+    )?;
+    #[cfg(not(windows))]
+    (if enabled {
         app.autolaunch().enable()
     } else {
         app.autolaunch().disable()
-    }
+    })
     .map_err(|e| e.to_string())?;
     get_autostart(app)
+}
+
+pub fn repair_startup_command(_app: &AppHandle) {
+    #[cfg(windows)]
+    if startup_available() {
+        let result = std::env::current_exe()
+            .map_err(|e| e.to_string())
+            .and_then(|exe| crate::windows_startup::repair(&_app.package_info().name, &exe));
+        if let Err(error) = result {
+            log::warn!("Login startup command repair: {error}");
+        }
+    }
 }
 
 pub fn apply_theme(app: &AppHandle, p: &Preferences) {

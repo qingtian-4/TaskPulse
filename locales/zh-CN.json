@@ -557,5 +557,11 @@
   "描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。": "描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。",
   "测试事件接收成功（不创建任务）。尚未验证真实 Agent 的开始、结束或审批事件。": "测试事件接收成功（不创建任务）。尚未验证真实 Agent 的开始、结束或审批事件。",
   "已加入关注，不补发历史通知": "已加入关注，不补发历史通知",
-  "会话设置已更新": "会话设置已更新"
+  "会话设置已更新": "会话设置已更新",
+  "Invalid startup executable path": "登录启动程序路径无效",
+  "Startup executable path exceeds the Windows Run limit": "程序路径过长，无法登记登录启动",
+  "Login startup entry points to a different command": "现有登录启动项指向其他命令，请检查系统启动设置",
+  "Unknown Windows login startup approval state": "无法识别 Windows 登录启动状态",
+  "Login startup command needs repair; check registry permissions": "登录启动路径需要修复，请检查注册表权限",
+  "添加来源": "添加来源"
 }

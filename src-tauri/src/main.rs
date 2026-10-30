@@ -29,6 +29,8 @@ mod transition;
 mod tray;
 mod updates;
 mod watcher;
+#[cfg(windows)]
+mod windows_startup;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
@@ -96,12 +98,13 @@ fn main() {
                 .build(),
         )
     };
+    #[cfg(not(windows))]
+    let builder = builder.plugin(tauri_plugin_autostart::init(
+        tauri_plugin_autostart::MacosLauncher::LaunchAgent,
+        None,
+    ));
     builder
         .plugin(tauri_plugin_updater::Builder::new().build())
-        .plugin(tauri_plugin_autostart::init(
-            tauri_plugin_autostart::MacosLauncher::LaunchAgent,
-            None,
-        ))
         .setup(move |app| {
             instance.listen(app.handle().clone());
             app.manage(instance);
@@ -109,6 +112,7 @@ fn main() {
             let settings = monitoring::initialize();
             let first_setup = !settings.onboarding_complete;
             preferences::apply_theme(app.handle(), &settings.preferences);
+            preferences::repair_startup_command(app.handle());
             monitoring::start_auto_discovery(app.handle().clone());
             updates::start(app.handle().clone());
 

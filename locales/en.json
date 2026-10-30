@@ -557,5 +557,11 @@
   "描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。": "Adapter imported. No hooks were installed and no sources were enabled.",
   "测试事件接收成功（不创建任务）。尚未验证真实 Agent 的开始、结束或审批事件。": "Test event received without creating a task. Host lifecycle events are not verified by this test.",
   "已加入关注，不补发历史通知": "Following this task without replaying historical notifications",
-  "会话设置已更新": "Session settings updated"
+  "会话设置已更新": "Session settings updated",
+  "Invalid startup executable path": "Invalid startup executable path",
+  "Startup executable path exceeds the Windows Run limit": "Startup executable path exceeds the Windows Run limit",
+  "Login startup entry points to a different command": "Login startup entry points to a different command",
+  "Unknown Windows login startup approval state": "Unknown Windows login startup approval state",
+  "Login startup command needs repair; check registry permissions": "Login startup command needs repair; check registry permissions",
+  "添加来源": "Add source"
 }
