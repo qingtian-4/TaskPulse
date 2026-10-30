@@ -5,6 +5,7 @@ import os
 from pathlib import Path
 import tempfile
 import threading
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 import urllib.error
@@ -16,15 +17,26 @@ spec.loader.exec_module(upgrade)
 
 
 class UpgradeTests(unittest.TestCase):
-    def test_nsis_standard_account_secret_uses_stdin_not_arguments(self):
-        with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value={"kind": "nsis"}), patch.object(upgrade.subprocess, "run") as child:
-            upgrade.install_and_test(Path("fixture-plan.json"))
-            arguments = child.call_args.args[0]
-            password = child.call_args.kwargs["input"]
-            self.assertGreater(len(password), 32)
-            self.assertNotIn(password, " ".join(map(str, arguments)))
-            self.assertNotIn("env", child.call_args.kwargs)
-            self.assertIn("upgrade-standard-user.ps1", " ".join(map(str, arguments)))
+    def test_windows_formats_use_a_real_standard_account_not_a_restricted_admin(self):
+        for kind in ("nsis", "msi"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                info = {"kind": kind, "root": temp, "evidence": temp, "old_payload": str(root / 'old.msi')}
+                # Let the old implementation finish its wrong-account branch
+                # without installing anything, so red fails on the missing
+                # standard-account launch assertion, not on fixture setup.
+                def fake_msi(*args):
+                    (root / 'Applications' / '测试 install' / 'agent-tray.exe').write_bytes(b'fixture')
+                with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value=info), patch.object(upgrade, "run_msi", side_effect=fake_msi), patch.object(upgrade, "run", return_value=SimpleNamespace(stdout=b'')), patch.dict(os.environ, {"GSUDO_EXE": "fixture-gsudo"}), patch.object(upgrade.subprocess, "run") as child:
+                    upgrade.install_and_test(root / "plan.json")
+                self.assertTrue(child.called, "MSI must launch the genuine standard-account supervisor")
+                arguments = child.call_args.args[0]
+                password = child.call_args.kwargs["input"]
+                self.assertGreater(len(password), 32)
+                self.assertNotIn(password, " ".join(map(str, arguments)))
+                self.assertNotIn("env", child.call_args.kwargs)
+                self.assertIn("upgrade-standard-user.ps1", " ".join(map(str, arguments)))
+                self.assertNotIn("gsudo", " ".join(map(str, arguments)).lower())
         with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value={"kind": "msi"}):
             with self.assertRaises(RuntimeError):
                 upgrade.install_and_test(Path("fixture-plan.json"), standard_user=True)

@@ -626,9 +626,13 @@ def supervise(plan):
         initial = wait_for(lambda: boot(info["old"]))
         save(evidence / "old-boot.json", initial)
         assert initial["status"]["can_install"] and not initial["elevated"]
-        if info["kind"] == "nsis":
+        if info["kind"] in ("nsis", "msi"):
             assert initial["token"]["sid"] == info["standard_user_sid"] and not initial["token"]["elevated"]
-            result["account_mode"] = "dedicated-standard-user"
+            result["account_mode"] = "managed-msi-standard-user" if info["kind"] == "msi" else "dedicated-standard-user"
+            if info["kind"] == "msi":
+                assert info.get("msi_deployment") == "administrator-advertised-package"
+                result["msi_deployment"] = info["msi_deployment"]
+                result["uac_interaction_verified"] = False
         assert os.path.samefile(initial["exe"], exe)
         if info["kind"] != "macos":
             assert info["kind"].lower() in initial["bundle"].lower()
@@ -670,7 +674,7 @@ def supervise(plan):
         updated = wait_for(lambda: boot(info["new"]), timeout=180)
         save(evidence / "new-boot.json", updated)
         assert updated["pid"] != initial["pid"] and not updated["elevated"]
-        if info["kind"] == "nsis":
+        if info["kind"] in ("nsis", "msi"):
             assert updated["token"]["sid"] == info["standard_user_sid"] and not updated["token"]["elevated"]
         assert updated["status"]["can_install"] and updated["bundle"] == initial["bundle"]
         assert os.path.samefile(updated["exe"], exe)
@@ -811,13 +815,13 @@ def supervise(plan):
 def install_and_test(plan, standard_user=False):
     require_ci()
     info = owned_plan(plan)
-    if standard_user and (info["kind"] != "nsis" or not info.get("standard_user_sid")):
-        raise RuntimeError("Standard-account mode requires its NSIS account-bound plan")
+    if standard_user and (info["kind"] not in ("nsis", "msi") or not info.get("standard_user_sid")):
+        raise RuntimeError("Standard-account mode requires its Windows account-bound plan")
     if standard_user:
         actual_sid = next(csv.reader([run("whoami.exe", "/user", "/fo", "csv", "/nh").stdout.decode().strip()]))[-1]
         if actual_sid != info["standard_user_sid"] or ctypes.windll.shell32.IsUserAnAdmin():
             raise RuntimeError("Refusing installation under an unexpected or administrator account")
-    if info["kind"] == "nsis" and not standard_user:
+    if info["kind"] in ("nsis", "msi") and not standard_user:
         # A genuine standard account, not gsudo's restricted administrator token.
         subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                         str(REPO / "scripts/upgrade-standard-user.ps1"), "-Plan", str(plan), "-Python", sys.executable],
@@ -825,6 +829,24 @@ def install_and_test(plan, standard_user=False):
         return
     root = Path(info["root"])
     install = root / "Applications" / "测试 install"
+    if info["kind"] == "msi":
+        # The CI administrator installed N and advertised only the hash-checked
+        # N+1 package. This is managed deployment, not interactive UAC coverage.
+        exe = install / "agent-tray.exe"
+        if (not standard_user or info.get("msi_deployment") != "administrator-advertised-package"
+                or not exe.is_file() or digest(exe) != info["old_exe_sha256"]):
+            raise RuntimeError("Missing verified managed MSI installation")
+        # WiX stores the directory in HKCU. In this fixture an administrator did
+        # the initial machine install, so transfer ONLY that directory preference
+        # to this disposable user's hive; no real user settings are touched.
+        import winreg
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, r"Software\taskpulse\TaskPulse", 0,
+                                winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
+            winreg.SetValueEx(key, "InstallDir", 0, winreg.REG_SZ, str(install) + "\\")
+        save(Path(info["evidence"]) / "msi-user-precondition.json",
+             {"directory_preference_in_disposable_hkcu": True, "uac_interaction_verified": False})
+        supervise(plan)
+        return
     install.mkdir(parents=True)
     if info["kind"] == "macos":
         mount = root / "volume"
@@ -838,31 +860,16 @@ def install_and_test(plan, standard_user=False):
         assert digest(exe) == info["old_exe_sha256"]
     else:
         package = info["old_payload"]
-        if info["kind"] == "nsis":
-            # NSIS /D is a raw, final tail; quoting the whole /D=argument changes parsing.
-            subprocess.run(subprocess.list2cmdline([package, "/S"]) + " /D=" + str(install),
-                           check=True, timeout=180)
-        else:
-            run_msi(["/i", package, "/qn", "/norestart", "/L*v",
-                     str(Path(info["evidence"]) / "msi-initial.log")], {"INSTALLDIR": str(install)})
+        # NSIS /D is a raw, final tail; quoting the whole /D=argument changes parsing.
+        subprocess.run(subprocess.list2cmdline([package, "/S"]) + " /D=" + str(install),
+                       check=True, timeout=180)
         exe = install / "agent-tray.exe"
     assert exe.is_file(), str(exe)
     if info["kind"] != "macos":
         (Path(info["evidence"]) / "installed-acl.txt").write_bytes(run("icacls.exe", exe).stdout)
     info["installed_exe"] = str(exe)
     save(plan, info)
-    if info["kind"] == "macos" or standard_user:
-        supervise(plan)
-    else:
-        try:
-            run(os.environ["GSUDO_EXE"], "--integrity", "Medium", "--direct", sys.executable,
-                Path(__file__).resolve(), "supervise", "--plan", plan, timeout=600, capture=False)
-        finally:
-            if info["kind"] == "msi":
-                # Read from the privileged CI parent: the live app remains medium.
-                events = run("powershell.exe", "-NoProfile", "-Command",
-                    "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-WinEvent -FilterHashtable @{LogName='Application';ProviderName='MsiInstaller';StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Depth 4")
-                (Path(info["evidence"]) / "msi-system-events.json").write_bytes(events.stdout)
+    supervise(plan)
 
 
 if __name__ == "__main__":

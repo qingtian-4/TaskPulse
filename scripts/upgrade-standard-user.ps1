@@ -9,7 +9,7 @@ $info = Get-Content -Raw -LiteralPath $planPath -Encoding UTF8 | ConvertFrom-Jso
 $root = (Resolve-Path -LiteralPath $info.root).Path
 $runner = (Resolve-Path -LiteralPath $env:RUNNER_TEMP).Path.TrimEnd('\')
 if (-not $root.StartsWith($runner+'\',[StringComparison]::OrdinalIgnoreCase) -or (Split-Path $root -Leaf) -notlike 'taskpulse-upgrade-*') { throw 'Unowned temporary root' }
-if ($info.kind -ne 'nsis' -or $planPath -ne (Join-Path $root 'plan.json')) { throw 'NSIS owned plan required' }
+if ($info.kind -notin @('nsis','msi') -or $planPath -ne (Join-Path $root 'plan.json')) { throw 'Windows owned plan required' }
 $marker = Get-Content -Raw -LiteralPath (Join-Path $root 'ci-owned.json') | ConvertFrom-Json
 if ($marker.commit -ne $info.commit) { throw 'Ownership marker mismatch' }
 $repo = (Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
@@ -24,7 +24,14 @@ $started = $false
 $desktop = $null
 $processesStopped = $false
 $outcome = @{mode='dedicated-standard-user';created=$false;removed=$false;exit_code=$null}
+$installerPolicy = $null
 try {
+    if ($info.kind -eq 'msi') {
+        . (Join-Path $PSScriptRoot 'upgrade-managed-msi.ps1')
+        $installerPolicy = Get-UpgradeInstallerPolicy
+        Initialize-ManagedMsiFixture $info $root $evidence
+        $outcome.mode = 'managed-msi-standard-user'
+    }
     $account = New-LocalUser -Name $name -Password $password -AccountNeverExpires -Description 'Disposable TaskPulse upgrade acceptance'
     $outcome.created = $true
     $outcome.sid = $account.SID.Value
@@ -156,6 +163,12 @@ public sealed class TaskPulseDesktopAccess : IDisposable {
                 $outcome.processes_stopped = $processesStopped
                 $outcome | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence 'standard-user.json') -Encoding UTF8
                 $password.Dispose()
+                if ($installerPolicy) {
+                    $after = Get-UpgradeInstallerPolicy
+                    @{before=($installerPolicy|ConvertFrom-Json);after=($after|ConvertFrom-Json);unchanged=($installerPolicy -eq $after)} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidence 'msi-policy.json') -Encoding UTF8
+                    Get-WinEvent -FilterHashtable @{LogName='Application';ProviderName='MsiInstaller';StartTime=(Get-Date).AddMinutes(-15)} -ErrorAction SilentlyContinue | Select-Object TimeCreated,Id,Message | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath (Join-Path $evidence 'msi-system-events.json') -Encoding UTF8
+                    if ($installerPolicy -ne $after) { throw 'MSI/UAC policies changed during acceptance' }
+                }
             }
         }
     }

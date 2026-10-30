@@ -53,19 +53,6 @@ jobs:
           cache-on-failure: true
       - run: bun install --frozen-lockfile
       - run: ${{ matrix.python }} scripts/test-upgrade-smoke.py
-      - name: Prepare medium-integrity Windows application launch
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          winget install --id gerardog.gsudo --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity
-          if ($LASTEXITCODE -ne 0) { throw 'Could not install de-elevation helper' }
-          $gsudoPath = Join-Path $env:ProgramFiles 'gsudo\Current\gsudo.exe'
-          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing de-elevation helper' }
-          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
-          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
-          if ($LASTEXITCODE -ne 0) { throw 'Could not grant evidence access' }
       - name: Build two real versions with an ephemeral signing identity
         env:
           UPGRADE_KIND: ${{ matrix.kind }}
@@ -73,6 +60,9 @@ jobs:
         shell: bash
         run: ${{ matrix.python }} scripts/upgrade-smoke.py build --kind "$UPGRADE_KIND" --target "$UPGRADE_TARGET"
       - name: Install old package and exercise native update, rejection and restart
+        # Both Windows formats use a disposable standard account. MSI is an
+        # administrator-advertised managed deployment; interactive UAC remains
+        # a distinct manual gate. No installer or UAC policy is weakened.
         shell: bash
         run: ${{ matrix.python }} scripts/upgrade-smoke.py test --plan "$TASKPULSE_UPGRADE_PLAN"
       # Evidence only: no generated executables, source overlay tree or signing keys.
