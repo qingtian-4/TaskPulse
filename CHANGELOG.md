@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.0.1 · 2026-10-31
+
+Fix macOS command-line installation when optional release metadata fields are absent. [Release details](docs/releases/1.0.1.md)
+
+修复 macOS 命令行安装对缺省发布字段的读取，版本、架构、校验和与系统安全检查继续保留。
+
 ## 1.0.0 · 2026-10-31
 
 First public TaskPulse release. [Release details](docs/releases/1.0.0.md)

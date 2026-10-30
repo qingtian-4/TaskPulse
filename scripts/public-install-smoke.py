@@ -37,6 +37,13 @@ def run(command, log, env=None, timeout=180, input_data=None):
     return child.stdout
 
 
+def canonical_bootstrap(root, commit, name):
+    if not re.fullmatch(r'[a-f0-9]{40}', commit) or name not in ('install.ps1', 'install.sh'):
+        raise ValueError('Invalid bootstrap source identity')
+    # Git blobs preserve the released bytes; a Windows checkout may use CRLF.
+    return subprocess.check_output(['git', 'show', f'{commit}:{name}'], cwd=root)
+
+
 def validate_manifest(manifest, tag, commit, platform_name, architecture, package_name):
     if (manifest.get('version') != tag[1:] or manifest.get('commit') != commit
             or manifest.get('platform') != platform_name or manifest.get('architecture') != architecture
@@ -85,7 +92,7 @@ def main():
             bootstrap = temporary / name
             # This is exactly the floating entry point documented in README.
             download(f'https://raw.githubusercontent.com/{REPO}/main/{name}', bootstrap)
-            if digest(bootstrap) != digest(ROOT / name):
+            if digest(bootstrap) != hashlib.sha256(canonical_bootstrap(ROOT, commit, name)).hexdigest():
                 raise RuntimeError('README bootstrap changed since the checked release tag; verify the new script separately')
             result['script_sha256'] = digest(bootstrap)
             if windows:

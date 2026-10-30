@@ -85,7 +85,8 @@ shutil.copyfile(root/file, dest)
 
             # The actual production script must reject the unchanged preview.
             run('preview-rejected', '--download-only', success=False)
-            manifest.update(build_kind='release', tag=tag)
+            manifest.pop('build_kind', None)
+            manifest.pop('tag', None)
             (response / files[-1]).write_text(json.dumps(manifest))
             run('download-only', '--download-only', '--output-dir', './下载 with spaces')
             downloaded = root / '下载 with spaces' / f'TaskPulse-{tag}-macos-{arch}' / name

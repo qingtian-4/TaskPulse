@@ -281,6 +281,24 @@ class InstallerTests(unittest.TestCase):
         self.options['system_version'] = '13.3'
         self.run_script('--prerelease', '--no-launch')
 
+    def test_missing_optional_manifest_fields_ignore_plutil_stdout_diagnostics(self):
+        self.options['missing_key_diagnostic'] = True
+        self.run_script('--prerelease', '--no-launch')
+        target = self.home / 'Applications/TaskPulse.app'
+        self.assertEqual(plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'], VERSION)
+
+    @unittest.skipUnless(sys.platform == 'darwin', 'Native macOS plutil semantics')
+    def test_native_plutil_missing_fields_do_not_leak_diagnostics(self):
+        import re
+        definition = re.search(r'field\(\) \{.*?\}\n', SCRIPT.read_text(), re.S).group(0)
+        metadata = self.root / 'native-optional.json'
+        metadata.write_text(json.dumps({'version': VERSION}))
+        env = dict(os.environ, PATH='/usr/bin:/bin:/usr/sbin:/sbin')
+        for key, code, output in [('build_kind', 1, ''), ('tag', 1, ''), ('version', 0, VERSION)]:
+            child = subprocess.run([BASH, '-c', definition + '\nfield "$1" "$2"', 'native-field', str(metadata), key], env=env, capture_output=True, text=True, timeout=10)
+            self.assertEqual(child.returncode, code, child.stdout + child.stderr)
+            self.assertEqual(child.stdout, output)
+
     def test_argument_validation(self):
         for args in [['--bad'], ['--version'], ['--version', '../x'], ['--language', 'fr']]:
             self.run_script(*args, success=False)
