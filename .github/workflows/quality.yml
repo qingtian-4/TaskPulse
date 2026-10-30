@@ -49,6 +49,8 @@ jobs:
       - name: Validate release versions
         run: bun run release:check
       - name: Test release validation
+        # Bun starts Windows PowerShell fixtures; keep Desktop module paths.
+        shell: powershell
         run: bun run test:release
       - name: Test security report validation
         run: bun run test:security

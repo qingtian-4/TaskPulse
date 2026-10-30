@@ -57,7 +57,9 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Could not grant the runner account access to acceptance scripts' }
       - name: Install Windows through the public bootstrap and verify the installed application
         if: runner.os == 'Windows'
-        shell: pwsh
+        # Python launches Windows PowerShell 5.1. Inherit its native module paths,
+        # rather than PowerShell 7 modules that Desktop PowerShell cannot load.
+        shell: powershell
         run: python scripts/public-install-smoke.py --tag "$env:RELEASE_TAG" --out dist/public-install --gsudo "$env:GSUDO_EXE"
       - name: Install macOS through the public bootstrap with native system tools
         if: runner.os == 'macOS'
