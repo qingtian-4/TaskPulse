@@ -10,6 +10,7 @@ pub struct SourceDefinition {
     pub category: String,
     pub description: String,
     pub location_kind: String,
+    pub multiple_instances: bool,
     pub platforms: Vec<String>,
     pub adapter_id: Option<String>,
     pub agent_id: Option<String>,
@@ -45,6 +46,7 @@ fn definition(
             SourceKind::GenericEvent => "通过已连接的 Agent 事件跟踪任务；具体支持的状态见接入说明。",
         }.into(),
         location_kind: location.into(),
+        multiple_instances: matches!(kind, SourceKind::CodexWsl | SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::Tmux | SourceKind::GenericEvent),
         platforms: vec!["windows".into(), "macos".into(), "linux".into()],
         adapter_id: None,
         agent_id: None,
@@ -114,6 +116,7 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
             category: "custom".into(),
             description: "通过已连接的 Agent 事件跟踪任务；具体支持的状态见接入说明。".into(),
             location_kind: "none".into(),
+            multiple_instances: true,
             platforms: manifest.systems,
             adapter_id: Some(manifest.adapter_id),
             agent_id: Some(manifest.agent_id),
@@ -134,6 +137,14 @@ mod tests {
             .unwrap();
         assert_eq!(process.capabilities["turn_end"], "unsupported");
         assert_eq!(entries.iter().filter(|e| e.category == "local").count(), 9);
+        assert!(entries
+            .iter()
+            .filter(|e| e.category == "local")
+            .all(|e| !e.multiple_instances));
+        assert!(entries
+            .iter()
+            .filter(|e| e.category == "remote")
+            .all(|e| e.multiple_instances));
         let ids: std::collections::HashSet<_> = entries.iter().map(|e| &e.id).collect();
         assert_eq!(ids.len(), entries.len());
     }

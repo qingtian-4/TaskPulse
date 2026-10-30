@@ -13,13 +13,12 @@
   import { listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { taskContext, taskLabel } from '$lib/dashboard';
-  import { sourceReadState, readTestResult, sourceCapability } from '$lib/source-setup';
+  import { sourceReadState, readTestResult, sourceCapability, sourceCatalogRows, sourceDefinitionFor, type SourceDefinition as Definition } from '$lib/source-setup';
   import { deliveryStage } from '$lib/notice';
   import type { DeliveryRecord } from '$lib/types';
   import { formatAgo, type DashboardSettings, type MonitorSource, type SourceDiscovery, type SourceKind, type SessionPage, type ProviderHealth } from '$lib/types';
   let {onDirtyChange,onAttention}:{onDirtyChange:(value:boolean)=>void;onAttention:()=>void}=$props();
   $effect(()=>onDirtyChange(dirty||saving||conflict));
-  type Definition={description?:string;id:string;name:string;kind:SourceKind;category:string;location_kind:string;platforms:string[];adapter_id?:string;agent_id?:string};
   let catalog=$state<Definition[]>([]),category=$state('local'),foundOnly=$state(false),platform=$state('windows');
   let settings=$state<DashboardSettings | null>(null);
   let discovery=$state<SourceDiscovery[]>([]);
@@ -189,13 +188,10 @@
   });
 
   function definitionFor(source:MonitorSource):Definition {
-    return catalog.find(d=>d.kind===source.kind&&(d.kind!=='generic_event'||d.adapter_id===source.integration?.adapter_id))??{id:source.id,name:source.name,kind:source.kind,category:'custom',location_kind:'none',platforms:[platform]};
+    return sourceDefinitionFor(catalog,source,platform);
   }
   function rows(){
-    const available=catalog.filter(d=>d.category===category&&(!d.platforms.length||d.platforms.includes(platform)));
-    const saved=(settings?.sources??[]).filter(s=>definitionFor(s).category===category).map(source=>({definition:definitionFor(source),source,found:discovery.find(d=>d.id===source.id)?.available??false}));
-    const missing=available.filter(d=>!saved.some(r=>r.definition.id===d.id)).map(definition=>({definition,source:undefined as MonitorSource|undefined,found:discovery.some(d=>d.available&&(d.id===definition.id||d.candidate?.kind===definition.kind&&definition.kind!=='generic_event'))}));
-    return [...saved,...missing].filter(r=>!foundOnly||r.found);
+    return sourceCatalogRows(catalog,settings?.sources??[],discovery,category,platform,foundOnly);
   }
   function choose(definition:Definition,source?:MonitorSource){
     if(!settings)return;
@@ -222,7 +218,7 @@
     {#if category==='local'}<div class="settings-group"><SettingRow label={$t("自动发现本机 Agent")} description={$t("识别新的只读本机来源，保留已关闭来源和项目范围。")}><input class="settings-switch" type="checkbox" role="switch" aria-label={$t("自动发现本机 Agent")} checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} onchange={e=>autoDiscover(e.currentTarget.checked,e.currentTarget)}/></SettingRow></div>{/if}
     <div class="source-toolbar"><div class="settings-actions"><button class="settings-tab" aria-pressed={!foundOnly} onclick={()=>foundOnly=false}>{$t("全部接入")}</button><button class="settings-tab" aria-pressed={foundOnly} onclick={()=>foundOnly=true}>{$t("已发现")}</button></div><button class="tp-btn" onclick={detect}>{$t("重新检测")}</button></div>
     <div class="source-list">{#each rows() as row (row.definition.id+':'+(row.source?.id??''))}
-      <article class="source-card"><div class="source-row"><div class="source-identity"><strong>{row.source?.name??$t(row.definition.name)}</strong><small>{row.definition.kind==='scanner'?$t('仅进程识别'):row.definition.kind==='generic_event'?$t('事件接入'):row.definition.category==='remote'?$t('独立连接'):$t('原生会话读取')} · {row.found?$t('已发现'):$t('尚未发现数据')}</small></div>{#if row.source}<span class="read-state">{$t(sourceState(row.source))}</span><input class="settings-switch" type="checkbox" role="switch" aria-label={'启用 '+row.source.name} checked={row.source.enabled} disabled={saving} onchange={async e=>{const control=e.currentTarget;await toggleSource(row.source!,control.checked);control.checked=row.source!.enabled;}}/>{/if}<button class="tp-btn source-expand" aria-label={(row.source?.name??$t(row.definition.name))+' 设置'} aria-expanded={!!row.source&&selected===row.source.id} onclick={()=>choose(row.definition,row.source)}>{row.source&&selected===row.source.id?$t('收起'):$t('配置')}</button></div>
+      <article class="source-card" data-definition={row.definition.id} data-source-id={row.source?.id??''}><div class="source-row"><div class="source-identity"><strong>{row.source?.name??$t(row.definition.name)}</strong><small>{row.definition.kind==='scanner'?$t('仅进程识别'):row.definition.kind==='generic_event'?$t('事件接入'):row.definition.category==='remote'?$t('独立连接'):$t('原生会话读取')} · {row.found?$t('已发现'):$t('尚未发现数据')}</small></div>{#if row.source}<span class="read-state">{$t(sourceState(row.source))}</span><input class="settings-switch" type="checkbox" role="switch" aria-label={'启用 '+row.source.name} checked={row.source.enabled} disabled={saving} onchange={async e=>{const control=e.currentTarget;await toggleSource(row.source!,control.checked);control.checked=row.source!.enabled;}}/>{/if}<button class="tp-btn source-expand" aria-label={(row.source?.name??$t(row.definition.name))+' 设置'} aria-expanded={!!row.source&&selected===row.source.id} onclick={()=>choose(row.definition,row.source)}>{!row.source?$t('添加来源'):selected===row.source.id?$t('收起'):$t('配置')}</button></div>
       {#if editor&&row.source?.id===editor.id}<div class="source-editor"><label>{$t('来源名称')}<input bind:value={editor.name} oninput={changed}/></label>
           <div class="capability-note tp-surface"><Info size={15} aria-hidden="true"/><p>{$t(row.definition.description??sourceCapability(editor.kind))}</p></div>
           <div class="source-tests"><button class="secondary tp-btn" title={$t("只检查所选来源本次读取，不验收 Agent 结束事件")} disabled={dirty || saving || reading || !editor.enabled} onclick={testRead}><Radio size={14}/>{reading?$t('正在读取…'):$t('测试读取来源')}</button><button class="secondary tp-btn" title={$t("只测试全局通知通道，不创建任务")} disabled={dirty || saving} onclick={testNotification}><Bell size={14}/>{$t("发送测试提醒")}</button></div>

@@ -1,4 +1,22 @@
-import type { DashboardSettings, MonitorSource, ProviderHealth, SourceKind } from './types';
+import type { DashboardSettings, MonitorSource, ProviderHealth, SourceKind, SourceDiscovery } from './types';
+
+export interface SourceDefinition {
+  description?:string; id:string; name:string; kind:SourceKind; category:string;
+  location_kind:string; platforms:string[]; adapter_id?:string; agent_id?:string;
+  multiple_instances?:boolean;
+}
+export function sourceDefinitionFor(catalog:SourceDefinition[],source:MonitorSource,platform:string):SourceDefinition {
+  return catalog.find(d=>d.kind===source.kind&&(d.kind!=='generic_event'||d.adapter_id===source.integration?.adapter_id))
+    ??{id:source.id,name:source.name,kind:source.kind,category:'custom',location_kind:'none',platforms:[platform]};
+}
+export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean) {
+  const saved=sources.filter(s=>sourceDefinitionFor(catalog,s,platform).category===category)
+    .map(source=>({definition:sourceDefinitionFor(catalog,source,platform),source,found:discovery.find(d=>d.id===source.id)?.available??false}));
+  const available=catalog.filter(d=>d.category===category&&(!d.platforms.length||d.platforms.includes(platform)));
+  const additions=available.filter(d=>d.multiple_instances||!saved.some(r=>r.definition.id===d.id))
+    .map(definition=>({definition,source:undefined as MonitorSource|undefined,found:discovery.some(d=>d.available&&(d.id===definition.id||d.candidate?.kind===definition.kind&&definition.kind!=='generic_event'))}));
+  return [...saved,...additions].filter(r=>!foundOnly||r.found);
+}
 
 // Readability is a transport observation, never proof of Agent lifecycle support.
 export function sourceReadState(source:MonitorSource, applied:DashboardSettings|null, health:ProviderHealth[], now:number):string {

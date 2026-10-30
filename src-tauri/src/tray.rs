@@ -4,7 +4,7 @@
 //! ACTION > ERROR/UNCERTAIN > UNVIEWED RESULT > RUNNING > VERIFIED IDLE
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::image::Image;
 use tauri::tray::TrayIconId;
@@ -317,11 +317,13 @@ fn create_popup(app: &AppHandle) {
 
 #[tauri::command]
 pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<(), String> {
-    let updates = section.as_deref() == Some("updates");
+    let section = management_section(section.as_deref());
     if let Some(win) = app.get_webview_window("management") {
-        if updates {
-            let _ = app.emit_to("management", "management-section", "updates");
+        if let Some(section) = section {
+            app.emit_to("management", "management-section", section)
+                .map_err(|e| e.to_string())?;
         }
+        fit_management(&win)?;
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
     }
@@ -329,12 +331,9 @@ pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<
         &app,
         "management",
         WebviewUrl::App(
-            if updates {
-                "manage/?section=updates"
-            } else {
-                "manage/"
-            }
-            .into(),
+            section
+                .map_or_else(|| "manage/".into(), |s| format!("manage/?section={s}"))
+                .into(),
         ),
     );
     let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
@@ -350,12 +349,65 @@ pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
-    fit_management(&window)?;
+    let area = management_area(&window)?;
+    fit_management_in(&window, area)?;
     window.show().map_err(|e| e.to_string())?;
     let fitted = window.clone();
+    let fit_state = Arc::new(Mutex::new(ManagementFitState {
+        area: Some(area),
+        queued: false,
+        force: false,
+    }));
     window.on_window_event(move |event| {
-        if matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. }) {
-            let _ = fit_management(&fitted);
+        if management_geometry_event(event) {
+            let queue = {
+                let mut state = fit_state.lock().unwrap_or_else(|e| e.into_inner());
+                state.force |= matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. });
+                if state.queued {
+                    false
+                } else {
+                    state.queued = true;
+                    true
+                }
+            };
+            if queue {
+                let dispatcher = fitted.clone();
+                let target = fitted.clone();
+                let state = fit_state.clone();
+                // A worker queues this after the current native DPI callback.
+                // Fitting inside that callback races Windows' suggested resize
+                // and can apply scaling twice. No timing delay is required.
+                tauri::async_runtime::spawn(async move {
+                    let callback_state = state.clone();
+                    let result = dispatcher.run_on_main_thread(move || {
+                        let area = management_area(&target);
+                        let should_fit = {
+                            let mut state =
+                                callback_state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.queued = false;
+                            let force = std::mem::take(&mut state.force);
+                            area.as_ref().is_ok_and(|area| {
+                                management_area_changed(&mut state.area, *area) || force
+                            })
+                        };
+                        if let Ok(area) = area {
+                            if should_fit {
+                                if let Err(error) = fit_management_in(&target, area) {
+                                    log::warn!("Could not fit settings window: {error}");
+                                    callback_state
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .area = None;
+                                }
+                            }
+                        }
+                    });
+                    if let Err(error) = result {
+                        state.lock().unwrap_or_else(|e| e.into_inner()).queued = false;
+                        log::warn!("Could not queue settings window fit: {error}");
+                    }
+                });
+            }
         }
         if matches!(event, tauri::WindowEvent::Destroyed) {
             let _ = app.emit("management-closed", ());
@@ -364,41 +416,126 @@ pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<
     Ok(())
 }
 
+fn management_section(section: Option<&str>) -> Option<&str> {
+    section.filter(|s| {
+        matches!(
+            *s,
+            "general" | "panel" | "sources" | "notifications" | "updates" | "about"
+        )
+    })
+}
+
+fn management_geometry_event(event: &tauri::WindowEvent) -> bool {
+    matches!(
+        event,
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct ManagementArea {
+    bounds: (i32, i32, u32, u32),
+    scale: f64,
+}
+
+struct ManagementFitState {
+    area: Option<ManagementArea>,
+    queued: bool,
+    force: bool,
+}
+
+fn management_area_changed(previous: &mut Option<ManagementArea>, area: ManagementArea) -> bool {
+    if *previous == Some(area) {
+        return false;
+    }
+    *previous = Some(area);
+    true
+}
+
+fn management_geometry(
+    area: (i32, i32, u32, u32),
+    scale: f64,
+    decoration: (u32, u32),
+    position: (i32, i32),
+) -> (u32, u32, i32, i32) {
+    let (left, top, available_width, available_height) = area;
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let dimension = |available: u32, border: u32, preferred: f64| {
+        let usable = available.saturating_sub(border).max(1);
+        let logical = (f64::from(usable) / scale - 32.0).clamp(1.0, preferred);
+        ((logical * scale).round() as u32).min(usable).max(1)
+    };
+    let width = dimension(available_width, decoration.0, 960.0);
+    let height = dimension(available_height, decoration.1, 704.0);
+    let max_x =
+        (i64::from(left) + i64::from(available_width) - i64::from(width) - i64::from(decoration.0))
+            .max(i64::from(left));
+    let max_y = (i64::from(top) + i64::from(available_height)
+        - i64::from(height)
+        - i64::from(decoration.1))
+    .max(i64::from(top));
+    (
+        width,
+        height,
+        i64::from(position.0).clamp(i64::from(left), max_x) as i32,
+        i64::from(position.1).clamp(i64::from(top), max_y) as i32,
+    )
+}
+
 fn fit_management(window: &tauri::WebviewWindow) -> Result<(), String> {
+    fit_management_in(window, management_area(window)?)
+}
+
+fn management_area(window: &tauri::WebviewWindow) -> Result<ManagementArea, String> {
     let monitor = window
         .current_monitor()
         .ok()
         .flatten()
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or("Cannot read monitor work area")?;
-    let scale = monitor.scale_factor().max(0.1);
     let area = monitor.work_area();
+    Ok(ManagementArea {
+        bounds: (
+            area.position.x,
+            area.position.y,
+            area.size.width,
+            area.size.height,
+        ),
+        scale: monitor.scale_factor().max(0.1),
+    })
+}
+
+fn fit_management_in(window: &tauri::WebviewWindow, area: ManagementArea) -> Result<(), String> {
     let inner = window.inner_size().map_err(|e| e.to_string())?;
     let outer = window.outer_size().map_err(|e| e.to_string())?;
     let decoration = (
         outer.width.saturating_sub(inner.width),
         outer.height.saturating_sub(inner.height),
     );
-    let width =
-        (area.size.width.saturating_sub(decoration.0) as f64 / scale - 32.0).clamp(1.0, 960.0);
-    let height =
-        (area.size.height.saturating_sub(decoration.1) as f64 / scale - 32.0).clamp(1.0, 704.0);
-    window
-        .set_size(tauri::LogicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
     let position = window.outer_position().map_err(|e| e.to_string())?;
-    let size = window.outer_size().map_err(|e| e.to_string())?;
-    let x = position.x.clamp(
-        area.position.x,
-        (area.position.x + area.size.width as i32 - size.width as i32).max(area.position.x),
+    let (width, height, x, y) = management_geometry(
+        area.bounds,
+        area.scale,
+        decoration,
+        (position.x, position.y),
     );
-    let y = position.y.clamp(
-        area.position.y,
-        (area.position.y + area.size.height as i32 - size.height as i32).max(area.position.y),
-    );
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
+    // Setters emit window events themselves. Only change an actual difference,
+    // so the follow-up Moved event converges without resizing or moving again.
+    if (inner.width, inner.height) != (width, height) {
+        window
+            .set_size(tauri::PhysicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+    }
+    if (position.x, position.y) != (x, y) {
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 fn emit_current_state(app: &AppHandle) {
@@ -525,6 +662,70 @@ pub async fn resize_dashboard(app: AppHandle, height: u32) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn management_routes_all_sections_and_rejects_url_injection() {
+        for section in [
+            "general",
+            "panel",
+            "sources",
+            "notifications",
+            "updates",
+            "about",
+        ] {
+            assert_eq!(super::management_section(Some(section)), Some(section));
+        }
+        for section in ["", "unknown", "sources?section=updates", "../notice"] {
+            assert_eq!(super::management_section(Some(section)), None);
+        }
+        assert_eq!(super::management_section(None), None);
+    }
+
+    #[test]
+    fn management_move_without_dpi_change_is_refitted_and_converges() {
+        let first = super::ManagementArea {
+            bounds: (0, 0, 1920, 1040),
+            scale: 1.0,
+        };
+        let mut previous = None;
+        assert!(super::management_area_changed(&mut previous, first));
+        // Moving near/over the same display edge must not snap back.
+        assert!(!super::management_area_changed(&mut previous, first));
+        let smaller = super::ManagementArea {
+            bounds: (-1280, 0, 1280, 720),
+            scale: 1.0,
+        };
+        assert!(super::management_area_changed(&mut previous, smaller));
+        assert!(!super::management_area_changed(&mut previous, smaller));
+        assert!(super::management_area_changed(
+            &mut previous,
+            super::ManagementArea {
+                bounds: smaller.bounds,
+                scale: 1.5
+            }
+        ));
+        assert!(super::management_geometry_event(
+            &tauri::WindowEvent::Moved(tauri::PhysicalPosition::new(-1200, 100))
+        ));
+        assert!(!super::management_geometry_event(
+            &tauri::WindowEvent::Focused(true)
+        ));
+        let decoration = (16, 39);
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let large =
+                super::management_geometry((0, 0, 3840, 2160), scale, decoration, (100, 100));
+            let small = (-1280, 40, 1280, 720);
+            let next = super::management_geometry(small, scale, decoration, (-500, 400));
+            assert!(next.0 <= large.0 && next.1 <= large.1);
+            assert!(next.2 >= -1280 && next.3 >= 40);
+            assert!(i64::from(next.2) + i64::from(next.0 + decoration.0) <= 0);
+            assert!(i64::from(next.3) + i64::from(next.1 + decoration.1) <= 760);
+            assert_eq!(
+                next,
+                super::management_geometry(small, scale, decoration, (next.2, next.3))
+            );
+        }
+    }
+
     #[test]
     fn four_task_panel_can_grow_without_widening_or_overlapping_the_work_area() {
         let large = super::popup_geometry((0, 0, 1920, 1040), 1.0, 840, None);

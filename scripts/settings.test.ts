@@ -6,6 +6,23 @@ import {reconcileSourceDraft} from '../src/lib/settings-draft';
 import type {DashboardSettings} from '../src/lib/types';
 import english from '../locales/en.json';
 import chinese from '../locales/zh-CN.json';
+import {sourceCatalogRows,type SourceDefinition} from '../src/lib/source-setup';
+
+test('multi-instance sources keep an add row after one or more saved instances',()=>{
+  for(const kind of ['remote_codex','codex_wsl','deepseek_wsl','tmux','generic_event'] as const){
+    const d:SourceDefinition={id:kind,name:kind,kind,category:'remote',location_kind:'host',platforms:['windows'],multiple_instances:true,adapter_id:'fixture'};
+    const sources=[1,2].map(n=>({...fixture().sources[0],id:kind+n,kind,location:'host'+n,integration:kind==='generic_event'?{agent_id:'test',adapter_id:'fixture',transport:'local',accept_since_ms:0}:undefined}));
+    for(const count of [0,1,2]){
+      const rows=sourceCatalogRows([d],sources.slice(0,count),[],'remote','windows',false);
+      expect(rows.filter(r=>!r.source).length).toBe(1);
+      expect(rows.filter(r=>r.source).map(r=>r.source!.id)).toEqual(sources.slice(0,count).map(s=>s.id));
+    }
+  }
+  const singleton:SourceDefinition={id:'codex',name:'Codex',kind:'codex',category:'local',location_kind:'none',platforms:['windows'],multiple_instances:false};
+  expect(sourceCatalogRows([singleton],fixture().sources,[],'local','windows',false).filter(r=>!r.source)).toHaveLength(0);
+  expect(sourceCatalogRows([singleton],[],[],'local','macos',false)).toHaveLength(0);
+  expect(sourceCatalogRows([singleton],fixture().sources,[],'local','windows',true)).toHaveLength(0);
+});
 
 function fixture():DashboardSettings{return {version:2,onboarding_complete:true,preferences:{...LEGACY_PREFERENCES},notifications:true,sound:false,default_view:'tasks',recent_days:7,sources:[{id:'test-source',name:'用户名称',kind:'codex',enabled:false,location:'',projects:['protected-project'],excluded_projects:['private'],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000}]};}
 
