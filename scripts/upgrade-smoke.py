@@ -79,18 +79,36 @@ def replace_once(path, old, new):
     path.write_text(text.replace(old, new), encoding="utf-8")
 
 
-def next_version(old):
-    match = re.fullmatch(r"(\d+)\.(\d+)\.(\d+)-alpha\.(\d+)", old)
+def msi_product_version(version):
+    match = re.fullmatch(r"(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-(alpha|beta|rc)\.(0|[1-9]\d*))?", version)
     if not match:
         raise ValueError("Review the upgrade pair when the release version scheme changes")
-    return ".".join(match.groups()[:3]) + "-alpha." + str(int(match[4]) + 1)
+    major, minor, patch = map(int, match.groups()[:3])
+    channel, sequence = match.groups()[3:]
+    if major > 255 or minor > 255 or patch > 65535 or sequence is not None and int(sequence) >= 1000:
+        raise ValueError("Upgrade pair exceeds Windows Installer numeric limits")
+    build = {"alpha": 1000, "beta": 2000, "rc": 3000}[channel] + int(sequence) if channel else 65535
+    return f"{major}.{minor}.{patch}.{build}"
+
+
+def next_version(old):
+    msi_product_version(old)
+    base, separator, prerelease = old.partition('-')
+    if separator:
+        channel, sequence = prerelease.split('.')
+        new = base + '-' + channel + '.' + str(int(sequence) + 1)
+    else:
+        major, minor, patch = map(int, base.split('.'))
+        new = f"{major}.{minor}.{patch + 1}"
+    msi_product_version(new)
+    return new
 
 
 def overlay(source, public, endpoint, version, original_version, msi_log=None):
     config_path = source / "src-tauri/tauri.conf.json"
     config = json.loads(config_path.read_text(encoding="utf-8"))
     config["version"] = version
-    config["bundle"]["windows"]["wix"]["version"] = version.split("-")[0] + "." + str(1000 + int(version.split(".")[-1]))
+    config["bundle"]["windows"]["wix"]["version"] = msi_product_version(version)
     config["bundle"]["createUpdaterArtifacts"] = True
     config["plugins"]["updater"].update(pubkey=public, endpoints=[endpoint], dangerousInsecureTransportProtocol=True)
     if msi_log is not None:

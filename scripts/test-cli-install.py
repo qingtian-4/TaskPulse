@@ -29,7 +29,7 @@ class InstallerTests(unittest.TestCase):
         tool_source = self.root / 'tool.py'
         shutil.copy2(REPO / 'scripts/fixtures/cli-install/tool.py', tool_source)
         tool_source.chmod(0o755)
-        for tool in ['uname', 'sysctl', 'plutil', 'curl', 'hdiutil', 'ditto', 'codesign', 'lipo', 'ps', 'open', 'mv', 'xattr', 'uuidgen', 'stat']:
+        for tool in ['uname', 'sysctl', 'plutil', 'curl', 'hdiutil', 'ditto', 'codesign', 'lipo', 'ps', 'open', 'mv', 'xattr', 'uuidgen', 'stat', 'sw_vers', 'od']:
             (self.bin / tool).symlink_to(tool_source)
         self.options = {}
         self.release = {'tag_name': 'v' + VERSION, 'draft': False, 'prerelease': True,
@@ -46,7 +46,7 @@ class InstallerTests(unittest.TestCase):
         (app / 'Contents/MacOS/agent-tray').write_text('synthetic executable')
         (app / 'Contents/Info.plist').write_bytes(plistlib.dumps({
             'CFBundleIdentifier': bundle_id, 'CFBundleShortVersionString': version,
-            'CFBundleExecutable': 'agent-tray'}))
+            'CFBundleExecutable': 'agent-tray', 'LSMinimumSystemVersion': '13.3'}))
 
     def prepare_assets(self, version=VERSION, arch='arm64', kind=None):
         name = f'TaskPulse_{version}_macos_{arch}.dmg'
@@ -170,7 +170,7 @@ class InstallerTests(unittest.TestCase):
     def test_upgrade_rollback_move_and_launch_failure(self):
         target = self.home / 'Applications/TaskPulse.app'
         self.make_app(target, '0.1.0')
-        for options in [{'fail_move': True}, {'launch_fail': True}, {'fail_installed': True}]:
+        for options in [{'fail_move': True}, {'fail_installed': True}]:
             self.options = options
             self.run_script('--prerelease', success=False)
             self.assertEqual(plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'], '0.1.0')
@@ -197,7 +197,7 @@ class InstallerTests(unittest.TestCase):
             self.assertTrue(path.is_dir()); path.rmdir()
 
     def test_binary_signature_extra_app_and_process_errors(self):
-        for options in [{'binary_arch': 'x86_64'}, {'bad_signature': True}, {'extra_app': True}]:
+        for options in [{'binary_arch': 'x86_64'}, {'bad_signature': True}, {'extra_app': True}, {'binary_header': 'ca fe ba be 00 00 00 02'}]:
             self.options = options
             self.run_script('--prerelease', '--no-launch', success=False)
         self.options = {'ps_fail': True}
@@ -245,10 +245,41 @@ class InstallerTests(unittest.TestCase):
         backup = target.parent / '.taskpulse-recovery/TaskPulse.app/Contents/Info.plist'
         self.assertEqual(plistlib.loads(backup.read_bytes())['CFBundleShortVersionString'], '0.1.0')
 
-    def test_first_install_launch_failure_removes_only_new_app(self):
+    def test_first_install_launch_failure_retains_verified_app(self):
         self.options['launch_fail'] = True
-        self.run_script('--prerelease', success=False)
-        self.assertFalse((self.home / 'Applications/TaskPulse.app').exists())
+        output = self.run_script('--prerelease', success=False)
+        target = self.home / 'Applications/TaskPulse.app'
+        self.assertTrue(target.exists(), 'A system launch failure must not delete a validated installation')
+        self.assertEqual(plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'], VERSION)
+        self.assertIn('installed', output.lower())
+        self.assertIn(str(target), output)
+        self.assertNotIn('No security attributes were removed', output)
+
+    def test_upgrade_launch_failure_retains_new_app_and_old_backup(self):
+        target = self.home / 'Applications/TaskPulse.app'
+        self.make_app(target, '0.1.0')
+        self.options['launch_fail'] = True
+        output = self.run_script('--prerelease', success=False)
+        self.assertEqual(plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'], VERSION)
+        old = target.parent / '.taskpulse-recovery/TaskPulse.app/Contents/Info.plist'
+        self.assertEqual(plistlib.loads(old.read_bytes())['CFBundleShortVersionString'], '0.1.0')
+        self.assertIn(str(old.parent.parent.parent), output)
+        self.assertFalse((target.parent / '.taskpulse-install.lock').exists())
+
+
+    def test_unsupported_os_never_replaces_existing_app(self):
+        target = self.home / 'Applications/TaskPulse.app'
+        self.make_app(target, '0.1.0')
+        self.options['system_version'] = '13.2.1'
+        output = self.run_script('--prerelease', success=False)
+        self.assertIn('requires macOS 13.3', output)
+        self.assertEqual(plistlib.loads((target / 'Contents/Info.plist').read_bytes())['CFBundleShortVersionString'], '0.1.0')
+        self.assertFalse((target.parent / '.taskpulse-recovery').exists())
+        for version in ['unknown', '13.3.0.1', '13.03', '9999.0']:
+            self.options['system_version'] = version
+            self.run_script('--prerelease', success=False)
+        self.options['system_version'] = '13.3'
+        self.run_script('--prerelease', '--no-launch')
 
     def test_argument_validation(self):
         for args in [['--bad'], ['--version'], ['--version', '../x'], ['--language', 'fr']]:

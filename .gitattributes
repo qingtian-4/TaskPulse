@@ -1,3 +1,5 @@
 *.sh text eol=lf
 *.py text eol=lf
 scripts/tp-run text eol=lf
+licenses/** text eol=lf
+licenses/spdx/MPL-2.0.txt whitespace=-blank-at-eol

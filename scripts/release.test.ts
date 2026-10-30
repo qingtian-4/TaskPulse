@@ -181,3 +181,12 @@ test('missing/duplicate installers and manifest traversal are rejected',()=>{
     expect(()=>verifyChecksums(out,version)).toThrow('Invalid checksum');
   } finally { rmSync(root,{recursive:true,force:true}); }
 });
+
+
+test('publication retries allow only missing releases or exact unpublished drafts',async()=>{
+  const {validatePublicationState}=await import('./release');
+  expect(()=>validatePublicationState('v1.0.0',404)).not.toThrow();
+  expect(()=>validatePublicationState('v1.0.0',200,{tag_name:'v1.0.0',draft:true})).not.toThrow();
+  for(const [status,release] of [[200,{tag_name:'v1.0.0',draft:false}],[200,{tag_name:'v1.0.1',draft:true}],[200,{}],[403,undefined],[500,undefined]] as const)
+    expect(()=>validatePublicationState('v1.0.0',status,release)).toThrow('Refusing');
+});

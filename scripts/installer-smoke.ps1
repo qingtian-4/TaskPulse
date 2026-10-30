@@ -63,6 +63,9 @@ try {
         foreach ($resource in @('agent-tray-hook.ps1','install-hooks.ps1')) {
             if (-not (Test-Path -LiteralPath (Join-Path $installDir "scripts\hooks\$resource"))) { throw "Missing packaged Hook resource: $resource" }
         }
+        foreach ($resource in @('LICENSE','licenses\THIRD_PARTY_NOTICES.txt','licenses\DEPENDENCIES.json')) {
+            if (-not (Test-Path -LiteralPath (Join-Path $installDir $resource))) { throw "Missing packaged license material: $resource" }
+        }
         $phase = "$kind-version"
         $versionOutput = Join-Path $evidence "$kind-version.txt"
         $versionProcess = Invoke-InstallerProcess -FilePath $exe -Arguments '--version' -TimeoutMilliseconds 15000

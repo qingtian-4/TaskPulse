@@ -10,11 +10,18 @@ export const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 export function validateRelease(tag: string, versions: string[]) {
   const version = tag.startsWith('v') ? tag.slice(1) : '';
-  if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Use an explicit SemVer tag, e.g. v0.2.0 or v0.2.0-rc.1.');
+  if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Use an explicit SemVer tag, e.g. v1.0.0 or v1.1.0-rc.1.');
   if (versions.length !== 4 || versions.some(v => v !== version)) {
     throw new Error(`Tag ${tag} must match package.json, Cargo.toml, Cargo.lock and tauri.conf.json: ${versions.join(', ')}`);
   }
   return version;
+}
+
+// An unpublished draft may be retried; published version assets are immutable.
+export function validatePublicationState(tag:string,status:number,release?:{tag_name?:unknown;draft?:unknown}):void {
+  if(status===404)return;
+  if(status!==200||release?.tag_name!==tag||release.draft!==true)
+    throw Error('Refusing to rebuild a published release or an unverified release state');
 }
 
 export function validateCandidateCommit(expected:string,head:string,main:string):void {
@@ -58,7 +65,7 @@ export function msiVersionFor(version:string):string {
 
 export function validateMsiVersion(root:string,version:string):void {
   const config=JSON.parse(readFileSync(join(root,'src-tauri/tauri.conf.json'),'utf8'));
-  if(config.bundle?.windows?.wix?.version!==msiVersionFor(version))throw new Error('Wix numeric product version must match the application pre-release version mapping');
+  if(config.bundle?.windows?.wix?.version!==msiVersionFor(version))throw new Error('Wix numeric product version must match the application version mapping');
 }
 
 export function installerNames(version: string) {
@@ -121,7 +128,15 @@ if (import.meta.main) {
       return args[i+1];
     };
     if(['check','candidate','preflight'].includes(command))validateTauriApiVersion(root);
-    if (command === 'check') {
+    if(command === 'publication-check') {
+      const tag=argument('--tag');validateRelease(tag,projectVersions(root));
+      const repository=process.env.GITHUB_REPOSITORY??'qingtian-4/TaskPulse';
+      if(!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repository))throw Error('Invalid repository identity');
+      const token=process.env.GH_TOKEN;
+      const response=await fetch(`https://api.github.com/repos/${repository}/releases/tags/${encodeURIComponent(tag)}`,{headers:{Accept:'application/vnd.github+json','User-Agent':'TaskPulse-release-check',...(token?{Authorization:`Bearer ${token}`}:{})},signal:AbortSignal.timeout(30000)});
+      validatePublicationState(tag,response.status,response.status===200?await response.json():undefined);
+      console.log(`Publication state verified: ${tag} has no published assets to overwrite`);
+    } else if (command === 'check') {
       const versions = projectVersions(root);
       const version = validateRelease(`v${versions[0]}`, versions);
       validateMsiVersion(root,version);
@@ -150,7 +165,7 @@ if (import.meta.main) {
     } else if (command === 'verify') {
       verifyChecksums(resolve(argument('--out')), argument('--version'));
     } else {
-      throw new Error('Usage: bun scripts/release.ts check | candidate --commit MAIN_SHA | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA [--untagged] [--pr-preview] | verify --out DIR --version VERSION');
+      throw new Error('Usage: bun scripts/release.ts check | publication-check --tag vVERSION | candidate --commit MAIN_SHA | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA [--untagged] [--pr-preview] | verify --out DIR --version VERSION');
     }
   } catch (error) { console.error(String(error)); process.exit(1); }
 }

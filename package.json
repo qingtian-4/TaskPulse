@@ -1,7 +1,7 @@
 {
   "name": "agent-tray",
   "private": true,
-  "version": "0.2.0-alpha.8",
+  "version": "1.0.0",
   "type": "module",
   "scripts": {
     "dev": "vite dev",
@@ -13,7 +13,7 @@
     "test:docs": "bun test ./scripts/docs.test.ts",
     "test:repo": "bun test ./scripts/repository.test.ts",
     "test:installation-preview": "bun test ./scripts/installation-preview.test.ts",
-    "test:release": "bun test ./scripts/release.test.ts ./scripts/updater-assets.test.ts",
+    "test:release": "bun test ./scripts/release.test.ts ./scripts/updater-assets.test.ts ./scripts/dependency-notices.test.ts",
     "audit:frontend": "bun audit --audit-level=moderate",
     "audit:rust": "bun scripts/security.ts rust",
     "audit:secrets": "bun scripts/security.ts secrets",

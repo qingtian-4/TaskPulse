@@ -27,7 +27,7 @@
 
 ## 没有内置品牌时
 
-豆包桌面现有独立的[原生读取](DOUBAO.md)，Windows 2.26.10 可观测正在执行的主任务。
+豆包桌面现有独立的[原生读取](LOCAL_AGENTS.md)，Windows 2.26.10 可观测正在执行的主任务。
 请添加“豆包 · 本机”来源；无需先配置 MCP。其完成和审批能力仍有明确限制。
 
 ### 支持本机 MCP 的桌面或 CLI 宿主
@@ -42,9 +42,9 @@
 
 支持的 stdio 协议版本为 `2025-06-18`、`2025-11-25`；不开放 HTTP 端口，也不提供命令执行、批准、文件读取或其他来源任务查询工具。工具只接收来源绑定的最小状态事实，标记为 `self_reported`。来源停用后，已经运行的 MCP 子进程也会拒收新事件。来源重新命名不改变任务身份。
 
-豆包工作开放平台列出了插件 / MCP 接入方式，但这**不证明所有豆包桌面版本支持任意自定义本机 stdio 服务**。若客户端只允许远程 URL、预置连接器或审核后的插件，这份本机配置不能直接使用，需要其正式插件通道及对应宿主验证。原生检查点读取是独立路径。没有开放接入口的桌面/网页助手，不能通过进程名、截图、CPU 或静默时间可靠补出完整任务生命周期。
+客户端须支持自定义本机 stdio 服务。仅支持远程 URL 或预置连接器的宿主，需要使用其正式插件通道；本机 MCP 配置不能直接用于这些宿主。
 
-依据：[MCP stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[MCP 生命周期与版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)、[豆包开放平台](https://open.doubao.com/)。客户端需要支持本机 stdio 服务。
+依据：[MCP stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[MCP 生命周期与版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)。客户端需要支持本机 stdio 服务。
 
 ### 支持 Hook / API / 脚本事件的宿主
 

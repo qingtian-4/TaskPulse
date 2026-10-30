@@ -64,7 +64,7 @@ test('local reports, captures, credentials and build files cannot enter the publ
   expect(forbidden).toEqual([]);
   const candidates=['docs/session-notes.md','docs/maintainers/review.md','assets/screenshots/raw.png',
     'assets/legacy-agenttray/demo.gif','NOTES.md','.agents/skills/tool/SKILL.md','skills-lock.json',
-    'CLAUDE.md','.claude/commands/private.md','.env.local','session.sqlite','debug.exe','output.zip'];
+    'CLAUDE.md','.claude/commands/private.md','dev.sh','scripts/build.sh','scripts/build.ps1','scripts/registry.sh','src-tauri/icons/android/generated.png','src-tauri/icons/ios/generated.png','output.tsbuildinfo','licenses/DEPENDENCIES.json','.env.local','session.sqlite','debug.exe','output.zip'];
   const ignored=spawnSync('git',['check-ignore','--no-index','--stdin'],{cwd:root,input:candidates.join('\n')+'\n',encoding:'utf8',windowsHide:true});
   expect(ignored.status).toBe(0);
   expect(ignored.stdout.trim().split(/\r?\n/).sort()).toEqual([...candidates].sort());

@@ -75,8 +75,13 @@ cleanup() {
   fi
   if [ -n "$lock" ]; then rmdir "$lock" || code=1; fi
   if [ "$code" != 0 ]; then
-    say 'Installation did not complete. No security attributes were removed. For macOS launch alerts see https://support.apple.com/en-us/102445' \
-        '安装未完成，未移除安全属性。macOS 启动提示请查阅 https://support.apple.com/en-us/102445' >&2
+    if [ "$committed" = 1 ]; then
+      say 'TaskPulse is installed, but startup or cleanup needs attention. See https://support.apple.com/en-us/102445' \
+          'TaskPulse 已安装，但启动或收尾仍需处理。请参阅 https://support.apple.com/en-us/102445' >&2
+    else
+      say 'Installation did not complete. No security attributes were removed. For macOS launch alerts see https://support.apple.com/en-us/102445' \
+          '安装未完成，未移除安全属性。macOS 启动提示请查阅 https://support.apple.com/en-us/102445' >&2
+    fi
   fi
   exit "$code"
 }
@@ -233,15 +238,30 @@ running() {
   done <<< "$listing"
   return 1
 }
+os_version_number() {
+  local major minor patch
+  [[ "$1" =~ ^(0|[1-9][0-9]{0,2})\.(0|[1-9][0-9]{0,2})(\.(0|[1-9][0-9]{0,2}))?$ ]] || return 1
+  IFS=. read -r major minor patch <<< "$1"
+  printf '%s' "$((major * 1000000 + minor * 1000 + ${patch:-0}))"
+}
+system_version=$(sw_vers -productVersion) || fail 'Cannot read macOS version.' '无法读取 macOS 版本。'
+system_version_number=$(os_version_number "$system_version") || fail 'Cannot validate macOS version.' '无法验证 macOS 版本。'
 verify_app() {
-  local app=$1 exe bundle_version architectures
+  local app=$1 exe bundle_version architectures minimum minimum_number
   identity "$app"
+  minimum=$(required "$app/Contents/Info.plist" LSMinimumSystemVersion)
+  minimum_number=$(os_version_number "$minimum") || fail 'Invalid minimum macOS version.' 'macOS 最低版本信息无效。'
+  [ "$system_version_number" -ge "$minimum_number" ] || fail "TaskPulse requires macOS $minimum or later; installed macOS is $system_version." "TaskPulse 需要 macOS ${minimum} 或更高版本；当前系统为 ${system_version}。"
   bundle_version=$(required "$app/Contents/Info.plist" CFBundleShortVersionString)
   [ "$bundle_version" = "$version" ] || fail 'Application version mismatch.' '应用版本不匹配。'
   exe=$(required "$app/Contents/Info.plist" CFBundleExecutable)
   [[ "$exe" =~ $executable_pattern ]] && [ -f "$app/Contents/MacOS/$exe" ] && [ ! -L "$app/Contents/MacOS" ] && [ ! -L "$app/Contents/MacOS/$exe" ] || fail 'Invalid bundle executable.' '应用可执行文件无效。'
-  architectures=$(lipo -archs "$app/Contents/MacOS/$exe")
-  [ "$architectures" = "$binary_arch" ] || fail 'Binary architecture mismatch.' '实际二进制架构不匹配。'
+  # Read the thin Mach-O CPU type with built-in tools, without requiring Xcode.
+  architectures=$(od -An -tx1 -N8 "$app/Contents/MacOS/$exe" | tr -d '[:space:]')
+  case "$binary_arch:$architectures" in
+    arm64:cffaedfe0c000001|x86_64:cffaedfe07000001) ;;
+    *) fail 'Binary architecture mismatch.' '实际二进制架构不匹配。';;
+  esac
   codesign --verify --deep --strict "$app"
 }
 if exists "$target"; then
@@ -281,21 +301,23 @@ incoming_id=$(directory_id "$stage/TaskPulse.app")
 move_owned "$stage/TaskPulse.app" "$target" || fail 'Application publication conflict.' '应用安装目录发生冲突。' 
 verify_app "$target"
 quarantine "$target"
-say 'Signature integrity verified. Current experimental packages use ad-hoc signing without notarization. Gatekeeper is preserved.' \
-    '签名完整性通过。当前实验包为 ad-hoc 签名且未公证，保留 Gatekeeper。'
+say 'Signature integrity verified. Packages use ad-hoc signing without notarization. Gatekeeper is preserved.' \
+    '签名完整性通过。安装包为 ad-hoc 签名且未公证，保留 Gatekeeper。'
+# Installation is committed only after bundle, OS, signature and quarantine checks.
+# LaunchServices may reject a valid installation until the user reviews macOS alerts.
+committed=1
+say "Installed TaskPulse $version: $target" "已安装 TaskPulse ${version}：$target"
 if [ "$no_launch" = 0 ]; then
   if ! open "$target" >"$work/launch.log" 2>&1; then
     cat "$work/launch.log" >&2
-    fail 'Launch failed. See Apple guidance; the previous app will be restored if present.' '启动失败。请查阅 Apple 指引；若有旧版将恢复。'
+    if [ -n "$old_id" ]; then say "Previous app retained: $recovery/TaskPulse.app. Inspect before retrying." "旧版保留于：${recovery}/TaskPulse.app。请核对后再重试。" >&2; fi
+    fail "Could not launch the installed app: $target. Review the original error and macOS Privacy & Security settings." "无法启动已安装的应用：${target}。请核对原始错误及 macOS 隐私与安全性设置。"
   fi
 fi
-committed=1
 if [ -d "$recovery" ]; then
   if [ -n "$old_id" ] && [ "$(directory_id "$recovery/TaskPulse.app" 2>/dev/null || true)" = "$old_id" ]; then
     rm -rf "$recovery/TaskPulse.app"
     rmdir "$recovery" || fail "Inspect retained recovery directory: $recovery" "请核对残留恢复目录：$recovery"
   else fail "Recovery ownership changed: $recovery" "恢复目录所有权发生变化：$recovery"; fi
 fi
-say "Installed TaskPulse $version: $target" "已安装 TaskPulse ${version}：$target"
-
 finished=1

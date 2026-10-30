@@ -87,11 +87,7 @@ never has to replace the live executable:
 powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
 ```
 
-For the fully configured GNU/MinGW development environment on this machine:
-
-```bash
-bash dev.sh
-```
+Machine-specific development wrappers such as `dev.sh` are local-only. Use the shared commands above and the [contributing guide](CONTRIBUTING.md) for reproducible setup.
 
 Run the opt-in real SSH smoke test only when the configured servers are expected to be reachable:
 

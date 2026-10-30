@@ -91,3 +91,25 @@ test('controlled download probes call production validators and keep transport o
   expect(production).toContain('xattr -w com.apple.quarantine');
   expect(read('install.ps1')).not.toContain('TASKPULSE_TEST');
 });
+
+
+test('public installation acceptance is read-only, stable-only and tests anonymous production bootstraps',()=>{
+  const text=read('.github/workflows/public-install-smoke.yml');
+  const publicFlow=Bun.YAML.parse(text) as any;
+  expect(publicFlow.permissions).toEqual({contents:'read'});
+  expect(publicFlow.on.release.types).toEqual(['published']);
+  expect(publicFlow.on).not.toHaveProperty('pull_request_target');
+  expect(publicFlow.jobs.install.strategy.matrix.include).toHaveLength(3);
+  expect(publicFlow.jobs.install.env.RELEASE_TAG).toContain('inputs.tag');
+  expect(text).not.toMatch(/secrets\.|contents: write|gh release|git push|git tag/);
+  for(const step of publicFlow.jobs.install.steps){
+    if(step.uses)expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
+    expect(step['continue-on-error']).not.toBe(true);
+    if(step.run)expect(step.run).not.toContain('${{');
+  }
+  const probe=read('scripts/public-install-smoke.py');
+  expect(probe).toContain('/releases/latest');
+  expect(probe).toContain('-DownloadOnly');
+  expect(probe).toContain('installer-smoke.ps1');
+  expect(probe).not.toMatch(/TASKPULSE_TEST_|Authorization|xattr.*-d/);
+});

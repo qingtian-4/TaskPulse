@@ -1,13 +1,13 @@
 {
   "$schema": "https://schema.tauri.app/config/2",
   "productName": "TaskPulse",
-  "version": "0.2.0-alpha.8",
+  "version": "1.0.0",
   "identifier": "app.taskpulse.desktop",
   "build": {
     "frontendDist": "../build",
     "devUrl": "http://localhost:5173",
     "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run build"
+    "beforeBuildCommand": "bun run build && bun scripts/dependency-notices.ts licenses"
   },
   "app": {
     "withGlobalTauri": true,
@@ -20,7 +20,9 @@
   "bundle": {
     "active": true,
     "resources": {
-      "../scripts/hooks/": "scripts/hooks/"
+      "../scripts/hooks/": "scripts/hooks/",
+      "../LICENSE": "LICENSE",
+      "../licenses/": "licenses/"
     },
     "targets": "all",
     "icon": [
@@ -41,7 +43,7 @@
       },
       "wix": {
         "upgradeCode": "6cd0d94e-66e7-5fec-8e52-e96008b6a767",
-        "version": "0.2.0.1008"
+        "version": "1.0.0.65535"
       },
       "nsis": {
         "installMode": "currentUser",
@@ -63,7 +65,7 @@
     },
     "macOS": {
       "entitlements": "./entitlements.plist",
-      "minimumSystemVersion": "10.15",
+      "minimumSystemVersion": "13.3",
       "hardenedRuntime": true
     }
   },
