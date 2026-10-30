@@ -1,4 +1,6 @@
 <script lang="ts">
+  import {t} from '$lib/i18n';
+  import {emit} from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   import type { MonitorSource } from '$lib/types';
@@ -24,7 +26,7 @@
     source.name=m.display_name;preview=null;confirmed=false;mcpConfig='';changed();
   }
   async function action(fn:()=>Promise<void>){busy=true;error='';message='';try{await fn();}catch(e){error=String(e);}finally{busy=false;}}
-  async function importManifest(){await action(async()=>{const m=await invoke<Manifest>('integration_import',{text});await load();message='描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。';if(!source.integration?.accept_since_ms)select(m.adapter_id);});}
+  async function importManifest(){await action(async()=>{const m=await invoke<Manifest>('integration_import',{text});await load();await emit('integration-catalog-updated');message='描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。';if(!source.integration?.accept_since_ms)select(m.adapter_id);});}
   async function makePreview(remove:boolean){await action(async()=>{preview=await invoke<Preview>('integration_preview',{sourceId:source.id,remove});confirmed=false;});}
   async function apply(){if(!preview||!confirmed)return;await action(async()=>{message=await invoke<string>('integration_apply',{token:preview!.token,confirmed:true});preview=null;confirmed=false;});}
   async function exportMcp(){await action(async()=>{const result=await invoke<{mcp_config:unknown}>('integration_export',{sourceId:source.id});if(!result.mcp_config)throw Error('请新建标准事件来源');mcpConfig=JSON.stringify(result.mcp_config,null,2);});}
@@ -33,60 +35,60 @@
 </script>
 
 <div class="integration-editor" data-integration-editor>
-  <h3>选择 Agent 与接入能力</h3>
-  <p>只关注确认后的新执行。Agent 身份与所用模型分开；这里没有通用进程猜测或任意插件代码。</p>
-  <label>Agent / 适配描述<select aria-label="Agent 适配描述" value={source.integration?.adapter_id??'standard-events'} disabled={!!source.integration?.accept_since_ms} onchange={e=>select(e.currentTarget.value)}>{#each catalog as m}<option value={m.adapter_id}>{m.display_name}</option>{/each}</select></label>
+  <h3>{$t("选择 Agent 与接入能力")}</h3>
+  <p>{$t("只关注确认后的新执行。Agent 身份与所用模型分开；这里没有通用进程猜测或任意插件代码。")}</p>
+  <label>{$t("Agent / 适配描述")}<select aria-label={$t("Agent 适配描述")} value={source.integration?.adapter_id??'standard-events'} disabled={!!source.integration?.accept_since_ms} onchange={e=>select(e.currentTarget.value)}>{#each catalog as m}<option value={m.adapter_id}>{m.display_name}</option>{/each}</select></label>
   {#if source.integration}
-    <label>传输环境<select aria-label="通用事件传输" value="local"><option value="local">{platformName} 本机</option><option disabled>WSL（尚未实现）</option><option disabled>SSH（尚未实现）</option></select></label>
+    <label>{$t("传输环境")}<select aria-label={$t("通用事件传输")} value="local"><option value="local">{platformName} {$t("本机")}</option><option disabled>{$t("WSL（尚未实现）")}</option><option disabled>{$t("SSH（尚未实现）")}</option></select></label>
   {/if}
   {#if standard}
-    <section class="universal tp-surface" aria-label="未适配 Agent 接入">
-      <h4>列表里没有你的 Agent？</h4>
-      <p>把来源名称改成实际宿主名称，再选择它提供的接入口。无需为每个品牌重新发布 TaskPulse。</p>
+    <section class="universal tp-surface" aria-label={$t("未适配 Agent 接入")}>
+      <h4>{$t("列表里没有你的 Agent？")}</h4>
+      <p>{$t("把来源名称改成实际宿主名称，再选择它提供的接入口。无需为每个品牌重新发布 TaskPulse。")}</p>
       <ol>
-        <li><strong>支持自定义本机 MCP</strong>：保存来源后生成配置，合并到宿主已有的 MCP 设置；连接后由宿主调用 <code>taskpulse_report</code> 上报任务。</li>
-        <li><strong>支持 Hook / API / 脚本</strong>：导出标准接入说明，在真实生命周期事件发生时转发。</li>
-        <li><strong>没有开放接入口</strong>：暂时无法可靠监控其中的任务。打开桌面应用或网页不等于任务正在运行，也不能证明需要批准或已经完成。</li>
+        <li><strong>{$t("支持自定义本机 MCP")}</strong>{$t("：保存来源后生成配置，合并到宿主已有的 MCP 设置；连接后由宿主调用")} <code>taskpulse_report</code> {$t("上报任务。")}</li>
+        <li><strong>{$t("支持 Hook / API / 脚本")}</strong>{$t("：导出标准接入说明，在真实生命周期事件发生时转发。")}</li>
+        <li><strong>{$t("没有开放接入口")}</strong>{$t("：暂时无法可靠监控其中的任务。打开桌面应用或网页不等于任务正在运行，也不能证明需要批准或已经完成。")}</li>
       </ol>
-      <p>主动上报可能漏报，接收成功不等于完整自动采集；优先使用可用的原生日志或 Hook。豆包可另选“豆包 · 本机（实验）”读取原生执行检查点；此处 MCP 接入仍需核对宿主能力。</p>
-      <div class="actions"><button class="tp-btn" disabled={busy||dirty} onclick={exportMcp}>生成本机 MCP 配置</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);advanced=true;})}>导出标准接入说明</button></div>
-      {#if mcpConfig}<pre aria-label="MCP 接入配置">{mcpConfig}</pre><button class="tp-btn" onclick={()=>action(async()=>{await navigator.clipboard.writeText(mcpConfig);message='MCP 配置已复制。请合并到宿主配置；TaskPulse 没有改动任何宿主设置。';})}>复制 MCP 配置</button><p>支持 stdio 的 MCP 宿主可使用；仅支持远程 URL 或预置连接器的宿主不能直接粘贴这份配置。应用更新后若路径变化，请重新生成。</p>{/if}
+      <p>{$t("主动上报可能漏报，接收成功不等于完整自动采集；优先使用可用的原生日志或 Hook。豆包可另选“豆包 · 本机”读取原生执行检查点；此处 MCP 接入仍需核对宿主能力。")}</p>
+      <div class="actions"><button class="tp-btn" disabled={busy||dirty} onclick={exportMcp}>{$t("生成本机 MCP 配置")}</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);advanced=true;})}>{$t("导出标准接入说明")}</button></div>
+      {#if mcpConfig}<pre aria-label={$t("MCP 接入配置")}>{mcpConfig}</pre><button class="tp-btn" onclick={()=>action(async()=>{await navigator.clipboard.writeText(mcpConfig);message='MCP 配置已复制。请合并到宿主配置；TaskPulse 没有改动任何宿主设置。';})}>{$t("复制 MCP 配置")}</button><p>{$t("支持 stdio 的 MCP 宿主可使用；仅支持远程 URL 或预置连接器的宿主不能直接粘贴这份配置。应用更新后若路径变化，请重新生成。")}</p>{/if}
     </section>
   {:else if adapter && platform && !adapter.systems.includes(platform)}
-    <p class="warning">该适配描述尚未支持 {platformName}；本平台不提供新增 Hook 操作。可新建“标准事件”来源接入。</p>
+    <p class="warning">{$t("该适配描述尚未支持")} {platformName}{$t("；本平台不提供新增 Hook 操作。可新建“标准事件”来源接入。")}</p>
   {/if}
-  <p class="warning">这些能力按项标注。文档或合成测试通过 ≠ 当前宿主版本实机通过；Stop 不会自动产生完成提醒。</p>
+  <p class="warning">{$t("这些能力按项标注。文档或合成测试通过 ≠ 当前宿主版本实机通过；Stop 不会自动产生完成提醒。")}</p>
   {#if adapter}
-    <div class="capability-summary tp-surface"><div class="capability-title"><strong>支持边界</strong><span class="tp-chip">按项核验</span></div><p>明确事件 {Object.values(adapter.capabilities).filter(c=>c.support==='explicit').length} 项 · 受限关联 {Object.values(adapter.capabilities).filter(c=>c.support==='inferred').length} 项 · 不支持 {Object.values(adapter.capabilities).filter(c=>c.support==='unsupported').length} 项</p><p>实机验证版本：{[...new Set(Object.values(adapter.capabilities).flatMap(c=>c.tested_versions))].join('、')||'无记录 · 仍需真实宿主验收'}</p></div>
-    <details class="capability-details tp-fold"><summary>逐项查看生命周期、审批与跳转能力</summary><div class="capabilities">{#each Object.entries(adapter.capabilities) as [key,c]}<div class="capability"><strong>{labels[key]??key}</strong><span class="capability-badges"><span class="tp-chip tp-tone" data-tone={c.support==='explicit'?'brand':'stale'}>{supports[c.support]??c.support}</span><span class="tp-chip tp-tone" data-tone="stale">{grades[c.validation]??c.validation}</span></span><small>证据渠道：{c.channel}。{c.limitations} 实测版本：{c.tested_versions.join(', ')||'无'}</small></div>{/each}</div></details>
+    <div class="capability-summary tp-surface"><div class="capability-title"><strong>{$t("支持边界")}</strong><span class="tp-chip">{$t("按项核验")}</span></div><p>{$t("明确事件")} {Object.values(adapter.capabilities).filter(c=>c.support==='explicit').length} {$t("项 · 受限关联")} {Object.values(adapter.capabilities).filter(c=>c.support==='inferred').length} {$t("项 · 不支持")} {Object.values(adapter.capabilities).filter(c=>c.support==='unsupported').length} {$t("项")}</p><p>{$t("实机验证版本：")}{[...new Set(Object.values(adapter.capabilities).flatMap(c=>c.tested_versions))].join('、')||$t('无记录 · 仍需真实宿主验收')}</p></div>
+    <details class="capability-details tp-fold"><summary>{$t("逐项查看生命周期、审批与跳转能力")}</summary><div class="capabilities">{#each Object.entries(adapter.capabilities) as [key,c]}<div class="capability"><strong>{$t(labels[key]??key)}</strong><span class="capability-badges"><span class="tp-chip tp-tone" data-tone={c.support==='explicit'?'brand':'stale'}>{$t(supports[c.support]??c.support)}</span><span class="tp-chip tp-tone" data-tone="stale">{$t(grades[c.validation]??c.validation)}</span></span><small>{$t("证据渠道：")}{c.channel}。{c.limitations} {$t("实测版本：")}{c.tested_versions.join(', ')||$t('无')}</small></div>{/each}</div></details>
   {/if}
   <div class="actions">
-    <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{await invoke('integration_test',{sourceId:source.id});message='测试事件接收成功（不创建任务）。尚未验证真实 Agent 的开始、结束或审批事件。';})}>测试事件接收（不创建任务）</button>
+    <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{await invoke('integration_test',{sourceId:source.id});message='测试事件接收成功（不创建任务）。尚未验证真实 Agent 的开始、结束或审批事件。';})}>{$t("测试事件接收（不创建任务）")}</button>
   </div>
-  {#if dirty}<p>请先保存来源配置，再测试或生成配置差异。修改既有 Agent 身份请新建来源。</p>{/if}
-  <details class="integration-advanced tp-fold" bind:open={advanced}><summary>高级接入 · Adapter、Hook 差异与诊断</summary>
-  {#if source.integration}<p class="identity">Agent ID：{source.integration.agent_id} · 来源 ID：{source.id}</p>
-    <label>宿主版本（用户记录，不等于验收通过）<input aria-label="宿主版本" value={source.integration.host_version??''} placeholder="未知 / 例如 3.11.2" oninput={e=>{source.integration!.host_version=e.currentTarget.value;changed();}}/></label>{/if}
+  {#if dirty}<p>{$t("请先保存来源配置，再测试或生成配置差异。修改既有 Agent 身份请新建来源。")}</p>{/if}
+  <details class="integration-advanced tp-fold" bind:open={advanced}><summary>{$t("高级接入 · Adapter、Hook 差异与诊断")}</summary>
+  {#if source.integration}<p class="identity">Agent ID：{source.integration.agent_id} {$t("· 来源 ID：")}{source.id}</p>
+    <label>{$t("宿主版本（用户记录，不等于验收通过）")}<input aria-label={$t("宿主版本")} value={source.integration.host_version??''} placeholder={$t("未知 / 例如 3.11.2")} oninput={e=>{source.integration!.host_version=e.currentTarget.value;changed();}}/></label>{/if}
   <div class="actions">
-    <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{diagnostic=JSON.stringify(await invoke('integration_diagnose',{sourceId:source.id}),null,2);})}>接入诊断</button>
-    <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);})}>导出标准接入说明</button>
-    {#if installable}<button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(false)}>预览新增 Hook</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(true)}>预览撤销 Hook</button>{:else}<p>当前平台没有此描述的已核验 Hook 安装方式。标准事件 / MCP 需要宿主主动接入，不会自动安装。</p>{/if}
+    <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{diagnostic=JSON.stringify(await invoke('integration_diagnose',{sourceId:source.id}),null,2);})}>{$t("接入诊断")}</button>
+    <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);})}>{$t("导出标准接入说明")}</button>
+    {#if installable}<button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(false)}>{$t("预览新增 Hook")}</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(true)}>{$t("预览撤销 Hook")}</button>{:else}<p>{$t("当前平台没有此描述的已核验 Hook 安装方式。标准事件 / MCP 需要宿主主动接入，不会自动安装。")}</p>{/if}
   </div>
-  {#if dirty}<p>请先保存来源配置，再测试或生成配置差异。修改既有 Agent 身份请新建来源。</p>{/if}
+  {#if dirty}<p>{$t("请先保存来源配置，再测试或生成配置差异。修改既有 Agent 身份请新建来源。")}</p>{/if}
   {#if preview}
-    <section class="preview" aria-label="Hook 配置差异">
-      <h4>{preview.action==='remove'?'移除':'新增'} TaskPulse 自有 Hook</h4><p>{preview.path}</p>
-      <pre>{JSON.stringify(preview.entries,null,2)}</pre><details class="tp-fold"><summary>查看命令的可读内容</summary><pre>{preview.decoded_command}</pre></details>
-      {#each preview.notes as note}<p>{note}</p>{/each}
-      <label class="confirmation"><input type="checkbox" bind:checked={confirmed}/>我已审阅上述文件位置与条目，同意写入这次差异</label>
-      <button class="tp-btn" disabled={busy||!confirmed} onclick={apply}>确认写入这次差异</button><button class="tp-btn" onclick={()=>{preview=null;confirmed=false;}}>取消，不修改文件</button>
+    <section class="preview" aria-label={$t("Hook 配置差异")}>
+      <h4>{preview.action==='remove'?$t('移除'):$t('新增')} {$t("TaskPulse 自有 Hook")}</h4><p>{preview.path}</p>
+      <pre>{JSON.stringify(preview.entries,null,2)}</pre><details class="tp-fold"><summary>{$t("查看命令的可读内容")}</summary><pre>{preview.decoded_command}</pre></details>
+      {#each preview.notes as note}<p>{$t(note)}</p>{/each}
+      <label class="confirmation"><input type="checkbox" bind:checked={confirmed}/>{$t("我已审阅上述文件位置与条目，同意写入这次差异")}</label>
+      <button class="tp-btn" disabled={busy||!confirmed} onclick={apply}>{$t("确认写入这次差异")}</button><button class="tp-btn" onclick={()=>{preview=null;confirmed=false;}}>{$t("取消，不修改文件")}</button>
     </section>
   {/if}
-  {#if diagnostic}<pre aria-label="接入诊断结果">{diagnostic}</pre>{/if}
-  {#if exported}<pre aria-label="标准接入说明">{exported}</pre>{/if}
-  <details class="manifest tp-fold"><summary>导入社区 / 自定义 Agent 描述文件</summary><p>仅支持受限 JSON 字段映射，不执行其中的程序或写入任意宿主配置。以 integrations/community-template.json 为起点。</p><textarea aria-label="适配描述 JSON" bind:value={text} placeholder="粘贴 manifest JSON"></textarea><button class="tp-btn" disabled={busy||!text.trim()} onclick={importManifest}>验证并导入描述</button></details>
+  {#if diagnostic}<pre aria-label={$t("接入诊断结果")}>{diagnostic}</pre>{/if}
+  {#if exported}<pre aria-label={$t("标准接入说明")}>{exported}</pre>{/if}
+  <details class="manifest tp-fold"><summary>{$t("导入社区 / 自定义 Agent 描述文件")}</summary><p>{$t("仅支持受限 JSON 字段映射，不执行其中的程序或写入任意宿主配置。以 integrations/community-template.json 为起点。")}</p><textarea aria-label={$t("适配描述 JSON")} bind:value={text} placeholder={$t("粘贴 manifest JSON")}></textarea><button class="tp-btn" disabled={busy||!text.trim()} onclick={importManifest}>{$t("验证并导入描述")}</button></details>
   </details>
-  {#if message}<p role="status">{message}</p>{/if}{#if error}<p class="error" role="alert">{error}</p>{/if}
+  {#if message}<p role="status">{$t(message)}</p>{/if}{#if error}<p class="error" role="alert">{error}</p>{/if}
 </div>
 
 <style>

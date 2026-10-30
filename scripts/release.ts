@@ -6,9 +6,11 @@ import { join, resolve } from 'node:path';
 
 export const ALPHA_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|beta|rc)\.(0|[1-9]\d*)$/;
 
+export const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
+
 export function validateRelease(tag: string, versions: string[]) {
   const version = tag.startsWith('v') ? tag.slice(1) : '';
-  if (!ALPHA_VERSION.test(version)) throw new Error('Use an explicit pre-release tag, e.g. v0.2.0-alpha.1. Stable publication is not enabled.');
+  if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Use an explicit SemVer tag, e.g. v0.2.0 or v0.2.0-rc.1.');
   if (versions.length !== 4 || versions.some(v => v !== version)) {
     throw new Error(`Tag ${tag} must match package.json, Cargo.toml, Cargo.lock and tauri.conf.json: ${versions.join(', ')}`);
   }
@@ -18,6 +20,14 @@ export function validateRelease(tag: string, versions: string[]) {
 export function validateCandidateCommit(expected:string,head:string,main:string):void {
   if(!/^[a-f0-9]{40}$/.test(expected)||head!==expected||main!==expected)
     throw new Error('Candidate requires a full SHA matching both checkout HEAD and current origin/main');
+}
+
+export function validateTauriApiVersion(root:string):void {
+  const lock=Bun.TOML.parse(readFileSync(join(root,'src-tauri/Cargo.lock'),'utf8')) as {package:Array<{name:string;version:string}>};
+  const core=lock.package.find(p=>p.name==='tauri')?.version;
+  const api=readFileSync(join(root,'bun.lock'),'utf8').match(/"@tauri-apps\/api":\s*\["@tauri-apps\/api@(\d+\.\d+\.\d+)/)?.[1];
+  if(!core || !api || core.split('.').slice(0,2).join('.')!==api.split('.').slice(0,2).join('.'))
+    throw Error(`Tauri Rust/JavaScript major.minor versions must match before packaging: Rust ${core??'missing'}, API ${api??'missing'}`);
 }
 
 export function projectVersions(root: string): string[] {
@@ -31,6 +41,11 @@ export function projectVersions(root: string): string[] {
 // Windows Installer cannot use SemVer's alpha.N identifier directly. Keep the
 // public/application version intact and validate a separate numeric Wix version.
 export function msiVersionFor(version:string):string {
+  const stable=STABLE_VERSION.exec(version);
+  if(stable){
+    if(Number(stable[1])>255 || Number(stable[2])>255 || Number(stable[3])>65535)throw Error('Version exceeds Windows Installer numeric limits');
+    return `${stable[1]}.${stable[2]}.${stable[3]}.65535`;
+  }
   const match=ALPHA_VERSION.exec(version);
   if(!match)throw new Error('Invalid pre-release version');
   const [,major,minor,patch,channel,sequence]=match;
@@ -47,7 +62,7 @@ export function validateMsiVersion(root:string,version:string):void {
 }
 
 export function installerNames(version: string) {
-  if (!ALPHA_VERSION.test(version)) throw new Error('Invalid pre-release version');
+  if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Invalid release version');
   return [`TaskPulse_${version}_windows_x64_setup.exe`, `TaskPulse_${version}_windows_x64.msi`];
 }
 
@@ -68,8 +83,9 @@ export function verifyChecksums(directory: string, version: string): void {
   }
 }
 
-export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string, options:{tagged?:boolean}={}): void {
+export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string, options:{tagged?:boolean;buildKind?:'pr-preview'}={}): void {
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('A full source commit SHA is required');
+  if(options.buildKind && options.tagged!==false)throw new Error('PR preview must be untagged');
   if (existsSync(out) && readdirSync(out).length) throw new Error('Output directory must be empty; refusing stale assets');
   const names = installerNames(version);
   const sources = [['nsis', '.exe'], ['msi', '.msi']].map(([subdir, extension]) => {
@@ -85,7 +101,7 @@ export function stageInstallers(bundleRoot: string, out: string, version: string
   mkdirSync(out, {recursive:true});
   sources.forEach((file, index) => copyFileSync(file, join(out, names[index])));
   writeFileSync(join(out, 'SHA256SUMS.txt'), names.map(name => `${sha256(readFileSync(join(out, name)))}  ${name}\n`).join(''));
-  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:options.tagged===false?null:`v${version}`, ...(options.tagged===false?{build_kind:'commit-candidate'}:{}), msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
+  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:options.tagged===false?null:`v${version}`, ...(options.tagged===false?{build_kind:options.buildKind??'commit-candidate'}:{}), msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
   verifyChecksums(out, version);
 }
 
@@ -104,6 +120,7 @@ if (import.meta.main) {
       if (i < 0 || !args[i+1] || args[i+1].startsWith('--')) throw new Error(`Missing ${name}`);
       return args[i+1];
     };
+    if(['check','candidate','preflight'].includes(command))validateTauriApiVersion(root);
     if (command === 'check') {
       const versions = projectVersions(root);
       const version = validateRelease(`v${versions[0]}`, versions);
@@ -124,15 +141,16 @@ if (import.meta.main) {
       const commit = git(root, ['rev-parse', 'HEAD']);
       const tagged = git(root, ['rev-parse', '--verify', `${tag}^{commit}`]);
       if (commit !== tagged) throw new Error('Checkout must be the existing release tag, not a branch or another commit');
+      git(root,['merge-base','--is-ancestor',commit,'refs/remotes/origin/main']);
       // No shell interpolation of user-supplied refs; validated outputs are safe.
       if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\ncommit=${commit}\n`);
       console.log(`Validated ${tag} at ${commit}`);
     } else if (command === 'stage') {
-      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'),{tagged:!args.includes('--untagged')});
+      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'),{tagged:!args.includes('--untagged'),...(args.includes('--pr-preview')?{buildKind:'pr-preview' as const}:{})});
     } else if (command === 'verify') {
       verifyChecksums(resolve(argument('--out')), argument('--version'));
     } else {
-      throw new Error('Usage: bun scripts/release.ts check | candidate --commit MAIN_SHA | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA [--untagged] | verify --out DIR --version VERSION');
+      throw new Error('Usage: bun scripts/release.ts check | candidate --commit MAIN_SHA | preflight --tag vVERSION | stage --bundle-root DIR --out DIR --version VERSION --commit SHA [--untagged] [--pr-preview] | verify --out DIR --version VERSION');
     }
   } catch (error) { console.error(String(error)); process.exit(1); }
 }

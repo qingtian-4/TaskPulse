@@ -1,54 +1,30 @@
-# Rust
 /target/
 src-tauri/target/
 **/*.rs.bk
-
-# Frontend
 node_modules/
 .svelte-kit/
 build/
 dist/
-
-# IDE
 .vscode/
 .idea/
 *.swp
 *.swo
 *~
-
-# OS
 .DS_Store
 Thumbs.db
-
-# Environment
 .env
 .env.*
 !.env.example
-
-# Tauri generated
 src-tauri/gen/
-
-# Logs
 *.log
-
-# Claude Code
-.claude/*
-!.claude/commands/
 plan.md
-
-# Build outputs
 *.bak
 .worktrees/
 .worktree
-
-# Script build artifacts
 scripts/*.tmp
 nocommit
 nocommit/
 .codex
-
-# Local diagnostics, recordings, and acceptance evidence
-# (Tracked documentation and curated assets remain versioned.)
 *.trace
 *.profraw
 *.profdata
@@ -75,22 +51,89 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 .bun-cache/
-
-# Disposable local media exports. Publish curated examples under assets/.
 *.mp4
 *.webm
 *.mov
 *.avi
 *.mkv
-!assets/demo/*.gif
-
-# Local diagnostics and test databases
 *.sqlite-journal
 *.sqlite-shm
 *.sqlite-wal
 *.db-journal
 *.db-shm
 *.db-wal
+.claude/
+CLAUDE.md
+.agents/
+skills-lock.json
+*.pem
+*.key
+*.p12
+*.pfx
+*.credentials
+*.keystore
+*.jks
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example
+*.exe
+*.dll
+*.pdb
+*.so
+*.dylib
+*.rlib
+*.rmeta
+*.o
+*.obj
+*.a
+*.lib
+*.zip
+*.tar
+*.tar.gz
+*.tgz
+*.7z
+*.sqlite
+*.sqlite3
+*.db
+*.dump
+/docs/*
+!/docs/AGENT_COMPATIBILITY.md
+!/docs/AGENT_INTEGRATION_GUIDE.md
+!/docs/AGENT_INTEGRATION_PROTOCOL.md
+!/docs/CLI_INSTALL.md
+!/docs/CODEX_APPROVAL_OBSERVER.md
+!/docs/DOUBAO.md
+!/docs/INSTALL.md
+!/docs/LOCAL_AGENTS.md
+!/docs/PRODUCT_DASHBOARD.md
+!/docs/REMOTE_TMUX.md
+!/docs/WSL_CODEX.md
+!/docs/README.md
+!/docs/releases/
+/assets/*
+!/assets/README.md
+!/assets/brand/
+!/assets/screenshots/
+/assets/screenshots/*
+!/assets/screenshots/dashboard.png
+!/assets/screenshots/notice-input.png
+!/assets/screenshots/notice-approval.png
+!/assets/screenshots/notice-completed.png
 
-# Keep docs/ validation reports, integrations/*.json, source fixtures,
-# release contracts and production icons tracked.
+/*.md
+!/README.md
+!/README.en.md
+!/AGENTS.md
+!/CHANGELOG.md
+!/CODE_OF_CONDUCT.md
+!/CONTRIBUTING.md
+!/SECURITY.md
+/docs/releases/TEMPLATE.md
+/docs/releases/0.2.0-alpha.1.md
+/docs/releases/0.2.0-alpha.2.md
+/docs/releases/0.2.0-alpha.3.md
+/docs/releases/0.2.0-alpha.4.md
+/docs/releases/0.2.0-alpha.5.md
+/docs/releases/0.2.0-alpha.6.md
+/docs/releases/0.2.0-alpha.7.md

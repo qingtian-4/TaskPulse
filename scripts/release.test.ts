@@ -4,10 +4,26 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {windowsTestProcess} from './windows-test-process';
 import './installer-webview.test';
-import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, verifyChecksums } from './release';
+import './cli-install.test';
+import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, validateTauriApiVersion, verifyChecksums } from './release';
+
+test('Tauri JavaScript API and locked Rust core have compatible major.minor versions',()=>{
+  expect(()=>validateTauriApiVersion(join(import.meta.dir,'..'))).not.toThrow();
+});
+test('preflight rejects a mismatched API before native packaging',()=>{
+  const root=mkdtempSync(join(tmpdir(),'tp-tauri-versions-'));
+  try {
+    mkdirSync(join(root,'src-tauri'));
+    writeFileSync(join(root,'src-tauri/Cargo.lock'),'[[package]]\nname="tauri"\nversion="2.12.5"\n');
+    writeFileSync(join(root,'bun.lock'),'{"packages":{"@tauri-apps/api":["@tauri-apps/api@2.10.1",""]}}');
+    expect(()=>validateTauriApiVersion(root)).toThrow('must match');
+    writeFileSync(join(root,'bun.lock'),'{"packages":{"@tauri-apps/api":["@tauri-apps/api@2.12.0",""]}}');
+    expect(()=>validateTauriApiVersion(root)).not.toThrow();
+  } finally {rmSync(root,{recursive:true,force:true});}
+});
 
 const version='0.2.0-alpha.1';
-test('repository versions and release workflow keep publication draft-only and separate from experimental platforms',()=>{
+test('repository versions and desktop release workflow keep publication draft-only',()=>{
   const root=join(import.meta.dir,'..');
   const versions=projectVersions(root);
   expect(validateRelease(`v${versions[0]}`,versions)).toBe(versions[0]);
@@ -19,11 +35,11 @@ test('repository versions and release workflow keep publication draft-only and s
   expect(workflow.jobs.draft.needs).toContain('installer-smoke');
   expect(workflow.jobs.draft.permissions.contents).toBe('write');
   const publication=workflow.jobs.draft.steps.find((s:any)=>s.uses?.startsWith('softprops/')).with;
-  expect(publication.draft).toBe(true);expect(publication.prerelease).toBe(true);
-  expect(publication.make_latest).toBe(false);expect(publication.fail_on_unmatched_files).toBe(true);
+  expect(publication.draft).toBe(true);expect(publication.prerelease).toBe("${{ contains(needs.preflight.outputs.version, '-') }}");
+  expect(publication.make_latest).toContain("contains(needs.preflight.outputs.version, '-')");expect(publication.fail_on_unmatched_files).toBe(true);
   expect(publication.tag_name).toContain('preflight.outputs.tag');
   expect(publication.target_commitish).toContain('preflight.outputs.commit');
-  expect(Object.keys(workflow.jobs)).not.toContain('build-macos');
+  expect(workflow.jobs.draft.needs).toContain('macos');
   const commands=workflow.jobs.windows.steps.filter((s:any)=>s.run).map((s:any)=>s.run);
   expect(commands).toContain('bun install --frozen-lockfile');
   expect(commands).toContain('bun run audit:frontend');
@@ -103,12 +119,14 @@ test('Windows test launcher retains actual fast errors and rejects startup/timeo
   await expect(windowsTestProcess('taskpulse-missing-test-executable.exe',[])).rejects.toThrow();
   await expect(windowsTestProcess('powershell.exe',['-NoProfile','-Command','Start-Sleep -Seconds 10'],100)).rejects.toThrow('timed out');
 },15000);
-test('release tag, app versions and lockfile must agree; stable publication is disabled',()=>{
+test('explicit release tag, app versions and lockfile must agree',()=>{
   expect(validateRelease(`v${version}`,Array(4).fill(version))).toBe(version);
-  for (const tag of ['main','app-v'+version,'v0.2.0','v0.2.0-alpha.01','v0.2.0-alpha.1\nattack','v$(whoami)']) {
+  for (const tag of ['main','app-v'+version,'v0.2.0.0','v0.2.0-alpha.01','v0.2.0-alpha.1\nattack','v$(whoami)']) {
     expect(()=>validateRelease(tag,Array(4).fill(version))).toThrow();
   }
   expect(()=>validateRelease(`v${version}`,[version,version,'0.1.11',version])).toThrow();
+  expect(validateRelease('v1.0.0',Array(4).fill('1.0.0'))).toBe('1.0.0');
+  expect(msiVersionFor('1.0.0')).toBe('1.0.0.65535');
 });
 
 test('untagged candidate pins the exact main SHA and cannot enter the Release job',()=>{
@@ -142,6 +160,10 @@ test('installer assets are flattened, hashed and versioned, and corruption or st
     const candidate=join(root,'candidate');stageInstallers(bundle,candidate,version,'a'.repeat(40),{tagged:false});
     const manifest=JSON.parse(readFileSync(join(candidate,'release-manifest.json'),'utf8'));
     expect(manifest.tag).toBeNull();expect(manifest.build_kind).toBe('commit-candidate');verifyChecksums(candidate,version);
+    const preview=join(root,'preview');stageInstallers(bundle,preview,version,'a'.repeat(40),{tagged:false,buildKind:'pr-preview'});
+    const pm=JSON.parse(readFileSync(join(preview,'release-manifest.json'),'utf8'));
+    expect(pm.tag).toBeNull();expect(pm.build_kind).toBe('pr-preview');verifyChecksums(preview,version);
+    expect(()=>stageInstallers(bundle,join(root,'invalid-preview'),version,'a'.repeat(40),{buildKind:'pr-preview'})).toThrow('untagged');
     expect(()=>stageInstallers(bundle,out,version,'a'.repeat(40))).toThrow('empty');
     const exe=join(out,installerNames(version)[0]);
     writeFileSync(exe,'corrupted');expect(()=>verifyChecksums(out,version)).toThrow('Checksum mismatch');

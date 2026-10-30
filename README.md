@@ -3,99 +3,131 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
-  <img alt="TaskPulse — Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
+  <img src="assets/brand/wordmark-light.svg" width="320" alt="TaskPulse">
 </picture>
 
-# TaskPulse
+**多个 Agent 同时跑，先看哪个需要你。**
 
-**专注写代码，其他 Agent 的进展交给 TaskPulse。**
+在托盘里查看 AI 任务的状态、模型与运行时间。<br>完成、失败或需要你时，及时提醒。
 
-![Windows first](https://img.shields.io/badge/Windows-first-76DFCD?style=flat-square)
-![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square)
-[![MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+[English](README.en.md) · [安装](#安装) · [支持的 Agent](#支持的-agent) · [使用指南](docs/README.md)
 
-[English](README.en.md) · [快速开始](#快速开始) · [支持的 Agent](#支持的-agent) · [路线图](#路线图) · [反馈问题](https://github.com/qingtian-4/TaskPulse/issues)
+<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a></p>
 
 </div>
 
-TaskPulse 是一个多 Coding Agent 任务监控器。把本机、WSL 和 SSH 环境中的任务汇总到桌面托盘，在 Agent **需要回答、等待批准或本轮结束**时提醒你，减少反复切换窗口查看进度。
+<p align="center">
+  <img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse 四任务面板：进行中、待输入、待批准和待查看，显示模型与耗时">
+  <br><sub>Windows 界面 · 示例任务</sub>
+</p>
 
-> 当前为 **0.2.0-alpha.8**，尚未公开发布。[候选安装包与测试说明](docs/CANDIDATE_TESTING.md)。Windows 优先，macOS/Linux 为实验支持；手机 App 在规划中。
+## 功能
 
-## 看一眼产品
+- **打开即关注**：自动发现本机 Agent，首次确认后跟踪新任务；也可接入 WSL 和 SSH 服务器。
+- **状态、模型、时间**：任务标题、项目、来源上报的模型和本轮耗时同屏展示，支持搜索与分组。
+- **需要你时提醒**：完成、失败、提问和授权请求分别提醒，点击后回到对应任务。
+- **结果不会错过**：未查看的结果持续保留，固定任务与未读状态可跨重启恢复。
+- **按你的习惯显示**：支持浅色、深色与跟随系统，可切换简体中文 / English，并设置登录启动、面板信息和通知方式。
+- **数据留在本机**：无需 TaskPulse 云账号，不上传对话；不会代你批准 Agent 请求。
 
-<p align="center"><img src="assets/screenshots/dashboard-current.png" alt="TaskPulse 任务面板：进行中、待处理与待查看" width="412"></p>
+## 任务提醒
 
-| 等待你回答 | 等待你批准 |
-|---|---|
-| ![待输入弹窗](assets/screenshots/notice-question-current.png) | ![待批准弹窗](assets/screenshots/notice-approval-current.png) |
+需要补充信息或授权时持续提醒，本轮结束后提醒查看结果。
 
-*真实 Tauri/WebView2 截图，使用隔离合成任务测试。弹窗提醒你回到原 Agent 处理；关闭提醒不等于批准或解决请求。[素材与复现](assets/README.md)。*
+<p align="center">
+  <img src="assets/screenshots/notice-input.png" width="320" alt="待输入弹窗：确认导出文件格式">
+  <br><sub>待输入：等待你补充信息</sub>
+</p>
 
-<details>
-<summary>消息中心与来源管理</summary>
+<p align="center">
+  <img src="assets/screenshots/notice-approval.png" width="320" alt="待批准弹窗：运行项目测试需要授权">
+  <br><sub>待批准：等待你确认执行请求</sub>
+</p>
 
-![消息中心](assets/screenshots/message-center-current.png)
+<p align="center">
+  <img src="assets/screenshots/notice-completed.png" width="320" alt="任务完成弹窗：快速入门指南本轮结束">
+  <br><sub>任务完成：回来查看本轮结果</sub>
+</p>
 
-![来源管理](assets/screenshots/sources-current.png)
+## 安装
 
-</details>
+### 下载安装包
 
-## 核心特性
+从 [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases) 选择对应系统：
 
-- **统一关注面板**：按 Agent、项目和来源查看进行中、待处理、失败与未查看结果。
-- **聚合托盘状态**：待处理优先于异常、未查看结果和运行中，多任务同时执行也能发现阻塞。
-- **明确事件提醒**：思考和工具执行仍算运行；日志静默、CPU 空闲或采集失败不会被当成完成。
-- **可恢复的关注记录**：未查看结果与固定任务跨重启保留；消息已读、结果已查看、请求已解决分别管理。
+| 系统 | 安装包 |
+| --- | --- |
+| Windows 10 / 11 · x64 | `.exe` 安装向导，或 `.msi` |
+| macOS · Apple Silicon | `macos_arm64.dmg` |
+| macOS · Intel | `macos_x64.dmg` |
 
-## 快速开始
+### 一条命令安装
 
-测试者从[候选下载说明](docs/CANDIDATE_TESTING.md)获取 Windows EXE/MSI 或 Apple Silicon DMG。源码开发需要 Bun、Rust 1.89+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)：
+**Windows**：打开 PowerShell：
 
 ```powershell
-git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
-cd TaskPulse
-bun install --frozen-lockfile
-bun run tauri dev
+irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex
 ```
 
-启动后打开 **来源管理 → 选择 Agent 与项目 → 保存并生效**，然后在原 Agent 中开始任务。使用 `Ctrl+Shift+A` 打开任务面板。
+**macOS**：打开终端：
 
-[安装与配置](docs/INSTALL.md) · [WSL 指南](docs/WSL_CODEX.md) · [Mac 开发](docs/MACOS_DEVELOPMENT.md) · [排障](docs/DEVELOPMENT.md)
+```sh
+curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
+```
+
+脚本选择对应架构、校验 SHA-256 并安装，无需 Bun、Rust 或克隆仓库。Mac 默认安装到 `~/Applications`。系统安全提示和指定版本等选项见[安装说明](docs/INSTALL.md)。
+
+首次启动，确认发现的本机 Agent 并点击**开始监控**。之后从托盘查看任务；Windows 也可按 `Ctrl+Shift+A`。
+
+默认面板展示运行中、明确待处理、结果未查看和手动固定的任务。来源暂未更新的任务可按需查看，未读状态会继续保留。
+
+应用会自动检查新版本；在**设置 → 应用更新**中点击安装，下载和签名校验完成后重启。也可关闭自动检查或手动检查更新。
 
 ## 支持的 Agent
 
-| 来源 | 当前接入方式 |
-|---|---|
-| Codex | 本机原生会话、独立 WSL 来源、已配置的 SSH 会话 |
-| Claude Code | 本机只读记录、用户显式启用的官方 Hook |
-| Hermes / DeepSeek Harness | 本机原生数据；DeepSeek Harness 另有独立 WSL 来源 |
-| 豆包桌面（实验） | Windows 原生运行检查点；审批未适配，结束提醒不保证 |
-| Gemini CLI / SSH tmux / `tp-run` | 兼容 Hook、进程扫描或运行包装器 |
-| Kimi / TRAE / ZCode | 部分事件映射，fixture-tested，真实宿主验收待完成 |
-| 其他 Agent | 标准事件、声明式 Manifest；支持本机 MCP 的宿主可主动上报 |
+| Agent / 任务来源 | 接入方式 |
+| --- | --- |
+| Codex | 本机自动发现；另支持独立 WSL 与 SSH 来源 |
+| Claude Code | 本机自动发现；可选官方 Hook 提供精确事件 |
+| Hermes | 本机原生数据库与运行状态 |
+| DeepSeek Harness | 本机 Desktop / CLI；另支持独立 WSL 来源 |
+| ZCode | 本机原生会话、项目、模型与任务状态 |
+| 豆包 | 本机桌面端原生执行状态 |
+| Gemini CLI | 进程发现；任务事件可通过通用接入补充 |
+| Kimi Code CLI | 配置标准事件或 MCP 接入 |
+| WorkBuddy | 本机自动发现，读取本地任务、模型与执行记录 |
+| OpenCode | 本机自动发现，读取会话数据库与明确结束记录 |
+| TRAE 中国版 IDE | 配置标准事件或 MCP 接入 |
+| 其他 Agent / 命令行任务 | 标准事件、MCP、兼容 Hook、`tp-run` 和远程 tmux |
 
-各来源的环境、事件覆盖与验证程度不同，详见[兼容性矩阵](docs/AGENT_COMPATIBILITY.md)。想接入更多 Agent，请看[接入指南](docs/AGENT_INTEGRATION_GUIDE.md)。
-
-## 工作原理
-
-![TaskPulse 中文架构图](assets/diagrams/taskpulse-architecture-zh.svg)
-
-**采集来源 → 统一任务状态 → 筛选需要关注的任务 → 托盘、面板与事件提醒。**
-
-基于 Rust、Tauri 2 和 Svelte 5。当前状态保存在本机，无 TaskPulse 云账号要求；来源失联保留不确定状态，真实审批仍由原 Agent 处理。[详细架构](docs/ARCHITECTURE.md)。
+自动发现适用于已适配的本机数据格式；WSL、SSH 和事件接入按需配置。不同 Agent 提供的状态不同，未提供的模型或审批信息不会猜测。[兼容说明](docs/AGENT_COMPATIBILITY.md) · [接入指南](docs/AGENT_INTEGRATION_GUIDE.md)
 
 ## 路线图
 
-- [ ] **手机 App**：在手机查看已配对电脑的任务，接收待回答、待批准、失败和完成提醒。
-- [ ] **更多 Coding Agent**：扩展官方事件、原生数据和 MCP 接入口，逐个补齐真实宿主验证。
-- [ ] **跨设备体验**：设备配对、断线状态、通知去重与阅读状态同步。
-- [ ] **桌面稳定性**：完善安装升级、多屏 DPI 与长期运行体验。
+- [x] 本机、WSL 与远程任务统一查看
+- [x] 模型显示、运行计时、提醒与未读保留
+- [x] Windows / macOS 安装包与命令行安装
+- [x] 自动发现本机来源、应用内更新
+- [ ] 扩展更多 Agent 的原生自动接入
+- [x] 浅色 / 深色主题、简体中文 / English 界面切换
+- [ ] 桌面端稳定后推出 Android / iOS App，随时查看任务与提醒
+- [ ] 支持在智能手表、手环上查看任务进度与提醒
 
-以上为规划，手机端和跨设备通知尚未实现。[需求范围与阶段划分](docs/ROADMAP.md)。
+## 从源码构建
+
+需要 Bun、Rust 1.90+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)。
+
+```sh
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
+cd TaskPulse
+bun install --frozen-lockfile
+bun run tauri build
+```
+
+安装包位于 `src-tauri/target/release/bundle/`。本地运行使用 `bun run tauri dev`。
 
 ## 贡献与许可
 
-欢迎提交问题、文档和适配器改进。代码通过 **功能分支 → Pull Request → 检查与审查 → 合入 main** 协作。[贡献指南](CONTRIBUTING.md) · [合入 main 的说明](docs/GIT_WORKFLOW.md) · [安全反馈](SECURITY.md)。
+欢迎[反馈问题](https://github.com/qingtian-4/TaskPulse/issues)、改进文档或贡献 Agent 适配器。[贡献指南](CONTRIBUTING.md) · [安全反馈](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
 
-基于 [sprklai/agenttray](https://github.com/sprklai/agenttray) 开发，保留上游版权与历史，采用 [MIT License](LICENSE)。
+基于 [AgentTray](https://github.com/sprklai/agenttray) 开发，保留原始版权与贡献历史，采用 [MIT License](LICENSE)。

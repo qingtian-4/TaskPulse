@@ -1,11 +1,11 @@
 # Remote Tmux Monitoring
 
-TaskPulse 监控 **Server1 / Server3 上 tmux pane 内正在运行的代码**（VS Code Remote-SSH → tmux → python/pytest/评测脚本），不需要用户改变任何工作习惯。
+TaskPulse 监控 **已配置 SSH 服务器上 tmux pane 内正在运行的代码**（VS Code Remote-SSH → tmux → python/pytest/评测脚本），不需要用户改变任何工作习惯。
 
 ```
 Windows TaskPulse
 → 系统 ssh.exe（使用用户 ~/.ssh/config 别名）
-→ Server1 / Server3
+→ research-box / build-box
 → tmux list-panes -a -F … + ps …   （每次轮询每个 Host 只有 1 条 SSH）
 → pane + 进程树 → TaskSnapshot
 ```
@@ -89,14 +89,14 @@ EXACT > HOOK > INFERRED
 # ~/.taskpulse/config.toml（首次启动自动生成）
 [[remote_hosts]]
 id = "server1"
-ssh_host = "Server1"   # ~/.ssh/config 中的别名
+ssh_host = "research-box"   # ~/.ssh/config 中的别名
 enabled = true
 poll_interval_ms = 3000
 tmux_sessions = ["wavelet", "8*"]   # 只监控这些 tmux 会话（精确名或 * 通配）；空=全部
 
 [[remote_hosts]]
 id = "server3"
-ssh_host = "Server3"
+ssh_host = "build-box"
 enabled = true
 poll_interval_ms = 3000
 tmux_sessions = []   # 空 = 监控该服务器全部 tmux 会话
@@ -108,18 +108,18 @@ tmux_sessions = []   # 空 = 监控该服务器全部 tmux 会话
 
 TaskPulse **不保存任何凭据**：走系统 `ssh.exe` + `BatchMode=yes`，认证完全依赖用户自己的 `~/.ssh/config` / key / ssh-agent。
 
-## 验收演示（Server3）
+## 验收演示（build-box）
 
 ```bash
 tmux new -s demo
 python -c "import time; time.sleep(30)"
 ```
 
-TaskPulse 自动出现 `Server3 · demo:0.0 · python … · RUNNING`；30 秒后变 `Finished (inferred)`，Windows 通知一次。然后：
+TaskPulse 自动出现 `build-box · demo:0.0 · python … · RUNNING`；30 秒后变 `Finished (inferred)`，Windows 通知一次。然后：
 
 ```bash
 tp-run "success-demo" -- bash -c "sleep 10; exit 0"   # → SUCCEEDED exit 0
 tp-run "failure-demo" -- bash -c "sleep 10; exit 2"   # → FAILED exit 2
 ```
 
-拔掉 Server3 网络 → `DISCONNECTED`（任务不消失、不判完成）；恢复 → 自动回来。
+拔掉 build-box 网络 → `DISCONNECTED`（任务不消失、不判完成）；恢复 → 自动回来。

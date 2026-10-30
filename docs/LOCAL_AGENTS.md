@@ -1,61 +1,40 @@
-# Local Agents
+# 本机 Agent
 
-本地 AI Coding Agent（Codex / Hermes / DeepSeek Harness / Claude Code / Gemini）通过 **hook > wrapper > scan** 三层可靠性报告状态，全部基于本地文件与本地进程，无任何网络上传。
+TaskPulse 自动发现受支持的本机 Agent。首次确认后，来源中的新执行会自动进入面板；不会把整个历史会话列表导入关注列表。
 
-## 数据源
+| 来源 | 默认数据位置 | 自定义位置 |
+| --- | --- | --- |
+| Codex | `~/.codex` | 环境变量 `CODEX_HOME` |
+| Claude Code | `~/.claude` | `CLAUDE_CONFIG_DIR` 或来源目录 |
+| Hermes | 本机 Hermes 状态数据库 | 来源中填写数据库路径 |
+| DeepSeek Harness | `~/.dsh` | `DSH_HOME` / `TASKPULSE_DSH_HOME` 或来源目录 |
+| OpenCode | `~/.local/share/opencode/opencode.db` | `XDG_DATA_HOME` 或来源中填写数据库路径 |
+| WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `~/.workbuddy/projects` | 来源中填写 `.workbuddy` 数据目录 |
+| ZCode | `~/.zcode/cli/db/db.sqlite` | 来源中填写数据库路径 |
+| 豆包 | 桌面端 IndexedDB | 见[豆包说明](DOUBAO.md) |
 
-| 层级 | 机制 | 目录 |
-|---|---|---|
-| hook | CLI 官方 hook 事件写入状态文件（Codex Stop → needs-input 等） | `~/.agent-monitor/`（AgentTray 兼容） |
-| wrap | `scripts/wrap.sh` / `wrap.ps1` 包装任意命令，实时写状态 | `~/.agent-monitor/` |
-| scan | 进程扫描兜底（CPU 平滑、子进程计数、终端 focus 识别） | — |
+`~` 表示运行 TaskPulse 的用户主目录。设置环境变量后，需要重新启动 TaskPulse，使其读取新环境。
 
-新推荐目录：`~/.taskpulse/`（v2 格式，可带 `started_at/finished_at/exit_code/confidence`）。TaskPulse 两个目录都读，旧 AgentTray 文件继续有效。
+## 范围与状态
 
-## 状态映射
+默认关注所有项目的新执行。来源管理可以限制项目、排除项目或停用来源。自动发现不会重新打开你主动关闭的来源。
 
-| AgentTray 旧状态 | TaskPulse 新状态 | 语义 |
-|---|---|---|
-| needs-input | `WAITING_INPUT` | 完成当前 turn，等用户 → 每个 turn 通知一次 |
-| working / starting | `RUNNING` | 正在执行 |
-| error | `FAILED` | wrapper 捕获的非零退出码 |
-| idle | `IDLE` | 运行中、低 CPU |
-| offline | `UNKNOWN` | 无信号 |
+任务使用稳定会话 ID；重命名只更新标题。模型显示来源报告的标识，代理后的实际模型未必可见。任务的思考、工具执行和等待模型响应均属于运行中。
 
-**关键区分**：Agent 完成一个 turn（WAITING_INPUT）≠ 命令完成（SUCCEEDED）。只有拿到真实退出码才标 SUCCEEDED/FAILED。
+数据暂时不可读时，TaskPulse 保留上次状态并显示待更新，不根据日志静默判断结束。原生记录的支持范围见[兼容说明](AGENT_COMPATIBILITY.md)。
 
-## Codex（Phase 6 已实现）
+## OpenCode 与 WorkBuddy
 
-- 复用 AgentTray 的 Codex hook（`scripts/hooks/`）；`Stop` 事件 → `WAITING_INPUT`。
-- **会话元数据 provider**（`providers/codex.rs`）：读 `~/.codex/sessions/**/rollout-*.jsonl`（CLI 与 Desktop 同源——Desktop 的 `state_5.sqlite.threads.rollout_path` 指向同一路径）；`task_complete` → `WAITING_INPUT`、`task_started/user_message/agent_message` → `RUNNING`、`turn_aborted` → `WAITING_INPUT`，置信度 HOOK。
-- 优先级：native hook > 会话元数据(node) > 进程扫描；当存在 Codex 会话任务时抑制扫描的 Codex 条目（去重，见 watcher `dedup_codex_over_scan`）。
-- 发现窗口为近期 7 天的元数据及已知/固定任务；RUNNING 10 分钟无事件标记待更新，不能推断结束。WAITING_INPUT 的 24h 是首次发现门槛，已关注未读结果由关注记录保留，不因刷新到期而确认已查看。
-- adapter 边界隔离在 `providers/codex.rs`，Windows、WSL、SSH 共用 rollout 增量解析；测试覆盖 completed/active/aborted/stale/unicode/recursive、当前工具调用、思考和标题同步。
-- `notify = ["...", "turn-ended"]` 是 Codex Desktop 的配置项；接入 TaskPulse 接收者会改动用户配置，当前不自动安装。
-- **本机 WSL**：独立 `codex_wsl` 来源，默认用户 Linux `CODEX_HOME` / `~/.codex`。在 Linux 内只读 SQLite + `session_index.jsonl` 获取原生标题、项目和 ID，UNC 只用于读取 rollout 日志，不能跨 Windows/WSL 打开 SQLite WAL。停止的发行版不自动唤醒；当前真实 Ubuntu 会话已验证。配置、降级和证据边界见 [WSL_CODEX.md](WSL_CODEX.md)。
+无需安装插件或 Hook。新安装首次确认监控来源；已有安装可在来源管理启用“自动发现本机 Agent”，或单独添加 OpenCode / WorkBuddy。自动发现约每分钟检查一次，关闭过的来源不会被重新打开；自定义目录仍按你的配置读取。
 
-## Hermes（Phase 7 已实现）
+OpenCode 读取会话数据库，WorkBuddy 结合本地数据库与 `projects` 下的 JSONL 会话记录。首次接入不会导入已完成的全部历史；已关注任务在重启后保留。工具返回不等于本轮结束，标题和模型变化不会重新计时。数据库繁忙、格式变化、日志尚未追赶完成时保留上次状态并提示读取异常。
 
-- 首选 Hermes 官方 lifecycle hooks（实时状态）。
-- **会话元数据 provider**（`providers/hermes.rs`）：读 Hermes 的 SQLite 状态库（`$HERMES_STATE_DB` → `~/.hermes/state.db` → `$LOCALAPPDATA/hermes/state.db`），用 `sessions` 表 + **`session_turn_leases` 表**判断 turn 状态：
-  - 有未过期的 turn 租约（`expires_at > now`）→ **RUNNING**（agent 正在处理）
-  - 无活跃租约、最近有活动 → **WAITING_INPUT**（完成、等用户）
-  - 置信度 = HOOK（来自 Hermes 自身的状态与租约，比进程扫描可靠）
-- 优先级：lifecycle hook > 会话元数据 > 进程扫描；存在 Hermes 会话任务时抑制扫描的 Hermes 条目（`dedup_hermes_over_scan`）。
-- 生命周期门槛：RUNNING 会话 10 分钟未活动丢弃；WAITING_INPUT 会话 24h 未活动丢弃。
-- adapter 隔离在 `providers/hermes.rs`；fixture 测试（active lease→RUNNING / expired→WAITING_INPUT / archived skipped / stale dropped / missing db empty）共 5 个，用临时 SQLite 库。
-- 已在本机真实 Hermes 库端到端验证：当前会话（TaskPulse Windows MVP）显示 Running，另两个会话显示 WaitingInput。
+这两款目前不从本地记录生成独立提问或批准提醒；WorkBuddy 的含糊 pending 状态显示为状态待更新，不猜测它在等待批准。云端 WorkBuddy 会话以及国际版 WorkBuddy AI 不属于此适配范围。Windows 本机数据已验证的版本及限制见[兼容说明](AGENT_COMPATIBILITY.md)；macOS 使用相同目录约定，仍需对应版本的实机确认。
 
-## DeepSeek Harness（Phase 8 已实现）
+目录定位参考 [Agent Speed 的来源目录说明](https://github.com/zoefix/agent-speed#how-speed-is-measured)；TaskPulse 只采集任务状态与运行时间，不计算速度。
 
-- **会话元数据 provider**（`providers/deepseek_harness.rs`）：dsh（`@deepseek-ai/dsh`）装在 **WSL2**（`$DSH_HOME` 默认 `~/.dsh`），会话是 `~/.dsh/sessions/<workspace>/<session-id>/session.jsonl.zstd`（zstd 压缩的追加式事件流）。
-- **状态推断**（读 harness 自己的事件流，置信度 = HOOK）：最新 `turn/end` seq > 最新 `turn/start` seq → **WAITING_INPUT**；有 `turn/start` 无后续 `turn/end` → **RUNNING**；无 turn 事件 → **IDLE**。
-- **访问**：该 WSL provider 经 `wsl.exe` 子进程 + WSL 端 `base64` + Rust 侧 `zstd` 解压，并缓存未变化日志。旧阶段的 UNC 不可用观察不是所有 WSL 环境的限制；当前 Codex WSL 已验证可通过 UNC 读取日志，但 SQLite/WAL 必须在 Linux 内打开。
-- 项目名取自会话 `cwd` basename；distro 可经 `TASKPULSE_WSL_DISTRO` 覆盖（默认 Ubuntu）。
-- adapter 隔离在 `providers/deepseek_harness.rs`；fixture 测试走 zstd 编解码验证推断逻辑。已在本机真实 WSL2 dsh 库端到端验证（Game 工作区会话 → WaitingInput）。
+## 接入精确事件
 
-## 可靠性机制（沿用 AgentTray）
+Claude Code 可在来源高级设置中显式安装官方 Hook；原有 Hook、statusLine、代理和模型设置保留，也可以撤销。Codex 的审批事件见 [Codex 审批提醒](CODEX_APPROVAL_OBSERVER.md)。
 
-- 状态文件原子写；watcher 永不见半个 JSON。
-- 陈旧文件 TTL 清理（10 min）；hook 文件孤儿清理（session-id 交叉校验）。
-- hook 状态与扫描数据交叉验证（heuristics）：过期 working hook → idle；扫描到高 CPU → working；假等待 → 清除。
+其他 Agent 使用[标准事件或 MCP](AGENT_INTEGRATION_GUIDE.md)。通用事件与进程扫描都不会自动安装 Hook 或更改审批策略。

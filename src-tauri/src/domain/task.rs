@@ -110,6 +110,7 @@ pub enum TaskSource {
     ClaudeCode,
     Gemini,
     GenericEvent,
+    NativeAgent,
 }
 
 impl TaskSource {
@@ -124,7 +125,7 @@ impl TaskSource {
             TaskSource::LocalFile => "Local",
             TaskSource::ClaudeCode => "Claude Code",
             TaskSource::Gemini => "Gemini",
-            TaskSource::GenericEvent => "其他 Agent",
+            TaskSource::GenericEvent | TaskSource::NativeAgent => "其他 Agent",
         }
     }
 }

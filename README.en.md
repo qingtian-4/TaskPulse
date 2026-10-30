@@ -3,99 +3,131 @@
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="assets/brand/wordmark-dark.svg">
   <source media="(prefers-color-scheme: light)" srcset="assets/brand/wordmark-light.svg">
-  <img alt="TaskPulse — Your agents, one glance." src="assets/brand/wordmark-light.svg" width="410">
+  <img src="assets/brand/wordmark-light.svg" width="320" alt="TaskPulse">
 </picture>
 
-# TaskPulse
+**Several agents running. Know which one needs you.**
 
-**Stay focused on your code. Let TaskPulse watch your coding agents.**
+See AI task status, model and elapsed time from your system tray.<br>Get notified when work finishes, fails or needs your attention.
 
-![Windows first](https://img.shields.io/badge/Windows-first-76DFCD?style=flat-square)
-![Tauri](https://img.shields.io/badge/Tauri-2-24C8DB?style=flat-square)
-[![MIT](https://img.shields.io/badge/License-MIT-blue?style=flat-square)](LICENSE)
+[简体中文](README.md) · [Install](#install) · [Supported agents](#supported-agents) · [User guides](docs/README.md)
 
-[中文](README.md) · [Quick start](#quick-start) · [Supported agents](#supported-agents) · [Roadmap](#roadmap) · [Issues](https://github.com/qingtian-4/TaskPulse/issues)
+<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a></p>
 
 </div>
 
-TaskPulse brings coding-agent tasks from local, WSL and SSH environments into one desktop tray. Get a reminder when an agent **needs an answer, requests approval or finishes a turn**, without repeatedly checking every window.
-
-> **0.2.0-alpha.8**, not publicly released. [Candidate downloads and testing](docs/CANDIDATE_TESTING.md). Windows first; macOS/Linux are experimental. A mobile companion is planned.
-
-## See it in action
-
-<p align="center"><img src="assets/screenshots/dashboard-current.png" alt="TaskPulse dashboard: running, needs action and results to review" width="412"></p>
-
-| Answer needed | Approval needed |
-|---|---|
-| ![Input request reminder](assets/screenshots/notice-question-current.png) | ![Approval reminder](assets/screenshots/notice-approval-current.png) |
-
-*Actual Tauri/WebView2 screenshots with isolated synthetic standard events. Respond in the original agent; dismissing a reminder does not approve or resolve its request. [Media and reproduction](assets/README.md).*
-
-<details>
-<summary>Message center and source management</summary>
-
-![Message center](assets/screenshots/message-center-current.png)
-
-![Source management](assets/screenshots/sources-current.png)
-
-</details>
+<p align="center">
+  <img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse showing four tasks: running, input needed, approval needed and unviewed results, with models and elapsed time">
+  <br><sub>Windows interface with sample tasks.</sub>
+</p>
 
 ## Features
 
-- **One attention dashboard** for running tasks, pending requests, failures and unviewed results, grouped by agent, project or source.
-- **Aggregate tray status** prioritizes requests over errors, unviewed results and running work across concurrent agents.
-- **Explicit event reminders** keep thinking and tools running; silence, low CPU or collection failure never imply completion.
-- **Recoverable attention** retains unviewed results and pins across restarts. Message seen, result viewed and request resolved stay separate.
+- **Find your agents automatically**: confirm detected local sources once, then follow new tasks. Connect WSL and SSH sources when needed.
+- **Status, model and time together**: see task titles, projects, reported models and turn duration, with search and grouping.
+- **Know when to return**: separate notifications for completion, failure, questions and permission requests.
+- **Keep results in view**: unread results remain available; pins and unread state survive restarts.
+- **Make it yours**: choose light, dark or system appearance, switch between English and Simplified Chinese, and customize login startup, task details and notifications.
+- **Keep your data local**: no TaskPulse cloud account or conversation uploads. TaskPulse never approves Agent requests for you.
 
-## Quick start
+## Task notifications
 
-For Windows EXE/MSI or Apple Silicon DMG packages, follow the [candidate guide](docs/CANDIDATE_TESTING.md). Source development needs Bun, Rust 1.89+ and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/):
+Requests for input or approval stay visible until handled. A completed turn prompts you to review its results.
+
+<p align="center">
+  <img src="assets/screenshots/notice-input.png" width="320" alt="Input notification asking to confirm the export format">
+  <br><sub>Input needed: provide the missing information.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/notice-approval.png" width="320" alt="Approval notification for running project tests">
+  <br><sub>Approval needed: review the execution request.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/notice-completed.png" width="320" alt="Completion notification for the quick-start guide task">
+  <br><sub>Task completed: review the turn's results.</sub>
+</p>
+
+## Install
+
+### Download an installer
+
+Choose your platform on [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases):
+
+| Platform | Package |
+| --- | --- |
+| Windows 10 / 11 · x64 | `.exe` setup wizard or `.msi` |
+| macOS · Apple Silicon | `macos_arm64.dmg` |
+| macOS · Intel | `macos_x64.dmg` |
+
+### Install with one command
+
+**Windows**: open PowerShell:
 
 ```powershell
-git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
-cd TaskPulse
-bun install --frozen-lockfile
-bun run tauri dev
+irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex
 ```
 
-Open **source management → select an agent and projects → save and apply**, then start work in the original agent. Open the dashboard with `Ctrl+Shift+A`.
+**macOS**: open Terminal:
 
-[Installation](docs/INSTALL.md) · [WSL](docs/WSL_CODEX.md) · [Mac development](docs/MACOS_DEVELOPMENT.md) · [Troubleshooting](docs/DEVELOPMENT.md)
+```sh
+curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
+```
+
+The scripts select your architecture, verify SHA-256 and install the package. No Bun, Rust or repository checkout is needed. On Mac, the default destination is `~/Applications`. See [installation details](docs/INSTALL.md) for system security prompts and version options.
+
+On first launch, confirm the detected local agents and click **Start monitoring**. Open the tray panel to see tasks; Windows also supports `Ctrl+Shift+A`.
+
+The default panel shows running tasks, explicit requests, unread results and manually pinned tasks. Tasks awaiting fresh source data are available in a separate view, with unread state preserved.
+
+TaskPulse automatically checks for new versions. In **Settings → Application updates**, click to download, verify the signature and install. You can turn automatic checks off or check manually.
 
 ## Supported agents
 
-| Source | Current integration |
-|---|---|
-| Codex | Local native sessions, independent WSL sources and configured SSH sessions |
-| Claude Code | Local read-only records and explicitly enabled official hooks |
-| Hermes / DeepSeek Harness | Local native data; DeepSeek Harness also has a separate WSL source |
-| Doubao Desktop (experimental) | Native Windows running checkpoints; approval unsupported, end reminders not guaranteed |
-| Gemini CLI / SSH tmux / `tp-run` | Compatibility hooks, process scanning or run wrappers |
-| Kimi / TRAE / ZCode | Partial event mappings, fixture-tested; real-host acceptance pending |
-| Other agents | Standard Events, declarative manifests and active reporting from hosts supporting local MCP |
+| Agent / task source | Connection |
+| --- | --- |
+| Codex | Automatic local discovery; separate WSL and SSH sources |
+| Claude Code | Automatic local discovery; optional official hooks for precise events |
+| Hermes | Native local database and runtime state |
+| DeepSeek Harness | Local Desktop / CLI; separate WSL source |
+| ZCode | Native local sessions, projects, models and task state |
+| Doubao | Native desktop execution state |
+| Gemini CLI | Process discovery; task events through a generic integration |
+| Kimi Code CLI | Configured Standard Events or MCP integration |
+| WorkBuddy | Automatic local discovery of tasks, models and execution records |
+| OpenCode | Automatic local discovery of sessions and explicit turn-end records |
+| TRAE China IDE | Configured Standard Events or MCP integration |
+| Other agents / command-line tasks | Standard Events, MCP, compatible hooks, `tp-run` and remote tmux |
 
-Environment coverage, event support and validation differ by source. See the [compatibility matrix](docs/AGENT_COMPATIBILITY.md) and [integration guide](docs/AGENT_INTEGRATION_GUIDE.md).
-
-## How it works
-
-![TaskPulse architecture](assets/diagrams/taskpulse-architecture.svg)
-
-**Collect evidence → reconcile tasks → track attention → update the tray, dashboard and event reminders.**
-
-Built with Rust, Tauri 2 and Svelte 5. State stays local without a TaskPulse cloud account. Source failures remain uncertain, and approvals stay in the original agent. [Architecture details](docs/ARCHITECTURE.md).
+Automatic discovery covers supported native data formats. WSL, SSH and event integrations need configuration. Available states vary by agent; missing models and permission requests are never guessed. [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Integration guide](docs/AGENT_INTEGRATION_GUIDE.md)
 
 ## Roadmap
 
-- [ ] **Mobile companion** to view tasks on paired computers and receive question, approval, failure and completion alerts.
-- [ ] **More coding agents**, using official events, native data and MCP, with real-host validation for each integration.
-- [ ] **Cross-device experience** with pairing, offline visibility, notification deduplication and reading-state sync.
-- [ ] **Desktop reliability** across upgrades, mixed-DPI monitors and extended use.
+- [x] Local, WSL and remote tasks in one view
+- [x] Model display, elapsed time, notifications and unread results
+- [x] Windows / macOS packages and command-line installation
+- [x] Automatic local discovery and in-app updates
+- [ ] Native automatic connections for more agents
+- [x] Light / dark themes and Simplified Chinese / English interface switch
+- [ ] Android / iOS apps for tasks and notifications after the desktop app is stable
+- [ ] Task progress and notifications on smartwatches and fitness bands
 
-These are plans: mobile apps and cross-device notifications are not implemented. [Scope and milestones](docs/ROADMAP.md).
+## Build from source
 
-## Contributing & license
+Install Bun, Rust 1.90+ and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
 
-Issues, documentation and adapters are welcome. Use **feature branch → Pull Request → checks and review → merge into main**. [Contributing](CONTRIBUTING.md) · [Merge workflow](docs/GIT_WORKFLOW.md) · [Security](SECURITY.md).
+```sh
+git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
+cd TaskPulse
+bun install --frozen-lockfile
+bun run tauri build
+```
 
-Derived from [sprklai/agenttray](https://github.com/sprklai/agenttray), with upstream credits and history preserved. [MIT License](LICENSE).
+Packages are written to `src-tauri/target/release/bundle/`. Use `bun run tauri dev` to run locally.
+
+## Contributing and license
+
+[Report an issue](https://github.com/qingtian-4/TaskPulse/issues), improve the docs or contribute an Agent adapter. [Contributing guide](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md)
+
+Built on [AgentTray](https://github.com/sprklai/agenttray), preserving its copyright and contribution history. Licensed under the [MIT License](LICENSE).

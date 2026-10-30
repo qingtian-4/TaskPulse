@@ -1,0 +1,74 @@
+name: Installed upgrade acceptance
+
+on:
+  pull_request:
+    branches: [main]
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: upgrade-acceptance-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+env:
+  CARGO_INCREMENTAL: 0
+  PYTHONUTF8: 1
+
+jobs:
+  security:
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    uses: ./.github/workflows/security.yml
+    with:
+      ref: ${{ github.event.pull_request.head.sha }}
+
+  upgrade:
+    needs: security
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, kind: nsis, target: x86_64-pc-windows-msvc, python: python}
+          - {os: windows-latest, kind: msi, target: x86_64-pc-windows-msvc, python: python}
+          - {os: macos-15, kind: macos, target: aarch64-apple-darwin, python: python3}
+          - {os: macos-15-intel, kind: macos, target: x86_64-apple-darwin, python: python3}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
+          targets: ${{ matrix.target }}
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - run: bun install --frozen-lockfile
+      - run: ${{ matrix.python }} scripts/test-upgrade-smoke.py
+      - name: Build two real versions with an ephemeral signing identity
+        env:
+          UPGRADE_KIND: ${{ matrix.kind }}
+          UPGRADE_TARGET: ${{ matrix.target }}
+        shell: bash
+        run: ${{ matrix.python }} scripts/upgrade-smoke.py build --kind "$UPGRADE_KIND" --target "$UPGRADE_TARGET"
+      - name: Install old package and exercise native update, rejection and restart
+        # Both Windows formats use a disposable standard account. MSI is an
+        # administrator-advertised managed deployment; interactive UAC remains
+        # a distinct manual gate. No installer or UAC policy is weakened.
+        shell: bash
+        run: ${{ matrix.python }} scripts/upgrade-smoke.py test --plan "$TASKPULSE_UPGRADE_PLAN"
+      # Evidence only: no generated executables, source overlay tree or signing keys.
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: upgrade-evidence-${{ matrix.kind }}-${{ matrix.target }}-${{ github.event.pull_request.head.sha }}
+          path: dist/upgrade-evidence/
+          if-no-files-found: error

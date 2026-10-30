@@ -1086,6 +1086,41 @@ mod tests {
     }
 
     #[test]
+    fn model_switch_preserves_unread_pin_activity_and_notification_dedup() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let mut store = crate::store::TaskStore::default();
+        let mut engine = crate::transition::TransitionEngine::new();
+        let now = SystemTime::now();
+        let mut observed = task("model", TaskStatus::Running, Some("t1"));
+        observed.pinned = true;
+        observed.started_at = Some(now);
+        observed.model = Some("first-model".into());
+        let initial = tracker.reconcile(store.merge(vec![observed.clone()], now));
+        assert!(engine.apply(&initial, &[], now).is_empty());
+        let activity = tracker.records["model"].last_execution_at;
+        observed.model = Some("second-model".into());
+        let switched = tracker.reconcile(store.merge(vec![observed.clone()], now));
+        assert_eq!(switched.len(), 1);
+        assert_eq!(switched[0].model.as_deref(), Some("second-model"));
+        assert_eq!(switched[0].started_at, Some(now));
+        assert!(switched[0].unread && switched[0].pinned);
+        assert_eq!(tracker.records["model"].last_execution_at, activity);
+        assert!(engine.apply(&switched, &[], now).is_empty());
+        observed.status = TaskStatus::WaitingInput;
+        observed.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        let completed = tracker.reconcile(store.merge(vec![observed.clone()], now));
+        assert_eq!(engine.apply(&completed, &[], now).len(), 1);
+        tracker.mark_viewed("model").unwrap();
+        let activity = tracker.records["model"].last_execution_at;
+        observed.model = Some("third-model".into());
+        let updated = tracker.reconcile(store.merge(vec![observed], now));
+        assert!(!updated[0].unread);
+        assert_eq!(tracker.records["model"].last_execution_at, activity);
+        assert!(engine.apply(&updated, &[], now).is_empty());
+    }
+
+    #[test]
     fn renamed_task_updates_without_reopening() {
         let dir = tempfile::tempdir().unwrap();
         let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));

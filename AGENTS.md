@@ -36,8 +36,7 @@ Important locations:
 - `src/routes/+page.svelte` and `src/lib/components/`: popup UI.
 - `src/routes/manage/`: independent management window; permissions include both `popup` and `management`.
 - `docs/PRODUCT_DASHBOARD.md`: task-first presentation, source configuration, blocking vs normal end, notification rules.
-- `docs/ATTENTION_LIST.md`: attention-list product rules and provider degradation behavior.
-- `docs/ARCHITECTURE.md`: detailed backend architecture.
+- Lifecycle and provider degradation rules live below and in the corresponding backend tests; detailed maintainer notes stay local.
 
 Stable session/thread IDs are task identity. A title rename updates presentation only; it must not create a new task, reset lifecycle state, or send another notification. Project and task title remain separate model fields.
 
@@ -57,7 +56,9 @@ Codex command permission parameters, slow tool results, silent logs and CPU acti
 - Codex: native thread/app-server metadata plus rollout logs; local and configured remote projects are supported.
 - Codex WSL: independent opt-in `codex_wsl` sources per running distro. Read metadata inside Linux using Python 3 / read-only SQLite plus `session_index.jsonl`; never open WSL SQLite/WAL through Windows UNC. Reuse the Codex incremental rollout parser via `\\wsl.localhost\<distro>`. IDs are `<source-instance>:codex:<thread-id>` and Linux project paths stay separate from Windows / SSH. Never auto-wake a stopped distro or query Windows account quota for WSL tasks. See `docs/WSL_CODEX.md`.
 - Claude Code: read-only `CLAUDE_CONFIG_DIR` (default `~/.claude`) projects/*.jsonl, sessions/*.json and IDE *.lock evidence; never read *.key. Native formats are best-effort/inferred. Explicit, reversible official hooks write a minimal event envelope to `~/.taskpulse/claude-events/`. Agent identity is independent from the reported/proxy model. Never auto-install hooks or overwrite statusLine/other hooks/proxy settings.
-  Hook envelopes use an OS-locked per-session JSONL journal with monotonic sequence; latest JSON is a compatibility checkpoint. PermissionRequest has no native call ID: associate only a unique preceding tool/input signature, preserve all explicit pending request IDs, and resolve only a matching call or explicit end. Native thinking/busy/idle metadata cannot clear an approval or prove turn end. Rust 1.89+ is required for File locking.
+  Hook envelopes use an OS-locked per-session JSONL journal with monotonic sequence; latest JSON is a compatibility checkpoint. PermissionRequest has no native call ID: associate only a unique preceding tool/input signature, preserve all explicit pending request IDs, and resolve only a matching call or explicit end. Native thinking/busy/idle metadata cannot clear an approval or prove turn end. File locking requires Rust 1.89+; the signed updater raises the project minimum to Rust 1.90.
+- OpenCode: read-only `XDG_DATA_HOME/opencode/opencode.db` (default `~/.local/share/opencode`). v2 `session_message` user/assistant/idle records and legacy message tables are distinct schemas; only a current-turn explicit idle outcome/final assistant ends a turn. A `tool-calls` finish, older idle outcome or model/title update never does. No approval/question state is inferred from local storage.
+- WorkBuddy: read-only `~/.workbuddy/workbuddy.db` plus bounded incremental `projects/*/*.jsonl`. Match native session IDs, latest real user message and current request; require current-turn transcript evidence with database terminal state. Partial/corrupt/rewound logs preserve uncertainty. `pending` is not proof of approval; cloud and WorkBuddy AI sessions are outside this adapter. Neither adapter installs hooks or imports idle history.
 - Hermes: native SQLite session metadata and runtime lease state.
 - DeepSeek Harness: native Desktop/CLI `$DSH_HOME` (default `~/.dsh`, override with `TASKPULSE_DSH_HOME`) plus an independent WSL worker. Support both `session.jsonl.zstd` and `session.v4.jsonl.zstd`. Native v4 titles/state use `storages/session_projcache/sessions/<id>.json` (`version`/`record` envelope); legacy versions use `storages/session_projcache.json`. Projection event seq must not override a newer log state. Native IDs are `dsh-native:<session-id>`; existing WSL IDs stay `dsh:<session-id>`.
 - Remote: configured SSH hosts, projects, and tmux sessions/panes.
@@ -135,17 +136,19 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 - Keep unrelated user changes intact. Start new feature/fix work on a short-lived `codex/*` branch from the latest `origin/main`. Review the code, run relevant tests and required checks, verify the app runs, then create small logical commits. Never commit a known failing change as a completed task.
 - The maintainer's standing workflow authorizes pushing completed repository work, opening a PR to `main`, merging after review and successful Windows quality/Security checks for the current PR head, then deleting the completed local/remote branch and returning to an updated local `main`. A later task-specific instruction can narrow this scope. This does not authorize releases, tags, installing Agent hooks, bypassing protections or discarding unrelated work.
 - Prefer merge commits to preserve dependency history. Before deleting a branch, verify its current tip is included in remote `main` and no uncommitted work is lost; inspect changed tips again instead of forcing deletion. Retain unfinished work. If local `main` diverges, inspect unique commits and patch equivalents rather than resetting it blindly.
-- Preserve the latest main-branch README, brand assets and screenshots when integrating older branches. Review both sides of conflicts and add only the feature's current documentation; never replace the README wholesale with an older branch copy. See `docs/GIT_WORKFLOW.md`.
+- Preserve the latest main-branch README, brand assets and screenshots when integrating older branches. Review both sides of conflicts and add only the feature's current documentation; never replace the README wholesale with an older branch copy.
 - Remove disposable intermediate logs and failed test artifacts only after validating their resolved paths and retaining useful final evidence, original-change backups and any running executable.
 
-## Windows Alpha releases
+## Desktop releases and updates
 
 - Versions in package.json, Cargo.toml, Cargo.lock and tauri.conf.json must match
-  the explicit pre-release tag. Run `bun run release:check` and `bun run test:release`.
+  the explicit SemVer tag. Run `bun run release:check` and `bun run test:release`.
 - release.yml builds Windows x64 MSVC, validates actual installers on a separate
-  runner and creates a **draft pre-release only**. Read docs/RELEASING.md before
-  tagging/publishing; no stable release or automatic version override is enabled.
-- Linux/macOS remain opt-in experimental artifact builds, independent of Windows.
+  runner, builds both macOS architectures, and creates a **draft only**. Stable
+  and pre-release versions require exact explicit tags; never override versions
+  or publish automatically. Local maintainer release notes are not public docs.
+- Tagged desktop releases require Windows and both macOS artifact/acceptance jobs.
+  Linux remains a separate opt-in artifact build.
 - NSIS/MSI acceptance runs on separate fresh Windows matrix runners with distinct
   evidence artifacts, and both must pass. Retained install-directory preferences
   make sequential formats a migration test; never delete user preferences to pass
@@ -166,3 +169,39 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
   unknown/stale/inferred/internal/disabled/ignored requests must not be reopened.
 - Semantic dashboard sections are ongoing/results/uncertain/pinned; thinking and
   model waits stay ongoing. Failures are results, source faults are uncertainty.
+
+## Installation preview and macOS bootstrap
+
+- Same-repository PR installation previews pin the full PR head SHA, use only
+  `contents: read`, and upload SHA-named test artifacts. Keep `build_kind=pr-preview`
+  and `tag=null`; public bootstraps reject previews. Do not relax release.yml's
+  existing tag/exact-main checks or publish a release through the preview path.
+- macOS CLI downloads reuse the architecture-specific DMG, manifest and checksums.
+  Preserve/add and verify quarantine; never remove security attributes or disable
+  Gatekeeper. Signature integrity is separate from Developer ID/notarization.
+- Directory replacement/rollback must verify device/inode ownership. BSD mv can
+  nest into a concurrently created destination; never move or clean a colliding
+  foreign directory. Retain and report ambiguous recovery state. Native CI and
+  physical-machine/Finder/real-Agent acceptance are separate evidence gates.
+
+## Automatic discovery and application updates
+
+- Fresh onboarding confirms detected read-only local sources once. Automatic discovery preserves disabled/removed sources and explicit project scopes; WSL, SSH, hooks and event integrations stay opt-in. Existing installations keep their previous discovery preference.
+- ZCode reads its SQLite database read-only, uses the user message as turn identity and never treats tool completion as turn completion. Completed history belongs in the catalog, not the attention list. Agent name/model remain separate fields.
+- Application updates use the official Tauri updater, a compiled public key and an HTTPS GitHub feed. Check automatically, download/install only after a user click; never weaken signature, downgrade or OS security checks. Private keys stay outside Git and PR workflows.
+- Cross-version acceptance uses disposable hosted runners, two real installed versions and an audited source-copy overlay with ephemeral signing and a loopback feed. Never add test transport/driver overrides to production. Export evidence only, never test binaries or keys. Verify the actual packaged executable, retained state and restarted process; Windows installer dispatch success alone is not upgrade success. Controlled-feed acceptance does not certify public feed delivery, historical migrations or OS trust prompts.
+- GUI lock acquisition allows a bounded shutdown grace for updater restarts: macOS LaunchServices can start the replacement before the old process exits. Never release the old writer lock early while its watcher can still persist state; a second live instance must still activate the existing GUI and exit.
+- NSIS includes English and Simplified Chinese with automatic language selection. Keep displayLanguageSelector disabled: a silent CLI install may not save a language, and a later passive app update otherwise blocks on a language dialog.
+- Windows installed-upgrade CI uses a disposable standard account, asserting the old/new process SID and TokenElevation=0. A gsudo restricted administrator can still report an elevated token and is not equivalent. Keep test-account passwords off argv/env/artifacts, remove ephemeral signing keys before granting access, and stop account-owned processes before restoring desktop ACLs/removing the account. MSI CI covers administrator-advertised managed deployment: authorize only hash/identity-checked packages in an administrator-protected directory, assert advertisement leaves the old executable installed and the new product only advertised, and record the disposable user's inherited installation-directory preference. Capture unchanged installer/UAC policies. Ordinary MSI UAC acceptance remains a separate interactive-machine gate; never relax installer policy to pass CI or label managed deployment as interactive UAC coverage.
+- Release staging must match version and commit across Windows NSIS/MSI and macOS arm64/x64, verify signatures against the compiled key, then assemble latest.json. Publishing a draft requires maintainer approval and platform acceptance.
+- Process reports and maintainer plans stay local/ignored; public docs are user and integration guides. Preserve originals before untracking. UI screenshots require explicit suitable user-provided assets; never publish private desktop captures.
+
+## Settings presentation
+
+- The management window uses one close-request owner in SourceSettings. Tauri's onCloseRequested destroys the window independently per listener unless prevented; additional listeners must not bypass source drafts or pending preference saves.
+- Save preferences through their compare-and-swap endpoint. Preserve unsaved source arrays when preference-only settings broadcasts refresh the editor baseline; real source changes require conflict resolution.
+- Translate only application-owned copy. Never translate or rewrite native task titles, project paths, source names chosen by the user or reported model IDs. Both locale catalogs must retain matching keys.
+- Native settings acceptance: run `bun scripts/native-settings-smoke.ts --exe <unused-built-exe>` on Windows. It uses an isolated profile and never registers login startup or installs Agent hooks.
+- Windows login commands quote the executable and create new registrations in HKCU. Repair only exact owned legacy commands, preserving their scope and StartupApproved state; never silently enable an OS-disabled entry. Registry tests use a private uncommitted transaction and native launch tests use suspended, handle-owned processes.
+- Management entry points share the six-section allowlist for cold URLs and warm navigation. Refit on display/work-area/scale changes; ordinary same-monitor dragging must not snap back. Update cached display state and release locks before native setters emit follow-up events.
+- The source catalog declares multi-instance support. SSH/WSL/event connections retain an add entry after the first instance; source IDs remain stable and the backend still rejects duplicate kind/location pairs.

@@ -1,6 +1,6 @@
 # 接入其他 Coding Agent
 
-这是**部分宿主适配 + 标准事件 / MCP 接入平台**，不是“任何 Agent 安装后自动全面支持”。先看[兼容矩阵](AGENT_COMPATIBILITY.md)，再选择接入方式。标准事件 / MCP 使用本机进程通信，Windows、macOS 共用实现；Linux 有相同入口但本轮未做 Linux 原生验收。WSL/SSH 通用事件传输尚未实现；现有 Codex WSL/SSH 来源不受影响。
+通过标准事件或 MCP，把支持外部事件的 Agent 连接到 TaskPulse。先查看[兼容说明](AGENT_COMPATIBILITY.md)，选择合适的接入方式。事件接入使用本机进程通信；WSL 和 SSH 请使用各自的 Codex 来源。
 
 ## 从界面接入
 
@@ -19,7 +19,7 @@
 | 新版 Kimi Code CLI | `~/.kimi-code/config.toml` 的 `[[hooks]]` | 仅合法 event/command/timeout 字段；保留 TOML 注释；不适用于旧 `.kimi` 产品配置 |
 | TRAE 国内 IDE | `~/.trae-cn/hooks.json`，version=1 | PowerShell 固定转发命令；严格 JSON，遇 JSONC/其他版本拒绝并不改文件 |
 | ZCode Desktop | `~/.zcode/cli/config.json`，hooks.events | process command + argv；不改变全局 hooks.enabled；需你在宿主确认开关并新建会话 |
-| WorkBuddy Desktop | 无 | 只有候选描述，不开放一键安装；需要官方桌面载荷/配置及实测证据 |
+| WorkBuddy Desktop | 无需 Hook，可添加本机原生来源 | 只读本地数据库与会话日志；通用 Hook 描述仍不提供宿主事件映射或安装 |
 
 安装时备份原文件到同目录 `*.pre-taskpulse-integrations.bak`（一次性）。撤销不把旧备份整体覆盖回去，只移除登记的 TaskPulse 条目，保留后来添加的 Hook、模型、代理、statusLine 与未知字段。“停用来源”不会移除 Hook，也不删除未读/固定；“撤销 Hook”是独立确认动作。
 
@@ -27,8 +27,8 @@
 
 ## 没有内置品牌时
 
-豆包桌面现有独立的[实验原生读取](DOUBAO.md)，Windows 2.26.10 可观测正在执行的主任务。
-请添加“豆包 · 本机（实验）”来源；无需先配置 MCP。其完成和审批能力仍有明确限制。
+豆包桌面现有独立的[原生读取](DOUBAO.md)，Windows 2.26.10 可观测正在执行的主任务。
+请添加“豆包 · 本机”来源；无需先配置 MCP。其完成和审批能力仍有明确限制。
 
 ### 支持本机 MCP 的桌面或 CLI 宿主
 
@@ -42,9 +42,9 @@
 
 支持的 stdio 协议版本为 `2025-06-18`、`2025-11-25`；不开放 HTTP 端口，也不提供命令执行、批准、文件读取或其他来源任务查询工具。工具只接收来源绑定的最小状态事实，标记为 `self_reported`。来源停用后，已经运行的 MCP 子进程也会拒收新事件。来源重新命名不改变任务身份。
 
-豆包工作开放平台列出了插件 / MCP 接入方式，但这**不证明所有豆包桌面版本支持任意自定义本机 stdio 服务**。若客户端只允许远程 URL、预置连接器或审核后的插件，这份本机配置不能直接使用，需要其正式插件通道及对应宿主验证；目前不标记为“豆包 MCP 已验收”。原生检查点读取是独立路径。没有开放接入口的桌面/网页助手，不能通过进程名、截图、CPU 或静默时间可靠补出完整任务生命周期。
+豆包工作开放平台列出了插件 / MCP 接入方式，但这**不证明所有豆包桌面版本支持任意自定义本机 stdio 服务**。若客户端只允许远程 URL、预置连接器或审核后的插件，这份本机配置不能直接使用，需要其正式插件通道及对应宿主验证。原生检查点读取是独立路径。没有开放接入口的桌面/网页助手，不能通过进程名、截图、CPU 或静默时间可靠补出完整任务生命周期。
 
-依据：[MCP stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[MCP 生命周期与版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)、[豆包开放平台](https://open.doubao.com/)。这些协议资料不等于 TaskPulse 已通过真实宿主验收。
+依据：[MCP stdio](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports)、[MCP 生命周期与版本协商](https://modelcontextprotocol.io/specification/2025-11-25/basic/lifecycle)、[豆包开放平台](https://open.doubao.com/)。客户端需要支持本机 stdio 服务。
 
 ### 支持 Hook / API / 脚本事件的宿主
 
@@ -84,8 +84,4 @@ seen 去重上限不会清空旧账本；达到后拒绝普通新事实，但幂
 3. 备份 `~/.taskpulse/integrations/<source-sha256>/` 整个目录及 attention.json、notifications.json、config.toml。只处理这一明确来源，不清空 `.taskpulse` 或其他来源。
 4. 损坏检查点能自动备份/重放；损坏 journal 或达到配额则保留原目录导出排查。不要直接删除未消费尾部/未解决请求。需要重新开始时，在 UI **新建独立来源 ID**、预览确认迁移 Hook，只收后续新执行；旧来源与备份继续保留以便回查。
 
-这是一版明确受限的保守保留策略，不承诺无限期无人值守。动态轮转/归档及真实宿主长期验收是后续工作。
-
-## 维护者隔离验收
-
-见[验证报告](AGENT_INTEGRATION_VALIDATION.md)。脚本自动生成独立 TASKPULSE_HOME、host-sandbox 与 WebView2 数据目录，显示合成任务，不碰真实宿主文件。真实宿主验收必须另行显示差异并获确认；没装/没授权不自动安装、登录或发任务。
+达到存储上限时按界面提示检查，避免继续积累无用事件。

@@ -38,6 +38,8 @@ jobs:
       # mask an earlier failed fmt/lint/test exit code.
       - name: Check frontend types
         run: bun run check
+      - name: Test installation preview contracts
+        run: bun run test:installation-preview
       - name: Test documentation links and candidate source instructions
         run: bun run test:docs
       - name: Audit tracked documentation, media and ignored outputs

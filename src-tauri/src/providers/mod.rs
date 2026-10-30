@@ -11,10 +11,14 @@ pub mod generic_event;
 pub mod hermes;
 pub mod jsonl_tail;
 pub mod local_file;
+mod native_sessions;
+pub mod opencode;
 mod parser_cache;
 pub mod remote_tmux;
 pub mod resources;
+pub mod workbuddy;
 pub mod worker;
+pub mod zcode;
 
 use std::time::SystemTime;
 
@@ -205,4 +209,61 @@ pub fn sort_tasks(tasks: &mut [TaskSnapshot]) {
             .cmp(&b.status.priority())
             .then_with(|| a.name.cmp(&b.name))
     });
+}
+
+/// Keep source-reported model identifiers verbatim, with bounded display data.
+/// Never derive an Agent identity or lifecycle signal from a model name.
+pub(crate) fn reported_model(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty()
+        && !value.starts_with('<')
+        && value.chars().count() <= 200
+        && !value.chars().any(char::is_control))
+    .then(|| value.to_owned())
+}
+
+#[cfg(test)]
+mod model_evidence_tests {
+    use super::*;
+    #[test]
+    #[ignore = "read-only real native Claude, Hermes and DSH data; no commands or prompts logged"]
+    fn live_native_model_evidence() {
+        let providers: Vec<Box<dyn Provider>> = vec![
+            Box::new(claude_code::ClaudeCodeProvider::new(
+                claude_code::default_root(),
+            )),
+            Box::new(hermes::HermesProvider::new()),
+            Box::new(deepseek_harness::DeepSeekHarnessProvider::desktop()),
+        ];
+        let mut observed_sources = 0;
+        for mut provider in providers {
+            let out = provider.poll(SystemTime::now());
+            assert!(out.authoritative, "{}: {:?}", provider.name(), out.error);
+            let models: std::collections::BTreeSet<_> = out
+                .tasks
+                .iter()
+                .chain(out.catalog.iter())
+                .filter_map(|task| task.model.clone())
+                .collect();
+            println!(
+                "provider={} tasks={} models={models:?}",
+                provider.name(),
+                out.tasks.len()
+            );
+            if out.tasks.is_empty() && out.catalog.is_empty() {
+                println!(
+                    "{}: no eligible recent sessions; not validated",
+                    provider.name()
+                );
+                continue;
+            }
+            observed_sources += 1;
+            assert!(
+                !models.is_empty(),
+                "{} had no native model evidence",
+                provider.name()
+            );
+        }
+        assert!(observed_sources > 0, "No real sources were validated");
+    }
 }

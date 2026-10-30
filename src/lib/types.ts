@@ -10,6 +10,7 @@ export type Status =
   | 'unknown';
 
 export type Source =
+  | 'native_agent'
   | 'doubao'
   | 'codex'
   | 'hermes'
@@ -79,14 +80,16 @@ export interface TaskSnapshot {
   hook_matcher?: string;
 }
 
-export type SourceKind = 'doubao' | 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner' | 'generic_event';
+export type SourceKind = 'opencode' | 'workbuddy' | 'zcode' | 'doubao' | 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner' | 'generic_event';
 export interface MonitorSource {
   id: string; name: string; kind: SourceKind; enabled: boolean; location: string;
   projects: string[]; excluded_projects: string[]; tmux_sessions: string[]; tmux_panes: string[]; poll_interval_ms: number;
   integration?:{agent_id:string;adapter_id:string;transport:string;host_version?:string;accept_since_ms:number};
 }
 export interface DashboardSettings {
+  preferences?: import('./preferences').Preferences;
   version: number; onboarding_complete: boolean; sources: MonitorSource[];
+  auto_discover_local?: boolean; auto_discovery_seen?: string[]; auto_check_updates?: boolean;
   notifications: boolean; sound: boolean; default_view: 'tasks' | 'projects';
   recent_days?: number; // 0 keeps all ages; legacy configs default to 7.
   notification_mode?: 'popup' | 'system' | 'both';
@@ -147,6 +150,7 @@ export const STATUS_COLOR: Record<Status, string> = {
 };
 
 export const SOURCE_LABEL: Record<Source, string> = {
+  'native_agent':     '其他 Agent',
   'doubao':           '豆包',
   'generic_event':    '其他 Agent',
   'codex':            'Codex',
@@ -159,6 +163,7 @@ export const SOURCE_LABEL: Record<Source, string> = {
 };
 
 export const SOURCE_COLOR: Record<Source, string> = {
+  'native_agent':     '#69b7cf',
   'doubao':           '#69b7cf',
   'generic_event':    '#69b7cf',
   'codex':            '#6fbe5a',
@@ -242,3 +247,5 @@ export interface CodexAccountQuota {
   stale: boolean;
   refreshing: boolean;
 }
+
+export interface UpdateStatus {phase:string;current_version:string;version:string|null;notes:string|null;checked_at:number|null;downloaded:number;total:number|null;message:string|null;can_install:boolean}

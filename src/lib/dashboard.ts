@@ -1,5 +1,12 @@
 import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
+// Keep a compact single task; allow four task cards before scrolling.
+export function preferredDashboardHeight(taskCount:number, expanded:boolean):number {
+  if(expanded || taskCount>=4)return 840;
+  if(taskCount===3)return 680;
+  return taskCount>1 ? 560 : 400;
+}
+
 export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
 export type TaskSignal = 'approval' | 'question' | 'failed' | 'action';
 export interface DashboardFilters { source: string; project: string; location: string; section: TaskSection | null; signal?: TaskSignal | null; query?:string; unreadOnly?:boolean }
@@ -40,7 +47,7 @@ export function filterTasks(tasks: TaskSnapshot[], filters: DashboardFilters, se
     (!filters.location || (t.host ?? '本机') === filters.location) &&
     (filters.section === null || taskSection(t) === filters.section) &&
     (!filters.signal || matchesSignal(t,filters.signal)) && (!filters.unreadOnly || t.unread===true) &&
-    (!terms.length || terms.every(word=>[t.name,t.project,t.project_path,t.agent_name,SOURCE_LABEL[t.source],taskContext(t,settings),t.host,taskActivity(t)].filter(Boolean).join(' ').toLocaleLowerCase().includes(word))));
+    (!terms.length || terms.every(word=>[t.name,t.project,t.project_path,t.agent_name,t.model,SOURCE_LABEL[t.source],taskContext(t,settings),t.host,taskActivity(t)].filter(Boolean).join(' ').toLocaleLowerCase().includes(word))));
 }
 export function compareTasks(a:TaskSnapshot,b:TaskSnapshot):number {
   return sectionRank(a)-sectionRank(b) || Number(matchesSignal(b,'action'))-Number(matchesSignal(a,'action')) || (b.attention_since??b.updated_at)-(a.attention_since??a.updated_at) || a.id.localeCompare(b.id);
@@ -134,6 +141,23 @@ export function taskSection(task: TaskSnapshot): TaskSection {
   if (isEndedResult(task)) return 'results';
   if (task.status === 'unknown' || task.status === 'disconnected' || task.status === 'waiting_input') return 'uncertain';
   return 'pinned';
+}
+
+// Process detection alone does not establish a named user task. Keep these
+// observations in the source catalog without manufacturing attention cards.
+// Never classify a native session or a subagent from its display name alone.
+export function dashboardCandidates(tasks:TaskSnapshot[]):TaskSnapshot[] {
+  return tasks.filter(task=>!task.internal && (task.pinned || !(
+    task.confidence==='inferred' && (task.source_instance==='scanner' || task.id.startsWith('scan:')) &&
+    !task.session_id?.trim() && !task.project?.trim() && !task.project_path?.trim() &&
+    (!task.name.trim() || task.name.trim().toLowerCase()==='unknown')
+  )));
+}
+
+// This is a view, never an acknowledgement, deletion or lifecycle transition.
+// Source filters/search and the uncertainty tab can still reach other records.
+export function defaultDashboardTasks(tasks:TaskSnapshot[]):TaskSnapshot[] {
+  return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task));
 }
 export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
   const explicit = settings?.sources.find(s => s.id === task.source_instance);

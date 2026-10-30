@@ -1,4 +1,4 @@
-name: Windows Alpha release
+name: Desktop release
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Existing pre-release tag (must match all version files)'
+        description: 'Existing version tag (must match all version files)'
         required: true
         default: 'v0.2.0-alpha.8'
       commit:
@@ -126,11 +126,20 @@ jobs:
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
       - name: Test Rust
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
+      - name: Require updater signing key for tagged builds
+        if: needs.preflight.outputs.tag != ''
+        shell: pwsh
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: if ([string]::IsNullOrWhiteSpace($env:SIGNING_KEY)) { throw 'Configure TAURI_SIGNING_PRIVATE_KEY before building a release' }
       - name: Build NSIS and MSI installers
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.preflight.outputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.preflight.outputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           tauriScript: bun run tauri
-          args: --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
+          args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
         run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
       - name: Test MCP in the GUI-subsystem executable
@@ -140,6 +149,14 @@ jobs:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
         run: bun scripts/release.ts stage --bundle-root src-tauri/target/x86_64-pc-windows-msvc/ci-release/bundle --out dist/release --version "$env:RELEASE_VERSION" --commit "$env:RELEASE_COMMIT" ${{ needs.preflight.outputs.tag == '' && '--untagged' || '' }}
+      - name: Stage signed Windows update installers
+        if: needs.preflight.outputs.tag != ''
+        run: bun scripts/updater-assets.ts stage --bundle-root src-tauri/target/x86_64-pc-windows-msvc/ci-release/bundle --out dist/release --platform windows --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}'
+      - name: Verify signatures against the embedded application key
+        if: needs.preflight.outputs.tag != ''
+        env:
+          TASKPULSE_VERIFY_UPDATE_DIR: ${{ github.workspace }}/dist/release
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray signed_release_artifacts_match_embedded_key -- --ignored --nocapture
       - name: Export dependency inventory and license texts
         run: bun scripts/dependency-notices.ts dist/release x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
@@ -194,10 +211,82 @@ jobs:
           path: dist/installer-smoke/
           if-no-files-found: warn
 
+  macos:
+    name: Build and verify macOS ${{ matrix.arch }}
+    if: needs.preflight.outputs.tag != ''
+    needs: [preflight, security]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: macos-15, arch: arm64, target: aarch64-apple-darwin }
+          - { os: macos-15-intel, arch: x64, target: x86_64-apple-darwin }
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
+          targets: ${{ matrix.target }}
+          components: rustfmt, clippy
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      - run: bun run audit:frontend
+      - run: bun run check
+      - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+      - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
+      - name: Require updater signing key
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: test -n "$SIGNING_KEY"
+      - name: Build DMG and signed updater archive
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          APPLE_SIGNING_IDENTITY: '-'
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
+        with:
+          tauriScript: bun run tauri
+          args: --config src-tauri/tauri.updater.conf.json --target ${{ matrix.target }} --bundles app,dmg --features custom-protocol -- --profile ci-release --locked
+      - name: Verify installed application and restart
+        run: python3 scripts/macos-package.py --bundle-root src-tauri/target/${{ matrix.target }}/ci-release/bundle/dmg --arch '${{ matrix.arch }}' --commit '${{ needs.preflight.outputs.commit }}' --out dist/release --smoke
+      - name: Stage signed macOS archive
+        run: bun scripts/updater-assets.ts stage --bundle-root src-tauri/target/${{ matrix.target }}/ci-release/bundle --out dist/release --platform 'macos-${{ matrix.arch }}' --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}'
+      - name: Verify signatures against the embedded application key
+        env:
+          TASKPULSE_VERIFY_UPDATE_DIR: ${{ github.workspace }}/dist/release
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray signed_release_artifacts_match_embedded_key -- --ignored --nocapture
+      - name: Export architecture-specific dependency notices
+        run: |
+          bun scripts/dependency-notices.ts dist/notices-${{ matrix.arch }} ${{ matrix.target }}
+          for file in DEPENDENCIES.json SBOM.cdx.json THIRD_PARTY_NOTICES.txt; do
+            cp "dist/notices-${{ matrix.arch }}/$file" "dist/release/macos-${{ matrix.arch }}-$file"
+          done
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: release-package-macos-${{ matrix.arch }}
+          path: dist/release/*
+          if-no-files-found: error
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: release-macos-evidence-${{ matrix.arch }}
+          path: dist/macos-evidence/
+          if-no-files-found: warn
+
   draft:
-    name: Create a draft pre-release only
+    name: Create a release draft
     if: ${{ needs.preflight.outputs.tag != '' }}
-    needs: [preflight, windows, installer-smoke]
+    needs: [preflight, windows, installer-smoke, macos]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -213,24 +302,40 @@ jobs:
         with:
           name: windows-installers
           path: dist/release
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          pattern: release-package-macos-*
+          merge-multiple: true
+          path: dist/release
       - name: Verify final uploaded assets
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
         run: bun scripts/release.ts verify --out dist/release --version "$RELEASE_VERSION"
+      - name: Assemble complete update feed from verified platform builds
+        run: bun scripts/updater-assets.ts feed --out dist/release --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}' --notes 'docs/releases/${{ needs.preflight.outputs.version }}.md'
       - name: Create draft (manual acceptance required before publishing)
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:
           tag_name: ${{ needs.preflight.outputs.tag }}
           target_commitish: ${{ needs.preflight.outputs.commit }}
-          name: TaskPulse ${{ needs.preflight.outputs.tag }} · Windows Alpha
+          name: TaskPulse ${{ needs.preflight.outputs.tag }}
           draft: true
-          prerelease: true
-          make_latest: false
+          prerelease: ${{ contains(needs.preflight.outputs.version, '-') }}
+          make_latest: ${{ contains(needs.preflight.outputs.version, '-') && 'false' || 'true' }}
           body_path: docs/releases/${{ needs.preflight.outputs.version }}.md
           fail_on_unmatched_files: true
           files: |
             dist/release/*.exe
             dist/release/*.msi
+            dist/release/*.dmg
+            dist/release/*.app.tar.gz
+            dist/release/*.sig
+            dist/release/latest.json
+            dist/release/macos-*-SHA256SUMS.txt
+            dist/release/macos-*-manifest.json
+            dist/release/macos-*-DEPENDENCIES.json
+            dist/release/macos-*-SBOM.cdx.json
+            dist/release/macos-*-THIRD_PARTY_NOTICES.txt
             dist/release/SHA256SUMS.txt
             dist/release/release-manifest.json
             dist/release/DEPENDENCIES.json

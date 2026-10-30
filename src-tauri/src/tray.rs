@@ -4,7 +4,7 @@
 //! ACTION > ERROR/UNCERTAIN > UNVIEWED RESULT > RUNNING > VERIFIED IDLE
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use tauri::image::Image;
 use tauri::tray::TrayIconId;
@@ -47,8 +47,12 @@ static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 
 // Keep text readable; the narrow CSS layout reduces spacing instead of fonts.
 // Logical size preference is independent of the monitor's Retina/DPI scale.
-const DASHBOARD_SCALE: f64 = if cfg!(target_os = "macos") { 0.9 } else { 1.0 };
-const DASHBOARD_WIDTH: f64 = 412.0 * DASHBOARD_SCALE;
+const DASHBOARD_WIDTH: f64 = 368.0;
+const DASHBOARD_MIN_WIDTH: f64 = 320.0;
+const DASHBOARD_MIN_HEIGHT: u32 = 360;
+const DASHBOARD_MAX_HEIGHT: u32 = 840;
+static DASHBOARD_HEIGHT: std::sync::atomic::AtomicU32 =
+    std::sync::atomic::AtomicU32::new(DASHBOARD_MAX_HEIGHT);
 
 /// Presentation only: consumes the same scoped, reconciled attention snapshot
 /// as the Dashboard. Never changes lifecycle, unread state or notifications.
@@ -226,6 +230,7 @@ pub fn toggle_popup(app: &AppHandle) {
             let _ = win.hide();
             return;
         }
+        let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true);
         set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
         let _ = win.show();
         let _ = app.emit("popup-opened", ());
@@ -240,6 +245,7 @@ pub fn toggle_popup(app: &AppHandle) {
 /// Notification activation must show, never toggle/hide an existing popup.
 pub fn show_popup(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("popup") {
+        let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true);
         set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
         let was_hidden = !win.is_visible().unwrap_or(false);
         let _ = win.show();
@@ -280,7 +286,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title("TaskPulse")
-        .inner_size(DASHBOARD_WIDTH, 620.0 * DASHBOARD_SCALE)
+        .inner_size(DASHBOARD_WIDTH, f64::from(DASHBOARD_MAX_HEIGHT))
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
         // keeps its native shadow. The transparent dashboard draws its own edge.
@@ -294,7 +300,7 @@ fn create_popup(app: &AppHandle) {
         .build()
     {
         Ok(win) => {
-            let _ = fit_popup(&win, 620, false);
+            let _ = fit_popup(&win, DASHBOARD_MAX_HEIGHT, false);
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
@@ -310,29 +316,225 @@ fn create_popup(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub async fn open_management(app: AppHandle) -> Result<(), String> {
+pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<(), String> {
+    let section = management_section(section.as_deref());
     if let Some(win) = app.get_webview_window("management") {
+        if let Some(section) = section {
+            app.emit_to("management", "management-section", section)
+                .map_err(|e| e.to_string())?;
+        }
+        fit_management(&win)?;
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
     }
-    let builder = WebviewWindowBuilder::new(&app, "management", WebviewUrl::App("manage/".into()));
+    let builder = WebviewWindowBuilder::new(
+        &app,
+        "management",
+        WebviewUrl::App(
+            section
+                .map_or_else(|| "manage/".into(), |s| format!("manage/?section={s}"))
+                .into(),
+        ),
+    );
     let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
         builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
     } else {
         builder
     };
     let window = builder
-        .title("TaskPulse · 管理监控来源")
-        .inner_size(900.0, 640.0)
-        .min_inner_size(720.0, 520.0)
-        .resizable(true)
+        .title(format!("TaskPulse · {}", crate::localization::text("设置")))
+        .inner_size(960.0, 704.0)
+        .resizable(false)
+        .maximizable(false)
+        .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
+    let area = management_area(&window)?;
+    fit_management_in(&window, area)?;
+    window.show().map_err(|e| e.to_string())?;
+    let fitted = window.clone();
+    let fit_state = Arc::new(Mutex::new(ManagementFitState {
+        area: Some(area),
+        queued: false,
+        force: false,
+    }));
     window.on_window_event(move |event| {
+        if management_geometry_event(event) {
+            let queue = {
+                let mut state = fit_state.lock().unwrap_or_else(|e| e.into_inner());
+                state.force |= matches!(event, tauri::WindowEvent::ScaleFactorChanged { .. });
+                if state.queued {
+                    false
+                } else {
+                    state.queued = true;
+                    true
+                }
+            };
+            if queue {
+                let dispatcher = fitted.clone();
+                let target = fitted.clone();
+                let state = fit_state.clone();
+                // A worker queues this after the current native DPI callback.
+                // Fitting inside that callback races Windows' suggested resize
+                // and can apply scaling twice. No timing delay is required.
+                tauri::async_runtime::spawn(async move {
+                    let callback_state = state.clone();
+                    let result = dispatcher.run_on_main_thread(move || {
+                        let area = management_area(&target);
+                        let should_fit = {
+                            let mut state =
+                                callback_state.lock().unwrap_or_else(|e| e.into_inner());
+                            state.queued = false;
+                            let force = std::mem::take(&mut state.force);
+                            area.as_ref().is_ok_and(|area| {
+                                management_area_changed(&mut state.area, *area) || force
+                            })
+                        };
+                        if let Ok(area) = area {
+                            if should_fit {
+                                if let Err(error) = fit_management_in(&target, area) {
+                                    log::warn!("Could not fit settings window: {error}");
+                                    callback_state
+                                        .lock()
+                                        .unwrap_or_else(|e| e.into_inner())
+                                        .area = None;
+                                }
+                            }
+                        }
+                    });
+                    if let Err(error) = result {
+                        state.lock().unwrap_or_else(|e| e.into_inner()).queued = false;
+                        log::warn!("Could not queue settings window fit: {error}");
+                    }
+                });
+            }
+        }
         if matches!(event, tauri::WindowEvent::Destroyed) {
             let _ = app.emit("management-closed", ());
         }
     });
+    Ok(())
+}
+
+fn management_section(section: Option<&str>) -> Option<&str> {
+    section.filter(|s| {
+        matches!(
+            *s,
+            "general" | "panel" | "sources" | "notifications" | "updates" | "about"
+        )
+    })
+}
+
+fn management_geometry_event(event: &tauri::WindowEvent) -> bool {
+    matches!(
+        event,
+        tauri::WindowEvent::Moved(_) | tauri::WindowEvent::ScaleFactorChanged { .. }
+    )
+}
+
+#[derive(Clone, Copy, PartialEq)]
+struct ManagementArea {
+    bounds: (i32, i32, u32, u32),
+    scale: f64,
+}
+
+struct ManagementFitState {
+    area: Option<ManagementArea>,
+    queued: bool,
+    force: bool,
+}
+
+fn management_area_changed(previous: &mut Option<ManagementArea>, area: ManagementArea) -> bool {
+    if *previous == Some(area) {
+        return false;
+    }
+    *previous = Some(area);
+    true
+}
+
+fn management_geometry(
+    area: (i32, i32, u32, u32),
+    scale: f64,
+    decoration: (u32, u32),
+    position: (i32, i32),
+) -> (u32, u32, i32, i32) {
+    let (left, top, available_width, available_height) = area;
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
+    let dimension = |available: u32, border: u32, preferred: f64| {
+        let usable = available.saturating_sub(border).max(1);
+        let logical = (f64::from(usable) / scale - 32.0).clamp(1.0, preferred);
+        ((logical * scale).round() as u32).min(usable).max(1)
+    };
+    let width = dimension(available_width, decoration.0, 960.0);
+    let height = dimension(available_height, decoration.1, 704.0);
+    let max_x =
+        (i64::from(left) + i64::from(available_width) - i64::from(width) - i64::from(decoration.0))
+            .max(i64::from(left));
+    let max_y = (i64::from(top) + i64::from(available_height)
+        - i64::from(height)
+        - i64::from(decoration.1))
+    .max(i64::from(top));
+    (
+        width,
+        height,
+        i64::from(position.0).clamp(i64::from(left), max_x) as i32,
+        i64::from(position.1).clamp(i64::from(top), max_y) as i32,
+    )
+}
+
+fn fit_management(window: &tauri::WebviewWindow) -> Result<(), String> {
+    fit_management_in(window, management_area(window)?)
+}
+
+fn management_area(window: &tauri::WebviewWindow) -> Result<ManagementArea, String> {
+    let monitor = window
+        .current_monitor()
+        .ok()
+        .flatten()
+        .or_else(|| window.primary_monitor().ok().flatten())
+        .ok_or("Cannot read monitor work area")?;
+    let area = monitor.work_area();
+    Ok(ManagementArea {
+        bounds: (
+            area.position.x,
+            area.position.y,
+            area.size.width,
+            area.size.height,
+        ),
+        scale: monitor.scale_factor().max(0.1),
+    })
+}
+
+fn fit_management_in(window: &tauri::WebviewWindow, area: ManagementArea) -> Result<(), String> {
+    let inner = window.inner_size().map_err(|e| e.to_string())?;
+    let outer = window.outer_size().map_err(|e| e.to_string())?;
+    let decoration = (
+        outer.width.saturating_sub(inner.width),
+        outer.height.saturating_sub(inner.height),
+    );
+    let position = window.outer_position().map_err(|e| e.to_string())?;
+    let (width, height, x, y) = management_geometry(
+        area.bounds,
+        area.scale,
+        decoration,
+        (position.x, position.y),
+    );
+    // Setters emit window events themselves. Only change an actual difference,
+    // so the follow-up Moved event converges without resizing or moving again.
+    if (inner.width, inner.height) != (width, height) {
+        window
+            .set_size(tauri::PhysicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+    }
+    if (position.x, position.y) != (x, y) {
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+    }
     Ok(())
 }
 
@@ -392,10 +594,21 @@ fn popup_geometry(
     current: Option<(i32, i32)>,
 ) -> (u32, u32, i32, i32) {
     let (left, top, available_width, available_height) = area;
+    let scale = if scale.is_finite() && scale > 0.0 {
+        scale
+    } else {
+        1.0
+    };
     let margin = (8.0 * scale).round() as i32;
-    let width = ((DASHBOARD_WIDTH * scale).round() as u32)
+    let logical_width =
+        (f64::from(available_width) / scale * 0.32).clamp(DASHBOARD_MIN_WIDTH, DASHBOARD_WIDTH);
+    // Expanded task lists can use more of the screen; keep the idle view compact.
+    let work_area_fraction = if height > 400 { 0.92 } else { 0.82 };
+    let logical_height = f64::from(height.clamp(DASHBOARD_MIN_HEIGHT, DASHBOARD_MAX_HEIGHT))
+        .min(f64::from(available_height) / scale * work_area_fraction);
+    let width = ((logical_width * scale).round() as u32)
         .min(available_width.saturating_sub((margin * 2) as u32).max(1));
-    let height = ((f64::from(height.clamp(400, 620)) * DASHBOARD_SCALE * scale).round() as u32)
+    let height = ((logical_height * scale).round() as u32)
         .min(available_height.saturating_sub((margin * 2) as u32).max(1));
     let min_x = left + margin.min(available_width.saturating_sub(width) as i32);
     let min_y = top + margin.min(available_height.saturating_sub(height) as i32);
@@ -443,30 +656,107 @@ fn fit_popup(
 #[tauri::command]
 pub async fn resize_dashboard(app: AppHandle, height: u32) -> Result<(), String> {
     let window = app.get_webview_window("popup").ok_or("任务窗口尚未创建")?;
+    DASHBOARD_HEIGHT.store(height, Ordering::SeqCst);
     fit_popup(&window, height, true)
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn management_routes_all_sections_and_rejects_url_injection() {
+        for section in [
+            "general",
+            "panel",
+            "sources",
+            "notifications",
+            "updates",
+            "about",
+        ] {
+            assert_eq!(super::management_section(Some(section)), Some(section));
+        }
+        for section in ["", "unknown", "sources?section=updates", "../notice"] {
+            assert_eq!(super::management_section(Some(section)), None);
+        }
+        assert_eq!(super::management_section(None), None);
+    }
+
+    #[test]
+    fn management_move_without_dpi_change_is_refitted_and_converges() {
+        let first = super::ManagementArea {
+            bounds: (0, 0, 1920, 1040),
+            scale: 1.0,
+        };
+        let mut previous = None;
+        assert!(super::management_area_changed(&mut previous, first));
+        // Moving near/over the same display edge must not snap back.
+        assert!(!super::management_area_changed(&mut previous, first));
+        let smaller = super::ManagementArea {
+            bounds: (-1280, 0, 1280, 720),
+            scale: 1.0,
+        };
+        assert!(super::management_area_changed(&mut previous, smaller));
+        assert!(!super::management_area_changed(&mut previous, smaller));
+        assert!(super::management_area_changed(
+            &mut previous,
+            super::ManagementArea {
+                bounds: smaller.bounds,
+                scale: 1.5
+            }
+        ));
+        assert!(super::management_geometry_event(
+            &tauri::WindowEvent::Moved(tauri::PhysicalPosition::new(-1200, 100))
+        ));
+        assert!(!super::management_geometry_event(
+            &tauri::WindowEvent::Focused(true)
+        ));
+        let decoration = (16, 39);
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let large =
+                super::management_geometry((0, 0, 3840, 2160), scale, decoration, (100, 100));
+            let small = (-1280, 40, 1280, 720);
+            let next = super::management_geometry(small, scale, decoration, (-500, 400));
+            assert!(next.0 <= large.0 && next.1 <= large.1);
+            assert!(next.2 >= -1280 && next.3 >= 40);
+            assert!(i64::from(next.2) + i64::from(next.0 + decoration.0) <= 0);
+            assert!(i64::from(next.3) + i64::from(next.1 + decoration.1) <= 760);
+            assert_eq!(
+                next,
+                super::management_geometry(small, scale, decoration, (next.2, next.3))
+            );
+        }
+    }
+
+    #[test]
+    fn four_task_panel_can_grow_without_widening_or_overlapping_the_work_area() {
+        let large = super::popup_geometry((0, 0, 1920, 1040), 1.0, 840, None);
+        assert_eq!((large.0, large.1), (368, 840));
+        let retina = super::popup_geometry((0, 0, 3840, 2080), 2.0, 840, None);
+        assert_eq!((retina.0, retina.1), (736, 1680));
+        let small = super::popup_geometry((0, 0, 1366, 728), 1.5, 840, None);
+        assert_eq!(small.0, 480);
+        assert!(small.1 <= 671 && small.3 + small.1 as i32 <= 728);
+    }
+
     use super::*;
     use std::time::SystemTime;
 
     #[test]
     fn popup_fits_work_area_at_scaled_and_negative_monitor_coordinates() {
         for scale in [1.0, 1.25, 1.5, 2.0] {
-            let (w, h, x, y) =
-                popup_geometry((-1920, 40, 1920, 1000), scale, 620, Some((-9999, 9999)));
-            assert_eq!(w, (DASHBOARD_WIDTH * scale).round() as u32);
-            assert_eq!(
-                h,
-                ((620.0 * DASHBOARD_SCALE * scale).round() as u32)
-                    .min(1000 - (16.0 * scale) as u32)
-            );
-            assert!(x >= -1920 && y >= 40);
-            assert!(x + w as i32 <= 0 && y + h as i32 <= 1040);
+            for (aw, ah) in [(1920, 1000), (1366, 728), (1536, 824), (2560, 1400)] {
+                let (w, h, x, y) =
+                    popup_geometry((-1920, 40, aw, ah), scale, 620, Some((-9999, 9999)));
+                assert!(f64::from(w) / scale <= DASHBOARD_WIDTH + 1.0);
+                assert!(f64::from(h) <= f64::from(ah) * 0.92 + 1.0);
+                assert!(x >= -1920 && y >= 40);
+                assert!(x + w as i32 <= -1920 + aw as i32 && y + h as i32 <= 40 + ah as i32);
+            }
         }
-        let (w, h, x, y) = popup_geometry((0, 0, 640, 480), 2.0, 620, None);
-        assert!(w <= 608 && h <= 448 && x >= 16 && y >= 16);
+        let large = popup_geometry((0, 0, 2560, 1400), 1.0, 620, None);
+        assert_eq!((large.0, large.1), (368, 620));
+        let laptop = popup_geometry((0, 0, 1536, 824), 1.5, 620, None);
+        assert_eq!(laptop.0, 492);
+        assert!(laptop.1 <= 759);
         let (w, h, x, y) = popup_geometry((0, 0, 10, 10), 1.0, 0, None);
         assert!(x >= 0 && y >= 0 && x + w as i32 <= 10 && y + h as i32 <= 10);
     }

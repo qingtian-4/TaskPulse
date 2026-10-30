@@ -70,6 +70,7 @@ impl Drop for ProbeChild {
 
 #[derive(Debug, Clone)]
 struct CachedSession {
+    model: Option<String>,
     mtime: f64,
     status: TaskStatus,
     cwd: String,
@@ -456,6 +457,8 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
     let mut native_title: Option<String> = None;
     let mut first_user_message: Option<String> = None;
     let mut last_msg: Option<String> = None;
+    let mut model = None;
+    let mut model_seq = -1;
     let mut activity = None;
     let mut last_seq = -1;
     let mut started_at = None;
@@ -495,6 +498,23 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
             .and_then(|value| value.as_u64())
             .and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms)));
         updated_at = time.or(updated_at);
+        // Request configuration and response source are explicit model facts.
+        // Prefer later sequence evidence, including a response's actual alias.
+        let model_path = match ty {
+            "request/header" => Some("/data/header/config/model"),
+            "assistant/message" => Some("/data/message/source/model"),
+            _ => None,
+        };
+        if seq >= model_seq {
+            if let Some(reported) = model_path
+                .and_then(|path| v.pointer(path))
+                .and_then(|value| value.as_str())
+                .and_then(super::reported_model)
+            {
+                model = Some(reported);
+                model_seq = seq;
+            }
+        }
         match ty {
             "session" => {
                 if cwd.is_none() {
@@ -592,6 +612,7 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
         });
     let turn_key = (last_turn_start_seq >= 0).then(|| format!("turn:{last_turn_start_seq}"));
     Some(CachedSession {
+        model,
         mtime: 0.0,
         status,
         cwd,
@@ -823,6 +844,7 @@ impl Provider for DeepSeekHarnessProvider {
                 state.updated_at.unwrap_or(mtime_time),
                 now,
             );
+            task.model = state.model.clone();
             task.started_at = state.started_at;
             task.project_path = (!state.cwd.is_empty()).then_some(state.cwd.clone());
             if task.status == TaskStatus::WaitingInput {
@@ -1310,6 +1332,24 @@ mod tests {
             }
         }
         inspect(&dirs_next::home_dir().unwrap().join(".dsh/sessions"));
+    }
+
+    #[test]
+    fn model_uses_request_then_response_evidence_without_changing_lifecycle() {
+        let base = "{\"type\":\"turn/start\",\"seq\":1,\"time\":1000}\n";
+        let request = serde_json::json!({"type":"request/header","seq":2,"data":{"header":{"config":{"model":"deepseek-default"}}}});
+        let response = serde_json::json!({"type":"assistant/message","seq":3,"data":{"message":{"source":{"model":"deepseek-v4-flash"}}}});
+        let path = "session-fixture/session.v4.jsonl.zstd";
+        let first = parse_session_text(&format!("{base}{request}\n"), path).unwrap();
+        assert_eq!(first.model.as_deref(), Some("deepseek-default"));
+        let after =
+            parse_session_text(&format!("{base}{request}\n{response}\n{request}\n"), path).unwrap();
+        assert_eq!(after.model.as_deref(), Some("deepseek-v4-flash"));
+        assert_eq!(after.status, first.status);
+        assert_eq!(after.turn_key, first.turn_key);
+        assert_eq!(after.started_at, first.started_at);
+        assert_eq!(after.updated_at, first.updated_at);
+        assert!(parse_session_text(base, path).unwrap().model.is_none());
     }
 
     // Parse-only tests (no WSL): feed JSONL event text through the same logic.

@@ -1,6 +1,7 @@
 //! One GUI writer per configuration root. CLI event writers have separate locks.
 use std::fs::File;
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 pub struct Instance {
     _lock: File,
@@ -19,20 +20,31 @@ impl Instance {
             .write(true)
             .open(root.join("gui.lock"))?;
         let activation = root.join("gui.activate");
-        match lock.try_lock() {
-            Ok(()) => Ok(Some(Self {
-                _lock: lock,
-                previous_activation: std::fs::read(&activation).unwrap_or_default(),
-                activation,
-            })),
-            Err(std::fs::TryLockError::WouldBlock) => {
-                std::fs::write(
-                    activation,
-                    format!("{}:{:?}", std::process::id(), std::time::SystemTime::now()),
-                )?;
-                Ok(None)
+        // LaunchServices can start the replacement before the old event loop
+        // exits. Keep its writer lock intact, and give that exit a bounded grace
+        // period before treating this launch as activation of a live instance.
+        let deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match lock.try_lock() {
+                Ok(()) => {
+                    return Ok(Some(Self {
+                        _lock: lock,
+                        previous_activation: std::fs::read(&activation).unwrap_or_default(),
+                        activation,
+                    }));
+                }
+                Err(std::fs::TryLockError::WouldBlock) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(25));
+                }
+                Err(std::fs::TryLockError::WouldBlock) => {
+                    std::fs::write(
+                        activation,
+                        format!("{}:{:?}", std::process::id(), std::time::SystemTime::now()),
+                    )?;
+                    return Ok(None);
+                }
+                Err(std::fs::TryLockError::Error(error)) => return Err(error),
             }
-            Err(std::fs::TryLockError::Error(error)) => Err(error),
         }
     }
 
@@ -54,6 +66,22 @@ impl Instance {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn replacement_process_waits_for_exiting_writer_without_dropping_lock() {
+        let root = tempfile::tempdir().unwrap();
+        let previous = Instance::acquire(root.path()).unwrap().unwrap();
+        let exiting = std::thread::spawn(move || {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+            drop(previous);
+        });
+        let replacement = Instance::acquire(root.path()).unwrap();
+        exiting.join().unwrap();
+        assert!(
+            replacement.is_some(),
+            "restart must acquire after the old writer exits"
+        );
+    }
+
     #[test]
     fn one_writer_per_root_and_lock_releases_on_exit() {
         let a = tempfile::tempdir().unwrap();
