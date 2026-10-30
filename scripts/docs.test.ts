@@ -23,7 +23,7 @@ test('both READMEs expose the actual one-line installation commands before sourc
     expect(body).toContain('Apple Silicon');expect(body).toContain('Intel');
     expect(body).toContain('bun run tauri build');
     expect(body).toContain('sprklai/agenttray');expect(body).toContain('(LICENSE)');
-    expect(body).not.toMatch(/assets\/(?:screenshots|legacy-agenttray)\//);
+    expect(body).not.toMatch(/assets\/legacy-agenttray\//);
     expect(body).not.toMatch(/docs\/(?:internal|maintainers)\//);
     expect([...body.matchAll(/^git clone .+$/gm)].map(m=>m[0])).toEqual(['git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git']);
   }
@@ -35,6 +35,20 @@ test('both READMEs expose the actual one-line installation commands before sourc
   expect(read('install.sh')).toStartWith('#!/bin/bash');
   expect(read('README.md')).not.toContain('install.sh | sh');
   expect(read('README.en.md')).not.toContain('install.sh | sh');
+});
+
+test('both READMEs show four native figures at half their actual PNG resolution',()=>{
+  const figures=[['dashboard',368,840],['notice-input',320,132],['notice-approval',320,132],['notice-completed',320,132]] as const;
+  for(const [name,width,height] of figures){
+    const path=`assets/screenshots/${name}.png`;
+    const bytes=readFileSync(resolve(root,path));
+    expect(bytes.subarray(0,8).toString('hex'),path).toBe('89504e470d0a1a0a');
+    expect(bytes.readUInt32BE(16),path).toBe(width*2);
+    expect(bytes.readUInt32BE(20),path).toBe(height*2);
+    for(const file of ['README.md','README.en.md'])expect(read(file),file).toContain(`src="${path}" width="${width}"`);
+  }
+  expect(read('README.md')).toContain('Windows 界面 · 示例任务');
+  expect(read('README.en.md')).toContain('Windows interface with sample tasks.');
 });
 
 test('repository tests use exact root paths rather than collecting nested worktrees',()=>{

@@ -12,10 +12,14 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 | Claude Code | `CLAUDE_CONFIG_DIR` 或 `~/.claude` | 原生会话观测；需要精确生命周期与授权事件时，可选择安装官方 Hook |
 | Hermes | 原生 SQLite 数据库与运行租约 | 标题、项目、模型及运行状态；缺少结束证据时保留待更新状态 |
 | DeepSeek Harness | `DSH_HOME` 或 `~/.dsh`，可用 `TASKPULSE_DSH_HOME` 覆盖 | Desktop / CLI 原生会话，支持旧日志与 v4 日志 |
+| OpenCode | `~/.local/share/opencode/opencode.db`，支持 `XDG_DATA_HOME` | 读取运行阶段、模型与明确结束记录；支持 v2 和旧版会话表；不提供独立提问或审批提醒 |
+| WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `projects/*.jsonl` 会话目录 | 数据库与增量日志关联本轮开始/结束；不包含云端任务，不提供独立提问或审批提醒 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 原生标题、项目、模型、工具阶段与整轮结果；不提供独立审批事件 |
 | 豆包 | 桌面端原生执行存储 | 当前工作任务与执行状态；不提供审批提醒，详见[豆包说明](DOUBAO.md) |
 
 原生数据格式可能随 Agent 版本改变。读取失败会显示来源异常或状态待更新，不伪造任务结束。来源没有提供模型时不猜测模型；代理所报告的模型名不保证揭示代理背后的实际模型。
+
+OpenCode 2.2.2 和 WorkBuddy 5.9.3 的 Windows 本机记录已做只读核对；这不代表所有旧版、国际版或 macOS 版本均已实机验收。接入操作见[本机 Agent](LOCAL_AGENTS.md#opencode-与-workbuddy)。
 
 ## 按需连接
 
@@ -25,7 +29,6 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 | Codex SSH | 添加你自己的 SSH 主机与项目范围 |
 | Gemini CLI | 启用进程扫描发现运行进程；完整任务生命周期需要事件接入 |
 | Kimi Code CLI | 选择适配器，连接标准事件或 MCP；宿主需发送对应事件 |
-| WorkBuddy | 选择适配器，连接标准事件或 MCP；宿主需发送对应事件 |
 | TRAE 中国版 IDE | 选择适配器，连接标准事件或 MCP；宿主需发送对应事件 |
 | ZCode 事件接入 | 除原生读取外，可按需使用标准事件 / MCP |
 | 其他 Agent | 使用标准事件、MCP 或兼容状态文件 |

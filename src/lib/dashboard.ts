@@ -1,5 +1,12 @@
 import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
+// Keep a compact single task; allow four task cards before scrolling.
+export function preferredDashboardHeight(taskCount:number, expanded:boolean):number {
+  if(expanded || taskCount>=4)return 840;
+  if(taskCount===3)return 680;
+  return taskCount>1 ? 560 : 400;
+}
+
 export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
 export type TaskSignal = 'approval' | 'question' | 'failed' | 'action';
 export interface DashboardFilters { source: string; project: string; location: string; section: TaskSection | null; signal?: TaskSignal | null; query?:string; unreadOnly?:boolean }

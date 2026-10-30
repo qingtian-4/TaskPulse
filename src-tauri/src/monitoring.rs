@@ -15,6 +15,8 @@ use tauri::{AppHandle, Emitter};
 pub enum SourceKind {
     Doubao,
     Zcode,
+    Opencode,
+    Workbuddy,
     Codex,
     CodexWsl,
     ClaudeCode,
@@ -145,6 +147,8 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         source("local_file", "通用 Hooks", SourceKind::Hooks, ""),
         source("scanner", "进程扫描", SourceKind::Scanner, ""),
         source("zcode", "ZCode · 本机", SourceKind::Zcode, ""),
+        source("opencode", "OpenCode · 本机", SourceKind::Opencode, ""),
+        source("workbuddy", "WorkBuddy · 本机", SourceKind::Workbuddy, ""),
         source("doubao", "豆包 · 本机", SourceKind::Doubao, ""),
     ];
     for item in &mut sources {
@@ -164,6 +168,8 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
                     | SourceKind::CodexWsl
                     | SourceKind::Doubao
                     | SourceKind::Zcode
+                    | SourceKind::Opencode
+                    | SourceKind::Workbuddy
             );
     }
     for host in &cfg.remote_hosts {
@@ -344,6 +350,16 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
             return Err("请输入有效的 SSH 别名".into());
         }
         let location = match source.kind {
+            SourceKind::Opencode => Some(if source.location.is_empty() {
+                crate::providers::opencode::default_db()
+            } else {
+                PathBuf::from(&source.location)
+            }),
+            SourceKind::Workbuddy => Some(if source.location.is_empty() {
+                crate::providers::workbuddy::default_root()
+            } else {
+                PathBuf::from(&source.location)
+            }),
             SourceKind::Zcode => Some(if source.location.is_empty() {
                 crate::providers::zcode::default_db()
             } else {
@@ -537,6 +553,8 @@ fn automatic_local(kind: SourceKind) -> bool {
             | SourceKind::DeepseekDesktop
             | SourceKind::Doubao
             | SourceKind::Zcode
+            | SourceKind::Opencode
+            | SourceKind::Workbuddy
     )
 }
 
@@ -923,7 +941,7 @@ pub fn find_session(id: &str) -> Option<TaskSnapshot> {
     catalog.or(known)
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct SourceDiscovery {
     pub id: String,
     pub available: bool,
@@ -982,6 +1000,14 @@ fn discover_source_rows_with_wsl(
         .iter()
         .map(|source| {
             let (available, detail) = match source.kind {
+                SourceKind::Opencode => {
+                    let path=if source.location.is_empty(){crate::providers::opencode::default_db()}else{PathBuf::from(&source.location)};
+                    (path.is_file(),format!("{} · 原生任务；不提供独立提问/审批事件",path.display()))
+                }
+                SourceKind::Workbuddy => {
+                    let root=if source.location.is_empty(){crate::providers::workbuddy::default_root()}else{PathBuf::from(&source.location)};
+                    (root.join("workbuddy.db").is_file() && root.join("projects").is_dir(),format!("{} · 本机任务；不包含云端任务或独立提问/审批事件",root.display()))
+                }
                 SourceKind::Zcode => {
                     let path=if source.location.is_empty() {crate::providers::zcode::default_db()} else {PathBuf::from(&source.location)};
                     (path.is_file(), path.display().to_string())
@@ -1104,6 +1130,52 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn newly_supported_native_agents_join_opted_in_discovery_without_overriding_a_disabled_source()
+    {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), false);
+        settings.onboarding_complete = true;
+        settings.auto_discover_local = true;
+        let rows = vec![SourceKind::Opencode, SourceKind::Workbuddy]
+            .into_iter()
+            .map(|kind| {
+                let s = settings.sources.iter().find(|s| s.kind == kind).unwrap();
+                SourceDiscovery {
+                    id: s.id.clone(),
+                    available: true,
+                    detail: String::new(),
+                    candidate: None,
+                }
+            })
+            .collect::<Vec<_>>();
+        assert!(merge_discovered(&mut settings, rows.clone()));
+        for kind in [SourceKind::Opencode, SourceKind::Workbuddy] {
+            assert!(
+                settings
+                    .sources
+                    .iter()
+                    .find(|s| s.kind == kind)
+                    .unwrap()
+                    .enabled
+            );
+        }
+        settings
+            .sources
+            .iter_mut()
+            .find(|s| s.kind == SourceKind::Workbuddy)
+            .unwrap()
+            .enabled = false;
+        assert!(!merge_discovered(&mut settings, rows));
+        assert!(
+            !settings
+                .sources
+                .iter()
+                .find(|s| s.kind == SourceKind::Workbuddy)
+                .unwrap()
+                .enabled
+        );
+    }
+
     #[test]
     fn newly_saved_disabled_custom_sources_remain_disabled() {
         let mut previous = from_legacy(&TaskPulseConfig::default(), false);

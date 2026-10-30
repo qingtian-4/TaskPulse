@@ -2,6 +2,7 @@
  * Run: bun scripts/native-product-smoke.ts --exe <unused-built-exe>
  * --capture writes public PNGs only after privacy/layout assertions. Never installs Hooks. */
 import assert from 'node:assert/strict';
+import {Database} from 'bun:sqlite';
 import {mkdir,copyFile} from 'node:fs/promises';
 import {resolve,join,dirname} from 'node:path';
 import {spawn,spawnSync,type ChildProcess} from 'node:child_process';
@@ -122,17 +123,21 @@ async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:
 }
 async function screenshot(client:any,name:string,width:number,height:number){
   if(!process.argv.includes('--capture'))return;
-  await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+  await client.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:2,mobile:false});
+  await client.evaluate('document.fonts.ready.then(()=>true)');
   await Bun.sleep(300);
   const visible=await client.evaluate('document.body.innerText');
   assert.ok(!/[A-Z]:[\\/]Users[\\/]|Administrator|qingtian|Server[13]|wanghy/i.test(visible),'Public capture must not expose private host data');
-  await Bun.write(join(owned,name+'.png'),Buffer.from((await client.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  const png=Buffer.from((await client.send('Page.captureScreenshot',{format:'png'})).data,'base64');
+  assert.equal(png.readUInt32BE(16),width*2,'Public capture must have twice the logical width');
+  assert.equal(png.readUInt32BE(20),height*2,'Public capture must have twice the logical height');
+  await Bun.write(join(owned,name+'.png'),png);
 }
 try{
   root=await page('');await root.wait(`!!document.querySelector('.dashboard')`);
   assert.equal((await root.invoke('integration_environment')).isolated,true);
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
-  const nativeLayout=await root.evaluate(`({width:Math.round(Math.min(368,Math.max(320,screen.availWidth*.32),screen.availWidth-16)),collapsed:Math.round(Math.min(400,screen.availHeight*.82,screen.availHeight-16)),expanded:Math.round(Math.min(560,screen.availHeight*.82,screen.availHeight-16))})`);
+  const nativeLayout=await root.evaluate(`({width:Math.round(Math.min(368,Math.max(320,screen.availWidth*.32),screen.availWidth-16)),collapsed:Math.round(Math.min(400,screen.availHeight*.82,screen.availHeight-16)),expanded:Math.round(Math.min(560,screen.availHeight*.92,screen.availHeight-16)),four:Math.round(Math.min(840,screen.availHeight*.92,screen.availHeight-16))})`);
   await root.wait(`Math.abs(innerWidth-${nativeLayout.width})<=1&&Math.abs(innerHeight-${nativeLayout.collapsed})<=1`);
   await Bun.write(join(owned,'empty-native.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await nativeTray('idle');
@@ -168,15 +173,15 @@ try{
   await root.invoke('update_task_attention',{id:firstResult.id,action:'restore'});
   event('tool','turn.started',{title:'Example: verify-session-renaming-and-unread-result-preservation-with-a-long-English-title',project:'UI Sandbox / extremely-long-project-name-for-width-validation'});
   event('tool','tool.started',{activity:'运行回归测试 · C:/public/examples/very-long-project-path/packages/integration/verify-taskpulse-notification-layout.test.ts'},{call_id:'test-call'});
-  await root.wait(`document.querySelectorAll('.task-row').length===4`);
+  await root.wait(`document.querySelectorAll('.task-row').length===4&&Math.abs(innerHeight-${nativeLayout.four})<=1`);
   const initial=await root.invoke('get_agents');
   const thinking=initial.find((t:any)=>t.session_id==='thinking'),done=initial.find((t:any)=>t.session_id==='done');
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
   assert.deepEqual(fontSizes,{title:'14px',context:'11px',activity:'12px',number:nativeLayout.width<=350?'23px':'22px'});
-  for(const [width,height] of [[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
+  for(const [width,height] of [[368,840],[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.setDeviceMetricsOverride',{width:368,height:560,deviceScaleFactor:1,mobile:false});
-  checks.push('native compact window follows work-area/DPI bounds; ordinary 368x400 grows to 368x560; long Chinese/English typography at DPR 1/1.25/1.5/2');
+  checks.push('native compact window follows work-area/DPI bounds; ordinary 368x400 grows through 368x560 to 368x840 for four tasks; long Chinese/English typography at DPR 1/1.25/1.5/2');
   await root.evaluate(`[...document.querySelectorAll('.counts .overview')].find(b=>b.textContent.includes('待处理')).click()`);
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.task-row').textContent.includes('等待输入')`);
   await click(root,'.all-tasks');
@@ -237,7 +242,7 @@ try{
   await root.wait(`document.querySelectorAll('.task-row').length===27`);
   const layout=await root.evaluate(`(()=>{const e=document.querySelector('.task-scroll');return {scroll:e.scrollHeight>e.clientHeight,height:document.querySelector('.dashboard').getBoundingClientRect().height,horizontal:document.documentElement.scrollWidth>innerWidth};})()`);
   assert.equal(layout.scroll,true);assert.ok(layout.height<=560);assert.equal(layout.horizontal,false);
-  for(const [width,height] of [[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
+  for(const [width,height] of [[368,840],[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.clearDeviceMetricsOverride');
   await root.wait(`Math.abs(innerWidth-${nativeLayout.width})<=1`);
   const nativeBounds=await root.invoke('plugin:window|outer_size',{label:'popup'}),nativePosition=await root.invoke('plugin:window|outer_position',{label:'popup'}),monitor=await root.invoke('plugin:window|current_monitor',{label:'popup'});
@@ -368,10 +373,137 @@ try{
   assert.equal(observedMcp.id,mcpId);assert.equal(observedMcp.unread,false);
   assert.equal(observedMcp.evidence_channel,'self_reported');
   checks.push('real MCP events reach native task UI: stable identity, two explicit requests, matching resolution, thinking remains blocked, explicit end, rename and duplicate after viewed');
+  // Public native-schema fixtures verify the full discovery/settings/provider/UI
+  // path without installing an Agent or touching its actual files.
+  {
+    const settings=await root.invoke('get_monitoring_settings');
+    settings.notifications=false;await root.invoke('save_monitoring_settings',{settings});
+    for(let n=0;n<32;n++){const current=(await root.invoke('get_task_notice')).current;if(!current)break;await root.invoke('dismiss_task_notice',{id:current.id});}
+    const ocPath=join(owned,'public-opencode.db'),wbRoot=join(owned,'public-workbuddy');
+    await mkdir(join(wbRoot,'projects','public'),{recursive:true});
+    const oc=new Database(ocPath),wb=new Database(join(wbRoot,'workbuddy.db'));
+    try{
+      oc.exec(`CREATE TABLE session_v2(id TEXT PRIMARY KEY,title TEXT,slug TEXT,directory TEXT,model TEXT,time_archived INTEGER,time_updated INTEGER);
+        CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,time_created INTEGER,time_updated INTEGER,data TEXT);
+        INSERT INTO session_v2 VALUES('public-native-session','公开合成 OpenCode 任务','public-session','C:/public/TaskPulse','{"id":"public-model"}',NULL,100000);
+        INSERT INTO session_message VALUES('old-user','public-native-session','user',1,100000,100000,'{"time":{"created":100000}}');
+        INSERT INTO session_message VALUES('old-idle','public-native-session','idle',2,101000,101000,'{"time":{"created":101000},"outcome":"succeeded"}');`);
+      wb.exec(`CREATE TABLE sessions(id TEXT,title TEXT,custom_title TEXT,cwd TEXT,status TEXT,last_activity_at INTEGER,created_at INTEGER,updated_at INTEGER,model TEXT,deleted_at INTEGER,transport TEXT);
+        INSERT INTO sessions VALUES('public-native-session','公开合成 WorkBuddy 任务',NULL,'C:/public/TaskPulse','completed',101000,100000,101000,'public-model',NULL,'local');`);
+      const wbLog=join(wbRoot,'projects','public','public-native-session.jsonl');
+      const wbEvents:any[]=[{id:'old-user',sessionId:'public-native-session',type:'message',role:'user',timestamp:100000},{id:'old-end',sessionId:'public-native-session',type:'message',role:'assistant',status:'completed',timestamp:101000}];
+      await Bun.write(wbLog,wbEvents.map(e=>JSON.stringify(e)+'\n').join(''));
+      for(const [kind,location] of [['opencode',ocPath],['workbuddy',wbRoot]])settings.sources.push({id:'public-native-'+kind,name:kind==='opencode'?'OpenCode · 公开合成验收':'WorkBuddy · 公开合成验收',kind,location,enabled:true,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:500});
+      await root.invoke('save_monitoring_settings',{settings});
+      await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(h=>['opencode','workbuddy'].every(k=>h.some(h=>h.provider==='public-native-'+k&&h.status==='connected')))`);
+      assert.equal((await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-')).length,0,'New sources must not import finished native history');
+      const started=Date.now();
+      oc.query("INSERT INTO session_message VALUES(?,'public-native-session','user',3,?,?,?)").run('current-user',started,started,JSON.stringify({time:{created:started}}));
+      wbEvents.push({id:'current-user',sessionId:'public-native-session',type:'message',role:'user',timestamp:started});
+      await Bun.write(wbLog,wbEvents.map(e=>JSON.stringify(e)+'\n').join(''));
+      wb.query("UPDATE sessions SET status='working',last_activity_at=?,updated_at=?").run(started,started);
+      await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.filter(t=>t.source_instance?.startsWith('public-native-')&&t.status==='running'&&t.model==='public-model').length===2)`);
+      await click(root,'.all-tasks');
+      await root.wait(`Array.from(document.querySelectorAll('.task-row')).filter(e=>e.dataset.taskId.startsWith('public-native-')&&e.textContent.includes('public-model')).length===2`);
+      const nativeBefore=(await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-'));
+      assert.ok(nativeBefore.every((t:any)=>t.name.startsWith('公开合成')&&t.turn_key==='current-user'&&t.project==='TaskPulse'));
+      oc.query("UPDATE session_v2 SET title='公开合成 OpenCode 已改名',time_updated=?").run(Date.now());
+      wb.query("UPDATE sessions SET custom_title='公开合成 WorkBuddy 已改名',updated_at=?").run(Date.now());
+      await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.filter(t=>t.source_instance?.startsWith('public-native-')&&t.name.endsWith('已改名')).length===2)`);
+      for(const old of nativeBefore){const updated=(await root.invoke('get_agents')).find((t:any)=>t.id===old.id);assert.equal(updated.turn_key,old.turn_key);assert.equal(updated.started_at,old.started_at);}
+      // A returned tool is still running, without a final native idle/result.
+      oc.query("INSERT INTO session_message VALUES(?,'public-native-session','assistant',4,?,?,?)").run('tool-message',started+1,started+2,JSON.stringify({time:{created:started+1,completed:started+2},finish:'tool-calls'}));
+      wbEvents.push({id:'call',sessionId:'public-native-session',type:'function_call',callId:'public-call',timestamp:started+1},{id:'result',sessionId:'public-native-session',type:'function_call_result',callId:'public-call',status:'completed',timestamp:started+2});
+      await Bun.write(wbLog,wbEvents.map(e=>JSON.stringify(e)+'\n').join(''));
+      await root.invoke('request_refresh');await Bun.sleep(1000);
+      assert.equal((await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-')&&t.status==='running').length,2);
+      settings.notifications=true;await root.invoke('save_monitoring_settings',{settings});
+      const finished=Date.now();
+      oc.query("INSERT INTO session_message VALUES(?,'public-native-session','idle',5,?,?,?)").run('current-idle',finished,finished,JSON.stringify({time:{created:finished},outcome:'succeeded'}));
+      wbEvents.push({id:'current-end',sessionId:'public-native-session',type:'message',role:'assistant',status:'completed',timestamp:finished});
+      await Bun.write(wbLog,wbEvents.map(e=>JSON.stringify(e)+'\n').join(''));
+      wb.query("UPDATE sessions SET status='completed',last_activity_at=?").run(finished);
+      await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.filter(t=>t.source_instance?.startsWith('public-native-')&&t.finished_at&&t.unread).length===2)`);
+      for(let n=0;n<2;n++){
+        await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current&&${JSON.stringify(nativeBefore.map((t:any)=>t.id))}.includes(s.current.task_id))`);
+        const current=(await root.invoke('get_task_notice')).current;await root.invoke('dismiss_task_notice',{id:current.id});
+      }
+      assert.ok((await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-')).every((t:any)=>t.unread),'Dismissing native reminders cannot acknowledge results');
+      await management.wait(`document.body.innerText.includes('OpenCode')&&document.body.innerText.includes('WorkBuddy')`);
+      checks.push('OpenCode/WorkBuddy native SQLite+JSONL through settings/provider/store/UI: no history import, stable rename, models, tool return stays running, explicit end and unread-preserving reminders (public fixtures, not host certification)');
+      settings.sources=settings.sources.filter((s:any)=>!s.id.startsWith('public-native-'));await root.invoke('save_monitoring_settings',{settings});
+    }finally{oc.close();wb.close();}
+  }
   assert.equal(errors.length,0,JSON.stringify(errors));
   if(process.argv.includes('--capture')){
+    // Curated public examples use the real event/store/UI pipeline. They are
+    // deliberately custom-agent tasks, not fabricated native provider output.
+    const settings=await root.invoke('get_monitoring_settings');
+    settings.notifications=false;
+    settings.sources.find((s:any)=>s.id===source.id).name='示例 Agent';
+    await root.invoke('save_monitoring_settings',{settings});
+    for(let n=0;n<32;n++){
+      const current=(await root.invoke('get_task_notice')).current;if(!current)break;
+      await root.invoke('dismiss_task_notice',{id:current.id});
+    }
+    for(const task of await root.invoke('get_agents'))if(task.status==='running'){
+      assert.equal(task.source_instance,source.id,'Only owned sample sessions may be ended for the capture');
+      event(task.session_id,'turn.completed');
+    }
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(tasks=>tasks.every(t=>t.status!=='running'))`);
+    for(const task of await root.invoke('get_agents'))await root.invoke('update_task_attention',{id:task.id,action:'hide'});
+    await click(root,'.all-tasks');
+    if(await root.evaluate(`!!document.querySelector('[aria-label="关闭详情"]')`))await click(root,'[aria-label="关闭详情"]');
+    if(await root.evaluate(`document.querySelector('.filter-toggle')?.getAttribute('aria-expanded')==='true'`))await click(root,'.filter-toggle');
+    await root.wait(`document.querySelectorAll('.task-row').length===0`);
+    const oldMessages=await root.invoke('get_message_center');
+    await root.invoke('mark_messages_seen',{ids:oldMessages.entries.map((entry:any)=>entry.id)});
+    event('readme-overview-running','turn.started',{title:'优化任务列表布局',project:'TaskPulse 示例',model:'gpt-5.4'});
+    event('readme-overview-running','tool.started',{activity:'调整任务卡片与状态提示'},{call_id:'readme-layout'});
+    event('readme-overview-input','turn.started',{title:'确认导出文件格式',project:'TaskPulse 示例',model:'gpt-5.4'});
+    event('readme-overview-input','input.requested',{request_kind:'question'},{request_id:'readme-format'});
+    event('readme-overview-approval','turn.started',{title:'运行项目测试',project:'TaskPulse 示例',model:'gpt-5.4'});
+    event('readme-overview-approval','input.requested',{request_kind:'approval'},{request_id:'readme-test'});
+    event('readme-overview-result','turn.started',{title:'整理快速入门指南',project:'Docs 示例',model:'gpt-5.4'});
+    event('readme-overview-result','turn.completed');
+    await root.wait(`document.querySelectorAll('.task-row').length===4&&document.querySelectorAll('.model').length===4&&document.body.innerText.includes('等待输入')&&document.body.innerText.includes('本轮结束')`);
+    const overview=await root.invoke('get_agents');
+    assert.equal(overview.filter((t:any)=>t.status==='running').length,1);
+    assert.equal(overview.filter((t:any)=>t.waiting_reason==='question').length,1);
+    assert.equal(overview.filter((t:any)=>t.finished_at&&t.unread).length,1);
+    assert.equal(overview.filter((t:any)=>t.waiting_reason==='approval').length,1);
+    await Bun.sleep(8000); // Capture a live elapsed clock, not a just-created 0s task.
+    await screenshot(root,'readme-dashboard',368,840);
+    assert.ok(await root.evaluate(`[...document.querySelectorAll('.task-item')].every(e=>{const r=e.getBoundingClientRect(),list=document.querySelector('.task-scroll').getBoundingClientRect();return r.top>=list.top&&r.bottom<=list.bottom})`),'Every representative task must be visible');
+    settings.notifications=true;await root.invoke('save_monitoring_settings',{settings});
+    for(const [kind,title,project,label] of [
+      ['input','确认导出文件格式','TaskPulse 示例','等待输入'],
+      ['approval','运行项目测试','TaskPulse 示例','需要授权'],
+      ['completed','整理快速入门指南','Docs 示例','本轮结束']
+    ]){
+      const session='readme-notice-'+kind,requestId=session+'-request';
+      event(session,'turn.started',{title,project,model:'gpt-5.4'});
+      await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.session_id==='${session}'&&t.status==='running'))`);
+      const id=(await root.invoke('get_agents')).find((t:any)=>t.session_id===session).id;
+      if(kind==='completed')event(session,'turn.completed');
+      else event(session,'input.requested',{request_kind:kind==='input'?'question':'approval'},{request_id:requestId});
+      await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.task_id==='${id}')`);
+      await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(label)})`);
+      const current=(await root.invoke('get_task_notice')).current;
+      if(kind!=='completed')assert.equal(current.auto_dismiss_ms,null);
+      const unreadBefore=(await root.invoke('get_agents')).find((t:any)=>t.id===id).unread;
+      await screenshot(notice,'readme-notice-'+kind,320,132);
+      await root.invoke('dismiss_task_notice',{id:current.id});
+      const task=(await root.invoke('get_agents')).find((t:any)=>t.id===id);
+      assert.equal(task.unread,unreadBefore,'Capturing/dismissing a notification must not mark it viewed');
+      if(kind!=='completed'){
+        assert.equal(task.input_request_id,requestId);
+        event(session,'input.resolved',{}, {request_id:requestId});
+      }
+    }
     await mkdir('assets/screenshots',{recursive:true});
-    for(const name of ['dashboard-current','sources-current','notice-current','notice-question-current','notice-approval-current'])await copyFile(join(owned,name+'.png'),join('assets/screenshots',name+'.png'));
+    for(const [from,to] of [['readme-dashboard','dashboard'],['readme-notice-input','notice-input'],['readme-notice-approval','notice-approval'],['readme-notice-completed','notice-completed']])await copyFile(join(owned,from+'.png'),join('assets/screenshots',to+'.png'));
+    checks.push('public README native captures at DPR 2: four visible tasks across running/input/approval/unviewed states and input/approval/completed notices; no acknowledgement or fabricated native-agent identities');
   }
   const report={passed:true,checks,layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events, not real Agent-host support',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));

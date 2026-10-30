@@ -50,7 +50,7 @@ static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 const DASHBOARD_WIDTH: f64 = 368.0;
 const DASHBOARD_MIN_WIDTH: f64 = 320.0;
 const DASHBOARD_MIN_HEIGHT: u32 = 360;
-const DASHBOARD_MAX_HEIGHT: u32 = 560;
+const DASHBOARD_MAX_HEIGHT: u32 = 840;
 static DASHBOARD_HEIGHT: std::sync::atomic::AtomicU32 =
     std::sync::atomic::AtomicU32::new(DASHBOARD_MAX_HEIGHT);
 
@@ -421,8 +421,10 @@ fn popup_geometry(
     let margin = (8.0 * scale).round() as i32;
     let logical_width =
         (f64::from(available_width) / scale * 0.32).clamp(DASHBOARD_MIN_WIDTH, DASHBOARD_WIDTH);
+    // Expanded task lists can use more of the screen; keep the idle view compact.
+    let work_area_fraction = if height > 400 { 0.92 } else { 0.82 };
     let logical_height = f64::from(height.clamp(DASHBOARD_MIN_HEIGHT, DASHBOARD_MAX_HEIGHT))
-        .min(f64::from(available_height) / scale * 0.82);
+        .min(f64::from(available_height) / scale * work_area_fraction);
     let width = ((logical_width * scale).round() as u32)
         .min(available_width.saturating_sub((margin * 2) as u32).max(1));
     let height = ((logical_height * scale).round() as u32)
@@ -479,6 +481,17 @@ pub async fn resize_dashboard(app: AppHandle, height: u32) -> Result<(), String>
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn four_task_panel_can_grow_without_widening_or_overlapping_the_work_area() {
+        let large = super::popup_geometry((0, 0, 1920, 1040), 1.0, 840, None);
+        assert_eq!((large.0, large.1), (368, 840));
+        let retina = super::popup_geometry((0, 0, 3840, 2080), 2.0, 840, None);
+        assert_eq!((retina.0, retina.1), (736, 1680));
+        let small = super::popup_geometry((0, 0, 1366, 728), 1.5, 840, None);
+        assert_eq!(small.0, 480);
+        assert!(small.1 <= 671 && small.3 + small.1 as i32 <= 728);
+    }
+
     use super::*;
     use std::time::SystemTime;
 
@@ -489,16 +502,16 @@ mod tests {
                 let (w, h, x, y) =
                     popup_geometry((-1920, 40, aw, ah), scale, 620, Some((-9999, 9999)));
                 assert!(f64::from(w) / scale <= DASHBOARD_WIDTH + 1.0);
-                assert!(f64::from(h) <= f64::from(ah) * 0.82 + 1.0);
+                assert!(f64::from(h) <= f64::from(ah) * 0.92 + 1.0);
                 assert!(x >= -1920 && y >= 40);
                 assert!(x + w as i32 <= -1920 + aw as i32 && y + h as i32 <= 40 + ah as i32);
             }
         }
         let large = popup_geometry((0, 0, 2560, 1400), 1.0, 620, None);
-        assert_eq!((large.0, large.1), (368, 560));
+        assert_eq!((large.0, large.1), (368, 620));
         let laptop = popup_geometry((0, 0, 1536, 824), 1.5, 620, None);
         assert_eq!(laptop.0, 492);
-        assert!(laptop.1 <= 676);
+        assert!(laptop.1 <= 759);
         let (w, h, x, y) = popup_geometry((0, 0, 10, 10), 1.0, 0, None);
         assert!(x >= 0 && y >= 0 && x + w as i32 <= 10 && y + h as i32 <= 10);
     }

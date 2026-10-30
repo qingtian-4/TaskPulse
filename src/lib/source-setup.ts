@@ -31,6 +31,8 @@ export function readTestResult(id:string, health:ProviderHealth[], since:number)
 }
 
 const notes:Record<SourceKind,string>={
+  opencode:'只读本机 OpenCode 会话、模型和运行记录；明确本轮结束才提醒，不从工具返回推断完成。提问与审批事件尚不提供。',
+  workbuddy:'只读 WorkBuddy 本地数据库与会话记录；关注新执行，不导入空闲历史，不包含云端任务。提问与审批事件尚不提供。',
   zcode:'自动读取本机 ZCode 会话、项目和模型；工具执行完成不会当作整轮结束。',
   doubao:'读取豆包原生执行检查点；已验证 Windows 2.26.10。检查点移除只标为待更新，不推断完成；审批提醒尚未适配。',
   codex:'原生标题、项目与 rollout 执行阶段；仅明确结束事件提醒。命令审批需可选的官方观察 Hook，安装后还需在 Codex /hooks 中信任。',

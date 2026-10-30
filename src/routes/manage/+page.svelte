@@ -59,7 +59,7 @@
   }
   let editor=$derived(settings?.sources.find(s=>s.id===selected) ?? null);
   const setupStep=$derived(sourceSetupStep(!!editor,dirty || !applied?.onboarding_complete,readTest?.id===editor?.id && readTest?.passed===true));
-  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'zcode',name:'ZCode · 本机'},{kind:'doubao',name:'豆包 · 本机'},{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
+  const kinds:Array<{kind:SourceKind;name:string}>=[{kind:'opencode',name:'OpenCode · 本机'},{kind:'workbuddy',name:'WorkBuddy · 本机'},{kind:'zcode',name:'ZCode · 本机'},{kind:'doubao',name:'豆包 · 本机'},{kind:'generic_event',name:'其他 Agent · 通用事件'},{kind:'codex',name:'Codex · 本机'},{kind:'codex_wsl',name:'Codex · WSL'},{kind:'claude_code',name:'Claude Code · 本机'},{kind:'hermes',name:'Hermes · 本机'},{kind:'deepseek_desktop',name:'DeepSeek · Windows'},{kind:'deepseek_wsl',name:'DeepSeek · WSL'},{kind:'remote_codex',name:'Codex · 远程服务器'},{kind:'tmux',name:'tmux · 远程服务器'},{kind:'hooks',name:'通用 Hooks'},{kind:'scanner',name:'进程扫描'}];
   const candidates=$derived(discovery.filter(d=>d.available && d.candidate && !settings?.sources.some(s=>s.id===d.candidate!.id || s.kind===d.candidate!.kind && s.location.toLowerCase()===d.candidate!.location.toLowerCase())));
   function addCandidate(candidate:MonitorSource) {
     if(!settings)return;
@@ -74,7 +74,7 @@
   function changed(){dirty=true;readTest=null;}
   function add(){
     if(!settings)return;
-    const builtin:Partial<Record<SourceKind,string>>={zcode:'zcode',doubao:'doubao',codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
+    const builtin:Partial<Record<SourceKind,string>>={opencode:'opencode',workbuddy:'workbuddy',zcode:'zcode',doubao:'doubao',codex:'codex',claude_code:'claude_code',hermes:'hermes',deepseek_desktop:'deepseek_harness_desktop',deepseek_wsl:'deepseek_harness',hooks:'local_file',scanner:'scanner'};
     const candidate=builtin[addKind];
     if(['codex','hooks','scanner'].includes(addKind) && settings.sources.some(s=>s.kind===addKind)){selected=settings.sources.find(s=>s.kind===addKind)!.id;notice='本机来源已存在，请在左侧启用或编辑。';return;}
     const id=candidate && !settings.sources.some(s=>s.id===candidate) ? candidate : addKind+':'+crypto.randomUUID();
@@ -154,7 +154,7 @@
         discovery=await invoke<SourceDiscovery[]>('discover_sources');
         health=await invoke<ProviderHealth[]>('get_providers');
         notificationError=await invoke<string | null>('get_notification_error') ?? '';
-        if(!settings.onboarding_complete){for(const source of settings.sources){source.enabled=['codex','claude_code','hermes','deepseek_desktop','doubao','zcode'].includes(source.kind) && (discovery.find(d=>d.id===source.id)?.available ?? false);}dirty=true;}
+        if(!settings.onboarding_complete){for(const source of settings.sources){source.enabled=['codex','claude_code','hermes','deepseek_desktop','doubao','zcode','opencode','workbuddy'].includes(source.kind) && (discovery.find(d=>d.id===source.id)?.available ?? false);}dirty=true;}
         selected=settings.sources[0]?.id ?? '';
         const updateCleanup=await listen<{phase:string}>('application-update',e=>updating=['downloading','verifying','installing'].includes(e.payload.phase));if(mounted)cleanups.push(updateCleanup);else updateCleanup();
         const currentUpdate=await invoke<{phase:string}>('get_update_status');updating=['downloading','verifying','installing'].includes(currentUpdate.phase);
@@ -205,6 +205,8 @@
           {#if editor.kind==='generic_event'}{#key editor.id}<IntegrationEditor source={editor} {dirty} changed={changed}/>{/key}{/if}
           <label>显示名称<input aria-label="来源显示名称" bind:value={editor.name} oninput={changed}/></label>
           {#if editor.kind==='remote_codex' || editor.kind==='tmux'}<label>SSH 别名<input bind:value={editor.location} oninput={changed} placeholder="例如 dev-server"/></label><p class="help">使用系统 SSH 配置和已有登录方式，不在 TaskPulse 保存密码。</p><label>轮询周期（毫秒）<input type="number" min="500" max="60000" bind:value={editor.poll_interval_ms} oninput={changed}/></label>
+          {:else if editor.kind==='opencode'}<label>会话数据库<input bind:value={editor.location} oninput={changed} placeholder="留空：XDG_DATA_HOME 或本机 .local/share/opencode/opencode.db"/></label>
+          {:else if editor.kind==='workbuddy'}<label>WorkBuddy 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：本机 .workbuddy"/></label>
           {:else if editor.kind==='doubao'}<label>豆包 IndexedDB 目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用本机默认目录"/></label><p class="help">只读原生执行检查点。未验证的格式会提示读取异常；任务检查点消失不代表结束。审批提醒尚未适配。</p>
           {:else if editor.kind==='claude_code'}<label>Claude 数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 CLAUDE_CONFIG_DIR 或本机 .claude"/></label><p class="help">自动观测 VS Code / CLI 原生会话、标题与上报模型；未启用精确事件时，内部格式的状态显示为“推断”。</p>
           {:else if editor.kind==='deepseek_desktop'}<label>桌面版数据目录<input bind:value={editor.location} oninput={changed} placeholder="留空：使用 DSH_HOME 或本机 .dsh"/></label>

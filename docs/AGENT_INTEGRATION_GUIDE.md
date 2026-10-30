@@ -19,7 +19,7 @@
 | 新版 Kimi Code CLI | `~/.kimi-code/config.toml` 的 `[[hooks]]` | 仅合法 event/command/timeout 字段；保留 TOML 注释；不适用于旧 `.kimi` 产品配置 |
 | TRAE 国内 IDE | `~/.trae-cn/hooks.json`，version=1 | PowerShell 固定转发命令；严格 JSON，遇 JSONC/其他版本拒绝并不改文件 |
 | ZCode Desktop | `~/.zcode/cli/config.json`，hooks.events | process command + argv；不改变全局 hooks.enabled；需你在宿主确认开关并新建会话 |
-| WorkBuddy Desktop | 无 | 只有候选描述，不开放一键安装；需要官方桌面载荷/配置及实测证据 |
+| WorkBuddy Desktop | 无需 Hook，可添加本机原生来源 | 只读本地数据库与会话日志；通用 Hook 描述仍不提供宿主事件映射或安装 |
 
 安装时备份原文件到同目录 `*.pre-taskpulse-integrations.bak`（一次性）。撤销不把旧备份整体覆盖回去，只移除登记的 TaskPulse 条目，保留后来添加的 Hook、模型、代理、statusLine 与未知字段。“停用来源”不会移除 Hook，也不删除未读/固定；“撤销 Hook”是独立确认动作。
 

@@ -7,7 +7,7 @@
   import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, unconfirmedRunning, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import MessageCenter from './MessageCenter.svelte';
-  import {observedDashboardTasks} from '$lib/dashboard';
+  import {observedDashboardTasks,preferredDashboardHeight} from '$lib/dashboard';
   import {acceptMessageState} from '$lib/messages';
   import type {MessageCenterState} from '$lib/types';
   import Settings from '@lucide/svelte/icons/settings';
@@ -166,7 +166,7 @@
   $effect(()=>{
     if(!layoutReady)return;
     const expanded=showPrompts || !!selectedTask || showFilters || showArchive || quotaOpen || !!error || !!note;
-    const needed=tasks.length>1 || expanded ? 560 : 400;
+    const needed=preferredDashboardHeight(tasks.length,expanded);
     if(needed>sessionHeight)sessionHeight=needed;
   });
   $effect(()=>{

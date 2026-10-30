@@ -726,6 +726,36 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::Opencode => {
+                    let mut provider = crate::providers::opencode::OpenCodeProvider::new(
+                        if source.location.is_empty() {
+                            crate::providers::opencode::default_db()
+                        } else {
+                            PathBuf::from(&source.location)
+                        },
+                    );
+                    provider.resume(known_sessions().into_iter().filter(|t| {
+                        t.source == TaskSource::NativeAgent
+                            && t.agent_id.as_deref() == Some("opencode")
+                            && t.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
+                SourceKind::Workbuddy => {
+                    let mut provider = crate::providers::workbuddy::WorkBuddyProvider::new(
+                        if source.location.is_empty() {
+                            crate::providers::workbuddy::default_root()
+                        } else {
+                            PathBuf::from(&source.location)
+                        },
+                    );
+                    provider.resume(known_sessions().into_iter().filter(|t| {
+                        t.source == TaskSource::NativeAgent
+                            && t.agent_id.as_deref() == Some("workbuddy")
+                            && t.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
                 SourceKind::Zcode => {
                     let mut provider = crate::providers::zcode::ZcodeProvider::new(
                         if source.location.is_empty() {

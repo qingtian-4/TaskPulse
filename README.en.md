@@ -16,14 +16,38 @@ See AI task status, model and elapsed time from your system tray.<br>Get notifie
 
 </div>
 
+<p align="center">
+  <img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse showing four tasks: running, input needed, approval needed and unviewed results, with models and elapsed time">
+  <br><sub>Windows interface with sample tasks.</sub>
+</p>
+
 ## Features
 
-- **Find your agents automatically** — confirm detected local sources once, then follow new tasks. Connect WSL and SSH sources when needed.
-- **Status, model and time together** — see task titles, projects, reported models and turn duration, with search and grouping.
-- **Know when to return** — separate notifications for completion, failure, questions and permission requests.
-- **Keep results in view** — unread results remain available; pins and unread state survive restarts.
-- **Stay out of the way** — a compact tray panel fits laptops and high-DPI displays. Thinking and tool execution remain running states.
-- **Keep your data local** — no TaskPulse cloud account or conversation uploads. TaskPulse never approves Agent requests for you.
+- **Find your agents automatically**: confirm detected local sources once, then follow new tasks. Connect WSL and SSH sources when needed.
+- **Status, model and time together**: see task titles, projects, reported models and turn duration, with search and grouping.
+- **Know when to return**: separate notifications for completion, failure, questions and permission requests.
+- **Keep results in view**: unread results remain available; pins and unread state survive restarts.
+- **Stay out of the way**: a compact tray panel fits laptops and high-DPI displays. Thinking and tool execution remain running states.
+- **Keep your data local**: no TaskPulse cloud account or conversation uploads. TaskPulse never approves Agent requests for you.
+
+## Task notifications
+
+Requests for input or approval stay visible until handled. A completed turn prompts you to review its results.
+
+<p align="center">
+  <img src="assets/screenshots/notice-input.png" width="320" alt="Input notification asking to confirm the export format">
+  <br><sub>Input needed: provide the missing information.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/notice-approval.png" width="320" alt="Approval notification for running project tests">
+  <br><sub>Approval needed: review the execution request.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/notice-completed.png" width="320" alt="Completion notification for the quick-start guide task">
+  <br><sub>Task completed: review the turn's results.</sub>
+</p>
 
 ## Install
 
@@ -39,13 +63,13 @@ Choose your platform on [GitHub Releases](https://github.com/qingtian-4/TaskPuls
 
 ### Install with one command
 
-**Windows** — open PowerShell:
+**Windows**: open PowerShell:
 
 ```powershell
 irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex
 ```
 
-**macOS** — open Terminal:
+**macOS**: open Terminal:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
@@ -69,7 +93,8 @@ TaskPulse automatically checks for new versions. In **Settings → Application u
 | Doubao | Native desktop execution state |
 | Gemini CLI | Process discovery; task events through a generic integration |
 | Kimi Code CLI | Configured Standard Events or MCP integration |
-| WorkBuddy | Configured Standard Events or MCP integration |
+| WorkBuddy | Automatic local discovery of tasks, models and execution records |
+| OpenCode | Automatic local discovery of sessions and explicit turn-end records |
 | TRAE China IDE | Configured Standard Events or MCP integration |
 | Other agents / command-line tasks | Standard Events, MCP, compatible hooks, `tp-run` and remote tmux |
 

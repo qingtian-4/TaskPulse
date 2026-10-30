@@ -11,9 +11,12 @@ pub mod generic_event;
 pub mod hermes;
 pub mod jsonl_tail;
 pub mod local_file;
+mod native_sessions;
+pub mod opencode;
 mod parser_cache;
 pub mod remote_tmux;
 pub mod resources;
+pub mod workbuddy;
 pub mod worker;
 pub mod zcode;
 

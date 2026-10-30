@@ -16,6 +16,11 @@
 
 </div>
 
+<p align="center">
+  <img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse 四任务面板：进行中、待输入、待批准和待查看，显示模型与耗时">
+  <br><sub>Windows 界面 · 示例任务</sub>
+</p>
+
 ## 功能
 
 - **打开即关注**：自动发现本机 Agent，首次确认后跟踪新任务；也可接入 WSL 和 SSH 服务器。
@@ -24,6 +29,25 @@
 - **结果不会错过**：未查看的结果持续保留，固定任务与未读状态可跨重启恢复。
 - **安静地常驻**：紧凑托盘面板适配笔记本与高分屏；思考和工具执行都属于运行中。
 - **数据留在本机**：无需 TaskPulse 云账号，不上传对话；不会代你批准 Agent 请求。
+
+## 任务提醒
+
+需要补充信息或授权时持续提醒，本轮结束后提醒查看结果。
+
+<p align="center">
+  <img src="assets/screenshots/notice-input.png" width="320" alt="待输入弹窗：确认导出文件格式">
+  <br><sub>待输入：等待你补充信息</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/notice-approval.png" width="320" alt="待批准弹窗：运行项目测试需要授权">
+  <br><sub>待批准：等待你确认执行请求</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/notice-completed.png" width="320" alt="任务完成弹窗：快速入门指南本轮结束">
+  <br><sub>任务完成：回来查看本轮结果</sub>
+</p>
 
 ## 安装
 
@@ -39,13 +63,13 @@
 
 ### 一条命令安装
 
-**Windows** — 打开 PowerShell：
+**Windows**：打开 PowerShell：
 
 ```powershell
 irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex
 ```
 
-**macOS** — 打开终端：
+**macOS**：打开终端：
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
@@ -69,7 +93,8 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | 豆包 | 本机桌面端原生执行状态 |
 | Gemini CLI | 进程发现；任务事件可通过通用接入补充 |
 | Kimi Code CLI | 配置标准事件或 MCP 接入 |
-| WorkBuddy | 配置标准事件或 MCP 接入 |
+| WorkBuddy | 本机自动发现，读取本地任务、模型与执行记录 |
+| OpenCode | 本机自动发现，读取会话数据库与明确结束记录 |
 | TRAE 中国版 IDE | 配置标准事件或 MCP 接入 |
 | 其他 Agent / 命令行任务 | 标准事件、MCP、兼容 Hook、`tp-run` 和远程 tmux |
 
