@@ -6,13 +6,15 @@
   <img src="assets/brand/wordmark-light.svg" width="320" alt="TaskPulse">
 </picture>
 
+# TaskPulse
+
 **多个 Agent 同时跑，先看哪个需要你。**
 
 在托盘里查看 AI 任务的状态、模型与运行时间。<br>完成、失败或需要你时，及时提醒。
 
-[English](README.en.md) · [安装](#安装) · [支持的 Agent](#支持的-agent) · [使用指南](docs/README.md)
+[English](README.en.md)
 
-<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a></p>
+<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS 13.3+ · Apple Silicon / Intel" src="https://img.shields.io/badge/macOS-13.3%2B%20%7C%20Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a> <img alt="Rust / Tauri 2" src="https://img.shields.io/badge/Rust-Tauri%202-CE422B?style=flat-square&amp;logo=rust"></p>
 
 </div>
 
@@ -58,8 +60,8 @@
 | 系统 | 安装包 |
 | --- | --- |
 | Windows 10 / 11 · x64 | `.exe` 安装向导，或 `.msi` |
-| macOS · Apple Silicon | `macos_arm64.dmg` |
-| macOS · Intel | `macos_x64.dmg` |
+| macOS 13.3+ · Apple Silicon | `macos_arm64.dmg` |
+| macOS 13.3+ · Intel | `macos_x64.dmg` |
 
 ### 一条命令安装
 

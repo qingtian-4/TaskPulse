@@ -11,8 +11,8 @@ A clear description of the bug.
 
 ## Environment
 
-- **OS / Build**: [e.g., Windows 11; Linux/macOS are experimental]
-- **TaskPulse Version / Commit / Install format**: [e.g., 0.2.0-alpha.6 / commit SHA / NSIS, MSI or source]
+- **OS / Build**: [e.g., Windows 11 or macOS 15; Linux builds are optional]
+- **TaskPulse Version / Commit / Install format**: [e.g., 1.0.0 / commit SHA / NSIS, MSI or source]
 - **Agent / Source**: [e.g., Windows Codex, WSL Ubuntu Codex, SSH Codex]
 - **Agent version and host**: [native Desktop, CLI, VS Code; include WSL distro/SSH OS if applicable]
 - **Source health / last successful collection**: [from TaskPulse; do not include server credentials]

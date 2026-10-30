@@ -94,8 +94,13 @@ class UpgradeTests(unittest.TestCase):
 
     def test_two_versions_and_unknown_scheme_fail_closed(self):
         self.assertEqual(upgrade.next_version("0.2.0-alpha.8"), "0.2.0-alpha.9")
-        with self.assertRaises(ValueError):
-            upgrade.next_version("1.0.0")
+        for old, new in [("1.0.0", "1.0.1"), ("1.10.9", "1.10.10"), ("1.0.0-beta.1", "1.0.0-beta.2"), ("1.0.0-rc.1", "1.0.0-rc.2")]:
+            self.assertEqual(upgrade.next_version(old), new)
+        for old in ["1.0", "v1.0.0", "01.0.0", "1.0.0-preview.1", "1.0.0-alpha.999"]:
+            with self.assertRaises(ValueError):
+                upgrade.next_version(old)
+        self.assertEqual(upgrade.msi_product_version("1.0.0"), "1.0.0.65535")
+        self.assertEqual(upgrade.msi_product_version("1.0.0-beta.2"), "1.0.0.2002")
 
     def test_overlay_keeps_crypto_and_installed_guards(self):
         with tempfile.TemporaryDirectory() as temp:
@@ -110,7 +115,7 @@ class UpgradeTests(unittest.TestCase):
             self.assertTrue(config["plugins"]["updater"]["requireSignedVersion"])
             self.assertTrue(config["bundle"]["createUpdaterArtifacts"])
             self.assertEqual(config["version"], new)
-            self.assertEqual(config["bundle"]["windows"]["wix"]["version"], "0.2.0.1009")
+            self.assertEqual(config["bundle"]["windows"]["wix"]["version"], upgrade.msi_product_version(new))
             self.assertIn('version     = "' + new + '"', (root / "src-tauri/Cargo.toml").read_text())
             self.assertIn('name = "agent-tray"\nversion = "' + new + '"', (root / "src-tauri/Cargo.lock").read_text())
 

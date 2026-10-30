@@ -8,7 +8,7 @@ The normal interactive installer handles installation, upgrades and uninstall.
 .EXAMPLE
 .\install.ps1 -Prerelease
 .EXAMPLE
-.\install.ps1 -Version 0.2.0-alpha.8 -DownloadOnly -OutputDirectory .\downloads
+.\install.ps1 -Version 1.0.0 -DownloadOnly -OutputDirectory .\downloads
 #>
 [CmdletBinding()]
 param(
@@ -86,8 +86,8 @@ function Invoke-TaskPulseInstall {
     $ErrorActionPreference = 'Stop'
     $zh = $Language -eq 'zh-CN'
     # PowerShell 5.1 source stays ASCII; localized messages use JSON escapes.
-    $messages = if ($zh) { ConvertFrom-Json '{"download":"\u4e0b\u8f7d TaskPulse","verified":"SHA-256 \u6821\u9a8c\u901a\u8fc7","unsigned":"\u5b89\u88c5\u5305\u5c1a\u672a\u4ee3\u7801\u7b7e\u540d\uff0cWindows \u53ef\u80fd\u663e\u793a\u672a\u77e5\u53d1\u5e03\u8005\u3002","open":"\u6253\u5f00\u6807\u51c6\u5b89\u88c5\u5411\u5bfc","saved":"\u5df2\u4fdd\u5b58\u6821\u9a8c\u540e\u7684\u5b89\u88c5\u5305","failed":"\u5b89\u88c5\u672a\u5b8c\u6210\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u548c Releases\uff1bAlpha \u8bf7\u4f7f\u7528 -Prerelease \u6216 -Version\u3002"}' }
-        else { @{ download='Downloading TaskPulse'; verified='SHA-256 verified'; unsigned='The installer is not code signed. Windows may show an unknown publisher.'; open='Opening the standard setup wizard'; saved='Verified installer saved'; failed='Installation did not complete. Check your network and Releases; use -Prerelease or -Version for a public alpha.' } }
+    $messages = if ($zh) { ConvertFrom-Json '{"download":"\u4e0b\u8f7d TaskPulse","verified":"SHA-256 \u6821\u9a8c\u901a\u8fc7","unsigned":"\u5b89\u88c5\u5305\u5c1a\u672a\u4ee3\u7801\u7b7e\u540d\uff0cWindows \u53ef\u80fd\u663e\u793a\u672a\u77e5\u53d1\u5e03\u8005\u3002","open":"\u6253\u5f00\u6807\u51c6\u5b89\u88c5\u5411\u5bfc","saved":"\u5df2\u4fdd\u5b58\u6821\u9a8c\u540e\u7684\u5b89\u88c5\u5305","failed":"\u5b89\u88c5\u672a\u5b8c\u6210\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u8fde\u63a5\u548c GitHub Releases \u9875\u9762\u3002"}' }
+        else { @{ download='Downloading TaskPulse'; verified='SHA-256 verified'; unsigned='The installer is not code signed. Windows may show an unknown publisher.'; open='Opening the standard setup wizard'; saved='Verified installer saved'; failed='Installation did not complete. Check your network and the GitHub Releases page.' } }
     $temp = $null
     try {
         $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }

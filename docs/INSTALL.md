@@ -7,14 +7,20 @@
 | 系统 | 文件 |
 | --- | --- |
 | Windows 10 / 11，x64 | `TaskPulse_<版本>_windows_x64_setup.exe` 或同版本 `.msi` |
-| macOS，Apple Silicon | `TaskPulse_<版本>_macos_arm64.dmg` |
-| macOS，Intel | `TaskPulse_<版本>_macos_x64.dmg` |
+| macOS 13.3+，Apple Silicon | `TaskPulse_<版本>_macos_arm64.dmg` |
+| macOS 13.3+，Intel | `TaskPulse_<版本>_macos_x64.dmg` |
 
-Windows 运行安装向导即可；无需 Rust、Bun 或 Node。缺少 WebView2 时，安装器会联网安装运行时。EXE 和 MSI 选择一种，切换格式前先卸载旧格式。
+Windows 推荐 EXE 安装向导；MSI 安装需要相应管理员权限。无需 Rust、Bun 或 Node。缺少 WebView2 时，安装器会联网安装运行时。EXE 和 MSI 选择一种，切换格式前先卸载旧格式。
+
+Windows 首次打开可能显示“未知发布者”或 SmartScreen 提示。确认安装包来自本仓库并完成校验后，按系统提供的“更多信息 / 仍要运行”操作；组织策略禁止运行时，请联系设备管理员。
 
 Mac 打开 DMG，将 TaskPulse 拖入 Applications。命令行安装默认使用 `~/Applications`。尚未经过发行者签名或 Apple 公证的包可能触发系统安全提示；请核对下载来源，并按照 [Apple 官方说明](https://support.apple.com/en-us/102445)操作。TaskPulse 不会自动关闭 Gatekeeper 或清除隔离属性。
 
-发布附件提供 SHA-256 校验文件。不要把旧 AgentTray 安装包当作 TaskPulse。
+首次启动若提示无法验证开发者，请先确认下载自本仓库，再到**系统设置 → 隐私与安全性**，按系统提示选择**仍要打开**。若系统或组织策略没有提供此选项，请联系设备管理员。命令行脚本不会关闭系统安全检查。
+
+若终端显示“已安装，但无法启动”，应用仍保留在输出的安装路径，请核对原始错误和系统提示后打开。升级时若保留了 `.taskpulse-recovery/TaskPulse.app`，这是旧版副本；确认新版本可用后先移走或妥善保留该副本，再移除空的恢复目录，之后重试安装。需要回退时，先正常退出 TaskPulse，在 Finder 中将新应用移到其他位置，再将旧版移回安装目录；配置仍保存在用户主目录。
+
+发布附件提供 SHA-256 校验文件。可按校验文件核对下载内容。
 
 ## 命令行安装
 
@@ -44,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 ## 应用更新
 
-默认自动检查新版本，只显示提示。打开**管理 → 应用更新**，点击**下载并安装 · 将重启**后，TaskPulse 才会下载和验证更新签名，然后安装并重启。
+默认自动检查新版本，只显示提示。打开**设置 → 应用更新**，点击**下载并安装 · 将重启**后，TaskPulse 才会下载和验证更新签名，然后安装并重启。
 
 - 自动检查可以在同一页关闭，也可随时手动检查。
 - 更新保留 `~/.taskpulse/` 中的配置与任务状态。

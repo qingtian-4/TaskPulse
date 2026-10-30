@@ -1,7 +1,7 @@
-name: Experimental Linux and macOS bundles
+name: Optional compatibility bundles
 
-# Compatibility builds are opt-in artifacts, never a stable support claim or
-# a prerequisite of the Windows release. No Apple signing secrets are required.
+# Manual compatibility artifacts are independent of the official desktop release.
+# release.yml builds the supported Windows/macOS packages. No Apple signing secrets here.
 on:
   workflow_dispatch:
     inputs:
@@ -13,8 +13,6 @@ on:
       commit:
         description: 'Optional full source SHA (empty uses the selected branch/tag)'
         default: ''
-  push:
-    tags: ['v*']
 
 permissions:
   contents: read

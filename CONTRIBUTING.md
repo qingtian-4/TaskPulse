@@ -40,3 +40,9 @@ Use stable session IDs and keep task titles, projects and reported models separa
 Keep pull requests focused, explain the user-visible behavior and include relevant verification. Preserve unrelated work and upstream attribution. Never commit credentials, private task data, build products or local investigation notes.
 
 Contributions use the [MIT License](LICENSE), including the original AgentTray attribution.
+
+## Releases
+
+Use SemVer: bug fixes increment the patch version, compatible features the minor version, and incompatible changes the major version. Keep package.json, Cargo.toml, Cargo.lock and tauri.conf.json synchronized, including the derived Windows MSI version.
+
+Run `bun run release:check` and `bun run test:release`, pass the current PR quality/security checks and merge to `main`. An explicit version tag such as `v1.0.0` builds Windows and both macOS architectures, verifies signed updates and installers, and creates a GitHub release draft. The maintainer reviews the exact package evidence before publishing. Release notes belong in `docs/releases/<version>.md`; local reports and downloaded packages stay ignored.

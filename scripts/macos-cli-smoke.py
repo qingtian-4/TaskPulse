@@ -106,17 +106,31 @@ shutil.copyfile(root/file, dest)
                 raise RuntimeError('Expected explicit Gatekeeper rejection for the ad-hoc unnotarized package')
             result['checks'].append('quarantine-and-gatekeeper-rejection')
             run('same-version', '--no-launch')
+            # A launch API failure must leave the verified app for user review.
+            opened = transport / 'open'
+            opened.write_text('#!/bin/sh\necho "Synthetic launch failure" >&2\nexit 1\n')
+            opened.chmod(0o755)
+            blocked = home / 'Blocked launch'
+            run('launch-failure-retains-install', '--dir', str(blocked), success=False)
+            kept = blocked / 'TaskPulse.app'
+            if not kept.is_dir():
+                raise RuntimeError('Launch failure deleted a verified installation')
+            subprocess.run(['codesign', '--verify', '--deep', '--strict', str(kept)], check=True, capture_output=True, timeout=30)
+            if not subprocess.run(['xattr', '-p', 'com.apple.quarantine', str(kept)], check=True, capture_output=True, timeout=10).stdout.strip():
+                raise RuntimeError('Launch failure removed quarantine')
+            opened.unlink()
             # Simulated older metadata exercises replacement/rollback with the
             # real signed incoming DMG; it is not cross-version upgrade evidence.
             info['CFBundleShortVersionString'] = '0.0.0'
             old_info = plistlib.dumps(info)
             (target / 'Contents/Info.plist').write_bytes(old_info)
-            opened = transport / 'open'
-            opened.write_text('#!/bin/sh\necho "Synthetic launch failure" >&2\nexit 1\n')
-            opened.chmod(0o755)
+            mover = transport / 'mv'
+            mover.write_text('#!/bin/bash\nfor arg in "$@"; do\ncase "$arg" in */.taskpulse-stage.*/TaskPulse.app) echo "Synthetic publication failure" >&2; exit 1;; esac\ndone\nexec /bin/mv "$@"\n')
+            mover.chmod(0o755)
             run('replacement-rollback-simulated', success=False)
             if (target / 'Contents/Info.plist').read_bytes() != old_info or digest(exe) != result['application_sha256']:
                 raise RuntimeError('Rollback did not preserve old app')
+            mover.unlink()
             run('replacement-simulated', '--no-launch')
             if (state / 'marker').read_text() != 'preserve-user-state':
                 raise RuntimeError('User state changed')

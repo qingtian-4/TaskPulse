@@ -21,6 +21,8 @@ def option(key, default=None):
 
 if name == 'uname':
     print(option('os', 'Darwin') if args == ['-s'] else option('machine', 'arm64'))
+elif name == 'sw_vers':
+    print(option('system_version', '15.0'))
 elif name == 'sysctl':
     value = option('translated', '0') if args[-1] == 'sysctl.proc_translated' else option('arm', '1')
     if args[-1] == 'sysctl.proc_translated' and option('translated_error'):
@@ -83,6 +85,8 @@ elif name == 'codesign':
         sys.exit(1)
     if option('fail_installed') and args[-1] == str(root / 'home/Applications/TaskPulse.app'):
         sys.exit(1)
+elif name == 'od':
+    print(option('binary_header', 'cf fa ed fe ' + ('0c 00 00 01' if option('binary_arch', 'arm64') == 'arm64' else '07 00 00 01')))
 elif name == 'lipo':
     print(option('binary_arch', 'arm64'))
 elif name == 'ps':

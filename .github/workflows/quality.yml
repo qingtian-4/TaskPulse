@@ -64,6 +64,8 @@ jobs:
         run: python scripts/wsl-metadata.test.py
       - name: Test opt-in Codex approval observer and reversible installation
         run: python scripts/test-codex-observer.py
+      - name: Test public installation manifest/source validation
+        run: python scripts/test-public-install.py
       - name: Build frontend
         run: bun run build
       - name: Check Rust format

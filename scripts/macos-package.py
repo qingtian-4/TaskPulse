@@ -118,6 +118,9 @@ def smoke(dmg, version, arch, evidence):
             resources = installed / "Contents/Resources/scripts/hooks"
             if not resources.is_dir() or not any(resources.iterdir()):
                 raise RuntimeError("Packaged hook resources missing")
+            for file in ("LICENSE", "licenses/THIRD_PARTY_NOTICES.txt", "licenses/DEPENDENCIES.json"):
+                if not (installed / "Contents/Resources" / file).is_file():
+                    raise RuntimeError("Packaged license material missing: " + file)
             profile = root / "profile"
             profile.mkdir()
             config = ('[dashboard]\nversion = 2\nonboarding_complete = true\n'

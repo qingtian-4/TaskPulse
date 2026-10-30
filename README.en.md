@@ -6,13 +6,15 @@
   <img src="assets/brand/wordmark-light.svg" width="320" alt="TaskPulse">
 </picture>
 
+# TaskPulse
+
 **Several agents running. Know which one needs you.**
 
 See AI task status, model and elapsed time from your system tray.<br>Get notified when work finishes, fails or needs your attention.
 
-[简体中文](README.md) · [Install](#install) · [Supported agents](#supported-agents) · [User guides](docs/README.md)
+[简体中文](README.md)
 
-<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS" src="https://img.shields.io/badge/macOS-Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a></p>
+<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS 13.3+ · Apple Silicon / Intel" src="https://img.shields.io/badge/macOS-13.3%2B%20%7C%20Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a> <img alt="Rust / Tauri 2" src="https://img.shields.io/badge/Rust-Tauri%202-CE422B?style=flat-square&amp;logo=rust"></p>
 
 </div>
 
@@ -58,8 +60,8 @@ Choose your platform on [GitHub Releases](https://github.com/qingtian-4/TaskPuls
 | Platform | Package |
 | --- | --- |
 | Windows 10 / 11 · x64 | `.exe` setup wizard or `.msi` |
-| macOS · Apple Silicon | `macos_arm64.dmg` |
-| macOS · Intel | `macos_x64.dmg` |
+| macOS 13.3+ · Apple Silicon | `macos_arm64.dmg` |
+| macOS 13.3+ · Intel | `macos_x64.dmg` |
 
 ### Install with one command
 

@@ -8,7 +8,7 @@ on:
       tag:
         description: 'Existing version tag (must match all version files)'
         required: true
-        default: 'v0.2.0-alpha.8'
+        default: 'v1.0.0'
       commit:
         description: 'Optional full current main SHA: CI artifacts only, overrides tag; no Tag or Release created'
         required: false
@@ -64,8 +64,16 @@ jobs:
           else
             bun scripts/release.ts preflight --tag "$RELEASE_TAG"
           fi
+      - name: Refuse rebuilding an already published version
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+        run: bun scripts/release.ts publication-check --tag "$RELEASE_TAG"
       - name: Test release validation and asset handling
-        run: bun test scripts/release.test.ts
+        run: bun run test:release
+      - name: Test public installation manifest/source validation
+        run: python3 scripts/test-public-install.py
 
   security:
     needs: preflight
@@ -313,6 +321,11 @@ jobs:
         run: bun scripts/release.ts verify --out dist/release --version "$RELEASE_VERSION"
       - name: Assemble complete update feed from verified platform builds
         run: bun scripts/updater-assets.ts feed --out dist/release --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}' --notes 'docs/releases/${{ needs.preflight.outputs.version }}.md'
+      - name: Recheck that release assets are still unpublished
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.preflight.outputs.tag }}
+        run: bun scripts/release.ts publication-check --tag "$RELEASE_TAG"
       - name: Create draft (manual acceptance required before publishing)
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3
         with:

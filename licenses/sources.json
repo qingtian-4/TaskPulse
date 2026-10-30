@@ -1,0 +1,534 @@
+{
+  "format": "taskpulse-license-sources-v1",
+  "canonicalSource": {
+    "repository": "https://github.com/spdx/license-list-data",
+    "commit": "31846481de7ea17d92f2f46fad76abe58b2e9bb0"
+  },
+  "sources": {
+    "spdx:MIT": {
+      "path": "spdx/MIT.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/31846481de7ea17d92f2f46fad76abe58b2e9bb0/text/MIT.txt",
+      "kind": "canonical-terms",
+      "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5"
+    },
+    "spdx:Apache-2.0": {
+      "path": "spdx/Apache-2.0.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/31846481de7ea17d92f2f46fad76abe58b2e9bb0/text/Apache-2.0.txt",
+      "kind": "canonical-terms",
+      "sha256": "074e6e32c86a4c0ef8b3ed25b721ca23aca83df277cd88106ef7177c354615ff"
+    },
+    "spdx:MPL-2.0": {
+      "path": "spdx/MPL-2.0.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/31846481de7ea17d92f2f46fad76abe58b2e9bb0/text/MPL-2.0.txt",
+      "kind": "canonical-terms",
+      "sha256": "66a3107d5ad6a058aab753eaac2047ccb2ed0e39465dd0fe5844da3e300d5172"
+    },
+    "spdx:Zlib": {
+      "path": "spdx/Zlib.txt",
+      "url": "https://raw.githubusercontent.com/spdx/license-list-data/31846481de7ea17d92f2f46fad76abe58b2e9bb0/text/Zlib.txt",
+      "kind": "canonical-terms",
+      "sha256": "bfb1112d49db5b1daecdfef24bd7e2f3ea0bafb33aa67aa0ab51e2bf8407c03d"
+    },
+    "alloc-stdlib": {
+      "path": "upstream/alloc-stdlib-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/dropbox/rust-alloc-no-stdlib/0a81fd6928ea3b33c8cd484aa4575d50ffb98012/LICENSE",
+      "kind": "license",
+      "sha256": "c0c56f26d9c051cac4d200c34c84e7ae9aaa853e01a982a1df08b09931e518ae"
+    },
+    "tauri-plugin:MIT": {
+      "path": "upstream/tauri-plugin-MIT.txt",
+      "url": "https://raw.githubusercontent.com/tauri-apps/tauri/59b63ab500da9859f12d8888c3298bc29bba0b92/LICENSE-MIT",
+      "kind": "license",
+      "sha256": "9dd42ea92cff2ede5cd477cbfcce051b2d0115c0ac7f368ee88cb545055dff1d"
+    },
+    "tauri-plugin:APACHE-2.0": {
+      "path": "upstream/tauri-plugin-APACHE-2.0.txt",
+      "url": "https://raw.githubusercontent.com/tauri-apps/tauri/59b63ab500da9859f12d8888c3298bc29bba0b92/LICENSE-APACHE-2.0",
+      "kind": "license",
+      "sha256": "0d542e0c8804e39aa7f37eb00da5a762149dc682d7829451287e11b938e94594"
+    },
+    "webview2:dffa41a8a46d3f5565eefbff2de57d38d399f158": {
+      "path": "upstream/webview2-dffa41a8-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/wravery/webview2-rs/dffa41a8a46d3f5565eefbff2de57d38d399f158/LICENSE",
+      "kind": "license",
+      "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+    },
+    "webview2:edc2caf886175ccaebe86078c9cfe1ae2a187328": {
+      "path": "upstream/webview2-edc2caf8-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/wravery/webview2-rs/edc2caf886175ccaebe86078c9cfe1ae2a187328/LICENSE",
+      "kind": "license",
+      "sha256": "0dcf41516e608bbcb6cdc5229feb7b86fe4a643b85e7df251133c93408fdac73"
+    },
+    "mac-notification:MIT": {
+      "path": "upstream/mac-notification-MIT.txt",
+      "url": "https://raw.githubusercontent.com/h4llow3En/mac-notification-sys/deb559683962d314a7693478476bf8d052efa84e/LICENSE-MIT",
+      "kind": "license",
+      "sha256": "1299b4d9d15e9d67e4ac0e7d47ae9404887ca3cf0764aadeec7588d5a6e8e0cc"
+    },
+    "mac-notification:Apache": {
+      "path": "upstream/mac-notification-Apache.txt",
+      "url": "https://raw.githubusercontent.com/h4llow3En/mac-notification-sys/deb559683962d314a7693478476bf8d052efa84e/LICENSE-Apache",
+      "kind": "license",
+      "sha256": "b40930bbcf80744c86c46a12bc9da056641d722716c378f5659b9e555ef833e1"
+    },
+    "objc2:b4167b582b2f75f9a1be75495c41b765344fd03c": {
+      "path": "upstream/objc2-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/b4167b582b2f75f9a1be75495c41b765344fd03c/LICENSE.md",
+      "kind": "upstream-declaration",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+    },
+    "objc2:8852b424193ca41602281b3d7540d7c8ed51e49a": {
+      "path": "upstream/objc2-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/8852b424193ca41602281b3d7540d7c8ed51e49a/LICENSE.md",
+      "kind": "upstream-declaration",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+    },
+    "objc2:8d214f5477365ffcbcbb7de058c86ed9a518efb7": {
+      "path": "upstream/objc2-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/8d214f5477365ffcbcbb7de058c86ed9a518efb7/LICENSE.md",
+      "kind": "upstream-declaration",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+    },
+    "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b": {
+      "path": "upstream/objc2-LICENSE.md",
+      "url": "https://raw.githubusercontent.com/madsmtm/objc2/7b1abfd750a2cacaea71d6a56ecfb83cb7de560b/LICENSE.md",
+      "kind": "upstream-declaration",
+      "sha256": "7f976f7e9cb2d87df7230606feb932c3f21ac0e664045a775b600046ff850c54"
+    },
+    "selectors-notice": {
+      "path": "upstream/selectors-NOTICE.txt",
+      "url": "https://raw.githubusercontent.com/servo/stylo/572ecba2d1600e7c3d490586692a209faf703baa/selectors/lib.rs",
+      "kind": "notice",
+      "extract": {
+        "kind": "leading-comment"
+      },
+      "sha256": "766674381e88a468d55e07de3596987391cf0e8beebe51baf4fddf11078785b3",
+      "sourceSha256": "d54c6e13e9e952dac17d209171df8657e3cae93beaddace4906150cdec8d02e9"
+    },
+    "@polka/url": {
+      "path": "upstream/polka-url-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/lukeed/polka/02cbdb529ddca0a9f3d225e2abb2931924219cc3/license",
+      "kind": "license",
+      "sha256": "ba573393f24555ac0528612ad39665fab5bdcc80330a61096024bbf5f736526d"
+    },
+    "sirv": {
+      "path": "upstream/sirv-LICENSE.txt",
+      "url": "https://raw.githubusercontent.com/lukeed/sirv/1135207e92c40354543cbd15c763c7a61d79d432/license",
+      "kind": "license",
+      "sha256": "ba573393f24555ac0528612ad39665fab5bdcc80330a61096024bbf5f736526d"
+    },
+    "is-reference": {
+      "path": "upstream/is-reference-NOTICE.txt",
+      "url": "https://raw.githubusercontent.com/Rich-Harris/is-reference/8bb053129bfabe2f6a7d7ed050159d67ebe82829/README.md",
+      "kind": "upstream-declaration",
+      "extract": {
+        "kind": "license-section"
+      },
+      "sha256": "daf005969aac8cb4283b3777361f0244f4cce898b9a983a60b7f0d9e96f559bf",
+      "sourceSha256": "2acc01c7ca4596ec1751045eca54e1f27bd785deaadc09d287d76f0d26cbbf87"
+    },
+    "locate-character": {
+      "path": "upstream/locate-character-NOTICE.txt",
+      "url": "https://raw.githubusercontent.com/Rich-Harris/locate-character/4f08a59ec248121f7002abd02ee7b94e8eda06bc/README.md",
+      "kind": "upstream-declaration",
+      "extract": {
+        "kind": "license-section"
+      },
+      "sha256": "daf005969aac8cb4283b3777361f0244f4cce898b9a983a60b7f0d9e96f559bf",
+      "sourceSha256": "47ed524f92c6aa416672bf3c48f88fd0c9dfde93f6097683820def1d2db65456"
+    }
+  },
+  "packages": [
+    {
+      "ecosystem": "cargo",
+      "name": "alloc-stdlib",
+      "version": "0.3.0",
+      "license": "BSD-3-Clause",
+      "repository": "https://github.com/dropbox/rust-alloc-no-stdlib",
+      "sourceCommit": "0a81fd6928ea3b33c8cd484aa4575d50ffb98012",
+      "sources": [
+        "alloc-stdlib"
+      ],
+      "pathInVcs": "alloc-stdlib"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "tauri-plugin",
+      "version": "2.7.2",
+      "license": "Apache-2.0 OR MIT",
+      "repository": "https://github.com/tauri-apps/tauri",
+      "sourceCommit": "59b63ab500da9859f12d8888c3298bc29bba0b92",
+      "sources": [
+        "tauri-plugin:MIT",
+        "tauri-plugin:APACHE-2.0"
+      ],
+      "pathInVcs": "crates/tauri-plugin"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "webview2-com-macros",
+      "version": "0.8.1",
+      "license": "MIT",
+      "repository": "https://github.com/wravery/webview2-rs",
+      "sourceCommit": "dffa41a8a46d3f5565eefbff2de57d38d399f158",
+      "sources": [
+        "webview2:dffa41a8a46d3f5565eefbff2de57d38d399f158"
+      ],
+      "pathInVcs": "crates/callback-macros"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "webview2-com-sys",
+      "version": "0.39.1",
+      "license": "MIT",
+      "repository": "https://github.com/wravery/webview2-rs",
+      "sourceCommit": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+      "sources": [
+        "webview2:edc2caf886175ccaebe86078c9cfe1ae2a187328"
+      ],
+      "pathInVcs": "crates/bindings"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "webview2-com",
+      "version": "0.39.1",
+      "license": "MIT",
+      "repository": "https://github.com/wravery/webview2-rs",
+      "sourceCommit": "edc2caf886175ccaebe86078c9cfe1ae2a187328",
+      "sources": [
+        "webview2:edc2caf886175ccaebe86078c9cfe1ae2a187328"
+      ],
+      "pathInVcs": "crates/webview2-com"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "mac-notification-sys",
+      "version": "0.6.15",
+      "license": "MIT/Apache-2.0",
+      "repository": "https://github.com/h4llow3En/mac-notification-sys",
+      "sourceCommit": "deb559683962d314a7693478476bf8d052efa84e",
+      "sources": [
+        "mac-notification:MIT",
+        "mac-notification:Apache"
+      ],
+      "pathInVcs": ""
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "block2",
+      "version": "0.6.2",
+      "license": "MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "b4167b582b2f75f9a1be75495c41b765344fd03c",
+      "sources": [
+        "objc2:b4167b582b2f75f9a1be75495c41b765344fd03c"
+      ],
+      "canonicalTerms": [
+        "spdx:MIT"
+      ],
+      "pathInVcs": "crates/block2"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "dispatch2",
+      "version": "0.3.1",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "8852b424193ca41602281b3d7540d7c8ed51e49a",
+      "sources": [
+        "objc2:8852b424193ca41602281b3d7540d7c8ed51e49a"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "crates/dispatch2"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2",
+      "version": "0.6.4",
+      "license": "MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "8852b424193ca41602281b3d7540d7c8ed51e49a",
+      "sources": [
+        "objc2:8852b424193ca41602281b3d7540d7c8ed51e49a"
+      ],
+      "canonicalTerms": [
+        "spdx:MIT"
+      ],
+      "pathInVcs": "crates/objc2"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-encode",
+      "version": "4.1.0",
+      "license": "MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+      "sources": [
+        "objc2:8d214f5477365ffcbcbb7de058c86ed9a518efb7"
+      ],
+      "canonicalTerms": [
+        "spdx:MIT"
+      ],
+      "pathInVcs": "crates/objc2-encode"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-exception-helper",
+      "version": "0.1.1",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "8d214f5477365ffcbcbb7de058c86ed9a518efb7",
+      "sources": [
+        "objc2:8d214f5477365ffcbcbb7de058c86ed9a518efb7"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "crates/objc2-exception-helper"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-app-kit",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-app-kit"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-core-foundation",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-core-foundation"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-core-graphics",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-core-graphics"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-foundation",
+      "version": "0.3.2",
+      "license": "MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-foundation"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-io-surface",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-io-surface"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-osa-kit",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-osa-kit"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-quartz-core",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-quartz-core"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-security",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-security"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-service-management",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-service-management"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "objc2-web-kit",
+      "version": "0.3.2",
+      "license": "Zlib OR Apache-2.0 OR MIT",
+      "repository": "https://github.com/madsmtm/objc2",
+      "sourceCommit": "7b1abfd750a2cacaea71d6a56ecfb83cb7de560b",
+      "sources": [
+        "objc2:7b1abfd750a2cacaea71d6a56ecfb83cb7de560b"
+      ],
+      "canonicalTerms": [
+        "spdx:Zlib",
+        "spdx:Apache-2.0",
+        "spdx:MIT"
+      ],
+      "pathInVcs": "framework-crates/objc2-web-kit"
+    },
+    {
+      "ecosystem": "cargo",
+      "name": "selectors",
+      "version": "0.38.0",
+      "license": "MPL-2.0",
+      "repository": "https://github.com/servo/stylo",
+      "sourceCommit": "572ecba2d1600e7c3d490586692a209faf703baa",
+      "sources": [
+        "selectors-notice"
+      ],
+      "canonicalTerms": [
+        "spdx:MPL-2.0"
+      ],
+      "pathInVcs": "selectors"
+    },
+    {
+      "ecosystem": "npm",
+      "name": "@polka/url",
+      "version": "1.0.0-next.29",
+      "license": "MIT",
+      "repository": "https://github.com/lukeed/polka",
+      "sourceCommit": "02cbdb529ddca0a9f3d225e2abb2931924219cc3",
+      "sources": [
+        "@polka/url"
+      ],
+      "integrity": "sha512-wwQAWhWSuHaag8c4q/KN/vCoeOJYshAIvMQwD4GpSb3OiZklFfvAgmj0VCBBImRpuF/aFgIRzllXlVX93Jevww=="
+    },
+    {
+      "ecosystem": "npm",
+      "name": "sirv",
+      "version": "3.0.2",
+      "license": "MIT",
+      "repository": "https://github.com/lukeed/sirv",
+      "sourceCommit": "1135207e92c40354543cbd15c763c7a61d79d432",
+      "sources": [
+        "sirv"
+      ],
+      "integrity": "sha512-2wcC/oGxHis/BoHkkPwldgiPSYcpZK3JU28WoMVv55yHJgcZ8rlXvuG9iZggz+sU1d4bRgIGASwyWqjxu3FM0g=="
+    },
+    {
+      "ecosystem": "npm",
+      "name": "is-reference",
+      "version": "3.0.3",
+      "license": "MIT",
+      "repository": "https://github.com/Rich-Harris/is-reference",
+      "sourceCommit": "8bb053129bfabe2f6a7d7ed050159d67ebe82829",
+      "sources": [
+        "is-reference"
+      ],
+      "canonicalTerms": [
+        "spdx:MIT"
+      ],
+      "integrity": "sha512-ixkJoqQvAP88E6wLydLGGqCJsrFUnqoH6HnaczB8XmDH1oaWU+xxdptvikTgaEhtZ53Ky6YXiBuUI2WXLMCwjw=="
+    },
+    {
+      "ecosystem": "npm",
+      "name": "locate-character",
+      "version": "3.0.0",
+      "license": "MIT",
+      "repository": "https://gitlab.com/Rich-Harris/locate-character",
+      "sourceCommit": "4f08a59ec248121f7002abd02ee7b94e8eda06bc",
+      "sources": [
+        "locate-character"
+      ],
+      "canonicalTerms": [
+        "spdx:MIT"
+      ],
+      "integrity": "sha512-SW13ws7BjaeJ6p7Q6CO2nchbYEc3X3J6WrmTTDto7yMPqVSZTUyY5Tjbid+Ab8gLnATtygYtiDIJGQRRn2ZOiA==",
+      "sourceRepository": "https://github.com/Rich-Harris/locate-character"
+    }
+  ]
+}

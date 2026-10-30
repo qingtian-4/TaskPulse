@@ -11,7 +11,9 @@ TaskPulse 自动发现受支持的本机 Agent。首次确认后，来源中的�
 | OpenCode | `~/.local/share/opencode/opencode.db` | `XDG_DATA_HOME` 或来源中填写数据库路径 |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `~/.workbuddy/projects` | 来源中填写 `.workbuddy` 数据目录 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 来源中填写数据库路径 |
-| 豆包 | 桌面端 IndexedDB | 见[豆包说明](DOUBAO.md) |
+| 豆包 | 桌面端 IndexedDB | 来源中填写 IndexedDB 目录 |
+
+豆包的 Windows 默认目录为 `%LOCALAPPDATA%\Doubao\User Data\Default\IndexedDB`；读取当前工作任务，不生成审批提醒。
 
 `~` 表示运行 TaskPulse 的用户主目录。设置环境变量后，需要重新启动 TaskPulse，使其读取新环境。
 
@@ -30,8 +32,6 @@ TaskPulse 自动发现受支持的本机 Agent。首次确认后，来源中的�
 OpenCode 读取会话数据库，WorkBuddy 结合本地数据库与 `projects` 下的 JSONL 会话记录。首次接入不会导入已完成的全部历史；已关注任务在重启后保留。工具返回不等于本轮结束，标题和模型变化不会重新计时。数据库繁忙、格式变化、日志尚未追赶完成时保留上次状态并提示读取异常。
 
 这两款目前不从本地记录生成独立提问或批准提醒；WorkBuddy 的含糊 pending 状态显示为状态待更新，不猜测它在等待批准。云端 WorkBuddy 会话以及国际版 WorkBuddy AI 不属于此适配范围。Windows 本机数据已验证的版本及限制见[兼容说明](AGENT_COMPATIBILITY.md)；macOS 使用相同目录约定，仍需对应版本的实机确认。
-
-目录定位参考 [Agent Speed 的来源目录说明](https://github.com/zoefix/agent-speed#how-speed-is-measured)；TaskPulse 只采集任务状态与运行时间，不计算速度。
 
 ## 接入精确事件
 
