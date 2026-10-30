@@ -41,6 +41,12 @@ try {
         & icacls.exe $entry[0] /grant ('*'+$account.SID.Value+':(OI)(CI)'+$entry[1]) | Out-Null
         if ($LASTEXITCODE -ne 0) { throw 'Could not grant scoped test-account access' }
     }
+    if ($info.kind -eq 'msi') {
+        # MSI source resolution impersonates the caller even for an assigned
+        # product. Permit reading the approved source, never modifying it.
+        & icacls.exe (Join-Path $root 'administrator-packages') /grant ('*'+$account.SID.Value+':(OI)(CI)RX') | Out-Null
+        if ($LASTEXITCODE -ne 0) { throw 'Could not grant read-only MSI source access' }
+    }
     # A new interactive logon needs access to this CI window station/desktop.
     # Grant only its SID, retain original DACLs, and restore them on exit.
     Add-Type -TypeDefinition @'

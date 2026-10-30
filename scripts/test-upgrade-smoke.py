@@ -27,7 +27,7 @@ class UpgradeTests(unittest.TestCase):
                 # standard-account launch assertion, not on fixture setup.
                 def fake_msi(*args):
                     (root / 'Applications' / '测试 install' / 'agent-tray.exe').write_bytes(b'fixture')
-                with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value=info), patch.object(upgrade, "run_msi", side_effect=fake_msi), patch.object(upgrade, "run", return_value=SimpleNamespace(stdout=b'')), patch.dict(os.environ, {"GSUDO_EXE": "fixture-gsudo"}), patch.object(upgrade.subprocess, "run") as child:
+                with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value=info), patch.object(upgrade, "run_msi", side_effect=fake_msi), patch.object(upgrade, "run", return_value=SimpleNamespace(stdout=b'')), patch.dict(os.environ, {"GSUDO_EXE": "fixture-gsudo", "SystemRoot": "C:/Windows"}), patch.object(upgrade.subprocess, "run") as child:
                     upgrade.install_and_test(root / "plan.json")
                 self.assertTrue(child.called, "MSI must launch the genuine standard-account supervisor")
                 arguments = child.call_args.args[0]
@@ -40,6 +40,27 @@ class UpgradeTests(unittest.TestCase):
         with patch.object(upgrade, "require_ci"), patch.object(upgrade, "owned_plan", return_value={"kind": "msi"}):
             with self.assertRaises(RuntimeError):
                 upgrade.install_and_test(Path("fixture-plan.json"), standard_user=True)
+
+    def test_managed_sources_require_read_access_but_reject_write_access(self):
+        info = {"root": "fixture", "old_sha256": "expected", "new_sha256": "expected"}
+        with patch.object(upgrade, "digest", return_value="expected"), patch.object(Path, "open", side_effect=PermissionError) as access:
+            upgrade.verify_managed_msi_sources(info)
+            self.assertEqual(access.call_count, 2)
+            self.assertTrue(all(c.args == ("r+b",) for c in access.call_args_list))
+        with patch.object(upgrade, "digest", return_value="expected"), patch.object(Path, "open") as access:
+            with self.assertRaisesRegex(RuntimeError, "must not be able to modify"):
+                upgrade.verify_managed_msi_sources(info)
+            access.return_value.close.assert_called_once()
+        with patch.object(upgrade, "digest", side_effect=PermissionError):
+            with self.assertRaises(PermissionError):
+                upgrade.verify_managed_msi_sources(info)
+        with patch.object(upgrade, "digest", return_value="tampered"):
+            with self.assertRaisesRegex(RuntimeError, "has changed"):
+                upgrade.verify_managed_msi_sources(info)
+
+    def test_failure_diagnostics_find_powershell_without_user_path(self):
+        with patch.dict(os.environ, {"SystemRoot": "C:/Windows", "PATH": ""}, clear=True):
+            self.assertEqual(upgrade.windows_powershell(), Path("C:/Windows/System32/WindowsPowerShell/v1.0/powershell.exe"))
 
     def test_manual_diagnostic_boot_cannot_count_as_automatic_restart(self):
         with tempfile.TemporaryDirectory() as temp:

@@ -47,6 +47,24 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def windows_powershell():
+    return Path(os.environ["SystemRoot"]) / "System32/WindowsPowerShell/v1.0/powershell.exe"
+
+
+def verify_managed_msi_sources(info):
+    for label in ("old", "new"):
+        package = Path(info["root"]) / "administrator-packages" / (label + ".msi")
+        if digest(package) != info[label + "_sha256"]:
+            raise RuntimeError("Managed MSI source cannot be read or has changed")
+        try:
+            handle = package.open("r+b")  # No truncation or write, only access verification.
+        except PermissionError:
+            continue
+        else:
+            handle.close()
+            raise RuntimeError("Standard account must not be able to modify managed MSI sources")
+
+
 def save(path, value):
     path = Path(path)
     temp = path.with_name(path.name + ".tmp")
@@ -256,7 +274,7 @@ def prepare(kind, target, evidence):
         if kind != "macos":
             info[label + "_exe_sha256"] = digest(windows_payload_exe(payload, output / "extracted", kind))
         if kind == "msi":
-            metadata = run("powershell.exe", "-NoProfile", "-Command", r'''
+            metadata = run(windows_powershell(), "-NoProfile", "-Command", r'''
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[System.Text.UTF8Encoding]::new()
 $installer=New-Object -ComObject WindowsInstaller.Installer
@@ -724,7 +742,7 @@ def supervise(plan):
             result["installed_version_probe_error"] = str(probe_error)
         if platform.system() == "Windows":
             save(evidence / "failure-products.json", installed_products())
-            diagnostic = run("powershell.exe", "-NoProfile", "-Command",
+            diagnostic = run(windows_powershell(), "-NoProfile", "-Command",
                 "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|msiexec|consent|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
             (evidence / "failure-processes.json").write_bytes(diagnostic.stdout)
             processes = json.loads(diagnostic.stdout.decode("utf-8-sig") or "[]")
@@ -823,7 +841,7 @@ def install_and_test(plan, standard_user=False):
             raise RuntimeError("Refusing installation under an unexpected or administrator account")
     if info["kind"] in ("nsis", "msi") and not standard_user:
         # A genuine standard account, not gsudo's restricted administrator token.
-        subprocess.run(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+        subprocess.run([str(windows_powershell()), "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                         str(REPO / "scripts/upgrade-standard-user.ps1"), "-Plan", str(plan), "-Python", sys.executable],
                        input=secrets.token_urlsafe(32) + "Aa1!", text=True, check=True, timeout=720)
         return
@@ -836,6 +854,7 @@ def install_and_test(plan, standard_user=False):
         if (not standard_user or info.get("msi_deployment") != "administrator-advertised-package"
                 or not exe.is_file() or digest(exe) != info["old_exe_sha256"]):
             raise RuntimeError("Missing verified managed MSI installation")
+        verify_managed_msi_sources(info)
         # WiX stores the directory in HKCU. In this fixture an administrator did
         # the initial machine install, so transfer ONLY that directory preference
         # to this disposable user's hive; no real user settings are touched.
@@ -844,7 +863,8 @@ def install_and_test(plan, standard_user=False):
                                 winreg.KEY_SET_VALUE | winreg.KEY_WOW64_64KEY) as key:
             winreg.SetValueEx(key, "InstallDir", 0, winreg.REG_SZ, str(install) + "\\")
         save(Path(info["evidence"]) / "msi-user-precondition.json",
-             {"directory_preference_in_disposable_hkcu": True, "uac_interaction_verified": False})
+             {"directory_preference_in_disposable_hkcu": True, "managed_sources_readable": True,
+              "managed_sources_not_writable": True, "uac_interaction_verified": False})
         supervise(plan)
         return
     install.mkdir(parents=True)
