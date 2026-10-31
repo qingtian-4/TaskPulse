@@ -13,6 +13,7 @@
   import '$lib/components/settings/settings.css';
   import {t} from '$lib/i18n';
   import {appSettings,preferencePending,preferenceError} from '$lib/preferences';
+  import {autostart} from '$lib/autostart';
   import type {DashboardSettings} from '$lib/types';
   type Section='general'|'panel'|'sources'|'notifications'|'updates'|'about';
   let section=$state<Section>('general'),sourceDirty=$state(false),scroll:HTMLDivElement;
@@ -50,6 +51,6 @@
         </fieldset>
       {/if}
     </div>
-    <div class="settings-status" role="status" aria-live="polite">{$t(busy?'正在更新，请稍候…':$preferencePending?'正在保存设置…':'')}</div>
+    <div class="settings-status" role="status" aria-live="polite">{$t(busy?'正在更新，请稍候…':$autostart.pending?'正在核对系统启动设置…':$preferencePending?'正在保存设置…':'')}</div>
   </main>
 </div>

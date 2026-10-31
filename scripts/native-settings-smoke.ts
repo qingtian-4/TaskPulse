@@ -56,12 +56,13 @@ poll_interval_ms=3000
   async function connect(target:Tab){
     const ws=new WebSocket(target.webSocketDebuggerUrl);sockets.push(ws);await new Promise<void>((ok,fail)=>{ws.onopen=()=>ok();ws.onerror=()=>fail(Error('CDP failed'));});
     let id=0;const pending=new Map<number,{ok:(r:any)=>void;fail:(e:unknown)=>void;timer:ReturnType<typeof setTimeout>}>();
-    ws.onmessage=e=>{const m=JSON.parse(String(e.data));if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description??m.params.exceptionDetails.text);const p=pending.get(m.id);if(!p)return;clearTimeout(p.timer);pending.delete(m.id);m.error?p.fail(Error(JSON.stringify(m.error))):p.ok(m.result);};
+    let paused:((params:any)=>Promise<void>)|undefined;
+    ws.onmessage=e=>{const m=JSON.parse(String(e.data));if(m.method==='Fetch.requestPaused')void paused?.(m.params).catch(error=>errors.push(String(error)));if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description??m.params.exceptionDetails.text);const p=pending.get(m.id);if(!p)return;clearTimeout(p.timer);pending.delete(m.id);m.error?p.fail(Error(JSON.stringify(m.error))):p.ok(m.result);};
     const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((ok,fail)=>{const next=++id;const timer=setTimeout(()=>{pending.delete(next);fail(Error('CDP timeout: '+method+' '+String(params.expression??'').slice(0,180)));},20000);pending.set(next,{ok,fail,timer});ws.send(JSON.stringify({id:next,method,params}));});
     const evaluate=async(expression:string)=>{const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description??r.exceptionDetails.exception?.value??r.exceptionDetails.text);return r.result.value;};
     const invoke=(cmd:string,args:Record<string,unknown>={})=>evaluate(`__TAURI_INTERNALS__.invoke(${JSON.stringify(cmd)},${JSON.stringify(args)})`);
-    const wait=async(expression:string)=>{for(let n=0;n<150;n++){if(await evaluate(expression))return;await Bun.sleep(100);}throw Error('Native assertion timeout: '+expression);};
-    await send('Runtime.enable');return {send,evaluate,invoke,wait};
+    const wait=async(expression:string)=>{for(let n=0;n<150;n++){if(await evaluate(expression))return;await Bun.sleep(100);}throw Error('Native assertion timeout: '+expression+'; runtime errors: '+JSON.stringify(errors));};
+    await send('Runtime.enable');return {send,evaluate,invoke,wait,onRequestPaused:(handler:typeof paused)=>{paused=handler;}};
   }
   const start=()=>{app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});app.stderr?.on('data',chunk=>stderr+=String(chunk));app.once('error',e=>stderr+=String(e));};
   console.log('settings smoke: native startup');start();let root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
@@ -129,6 +130,82 @@ poll_interval_ms=3000
   assert.equal(catalog.find(s=>s.kind==='scanner').capabilities.turn_end,'unsupported');
   console.log('settings smoke: fixed layout and catalog passed');const startup=await ui.invoke('get_autostart');assert.equal(startup.available,false);
   assert.match(await ui.evaluate(`__TAURI_INTERNALS__.invoke('set_autostart',{enabled:true}).then(()=>'',e=>String(e))`),/installed TaskPulse/);
+  // Exercise the packaged startup UI while the native isolated-profile guard
+  // stays intact. Only these two IPC responses are simulated through CDP; no
+  // real login entry, security setting or production test override is used.
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
+  await ui.wait(`!!document.querySelector('[aria-label="登录时自动启动"]')`);
+  let startupEnabled=false,startupWrites=0,startupDenied=false;
+  ui.onRequestPaused(async({requestId,request})=>{
+    const command=new URL(request.url).pathname.slice(1);
+    let denied=command==='discover_sources' && request.method==='POST';
+    if(request.method==='POST' && command==='set_autostart'){
+      startupWrites++;denied=startupDenied;
+      if(!denied)startupEnabled=JSON.parse(request.postData).enabled;
+    }
+    await ui.send('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[
+      {name:'Content-Type',value:'application/json'},
+      {name:'Tauri-Response',value:denied?'error':'ok'},
+      {name:'Access-Control-Expose-Headers',value:'Tauri-Response'},
+      {name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'},
+      {name:'Access-Control-Allow-Methods',value:'POST, OPTIONS'},
+      {name:'Access-Control-Allow-Headers',value:'Content-Type, Tauri-Callback, Tauri-Error, Tauri-Invoke-Key'}
+    ],body:Buffer.from(JSON.stringify(denied?(command==='discover_sources'?'Source discovery fixture failure':'Access is denied.'):{enabled:startupEnabled,available:true})).toString('base64')});
+  });
+  try{
+    await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/get_autostart'},{urlPattern:'http://ipc.localhost/set_autostart'}]});
+    await ui.evaluate(`window.dispatchEvent(new Event('focus'))`);
+    await ui.wait(`!document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').click()`);
+    await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    await ui.invoke('plugin:window|close',{label:'management'});
+    assert.equal(await ui.evaluate(`!!document.querySelector('[aria-label="登录时自动启动"]') && !document.querySelector('#close-title')`),true,'Pending startup verification must retain the settings window');
+    await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]').checked && !document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    assert.equal(await ui.evaluate(`!!document.querySelector('.startup-feedback')`),false,'Positive control: a retained enable must not show a failure');
+    startupEnabled=false;
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
+    await ui.wait(`!document.querySelector('[aria-label="登录时自动启动"]').checked`);
+    assert.match(await ui.evaluate(`document.querySelector('[role="alert"]')?.textContent??''`),/登录启动未能保持开启/,'External removal must have visible feedback, not silently revert');
+    await ui.evaluate(`window.dispatchEvent(new Event('focus'))`);
+    await ui.wait(`!!document.querySelector('.startup-feedback')`);
+    assert.equal(startupWrites,1,'Readback and tab navigation must never retry an enable');
+    startupDenied=true;
+    await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').click()`);
+    await ui.wait(`document.querySelector('.startup-feedback')?.textContent.includes('Access is denied.') && !document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    assert.equal(await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').checked`),false);
+    await ui.evaluate(`window.dispatchEvent(new Event('focus'))`);
+    await ui.wait(`document.querySelector('.startup-feedback')?.textContent.includes('Access is denied.')`);
+    assert.equal(startupWrites,2);
+    // Clear only through explicit successful user actions, then remove the mock.
+    startupDenied=false;
+    for(const enabled of [true,false]){
+      await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').click()`);
+      await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]').checked===${enabled} && !document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    }
+    assert.equal(await ui.evaluate(`!!document.querySelector('.startup-feedback')`),false);
+    // A failed source initialization must not skip the window's single close
+    // owner. Reload to exercise registration ordering, not an already-ready UI.
+    await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/get_autostart'},{urlPattern:'http://ipc.localhost/set_autostart'},{urlPattern:'http://ipc.localhost/discover_sources'}]});
+    await ui.evaluate(`window.__smokeReloadMarker=true`);
+    await ui.send('Page.reload');
+    await ui.wait(`!window.__smokeReloadMarker && document.querySelector('.settings-inline-error')?.textContent.includes('Source discovery fixture failure')`);
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
+    await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]')?.disabled===false`);
+    await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').click()`);
+    await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    await ui.invoke('plugin:window|close',{label:'management'});
+    await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]').checked && !document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').click()`);
+    await ui.wait(`!document.querySelector('[aria-label="登录时自动启动"]').checked && !document.querySelector('[aria-label="登录时自动启动"]').disabled`);
+    console.log('settings smoke: startup retention, rollback feedback and no automatic writes passed');
+  }finally{await ui.send('Fetch.disable');ui.onRequestPaused(undefined);}
+  await ui.evaluate(`window.__smokeReloadMarker=true`);
+  await ui.send('Page.reload');
+  await ui.wait(`!window.__smokeReloadMarker && !!document.querySelector('.settings-nav a[href="#general"]')`);
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
+  await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]')?.disabled===true`);
+  assert.equal((await ui.invoke('get_autostart')).available,false);
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   await ui.wait(`document.querySelectorAll('.source-card').length>=9`);
   await ui.evaluate(`document.querySelector('.source-expand').click()`);

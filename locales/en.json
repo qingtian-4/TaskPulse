@@ -564,5 +564,12 @@
   "Login startup entry points to a different command": "Login startup entry points to a different command",
   "Unknown Windows login startup approval state": "Unknown Windows login startup approval state",
   "Login startup command needs repair; check registry permissions": "Login startup command needs repair; check registry permissions",
-  "添加来源": "Add source"
+  "添加来源": "Add source",
+  "登录启动未能保持开启或关闭，当前显示系统实际状态。": "The login startup change did not persist. The switch shows the current system state.",
+  "登录启动设置未生效，当前显示系统实际状态。": "The login startup setting was not applied. The switch shows the current system state.",
+  "无法确认系统的登录启动状态。": "Could not confirm the system login startup state.",
+  "无法保存登录启动设置。": "Could not save the login startup setting.",
+  "请检查系统启动设置或安全软件的拦截记录。TaskPulse 不会自动重试开启。": "Check your system startup settings or security software block history. TaskPulse will not automatically try to enable startup again.",
+  "重新检查": "Check again",
+  "正在核对系统启动设置…": "Checking system startup settings…"
 }
