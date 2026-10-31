@@ -272,7 +272,8 @@ pub fn get_pending_task_prompts() -> Vec<TaskSnapshot> {
             let source = crate::monitoring::source_for(&settings, &task);
             let provider = source.and_then(|s| health.iter().find(|p| p.provider == s.id));
             let interval = source.map_or(3000, |s| s.poll_interval_ms);
-            task.stale |= !prompt_source_fresh(provider, now, interval);
+            let fresh = prompt_task_source_fresh(&task, provider, now, interval);
+            task.stale |= !fresh;
             if task.source == TaskSource::GenericEvent {
                 task.stale |= task
                     .pending_confirmed_at
@@ -302,6 +303,15 @@ fn prompt_source_fresh(
                     age.as_millis() <= u128::from(interval.saturating_mul(3).max(30_000))
                 })
     })
+}
+
+fn prompt_task_source_fresh(
+    task: &TaskSnapshot,
+    health: Option<&crate::providers::ProviderHealth>,
+    now: SystemTime,
+    interval: u64,
+) -> bool {
+    prompt_source_fresh(health, now, interval) || health.is_some_and(|p| p.verifies_task(task, now))
 }
 
 fn reopenable(task: &TaskSnapshot) -> bool {
@@ -726,10 +736,51 @@ mod tests {
         assert!(!prompt_source_fresh(None, SystemTime::now(), 3000));
     }
     #[test]
+    fn partial_observation_prompt_requires_the_same_native_turn_and_request() {
+        use crate::providers::{ProviderHealth, ProviderStatus, TaskObservation};
+        let now = SystemTime::now();
+        let mut task = TaskSnapshot::new(
+            "codex:session",
+            "native",
+            TaskSource::Codex,
+            crate::domain::TaskStatus::WaitingInput,
+            crate::domain::DetectionConfidence::Hook,
+            now,
+        );
+        task.source_instance = Some("codex".into());
+        task.turn_key = Some("turn".into());
+        task.waiting_reason = Some(crate::domain::WaitingReason::Question);
+        task.input_request_id = Some("question".into());
+        let health = ProviderHealth {
+            provider: "codex".into(),
+            status: ProviderStatus::Degraded,
+            last_attempt: Some(now),
+            last_success: None,
+            message: None,
+            task_observations: [(
+                task.id.clone(),
+                TaskObservation {
+                    observed_at: crate::providers::resources::epoch_ms(now),
+                    state: crate::providers::task_observation_state(&task),
+                },
+            )]
+            .into(),
+        };
+        assert!(!prompt_source_fresh(Some(&health), now, 3000));
+        assert!(prompt_task_source_fresh(&task, Some(&health), now, 3000));
+        task.turn_key = Some("different-turn".into());
+        assert!(!prompt_task_source_fresh(&task, Some(&health), now, 3000));
+        task.turn_key = Some("turn".into());
+        task.input_request_id = Some("different-question".into());
+        assert!(!prompt_task_source_fresh(&task, Some(&health), now, 3000));
+    }
+
+    #[test]
     fn restored_prompts_require_a_fresh_success_of_their_own_source() {
         use crate::providers::{ProviderHealth, ProviderStatus};
         let now = SystemTime::now();
         let mut health = ProviderHealth {
+            task_observations: Default::default(),
             provider: "source".into(),
             status: ProviderStatus::Connected,
             last_success: Some(now),

@@ -98,7 +98,10 @@ fn aggregate(snapshot: &DashboardSnapshot) -> TrayPresentation {
                 .providers
                 .iter()
                 .find(|p| &p.provider == id)
-                .is_none_or(|p| p.status == ProviderStatus::Degraded || p.last_success.is_none())
+                .is_none_or(|p| {
+                    (p.status == ProviderStatus::Degraded || p.last_success.is_none())
+                        && !p.verifies_task(task, std::time::SystemTime::now())
+                })
         }) || task.host.as_ref().is_some_and(|host| {
             snapshot
                 .hosts
@@ -798,12 +801,38 @@ mod tests {
 
     fn health(status: ProviderStatus) -> crate::providers::ProviderHealth {
         crate::providers::ProviderHealth {
+            task_observations: Default::default(),
             provider: "fixture-source".into(),
             status,
             last_success: Some(SystemTime::now()),
             last_attempt: Some(SystemTime::now()),
             message: None,
         }
+    }
+
+    #[test]
+    fn partial_codex_observation_updates_tray_without_hiding_source_warning() {
+        let now = SystemTime::now();
+        let mut current = task(TaskStatus::Running);
+        current.source = crate::domain::TaskSource::Codex;
+        current.source_instance = Some("fixture-source".into());
+        let mut provider = health(ProviderStatus::Degraded);
+        provider.last_success = None;
+        provider.last_attempt = Some(now);
+        provider.task_observations.insert(
+            current.id.clone(),
+            crate::providers::TaskObservation {
+                observed_at: crate::providers::resources::epoch_ms(now),
+                state: crate::providers::task_observation_state(&current),
+            },
+        );
+        let mut state = snapshot(vec![current]);
+        state.providers.push(provider);
+        let shown = aggregate(&state);
+        assert!(shown.tooltip.contains("进行中 1"));
+        assert!(shown.tooltip.contains("来源异常 1"));
+        state.tasks[0].turn_key = Some("different-turn".into());
+        assert!(aggregate(&state).tooltip.contains("进行中 0"));
     }
 
     #[test]

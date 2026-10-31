@@ -19,11 +19,37 @@ param(
     [ValidateSet('en','zh-CN')][string]$Language = $(if ((Get-UICulture).Name -like 'zh*') { 'zh-CN' } else { 'en' })
 )
 
+function Get-TaskPulsePublicPageRelease {
+    param([string]$Tag)
+    $page = if ($Tag) { "https://github.com/qingtian-4/TaskPulse/releases/tag/$Tag" } else { 'https://github.com/qingtian-4/TaskPulse/releases/latest' }
+    $reply = Invoke-WebRequest -UseBasicParsing -Method Head -Uri $page -Headers @{ 'User-Agent'='TaskPulse-Installer' } -MaximumRedirection 5 -TimeoutSec 30
+    $baseResponse = $reply.BaseResponse
+    $final = if ($baseResponse.PSObject.Properties['ResponseUri']) { $baseResponse.ResponseUri }
+        elseif ($baseResponse.PSObject.Properties['RequestMessage']) { $baseResponse.RequestMessage.RequestUri }
+        else { $null }
+    $prefix = '/qingtian-4/TaskPulse/releases/tag/'
+    if (-not $final -or $final.Scheme -cne 'https' -or $final.Host -cne 'github.com' -or $final.Port -ne 443 -or
+        $final.UserInfo -or $final.Query -or $final.Fragment -or -not $final.AbsolutePath.StartsWith($prefix, [StringComparison]::Ordinal)) {
+        throw 'Unexpected public release-page URL.'
+    }
+    $resolved = $final.AbsolutePath.Substring($prefix.Length)
+    if ($resolved -cnotmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$' -or ($Tag -and $resolved -cne $Tag)) { throw 'Public release tag mismatch.' }
+    $names = @("TaskPulse_$($resolved.Substring(1))_windows_x64_setup.exe", 'SHA256SUMS.txt', 'release-manifest.json')
+    # An anonymous successful public page plus verified public assets replaces
+    # API metadata only when the API explicitly reports a rate limit. Drafts
+    # have neither an anonymous public page nor public download URLs.
+    return [pscustomobject]@{tag_name=$resolved;draft=$false;prerelease=$resolved.Contains('-');assets=@($names | ForEach-Object {
+        [pscustomobject]@{name=$_;browser_download_url="https://github.com/qingtian-4/TaskPulse/releases/download/$resolved/$_"}
+    })}
+}
+
 function Get-TaskPulseRelease {
     param([string]$Version, [bool]$Prerelease)
     $api = 'https://api.github.com/repos/qingtian-4/TaskPulse/releases'
     $headers = @{ 'User-Agent' = 'TaskPulse-Installer'; Accept = 'application/vnd.github+json' }
-    if ($Version) {
+    $publicPageVerified = $false
+    $tag = $null
+    try { if ($Version) {
         $tag = if ($Version.StartsWith('v')) { $Version } else { "v$Version" }
         if ($tag -cnotmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid version / Invalid -Version.' }
         $release = Invoke-RestMethod -Uri "$api/tags/$tag" -Headers $headers -TimeoutSec 30
@@ -33,11 +59,46 @@ function Get-TaskPulseRelease {
             Sort-Object { [DateTimeOffset]$_.published_at } -Descending | Select-Object -First 1
     } else {
         $release = Invoke-RestMethod -Uri "$api/latest" -Headers $headers -TimeoutSec 30
+    }} catch {
+        $response = $_.Exception.Response
+        $remaining = $null
+        if ($response) {
+            if ($response.Headers.PSObject.Methods['TryGetValues']) {
+                [Collections.Generic.IEnumerable[string]]$values = $null
+                if ($response.Headers.TryGetValues('X-RateLimit-Remaining', [ref]$values)) { $remaining = @($values)[0] }
+            } else { $remaining = $response.Headers['X-RateLimit-Remaining'] }
+        }
+        $limited = $response -and (([int]$response.StatusCode -eq 403 -and $remaining -eq '0') -or [int]$response.StatusCode -eq 429)
+        if (-not $limited) { throw }
+        if ($Prerelease -and -not $Version) { throw 'GitHub API rate limit reached. Specify a public -Version or retry later.' }
+        $release = Get-TaskPulsePublicPageRelease -Tag $tag
+        $publicPageVerified = $true
     }
-    if (-not $release -or $release.draft -or -not $release.published_at) { throw 'No public release available. Draft releases cannot be installed.' }
+    if (-not $release -or $release.draft -or (-not $publicPageVerified -and -not $release.published_at)) { throw 'No public release available. Draft releases cannot be installed.' }
     if (-not $Version -and -not $Prerelease -and $release.prerelease) { throw 'Prerelease requires -Prerelease or an explicit -Version.' }
     if ($Version -and $release.tag_name -cne $tag) { throw 'Release tag mismatch.' }
     return $release
+}
+
+function Save-TaskPulseAsset {
+    param([string]$Uri, [string]$OutFile, [string]$Name)
+    for ($attempt=1; $attempt -le 2; $attempt++) {
+        try {
+            Invoke-WebRequest -UseBasicParsing -Uri $Uri -Headers @{ 'User-Agent'='TaskPulse-Installer' } -OutFile $OutFile -TimeoutSec 300
+            return
+        } catch {
+            $errorValue = $_.Exception
+            $status = if ($errorValue.Response) { [int]$errorValue.Response.StatusCode } else { 0 }
+            $transient = $status -in @(408,429,500,502,503,504) -or ($errorValue -is [Net.WebException] -and
+                $errorValue.Status -in @([Net.WebExceptionStatus]::ConnectFailure,[Net.WebExceptionStatus]::ConnectionClosed,[Net.WebExceptionStatus]::KeepAliveFailure,[Net.WebExceptionStatus]::ReceiveFailure,[Net.WebExceptionStatus]::SendFailure,[Net.WebExceptionStatus]::Timeout))
+            if ($attempt -lt 2 -and $transient) {
+                if (Test-Path -LiteralPath $OutFile) { Remove-Item -LiteralPath $OutFile -Force }
+                Start-Sleep -Seconds 1
+                continue
+            }
+            throw "Download failed: $Name`nURL: $Uri`nHTTP: $status`n$($errorValue.Message)"
+        }
+    }
 }
 
 function Get-TaskPulseAssetUrl {
@@ -84,6 +145,7 @@ function Test-TaskPulseDownload {
 function Invoke-TaskPulseInstall {
     param([string]$Version, [bool]$Prerelease, [bool]$DownloadOnly, [string]$OutputDirectory, [string]$Language)
     $ErrorActionPreference = 'Stop'
+    $ProgressPreference = 'SilentlyContinue'
     $zh = $Language -eq 'zh-CN'
     # PowerShell 5.1 source stays ASCII; localized messages use JSON escapes.
     $messages = if ($zh) { ConvertFrom-Json '{"download":"\u4e0b\u8f7d TaskPulse","verified":"SHA-256 \u6821\u9a8c\u901a\u8fc7","unsigned":"\u5b89\u88c5\u5305\u5c1a\u672a\u4ee3\u7801\u7b7e\u540d\uff0cWindows \u53ef\u80fd\u663e\u793a\u672a\u77e5\u53d1\u5e03\u8005\u3002","open":"\u6253\u5f00\u6807\u51c6\u5b89\u88c5\u5411\u5bfc","saved":"\u5df2\u4fdd\u5b58\u6821\u9a8c\u540e\u7684\u5b89\u88c5\u5305","failed":"\u5b89\u88c5\u672a\u5b8c\u6210\u3002\u8bf7\u68c0\u67e5\u7f51\u7edc\u8fde\u63a5\u548c GitHub Releases \u9875\u9762\u3002"}' }
@@ -116,7 +178,8 @@ function Invoke-TaskPulseInstall {
         [void][IO.Directory]::CreateDirectory($temp)
         Write-Host "$($messages.download) $tag"
         for ($i=0; $i -lt $names.Count; $i++) {
-            Invoke-WebRequest -UseBasicParsing -Uri $urls[$i] -OutFile (Join-Path $temp $names[$i]) -TimeoutSec 300
+            Write-Host "  [$($i+1)/$($names.Count)] $($names[$i])"
+            Save-TaskPulseAsset -Uri $urls[$i] -OutFile (Join-Path $temp $names[$i]) -Name $names[$i]
         }
         $installer = Test-TaskPulseDownload $temp $tag
         Write-Host $messages.verified

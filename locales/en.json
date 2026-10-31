@@ -564,5 +564,7 @@
   "Login startup entry points to a different command": "Login startup entry points to a different command",
   "Unknown Windows login startup approval state": "Unknown Windows login startup approval state",
   "Login startup command needs repair; check registry permissions": "Login startup command needs repair; check registry permissions",
-  "添加来源": "Add source"
+  "添加来源": "Add source",
+  "部分会话需检查": "Some sessions need attention",
+  "该会话已更新；同一来源的其他会话需检查": "This session is up to date; other sessions from this source need attention"
 }

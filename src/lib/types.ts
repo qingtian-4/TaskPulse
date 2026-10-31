@@ -233,6 +233,7 @@ export interface ProviderHealth {
   status: 'connected' | 'degraded';
   last_success?: number;
   last_attempt?: number;
+  task_observations?: Record<string,{observed_at:number;state:string}>;
   message?: string;
 }
 export interface CodexAccountQuota {

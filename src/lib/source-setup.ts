@@ -25,7 +25,9 @@ export function sourceReadState(source:MonitorSource, applied:DashboardSettings|
   if(!saved.enabled)return '已保存 · 已停用';
   const h=health.find(h=>h.provider===source.id);
   if(!h?.last_attempt)return '已保存 · 等待首次读取';
-  if(h.status==='degraded')return '读取异常 · 需检查';
+  if(h.status==='degraded')return (saved.kind==='codex'||saved.kind==='codex_wsl') &&
+    now>=h.last_attempt && now-h.last_attempt<=30000 &&
+    Object.values(h.task_observations??{}).some(proof=>proof.observed_at===h.last_attempt)?'部分会话需检查':'读取异常 · 需检查';
   if(!h.last_success || now-h.last_success>Math.max(30000,saved.poll_interval_ms*3))return '读取结果待更新';
   return '来源读取正常';
 }
