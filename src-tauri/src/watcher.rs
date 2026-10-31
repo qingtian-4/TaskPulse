@@ -830,6 +830,7 @@ impl LocalProviders {
                         }),
                     ));
                     self.health.push(ProviderHealth {
+                        task_observations: Default::default(),
                         provider: id,
                         status: ProviderStatus::Degraded,
                         last_success: None,
@@ -872,6 +873,7 @@ impl LocalProviders {
                 }),
             ));
             self.health.push(ProviderHealth {
+                task_observations: Default::default(),
                 provider: id,
                 status: ProviderStatus::Degraded,
                 last_success: None,
@@ -1161,8 +1163,29 @@ fn update_provider_health(
         .iter()
         .find(|item| item.provider == provider)
         .and_then(|item| item.last_success);
+    let task_observations = output
+        .tasks
+        .iter()
+        .filter(|task| {
+            task.source == TaskSource::Codex
+                && !task.stale
+                && !task.internal
+                && task.confidence != DetectionConfidence::Inferred
+                && (task.status == crate::domain::TaskStatus::Running || task.requires_action())
+        })
+        .map(|task| {
+            (
+                task.id.clone(),
+                crate::providers::TaskObservation {
+                    observed_at: crate::providers::resources::epoch_ms(now),
+                    state: crate::providers::task_observation_state(task),
+                },
+            )
+        })
+        .collect();
     let next = if output.authoritative {
         ProviderHealth {
+            task_observations,
             provider: provider.to_string(),
             status: ProviderStatus::Connected,
             last_success: Some(now),
@@ -1171,6 +1194,7 @@ fn update_provider_health(
         }
     } else {
         ProviderHealth {
+            task_observations,
             provider: provider.to_string(),
             status: ProviderStatus::Degraded,
             last_success: previous_success,
@@ -1203,6 +1227,7 @@ fn append_state_health(
     ] {
         if let Some(error) = error {
             health.push(ProviderHealth {
+                task_observations: Default::default(),
                 provider: provider.into(),
                 status: ProviderStatus::Degraded,
                 last_success: None,
@@ -1605,6 +1630,7 @@ pub fn watch(app: AppHandle) {
                     };
                     let segment = remote_source_health.get(&(source.location.clone(), kind));
                     health.push(ProviderHealth {
+                        task_observations: Default::default(),
                         provider: source.id.clone(),
                         status: if host.status == crate::providers::HostStatus::Connected
                             && segment.is_some_and(|health| health.authoritative)
@@ -1621,6 +1647,7 @@ pub fn watch(app: AppHandle) {
                     // An enabled remote source without its first observation
                     // is not a trustworthy empty/idle source.
                     health.push(ProviderHealth {
+                        task_observations: Default::default(),
                         provider: source.id.clone(),
                         status: ProviderStatus::Degraded,
                         last_success: None,
@@ -1782,6 +1809,7 @@ mod tests {
                     );
                     let host = HostHealth::connected(host_id, SystemTime::now());
                     let provider = ProviderHealth {
+                        task_observations: Default::default(),
                         provider: provider_id,
                         status: ProviderStatus::Connected,
                         last_success: Some(SystemTime::now()),
@@ -2489,5 +2517,49 @@ mod tests {
         assert_eq!(health[0].status, ProviderStatus::Connected);
         assert_eq!(health[0].last_success, Some(recovered));
         assert!(health[0].message.is_none());
+    }
+
+    #[test]
+    fn partial_codex_health_keeps_only_verified_tasks_from_the_latest_attempt() {
+        let now = SystemTime::now();
+        let good = TaskSnapshot::new(
+            "good",
+            "native",
+            TaskSource::Codex,
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            now,
+        );
+        let mut unreadable = good.clone();
+        unreadable.id = "unreadable".into();
+        unreadable.stale = true;
+        let mut scanner = good.clone();
+        scanner.id = "scanner".into();
+        scanner.source = TaskSource::LocalFile;
+        let mut health = vec![];
+        update_provider_health(
+            &mut health,
+            "codex",
+            &ProviderOutput::degraded(
+                vec![good, unreadable, scanner],
+                "another rollout is unreadable",
+            ),
+            now,
+        );
+        assert_eq!(health[0].status, ProviderStatus::Degraded);
+        assert!(health[0].last_success.is_none());
+        assert_eq!(health[0].task_observations.len(), 1);
+        assert_eq!(
+            health[0].task_observations["good"].observed_at,
+            crate::providers::resources::epoch_ms(now)
+        );
+        // A subsequent failed attempt must not renew a previous task's proof.
+        update_provider_health(
+            &mut health,
+            "codex",
+            &ProviderOutput::degraded(vec![], "collection failed"),
+            now + Duration::from_secs(3),
+        );
+        assert!(health[0].task_observations.is_empty());
     }
 }

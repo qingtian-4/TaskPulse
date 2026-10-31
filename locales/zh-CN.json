@@ -564,5 +564,7 @@
   "Login startup entry points to a different command": "现有登录启动项指向其他命令，请检查系统启动设置",
   "Unknown Windows login startup approval state": "无法识别 Windows 登录启动状态",
   "Login startup command needs repair; check registry permissions": "登录启动路径需要修复，请检查注册表权限",
-  "添加来源": "添加来源"
+  "添加来源": "添加来源",
+  "部分会话需检查": "部分会话需检查",
+  "该会话已更新；同一来源的其他会话需检查": "该会话已更新；同一来源的其他会话需检查"
 }

@@ -2172,7 +2172,7 @@ impl Provider for CodexProvider {
         for previous in &self.last_tasks {
             if !tasks.iter().any(|t| t.id == previous.id) && !parser_protected(previous) {
                 let mut previous = previous.clone();
-                if self.linux_rollouts.is_some() {
+                if self.linux_rollouts.is_some() || previous.requires_action() {
                     previous.stale = true;
                 }
                 if let Some(meta) = previous.session_id.as_ref().and_then(|id| metadata.get(id)) {

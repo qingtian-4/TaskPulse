@@ -1,12 +1,38 @@
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import {observedDashboardTasks,shouldApplyDashboardSnapshot,preferredDashboardHeight,dashboardCandidates,defaultDashboardTasks} from '../src/lib/dashboard';
+import {taskObservationState,observedDashboardTasks,shouldApplyDashboardSnapshot,preferredDashboardHeight,dashboardCandidates,defaultDashboardTasks} from '../src/lib/dashboard';
 import {acceptMessageState,unreadMessageIds,messageStatus} from '../src/lib/messages';
 import type {MessageCenterState} from '../src/lib/types';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('a verified Codex session stays ongoing when a different rollout degrades the source',()=>{
+  const source={id:'codex',name:'Local',kind:'codex' as const,enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
+  const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[source]};
+  const health=[{provider:'codex',status:'degraded' as const,last_attempt:1000,task_observations:{a:{observed_at:1000,state:taskObservationState(base)}},message:'One unrelated rollout is unreadable'}];
+  const broken={...base,id:'broken',stale:true};
+  const observed=observedDashboardTasks([base,broken],health,settings,1100);
+  expect(taskSection(observed[0])).toBe('ongoing');expect(observed[0].stale).not.toBe(true);
+  expect(taskSection(observed[1])).toBe('uncertain');
+  expect(observedDashboardTasks([base],health,settings,32000)[0].stale).toBe(true);
+  expect(observedDashboardTasks([base],[{...health[0],task_observations:{other:{observed_at:1000,state:taskObservationState(base)}}}],settings,1100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([base],[{...health[0],last_attempt:2000}],settings,2100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([base],[{...health[0],provider:'another-source'}],settings,1100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([base],health,{...settings,sources:[{...source,enabled:false}]},1100)[0].stale).toBe(true);
+  const prompt={...base,status:'waiting_input' as const,waiting_reason:'approval' as const};
+  const promptHealth=[{...health[0],task_observations:{a:{observed_at:1000,state:taskObservationState(prompt)}}}];
+  expect(observedDashboardTasks([prompt],promptHealth,settings,1100)[0].stale).toBe(true);
+  const explicit={...prompt,input_request_id:'explicit-request'};
+  const explicitHealth=[{...health[0],task_observations:{a:{observed_at:1000,state:taskObservationState(explicit)}}}];
+  expect(observedDashboardTasks([explicit],explicitHealth,settings,1100)[0].stale).not.toBe(true);
+  const empty={...prompt,input_request_ids:[' ','']};
+  expect(observedDashboardTasks([empty],[{...health[0],task_observations:{a:{observed_at:1000,state:taskObservationState(empty)}}}],settings,1100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([{...explicit,turn_key:'newer-turn'}],explicitHealth,settings,1100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([{...explicit,input_request_id:'different-request'}],explicitHealth,settings,1100)[0].stale).toBe(true);
+  expect(observedDashboardTasks([{...explicit,updated_at:2}],explicitHealth,settings,1100)[0].stale).toBe(true);
+});
 
 test('anonymous scanner processes are discovery evidence, not independent task cards',()=>{
   const process:TaskSnapshot={...base,id:'scan:codex:process',source_instance:'scanner',name:'unknown',confidence:'inferred'};

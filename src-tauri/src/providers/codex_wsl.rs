@@ -180,7 +180,18 @@ fn command(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
     use std::os::windows::process::CommandExt;
     use std::process::{Command, Stdio};
     use std::time::Instant;
-    let mut child = Command::new("wsl.exe")
+    let mut command = Command::new("wsl.exe");
+    // WSLENV /p can translate a Windows CODEX_HOME into /mnt/c/... and make
+    // the Linux source read the Windows session database/logs a second time.
+    // Remove only the inherited Windows location in this child environment;
+    // explicit Linux overrides and every other WSLENV entry stay intact.
+    if std::env::var_os("CODEX_HOME").is_some_and(|v| windows_codex_home(&v.to_string_lossy())) {
+        command.env_remove("CODEX_HOME");
+        if let Ok(value) = std::env::var("WSLENV") {
+            command.env("WSLENV", without_windows_codex_home(&value));
+        }
+    }
+    let mut child = command
         .args(args)
         .creation_flags(0x08000000)
         .stdin(Stdio::null())
@@ -245,6 +256,31 @@ fn command(args: &[&str], timeout: Duration) -> Result<Vec<u8>, String> {
         ));
     }
     Ok(stdout)
+}
+
+#[cfg(any(windows, test))]
+fn windows_codex_home(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    value.starts_with(r"\\")
+        || bytes.len() >= 3
+            && bytes[0].is_ascii_alphabetic()
+            && bytes[1] == b':'
+            && matches!(bytes[2], b'\\' | b'/')
+}
+
+#[cfg(any(windows, test))]
+fn without_windows_codex_home(value: &str) -> String {
+    value
+        .split(':')
+        .filter(|entry| {
+            !entry
+                .split('/')
+                .next()
+                .unwrap_or("")
+                .eq_ignore_ascii_case("CODEX_HOME")
+        })
+        .collect::<Vec<_>>()
+        .join(":")
 }
 #[cfg(not(windows))]
 fn command(_: &[&str], _: Duration) -> Result<Vec<u8>, String> {
@@ -488,6 +524,35 @@ impl Provider for WslCodexProvider {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn windows_codex_home_does_not_cross_into_linux_sources() {
+        for path in [
+            r"C:\Users\User\.codex",
+            "D:/custom/codex",
+            r"\\server\share\codex",
+            r"\\?\C:\Codex",
+        ] {
+            assert!(super::windows_codex_home(path));
+        }
+        for path in [
+            "/home/user/.codex",
+            "/custom/codex",
+            "//custom/codex",
+            "",
+            "C:relative",
+        ] {
+            assert!(!super::windows_codex_home(path));
+        }
+        assert_eq!(
+            super::without_windows_codex_home("PATH/lp:CODEX_HOME/p:SSH_AUTH_SOCK/u"),
+            "PATH/lp:SSH_AUTH_SOCK/u"
+        );
+        assert_eq!(
+            super::without_windows_codex_home("codex_home:OTHER/p:CODEX_HOME/up"),
+            "OTHER/p"
+        );
+        assert_eq!(super::without_windows_codex_home("OTHER/p"), "OTHER/p");
+    }
     use super::*;
     #[test]
     fn wsl_continuity_partial_empty_does_not_erase_the_trusted_running_session() {

@@ -16,19 +16,32 @@ export function shouldApplyDashboardSnapshot(currentRevision:number,incomingRevi
 }
 export const SECTION_ORDER: TaskSection[] = ['ongoing', 'results', 'uncertain', 'pinned'];
 export const SECTION_NAMES: Record<TaskSection,string> = {ongoing:'进行中',results:'结果待查看',uncertain:'状态待更新',pinned:'固定与已查看'};
-// Presentation freshness is stricter than a cached provider snapshot. Keep
-// every record reachable, but never count degraded-source work as confirmed.
+// A source can be partially degraded by an unrelated rollout. Per-task proof
+// must come from its latest collection, never from task activity or cached health.
+export function taskObservationState(task:TaskSnapshot):string {
+  const ids=[...new Set([...(task.input_request_ids??[]),...(task.input_request_id?[task.input_request_id]:[])])].sort();
+  return JSON.stringify([task.session_id??null,task.turn_key??null,task.status,task.waiting_reason??null,task.updated_at,task.finished_at??null,ids]);
+}
+export function hasFreshCodexObservation(task:TaskSnapshot, source:ReturnType<typeof taskSource>, health:ProviderHealth|undefined, now:number):boolean {
+  const proof=health?.task_observations?.[task.id];
+  const at=proof?.observed_at;
+  return task.source==='codex' && task.stale!==true && !task.internal && task.confidence!=='inferred' && !!source?.enabled &&
+    (source.kind==='codex'||source.kind==='codex_wsl') && health?.provider===source.id &&
+    at!==undefined && at===health.last_attempt && Number.isFinite(at) && now>=at &&
+    now-at<=30000 && proof?.state===taskObservationState(task);
+}
 export function observedDashboardTasks(tasks:TaskSnapshot[], providers:ProviderHealth[], settings:DashboardSettings|null, now:number):TaskSnapshot[] {
   return tasks.map(task=>{
     if(task.status!=='running' && !needsAction(task))return task;
     const source=taskSource(task,settings??undefined);
     const health=providers.find(provider=>provider.provider===source?.id);
-    const fresh=source?.enabled && health?.status==='connected' && health.last_success!==undefined &&
-      now-health.last_success<=Math.max(30000,(source.poll_interval_ms??3000)*3);
+    const fresh=source?.enabled && ((health?.status==='connected' && health.last_success!==undefined &&
+      now-health.last_success<=Math.max(30000,(source.poll_interval_ms??3000)*3)) ||
+      health?.status==='degraded' && hasFreshCodexObservation(task,source,health,now));
     const eventEvidence=task.confidence!=='inferred' || task.source==='generic_event' &&
       task.evidence_channel==='self_reported' && !!task.integration_epoch && (task.integration_sequence??0)>0;
     const explicit=!needsAction(task) || eventEvidence &&
-      (task.waiting_reason==='quota_exhausted' || !!task.input_request_id || !!task.input_request_ids?.length);
+      (task.waiting_reason==='quota_exhausted' || !!task.input_request_id?.trim() || !!task.input_request_ids?.some(id=>!!id.trim()));
     const confirmed=task.source!=='generic_event' || !needsAction(task) ||
       task.pending_confirmed_at!==undefined && now-task.pending_confirmed_at<=30000;
     return fresh&&explicit&&confirmed ? task : {...task,stale:true};
@@ -183,6 +196,7 @@ export function projectKey(task: TaskSnapshot, settings?: DashboardSettings | nu
 export function sourceFreshness(task: TaskSnapshot, settings: DashboardSettings | null, providers: ProviderHealth[], now: number): string {
   const source = taskSource(task, settings);
   const health = providers.find(p => p.provider === (source?.id ?? task.source_instance));
+  if(health?.status==='degraded' && hasFreshCodexObservation(task,source,health,now))return '该会话已更新；同一来源的其他会话需检查';
   if (!health?.last_success) return '来源尚未成功采集';
   const age = now - health.last_success;
   const stale = health.status === 'degraded' || age > Math.max(30000, (source?.poll_interval_ms ?? 3000) * 3);

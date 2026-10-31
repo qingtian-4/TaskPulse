@@ -1,5 +1,48 @@
 use super::*;
 
+#[test]
+fn partial_observation_retained_quota_without_rollout_is_stale() {
+    use crate::domain::WaitingReason;
+    let root = tempfile::tempdir().unwrap();
+    let mut provider = CodexProvider::with_root(root.path().to_path_buf());
+    let now = SystemTime::now();
+    let mut quota = TaskSnapshot::new(
+        "codex:quota",
+        "native",
+        TaskSource::Codex,
+        TaskStatus::WaitingInput,
+        DetectionConfidence::Hook,
+        now,
+    );
+    quota.waiting_reason = Some(WaitingReason::QuotaExhausted);
+    let finished = TaskSnapshot::new(
+        "codex:done",
+        "native",
+        TaskSource::Codex,
+        TaskStatus::Succeeded,
+        DetectionConfidence::Hook,
+        now,
+    );
+    provider.last_tasks = vec![quota, finished];
+    let output = provider.poll(now);
+    assert!(
+        output
+            .tasks
+            .iter()
+            .find(|t| t.id == "codex:quota")
+            .unwrap()
+            .stale
+    );
+    assert!(
+        !output
+            .tasks
+            .iter()
+            .find(|t| t.id == "codex:done")
+            .unwrap()
+            .stale
+    );
+}
+
 fn question_call(name: &str, id: &str, count: usize) -> String {
     let questions: Vec<_> = (0..count)
         .map(|i| serde_json::json!({"title":format!("Question {i}"),"options":["Yes","No"]}))
