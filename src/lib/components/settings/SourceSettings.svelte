@@ -4,6 +4,7 @@
   import { Radio, Bell, Info } from '@lucide/svelte';
   import {t} from '$lib/i18n';
   import {appSettings,savePreference,preferencePending} from '$lib/preferences';
+  import {autostart} from '$lib/autostart';
   import {reconcileSourceDraft} from '$lib/settings-draft';
   import SettingRow from './SettingRow.svelte';
 
@@ -152,6 +153,8 @@
     const cleanups:Array<()=>void>=[];let mounted=true;
     void(async()=>{
       try {
+        // Own native close requests before any unrelated discovery can fail.
+        const closeCleanup=await getCurrentWindow().onCloseRequested(e=>{if(get(autostart).pending){e.preventDefault();return;}if(get(preferencePending)){e.preventDefault();onAttention();error='正在保存设置，请稍候再关闭。';return;}if((dirty || saving) && !closing){e.preventDefault();onAttention();closePrompt=true;}});if(mounted)cleanups.push(closeCleanup);else closeCleanup();
 
         catalog=await invoke<Definition[]>('get_source_catalog');
         const catalogCleanup=await listen('integration-catalog-updated',()=>{void invoke<Definition[]>('get_source_catalog').then(value=>catalog=value).catch(e=>error=String(e));});if(mounted)cleanups.push(catalogCleanup);else catalogCleanup();
@@ -178,7 +181,6 @@
           }
           settings=structuredClone(e.payload);applied=structuredClone(e.payload);
         });if(mounted)cleanups.push(settingsCleanup);else settingsCleanup();
-        const closeCleanup=await getCurrentWindow().onCloseRequested(e=>{if(get(preferencePending)){e.preventDefault();onAttention();error='正在保存设置，请稍候再关闭。';return;}if((dirty || saving) && !closing){e.preventDefault();onAttention();closePrompt=true;}});if(mounted)cleanups.push(closeCleanup);else closeCleanup();
       } catch(e){error=String(e);}
     })();
     const interval=setInterval(()=>{if(tab==='sessions')void loadSessions();if(notificationTest)void loadDelivery();},3000);
