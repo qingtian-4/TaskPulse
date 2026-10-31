@@ -1,4 +1,10 @@
 $ErrorActionPreference='Stop'
+class ReleaseLimitException : System.Exception {
+    [object]$Response
+    ReleaseLimitException([int]$Status,[string]$Remaining) : base('GitHub request rejected') {
+        $this.Response=@{StatusCode=$Status;Headers=@{'X-RateLimit-Remaining'=$Remaining}}
+    }
+}
 . (Join-Path $PSScriptRoot '..\install.ps1')
 # Reproduce hosts where this optional convenience command is unavailable.
 function Get-FileHash { throw 'Get-FileHash unavailable in this test host' }
@@ -54,7 +60,19 @@ try {
     $script:release.assets=@($assets)+@($assets[0])
     Reject {Get-TaskPulseAssetUrl $script:release $name} 'Duplicate asset accepted'
     $script:release.assets=$assets
-    function Invoke-RestMethod { param($Uri,$Headers,$TimeoutSec) $script:lastUri=$Uri;return $script:release }
+    function Invoke-RestMethod {
+        param($Uri,$Headers,$TimeoutSec)
+        $script:lastUri=$Uri
+        if($script:apiLimited){
+            $failure=[ReleaseLimitException]::new(403,$script:apiRemaining)
+            if($script:coreResponse){
+                $failure.Response=[Net.Http.HttpResponseMessage]::new([Net.HttpStatusCode]::Forbidden)
+                [void]$failure.Response.Headers.TryAddWithoutValidation('X-RateLimit-Remaining',$script:apiRemaining)
+            }
+            throw $failure
+        }
+        return $script:release
+    }
     Reject {Get-TaskPulseRelease '' $false} 'Stable selection accepted prerelease'
     Assert ((Get-TaskPulseRelease '' $true).tag_name -eq $tag) 'Explicit prerelease selection failed'
     Assert ($script:lastUri -like '*?per_page=100') 'Prerelease used stable latest endpoint'
@@ -66,7 +84,35 @@ try {
     Reject {Get-TaskPulseRelease '' $true} 'Draft-only list accepted'
     $script:release.draft=$false
     function Invoke-WebRequest {
-        param($Uri,$OutFile,$TimeoutSec,[switch]$UseBasicParsing)
+        param($Uri,$Headers,$Method,$TimeoutSec,$MaximumRedirection,[switch]$UseBasicParsing)
+        Assert ($Method -eq 'Head') 'Release fallback must only inspect the public page'
+        $script:webRequests++
+        $final=if($script:webRedirect){$script:webRedirect}elseif($Uri.EndsWith('/latest')){'https://github.com/qingtian-4/TaskPulse/releases/tag/v1.0.0'}else{$Uri}
+        if($script:coreResponse){return [pscustomobject]@{BaseResponse=[pscustomobject]@{RequestMessage=[pscustomobject]@{RequestUri=[uri]$final}}}}
+        return [pscustomobject]@{BaseResponse=[pscustomobject]@{ResponseUri=[uri]$final}}
+    }
+    $script:apiLimited=$true;$script:apiRemaining='0';$script:webRequests=0
+    Assert ((Get-TaskPulseRelease '' $false).tag_name -eq 'v1.0.0') 'API limit prevented a verified public stable release'
+    Add-Type -AssemblyName System.Net.Http
+    $script:coreResponse=$true
+    Assert ((Get-TaskPulseRelease '' $false).tag_name -eq 'v1.0.0') 'HttpClient header/response shape was not supported'
+    $script:coreResponse=$false
+    Assert ((Get-TaskPulseRelease '0.2.0-alpha.8' $false).tag_name -eq $tag) 'Explicit public tag fallback failed'
+    Reject {Get-TaskPulseRelease '' $true} 'Rate-limited prerelease discovery silently selected stable'
+    $script:webRedirect='https://example.com/qingtian-4/TaskPulse/releases/tag/v1.0.0'
+    Reject {Get-TaskPulseRelease '' $false} 'Untrusted release-page redirect accepted'
+    $script:webRedirect='https://github.com/another/repo/releases/tag/v1.0.0'
+    Reject {Get-TaskPulseRelease '' $false} 'Another repository accepted'
+    $script:webRedirect='https://github.com/qingtian-4/TaskPulse/releases/tag/v1.0.0-alpha.1'
+    Reject {Get-TaskPulseRelease '' $false} 'Stable fallback accepted a prerelease'
+    $script:webRedirect=$null;$beforeWeb=$script:webRequests;$script:apiRemaining='1'
+    Reject {Get-TaskPulseRelease '' $false} 'Non-rate-limit API denial was ignored'
+    Assert ($script:webRequests -eq $beforeWeb) 'Permission denial attempted a network workaround'
+    $script:apiLimited=$false
+    function Invoke-WebRequest {
+        param($Uri,$OutFile,$Headers,$TimeoutSec,[switch]$UseBasicParsing)
+        $script:assetRequests++
+        if($script:networkFailures -gt 0){$script:networkFailures--;throw [Net.WebException]::new('Fixture connection failure',[Net.WebExceptionStatus]::ConnectFailure)}
         Copy-Item -LiteralPath (Join-Path $root ([IO.Path]::GetFileName($OutFile))) -Destination $OutFile
         if ($script:racePath -and $Uri.EndsWith('/release-manifest.json')) {
             [void][IO.Directory]::CreateDirectory($script:racePath)
@@ -95,6 +141,14 @@ try {
     Assert ((Get-Content (Join-Path $script:racePath 'sentinel.txt')) -eq 'previous download') 'Concurrent data lost'
     Assert (@(Get-ChildItem -LiteralPath $raceRoot).Count -eq 1) 'Owned staging leaked after conflict'
     $script:racePath=$null
+    $script:networkFailures=1;$script:assetRequests=0
+    Invoke-TaskPulseInstall -Version '0.2.0-alpha.8' -DownloadOnly $true -OutputDirectory (Join-Path $root 'retry') -Language en
+    Assert ($script:assetRequests -eq 4) 'Transient failure did not retry exactly once'
+    $script:networkFailures=3;$failure=''
+    try{Invoke-TaskPulseInstall -Version '0.2.0-alpha.8' -DownloadOnly $true -OutputDirectory (Join-Path $root 'failed') -Language en}catch{$failure=$_.Exception.Message}
+    Assert ($failure.Contains($name) -and $failure.Contains("https://github.com/qingtian-4/TaskPulse/releases/download/$tag/$name")) 'Failure omitted the exact asset and official URL'
+    Assert (@(Get-ChildItem (Join-Path $root 'failed')).Count -eq 0) 'Failed download left staging data'
+    $script:networkFailures=0
     # Native preview probe must preserve its Version parameter while dot-sourcing
     # the production script. Downloads only: fixture MZ bytes are never executed.
     . (Join-Path $PSScriptRoot 'windows-cli-smoke.ps1') -Assets $root -Version '0.2.0-alpha.8'
