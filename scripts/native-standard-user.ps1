@@ -1,10 +1,10 @@
-param([Parameter(Mandatory=$true)][string]$Bun,[Parameter(Mandatory=$true)][string]$Exe,[switch]$Child,[string]$ExpectedSid,[string]$Evidence)
+param([Parameter(Mandatory=$true)][string]$Bun,[Parameter(Mandatory=$true)][string]$Exe,[switch]$ChildMode,[string]$ExpectedSid,[string]$Evidence)
 $ErrorActionPreference='Stop'
 if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted CI only' }
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 $repo=(Resolve-Path -LiteralPath (Join-Path $PSScriptRoot '..')).Path
 . (Join-Path $PSScriptRoot 'installer-process.ps1')
-if ($Child) {
+if ($ChildMode) {
     $identity=[Security.Principal.WindowsIdentity]::GetCurrent()
     if (-not $ExpectedSid -or $identity.User.Value -ne $ExpectedSid -or ([Security.Principal.WindowsPrincipal]$identity).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw 'Actual standard account required' }
     foreach($entry in @(@('USERPROFILE','UserProfile'),@('APPDATA','ApplicationData'),@('LOCALAPPDATA','LocalApplicationData'))) {
@@ -107,7 +107,7 @@ public sealed class TaskPulseDesktopAccess : IDisposable {
 '@
     $desktop=[TaskPulseDesktopAccess]::new($account.SID.Value)
     $child=[Diagnostics.Process]::new();$child.StartInfo.FileName=Join-Path $env:SystemRoot 'System32\WindowsPowerShell\v1.0\powershell.exe'
-    $child.StartInfo.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -Child -Bun "'+$runtime+'" -Exe "'+$Exe+'" -ExpectedSid "'+$account.SID.Value+'" -Evidence "'+$Evidence+'"'
+    $child.StartInfo.Arguments='-NoProfile -NonInteractive -ExecutionPolicy Bypass -File "'+$PSCommandPath+'" -ChildMode -Bun "'+$runtime+'" -Exe "'+$Exe+'" -ExpectedSid "'+$account.SID.Value+'" -Evidence "'+$Evidence+'"'
     $child.StartInfo.WorkingDirectory=$repo;$child.StartInfo.UseShellExecute=$false;$child.StartInfo.LoadUserProfile=$true
     $child.StartInfo.UserName=$name;$child.StartInfo.Domain=$env:COMPUTERNAME;$child.StartInfo.Password=$password
     $child.StartInfo.RedirectStandardOutput=$true;$child.StartInfo.RedirectStandardError=$true
