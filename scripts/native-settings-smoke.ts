@@ -66,7 +66,9 @@ poll_interval_ms=3000
   }
   const start=()=>{app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});app.stderr?.on('data',chunk=>stderr+=String(chunk));app.once('error',e=>stderr+=String(e));};
   console.log('settings smoke: native startup');start();let root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
-  console.log('settings smoke: build',JSON.stringify(await root.invoke('get_build_info')));
+  const build=await root.invoke('get_build_info');
+  const product=build.channel==='development'?'TaskPulse Dev':'TaskPulse';
+  console.log('settings smoke: build',JSON.stringify(build));
   await root.invoke('open_management',{section:'sources'});
   let ui=await connect(await tab('/manage'));await ui.wait(`!!document.querySelector('.settings-heading')`);
   console.log('settings smoke: cold section',await ui.evaluate(`document.querySelector('.settings-heading h1').textContent`));
@@ -88,6 +90,7 @@ poll_interval_ms=3000
   assert.ok(windowSizes.every(size=>JSON.stringify(size)===JSON.stringify(windowSizes[0])));
   const nativeMonitors:any[]=await ui.invoke('plugin:window|available_monitors');
   const title:string=await ui.invoke('plugin:window|title',{label:'management'});
+  assert.equal(title,`${product} · 设置`,'Initial window title must retain the build identity');
   const move=async(x:number,y:number)=>{
     const child=Bun.spawn([join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),'-NoProfile','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./settings-window-move.ps1',import.meta.url)),'-ProcessId',String(app!.pid),'-Exe',exe,'-Title',title,'-X',String(Math.round(x)),'-Y',String(Math.round(y))],{stdout:'pipe',stderr:'pipe'});
     const [code,,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);assert.equal(code,0,error);
@@ -216,9 +219,11 @@ poll_interval_ms=3000
   await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='en';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await ui.wait(`document.querySelector('.settings-heading h1').textContent==='General' && document.querySelector('.settings-status').textContent===''`);
   assert.equal(await root.evaluate(`document.documentElement.lang`),'en');
+  assert.equal(await ui.invoke('plugin:window|title',{label:'management'}),`${product} · Settings`,'Language changes must retain the build identity');
   console.log('settings smoke: language passed, switching theme');await ui.evaluate(`document.querySelector('[data-preview="dark"] input').click()`);
   await ui.wait(`document.documentElement.dataset.theme==='dark'`);
   await root.wait(`document.documentElement.dataset.theme==='dark'`);
+  assert.equal(await ui.invoke('plugin:window|title',{label:'management'}),`${product} · Settings`,'Theme changes must retain the build identity');
   console.log('settings smoke: theme passed');let saved=await ui.invoke('get_monitoring_settings');assert.deepEqual(saved.sources[0].projects,['protected-project']);
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   assert.equal(await ui.evaluate(`document.querySelector('.source-editor textarea').value`),'draft-only-project');
