@@ -3,13 +3,13 @@ name: Installed upgrade acceptance
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  group: upgrade-acceptance-${{ github.event.pull_request.number }}
+  group: upgrade-acceptance-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'test:upgrade' && github.run_id || 'build' }}
   cancel-in-progress: true
 
 env:
@@ -18,7 +18,7 @@ env:
 
 jobs:
   security:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'test:upgrade') && (github.event.action != 'labeled' || github.event.label.name == 'test:upgrade')
     uses: ./.github/workflows/security.yml
     with:
       ref: ${{ github.event.pull_request.head.sha }}
@@ -69,6 +69,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
+          retention-days: 7
           name: upgrade-evidence-${{ matrix.kind }}-${{ matrix.target }}-${{ github.event.pull_request.head.sha }}
           path: dist/upgrade-evidence/
           if-no-files-found: error

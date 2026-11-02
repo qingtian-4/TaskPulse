@@ -10,6 +10,48 @@ use crate::{
 use serde_json::json;
 
 #[test]
+#[cfg(windows)]
+fn deep_worktree_profile_can_create_and_replay_its_first_checkpoint() {
+    let root = tempfile::tempdir().unwrap();
+    let home = root.path().join("deep-worktree-profile-".repeat(8));
+    std::fs::create_dir_all(&home).unwrap();
+    let src = source();
+    let start = event(Kind::Started, "long-path-turn", 1);
+    let checkpoint = journal::root(&home, &src.id)
+        .join("state")
+        .join(format!("{}.json", super::key(&start.session_id)));
+    assert!(checkpoint.as_os_str().len() > 260);
+    journal::append(&home, &src.id, start, "self_reported", "v1").unwrap();
+    let mut provider = GenericEventProvider::with_home(src.clone(), home.clone());
+    let first = provider.poll(std::time::SystemTime::now());
+    assert!(first.authoritative, "{first:?}");
+    assert_eq!(first.tasks.len(), 1);
+    let original = std::fs::read(&checkpoint).unwrap();
+    journal::backup(&checkpoint, "pre-longpath.bak").unwrap();
+    let backup = checkpoint.with_extension("pre-longpath.bak");
+    assert_eq!(std::fs::read(&backup).unwrap(), original);
+    for observation in first.ordered {
+        acknowledge(&home, &observation.receipt).unwrap();
+    }
+    journal::append(
+        &home,
+        &src.id,
+        event(Kind::Heartbeat, "long-path-turn", 2),
+        "self_reported",
+        "v1",
+    )
+    .unwrap();
+    assert_eq!(provider.poll(std::time::SystemTime::now()).tasks.len(), 1);
+    let current: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&checkpoint).unwrap()).unwrap();
+    assert_eq!(current["cursor"]["sequence"], 2);
+    journal::backup(&checkpoint, "pre-longpath.bak").unwrap();
+    assert_eq!(std::fs::read(backup).unwrap(), original);
+    let mut restart = GenericEventProvider::with_home(src, home);
+    assert_eq!(restart.poll(std::time::SystemTime::now()).tasks.len(), 1);
+}
+
+#[test]
 fn f01_peer_success_and_heartbeat_cannot_repair_a_lost_resolution() {
     let home = tempfile::tempdir().unwrap();
     let src = source();

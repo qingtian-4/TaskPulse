@@ -154,7 +154,7 @@ pub fn status_priority_num(status: &str) -> u8 {
 }
 
 pub fn status_dir() -> Option<PathBuf> {
-    if std::env::var_os("TASKPULSE_HOME").is_some() {
+    if crate::runtime::isolated() {
         return Some(config::config_dir().join("legacy-status"));
     }
     dirs_next::home_dir().map(|h| h.join(".agent-monitor"))
@@ -456,6 +456,9 @@ pub fn request_refresh() -> u64 {
 /// tool. `cli` = "claude", "codex", "gemini", or "all"; `uninstall` removes.
 #[tauri::command]
 pub fn install_hooks(app: AppHandle, cli: String, uninstall: bool) -> Result<String, String> {
+    if crate::runtime::isolated() {
+        return Err("Configure hooks in the installed TaskPulse application".into());
+    }
     let base_dir = app
         .path()
         .resource_dir()
@@ -931,12 +934,10 @@ impl LocalProviders {
                 };
                 paths.push((root.join("projects"), RecursiveMode::Recursive));
                 paths.push((root.join("sessions"), RecursiveMode::NonRecursive));
-                if let Some(home) = dirs_next::home_dir() {
-                    paths.push((
-                        home.join(".taskpulse/claude-events"),
-                        RecursiveMode::NonRecursive,
-                    ));
-                }
+                paths.push((
+                    crate::claude_events::default_dir(),
+                    RecursiveMode::NonRecursive,
+                ));
             }
             if source.kind == SourceKind::Codex {
                 if let Some(home) = dirs_next::home_dir() {

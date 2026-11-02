@@ -584,10 +584,16 @@ fn publish(app: &AppHandle) {
     std::thread::spawn(move || {
         let builder =
             WebviewWindowBuilder::new(&app, "task-notice", WebviewUrl::App("notice/".into()));
-        let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+        let builder = if crate::runtime::isolated() {
             builder.data_directory(
                 crate::providers::remote_tmux::config::config_dir().join("webview2"),
             )
+        } else {
+            builder
+        };
+        #[cfg(target_os = "macos")]
+        let builder = if crate::runtime::isolated() {
+            builder.incognito(true)
         } else {
             builder
         };

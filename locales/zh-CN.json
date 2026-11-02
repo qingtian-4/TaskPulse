@@ -566,5 +566,6 @@
   "Login startup command needs repair; check registry permissions": "登录启动路径需要修复，请检查注册表权限",
   "添加来源": "添加来源",
   "部分会话需检查": "部分会话需检查",
-  "该会话已更新；同一来源的其他会话需检查": "该会话已更新；同一来源的其他会话需检查"
+  "该会话已更新；同一来源的其他会话需检查": "该会话已更新；同一来源的其他会话需检查",
+  "Configure hooks in the installed TaskPulse application": "请在已安装的 TaskPulse 中配置宿主 Hook；开发与隔离环境不会修改真实 Agent 设置"
 }
