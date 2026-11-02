@@ -35,8 +35,8 @@ test('repository versions and desktop release workflow keep publication draft-on
   expect(workflow.jobs.draft.needs).toContain('installer-smoke');
   expect(workflow.jobs.draft.permissions.contents).toBe('write');
   const publication=workflow.jobs.draft.steps.find((s:any)=>s.uses?.startsWith('softprops/')).with;
-  expect(publication.draft).toBe(true);expect(publication.prerelease).toBe("${{ contains(needs.preflight.outputs.version, '-') }}");
-  expect(publication.make_latest).toContain("contains(needs.preflight.outputs.version, '-')");expect(publication.fail_on_unmatched_files).toBe(true);
+  expect(publication.draft).toBe(true);expect(publication.prerelease).toBe(false);
+  expect(publication.make_latest).toBe(true);expect(publication.fail_on_unmatched_files).toBe(true);
   expect(publication.tag_name).toContain('preflight.outputs.tag');
   expect(publication.target_commitish).toContain('preflight.outputs.commit');
   expect(workflow.jobs.draft.needs).toContain('macos');

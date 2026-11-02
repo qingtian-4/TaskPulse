@@ -76,6 +76,9 @@ pub async fn configure_claude_events(
     enabled: bool,
     confirmed: bool,
 ) -> Result<String, String> {
+    if crate::runtime::isolated() {
+        return Err("Configure hooks in the installed TaskPulse application".into());
+    }
     if !confirmed {
         return Err("请先确认修改 Claude 配置；此操作可撤销".into());
     }
@@ -144,9 +147,7 @@ pub fn receive_event() -> Result<(), String> {
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
         .as_millis() as u64;
-    let dir = dirs_next::home_dir()
-        .unwrap_or_default()
-        .join(".taskpulse/claude-events");
+    let dir = crate::claude_events::default_dir();
     crate::claude_events::record(
         &dir,
         &input,
@@ -168,6 +169,21 @@ fn atomic_write(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(debug_assertions)]
+    fn development_cannot_install_or_remove_real_claude_hooks() {
+        for enabled in [true, false] {
+            let result = tauri::async_runtime::block_on(configure_claude_events(
+                "nonexistent-fixture-source".into(),
+                enabled,
+                true,
+            ));
+            assert_eq!(
+                result.unwrap_err(),
+                "Configure hooks in the installed TaskPulse application"
+            );
+        }
+    }
     #[test]
     fn install_is_idempotent_and_uninstall_preserves_proxy_statusline_and_other_hooks() {
         let original = json!({"env":{"ANTHROPIC_BASE_URL":"https://example.invalid","ANTHROPIC_AUTH_TOKEN":"fixture"},"model":"deepseek", "statusLine":{"type":"command","command":"ccusage"},"hooks":{"Stop":[{"hooks":[{"type":"command","command":"my-script"}]}]}});

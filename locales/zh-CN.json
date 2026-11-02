@@ -564,5 +564,6 @@
   "Login startup entry points to a different command": "现有登录启动项指向其他命令，请检查系统启动设置",
   "Unknown Windows login startup approval state": "无法识别 Windows 登录启动状态",
   "Login startup command needs repair; check registry permissions": "登录启动路径需要修复，请检查注册表权限",
-  "添加来源": "添加来源"
+  "添加来源": "添加来源",
+  "Configure hooks in the installed TaskPulse application": "请在已安装的 TaskPulse 中配置宿主 Hook；开发与隔离环境不会修改真实 Agent 设置"
 }

@@ -20,6 +20,7 @@ mod preferences;
 mod privacy;
 mod process;
 mod providers;
+mod runtime;
 mod scanner;
 mod source_catalog;
 mod state_file;
@@ -39,6 +40,13 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 fn main() {
     env_logger::init();
+    if std::env::args().any(|arg| arg == "--profile-info") {
+        println!(
+            "{}",
+            serde_json::to_string(&build_info::get_build_info()).expect("Build info serialization")
+        );
+        return;
+    }
     if let Some(code) = integrations::mcp::cli(&std::env::args().collect::<Vec<_>>()) {
         std::process::exit(code);
     }
@@ -89,7 +97,7 @@ fn main() {
     }));
 
     let builder = tauri::Builder::default();
-    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+    let builder = if crate::runtime::isolated() {
         builder
     } else {
         builder.plugin(
@@ -203,8 +211,10 @@ fn main() {
                     })
                     .build(),
             )?;
-            if let Err(error) = app.global_shortcut().register(shortcut) {
-                log::warn!("Ctrl+Shift+A unavailable; use the tray icon: {error}");
+            if !runtime::isolated() {
+                if let Err(error) = app.global_shortcut().register(shortcut) {
+                    log::warn!("Ctrl+Shift+A unavailable; use the tray icon: {error}");
+                }
             }
 
             // Useful for first launch and desktop smoke verification.

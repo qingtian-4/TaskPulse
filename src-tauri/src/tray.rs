@@ -224,7 +224,7 @@ pub fn toggle_popup(app: &AppHandle) {
             PINNED.store(false, Ordering::SeqCst);
             set_popup_always_on_top(app, false);
             let _ = app.emit("pinned-changed", false);
-            if std::env::var_os("TASKPULSE_HOME").is_none() {
+            if !crate::runtime::isolated() {
                 let _ = app.save_window_state(StateFlags::POSITION);
             }
             let _ = win.hide();
@@ -279,13 +279,19 @@ fn create_popup(app: &AppHandle) {
         emit_current_state(&ready);
     });
     let builder = WebviewWindowBuilder::new(app, "popup", WebviewUrl::default());
-    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+    let builder = if crate::runtime::isolated() {
         builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
     } else {
         builder
     };
+    #[cfg(target_os = "macos")]
+    let builder = if crate::runtime::isolated() {
+        builder.incognito(true)
+    } else {
+        builder
+    };
     match builder
-        .title("TaskPulse")
+        .title(crate::runtime::display_name())
         .inner_size(DASHBOARD_WIDTH, f64::from(DASHBOARD_MAX_HEIGHT))
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
@@ -336,13 +342,23 @@ pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<
                 .into(),
         ),
     );
-    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+    let builder = if crate::runtime::isolated() {
         builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
     } else {
         builder
     };
+    #[cfg(target_os = "macos")]
+    let builder = if crate::runtime::isolated() {
+        builder.incognito(true)
+    } else {
+        builder
+    };
     let window = builder
-        .title(format!("TaskPulse · {}", crate::localization::text("设置")))
+        .title(format!(
+            "{} · {}",
+            crate::runtime::display_name(),
+            crate::localization::text("设置")
+        ))
         .inner_size(960.0, 704.0)
         .resizable(false)
         .maximizable(false)
@@ -560,7 +576,7 @@ pub fn hide_popup(app: &AppHandle) {
     set_popup_always_on_top(app, false);
     let _ = app.emit("pinned-changed", false);
     if let Some(win) = app.get_webview_window("popup") {
-        if std::env::var_os("TASKPULSE_HOME").is_none() {
+        if !crate::runtime::isolated() {
             let _ = app.save_window_state(StateFlags::POSITION);
         }
         let _ = win.hide();

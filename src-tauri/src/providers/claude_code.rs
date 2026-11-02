@@ -79,9 +79,7 @@ impl ClaudeCodeProvider {
     pub fn new(root: PathBuf) -> Self {
         Self {
             root,
-            events: dirs_next::home_dir()
-                .unwrap_or_default()
-                .join(".taskpulse/claude-events"),
+            events: crate::claude_events::default_dir(),
             transcripts: HashMap::new(),
             hook_logs: HashMap::new(),
             cache_policy: Default::default(),
@@ -979,6 +977,18 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    #[cfg(debug_assertions)]
+    fn default_hook_journal_uses_the_development_profile() {
+        let fixture = tempfile::tempdir().unwrap();
+        let provider = ClaudeCodeProvider::new(fixture.path().to_path_buf());
+        assert_eq!(provider.events, crate::claude_events::default_dir());
+        assert!(provider.events.starts_with(crate::runtime::state_root()));
+        assert!(!provider
+            .events
+            .starts_with(dirs_next::home_dir().unwrap().join(".taskpulse")));
+    }
+
     #[test]
     fn r04_hashed_hook_roots_are_isolated_and_legacy_root_envelopes_still_match() {
         let root = tempfile::tempdir().unwrap();

@@ -29,7 +29,7 @@ pub struct LocalFileProvider {
 
 impl LocalFileProvider {
     pub fn new() -> Self {
-        if std::env::var_os("TASKPULSE_HOME").is_some() {
+        if crate::runtime::isolated() {
             let root = crate::providers::remote_tmux::config::config_dir();
             return Self {
                 dirs: vec![root.join("legacy-status"), root],

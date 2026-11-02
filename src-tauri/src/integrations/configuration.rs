@@ -52,7 +52,7 @@ fn location(adapter: &str) -> Result<PathBuf, String> {
         _ => return Err("no_verified_install_recipe_export_only".into()),
     };
     // Isolation has its own *host* root as well, not just TaskPulse state.
-    let home = if std::env::var_os("TASKPULSE_HOME").is_some() {
+    let home = if crate::runtime::isolated() {
         crate::providers::remote_tmux::config::config_dir().join("host-sandbox")
     } else {
         dirs_next::home_dir().ok_or("home_unavailable")?
@@ -434,7 +434,7 @@ pub fn prepare(source_id: &str, remove: bool) -> Result<Preview, String> {
             .iter()
             .any(|name| part.as_os_str() == *name)
     });
-    if !remove && temporary && std::env::var_os("TASKPULSE_HOME").is_none() {
+    if !remove && temporary && !crate::runtime::isolated() {
         return Err("install_taskpulse_at_persistent_path_before_installing_hooks".into());
     }
     let path = location(&m.adapter_id)?;
