@@ -7,29 +7,34 @@ const valid={embedded:true,onboarding:false,tasks:0,prompts:0};
 const value=(v:any)=>({result:{result:{value:v}}});
 const navigation={error:{code:-32000,message:'Execution context was destroyed.'}};
 
-async function probe(responses:any[],timeout=3000){
+// Match the production probe's 15s budget; cold PowerShell/JIT can consume 3s.
+async function probe(responses:any[],timeout=15000,firstResponseDelay=0){
   let calls=0,ipcCalls=0;
+  let delayed:ReturnType<typeof setTimeout>|undefined;
   const server=Bun.serve({port:0,hostname:'127.0.0.1',fetch(req,s){return s.upgrade(req)?undefined:new Response('',{status:400})},websocket:{message(ws,message){
     const request=JSON.parse(String(message));calls++;
     if(request.params.expression.includes('get_monitoring_settings'))ipcCalls++;
-    ws.send(JSON.stringify({id:request.id,...responses[Math.min(calls-1,responses.length-1)]}));
+    const reply=JSON.stringify({id:request.id,...responses[Math.min(calls-1,responses.length-1)]});
+    if(calls===1&&firstResponseDelay)delayed=setTimeout(()=>ws.send(reply),firstResponseDelay);
+    else ws.send(reply);
   }}});
   const helper=resolve(import.meta.dir,'installer-webview.ps1').replaceAll("'","''");
   try{
     const result=await windowsTestProcess('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',
-      `. '${helper}'; $trace=New-Object 'Collections.Generic.List[object]'; try {$v=Invoke-InstallerWebViewProbe -Url 'ws://127.0.0.1:${server.port}' -Trace $trace -TimeoutMilliseconds ${timeout}; @{value=$v;trace=$trace}|ConvertTo-Json -Depth 12 -Compress} catch {@{error=$_.Exception.Message;trace=$trace}|ConvertTo-Json -Depth 12 -Compress;exit 1}`],10000);
+      `. '${helper}'; $trace=New-Object 'Collections.Generic.List[object]'; try {$v=Invoke-InstallerWebViewProbe -Url 'ws://127.0.0.1:${server.port}' -Trace $trace -TimeoutMilliseconds ${timeout}; @{value=$v;trace=$trace}|ConvertTo-Json -Depth 12 -Compress} catch {@{error=$_.Exception.Message;trace=$trace}|ConvertTo-Json -Depth 12 -Compress;exit 1}`],timeout+10000);
     return {...result,calls,ipcCalls,data:JSON.parse(result.stdout.trim())};
-  }finally{server.stop(true)}
+  }finally{clearTimeout(delayed);server.stop(true)}
 }
 
 test('native installer probe waits only for reproduced navigation before invoking IPC once',async()=>{
   if(process.platform!=='win32')return;
-  const r=await probe([navigation,navigation,value({...ready,ready:false,documentReady:'loading'}),value(ready),value(valid)]);
+  const r=await probe([navigation,navigation,value({...ready,ready:false,documentReady:'loading'}),value(ready),value(valid)],undefined,3500);
   expect(r.exitCode,r.stderr).toBe(0);expect(r.ipcCalls).toBe(1);expect(r.calls).toBe(5);
   expect(r.data.value).toEqual(valid);
+  expect(r.data.trace.find((e:any)=>e.stage==='readiness').elapsed_ms).toBeGreaterThanOrEqual(3500);
   expect(r.data.trace.filter((e:any)=>e.protocol_error).map((e:any)=>e.stage)).toEqual(['readiness','readiness']);
   expect(r.data.trace.at(-1).validated).toBe(true);
-},15000);
+},30000);
 
 test('native installer probe never retries actual IPC failures, unexpected protocol errors or JS exceptions',async()=>{
   if(process.platform!=='win32')return;

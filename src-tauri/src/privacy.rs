@@ -101,6 +101,14 @@ mod tests {
         task.project_path = Some(secret.into());
         task.model = Some(secret.into());
         let provider = ProviderHealth {
+            task_observations: [(
+                secret.to_owned(),
+                crate::providers::TaskObservation {
+                    observed_at: 123,
+                    state: secret.into(),
+                },
+            )]
+            .into(),
             provider: secret.into(),
             status: crate::providers::ProviderStatus::Degraded,
             last_success: None,

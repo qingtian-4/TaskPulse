@@ -173,6 +173,11 @@ pub enum ProviderStatus {
 pub struct ProviderHealth {
     pub provider: String,
     pub status: ProviderStatus,
+    /// Runtime-only evidence from the latest completed Codex collection. A bad
+    /// rollout must not invalidate a different, fully verified session. This
+    /// map is replaced on every attempt and never stored in task checkpoints.
+    #[serde(default, skip_serializing_if = "std::collections::HashMap::is_empty")]
+    pub task_observations: std::collections::HashMap<String, TaskObservation>,
     #[serde(
         default,
         with = "opt_epoch_ms",
@@ -188,6 +193,122 @@ pub struct ProviderHealth {
     pub last_attempt: Option<SystemTime>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub message: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
+pub struct TaskObservation {
+    pub observed_at: u64,
+    pub state: String,
+}
+
+/// Match the exact observed lifecycle, not just a stable session ID. Store
+/// reconciliation may retain a newer turn when a rollout has been rewound.
+pub fn task_observation_state(task: &TaskSnapshot) -> String {
+    let mut requests = task.input_request_ids.clone();
+    if let Some(id) = &task.input_request_id {
+        requests.push(id.clone());
+    }
+    // Match JavaScript's UTF-16 string ordering for the shared wire key.
+    requests.sort_by(|a, b| a.encode_utf16().cmp(b.encode_utf16()));
+    requests.dedup();
+    serde_json::json!([
+        task.session_id,
+        task.turn_key,
+        task.status,
+        task.waiting_reason,
+        resources::epoch_ms(task.updated_at),
+        task.finished_at.map(resources::epoch_ms),
+        requests
+    ])
+    .to_string()
+}
+
+impl ProviderHealth {
+    pub fn verifies_task(&self, task: &TaskSnapshot, now: SystemTime) -> bool {
+        let now = resources::epoch_ms(now);
+        task.source == crate::domain::TaskSource::Codex
+            && !task.stale
+            && !task.internal
+            && task.confidence != crate::domain::DetectionConfidence::Inferred
+            && (!task.requires_action()
+                || task.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted)
+                || task
+                    .input_request_id
+                    .as_deref()
+                    .is_some_and(|id| !id.trim().is_empty())
+                || task
+                    .input_request_ids
+                    .iter()
+                    .any(|id| !id.trim().is_empty()))
+            && task.source_instance.as_deref() == Some(&self.provider)
+            && self.status == ProviderStatus::Degraded
+            && self.task_observations.get(&task.id).is_some_and(|proof| {
+                Some(proof.observed_at) == self.last_attempt.map(resources::epoch_ms)
+                    && now >= proof.observed_at
+                    && now - proof.observed_at <= 30_000
+                    && proof.state == task_observation_state(task)
+            })
+    }
+}
+
+#[cfg(test)]
+mod partial_observation_tests {
+    use super::*;
+    #[test]
+    fn proof_is_bound_to_source_turn_request_and_observed_lifecycle() {
+        use crate::domain::{DetectionConfidence, TaskSource, TaskStatus, WaitingReason};
+        let now = SystemTime::now();
+        let mut task = TaskSnapshot::new(
+            "codex:session",
+            "native",
+            TaskSource::Codex,
+            TaskStatus::WaitingInput,
+            DetectionConfidence::Hook,
+            now,
+        );
+        task.source_instance = Some("codex".into());
+        task.session_id = Some("session".into());
+        task.turn_key = Some("turn".into());
+        task.waiting_reason = Some(WaitingReason::Approval);
+        task.input_request_id = Some("request".into());
+        let mut health = ProviderHealth {
+            provider: "codex".into(),
+            status: ProviderStatus::Degraded,
+            last_success: None,
+            last_attempt: Some(now),
+            message: Some("unrelated gap".into()),
+            task_observations: [(
+                task.id.clone(),
+                TaskObservation {
+                    observed_at: resources::epoch_ms(now),
+                    state: task_observation_state(&task),
+                },
+            )]
+            .into(),
+        };
+        assert!(health.verifies_task(&task, now));
+        let mut changed = task.clone();
+        changed.turn_key = Some("newer-turn".into());
+        assert!(!health.verifies_task(&changed, now));
+        changed = task.clone();
+        changed.input_request_id = Some("different-request".into());
+        assert!(!health.verifies_task(&changed, now));
+        changed = task.clone();
+        changed.updated_at += std::time::Duration::from_secs(1);
+        assert!(!health.verifies_task(&changed, now));
+        changed = task.clone();
+        changed.stale = true;
+        assert!(!health.verifies_task(&changed, now));
+        changed = task.clone();
+        changed.confidence = DetectionConfidence::Inferred;
+        assert!(!health.verifies_task(&changed, now));
+        changed = task.clone();
+        changed.source_instance = Some("another-source".into());
+        assert!(!health.verifies_task(&changed, now));
+        assert!(!health.verifies_task(&task, now + std::time::Duration::from_secs(31)));
+        health.last_attempt = Some(now + std::time::Duration::from_secs(1));
+        assert!(!health.verifies_task(&task, now));
+    }
 }
 
 /// A pollable data source.
