@@ -151,25 +151,41 @@ accept_since_ms=${now}`:''}`).join('\n')}
     {timestamp:stamp,type:'event_msg',payload:{type:'user_message',message:'Public native partial-read fixture'}}
   ];
   await Bun.write(rollout,lines('public-good').map(v=>JSON.stringify(v)).join('\n')+'\n');
+  await Bun.write(join(codex,'sessions/rollout-public-second.jsonl'),lines('public-second').map(v=>JSON.stringify(v)).join('\n')+'\n');
   const previous=await root.invoke('get_monitoring_settings');
   await root.invoke('save_monitoring_settings',{expected:previous,settings:{...previous,sources:[...previous.sources,
     {id:'codex',name:'Public Codex fixture',kind:'codex',enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:1000}]}});
   const ongoing=`JSON.parse(document.querySelector('.dashboard').dataset.continuity).sources.find(s=>s.source_id==='codex')?.global.ongoing`;
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
-  await root.wait(`${ongoing}===1`);
+  await root.wait(`${ongoing}===2`);
   const bad=lines('public-bad');
   await Bun.write(join(codex,'sessions/rollout-public-bad.jsonl'),bad.map(v=>JSON.stringify(v)).join('\n')+'\n'+
     JSON.stringify({timestamp:stamp,type:'event_msg',payload:{type:'item_completed',data:'x'.repeat(4*1024*1024+64)}})+'\n');
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&p.task_observations?.['codex:public-good']))`);
-  await root.wait(`${ongoing}===1`);
+  await root.wait(`${ongoing}===2`);
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id==='codex:public-good'&&t.status==='running'&&!t.stale));
+  // A one-shot wait can pass on a clock tick while every following provider
+  // delivery briefly hides both sessions. Observe all rendered count changes
+  // across real collection cycles, including arrivals between clock ticks.
+  await root.evaluate(`(()=>{window.__ongoingSamples=[${ongoing}];window.__ongoingObserver=new MutationObserver(()=>window.__ongoingSamples.push(${ongoing}));window.__ongoingObserver.observe(document.querySelector('.dashboard'),{attributes:true,attributeFilter:['data-continuity']});})()`);
+  const attempts:number[]=[];
+  for(let poll=0;poll<8;poll++){
+    const last=(await root.invoke('get_providers')).find((p:any)=>p.provider==='codex').last_attempt;
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.last_attempt>${last}))`);
+    attempts.push((await root.invoke('get_providers')).find((p:any)=>p.provider==='codex').last_attempt);
+  }
+  const ongoingSamples:number[]=await root.evaluate(`(()=>{window.__ongoingObserver.disconnect();return window.__ongoingSamples;})()`);
+  assert.equal(new Set(attempts).size,8,'Eight distinct native collection attempts are required');
+  assert.ok(ongoingSamples.length>0);
+  assert.ok(ongoingSamples.every(count=>count===2),`Running count flickered between clock ticks: ${JSON.stringify(ongoingSamples)}`);
+  checks.push('two running sessions stay visible across eight partial-source collections between UI clock ticks');
   // Once that session itself is no longer verified, its previous proof must
   // disappear even though the same partial source continues polling.
   await rename(rollout,join(codex,'moved-good.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!p.task_observations?.['codex:public-good']))`);
-  await root.wait(`${ongoing}===0`);
+  await root.wait(`${ongoing}===1`);
   checks.push('partial Codex collection preserves an independently verified ongoing task; missing task proof is revoked');
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,errors},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)]},errors},null,2));
   console.log('Dashboard polish acceptance passed:',checks.length,'checks');
 });
