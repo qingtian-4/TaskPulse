@@ -47,6 +47,11 @@
   let closePrompt=$state(false);
   let closing=false;
   let now=$state(Date.now());
+  function applyProviderHealth(next:ProviderHealth[]) {
+    // Fresh proof may arrive between display ticks. Match the receipt time
+    // used by the dashboard before interpreting this collection's health.
+    now=Date.now();health=next;
+  }
   let reading=$state(false), readTest=$state<{id:string;message:string;passed?:boolean}|null>(null);
   let notificationTest=$state(false);
   const testStage=$derived(deliveryRecords.some(r=>r.test && r.stage==='rendered')?'已有测试渲染记录（非已读）':notificationTest?'已提交 · 请确认是否看到':'本窗口暂无测试记录');
@@ -57,7 +62,7 @@
       const since=await invoke<number>('request_refresh');
       for(let n=0;n<100;n++){
         await new Promise(r=>setTimeout(r,300));
-        health=await invoke<ProviderHealth[]>('get_providers');
+        applyProviderHealth(await invoke<ProviderHealth[]>('get_providers'));
         const result=readTestResult(id,health,since);
         if(result!=='pending'){readTest={id,passed:result==='passed',message:result==='passed'?'已连接，等待新任务':'本次读取失败 · 查看高级诊断'};return;}
       }
@@ -161,13 +166,13 @@
         applied=structuredClone($state.snapshot(settings));
         error=await invoke<string | null>('get_monitoring_error') ?? '';
         discovery=await invoke<SourceDiscovery[]>('discover_sources');
-        health=await invoke<ProviderHealth[]>('get_providers');
+        applyProviderHealth(await invoke<ProviderHealth[]>('get_providers'));
         notificationError=await invoke<string | null>('get_notification_error') ?? '';
         if(!settings.onboarding_complete){for(const source of settings.sources){source.enabled=['codex','claude_code','hermes','deepseek_desktop','doubao','zcode','opencode','workbuddy'].includes(source.kind) && (discovery.find(d=>d.id===source.id)?.available ?? false);}dirty=true;}
         selected='';
         const updateCleanup=await listen<{phase:string}>('application-update',e=>updating=['downloading','verifying','installing'].includes(e.payload.phase));if(mounted)cleanups.push(updateCleanup);else updateCleanup();
         const currentUpdate=await invoke<{phase:string}>('get_update_status');updating=['downloading','verifying','installing'].includes(currentUpdate.phase);
-        const cleanup=await listen<ProviderHealth[]>('providers-updated',e=>health=e.payload);if(mounted)cleanups.push(cleanup);else cleanup();
+        const cleanup=await listen<ProviderHealth[]>('providers-updated',e=>applyProviderHealth(e.payload));if(mounted)cleanups.push(cleanup);else cleanup();
         const notificationCleanup=await listen<string>('notification-error',e=>notificationError=e.payload);if(mounted)cleanups.push(notificationCleanup);else notificationCleanup();
         const settingsCleanup=await listen<DashboardSettings>('monitoring-settings-updated',e=>{
           if(saving)return;

@@ -159,11 +159,18 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
   await root.wait(`${ongoing}===2`);
   const bad=lines('public-bad');
-  await Bun.write(join(codex,'sessions/rollout-public-bad.jsonl'),bad.map(v=>JSON.stringify(v)).join('\n')+'\n'+
+  const badRollout=join(codex,'sessions/rollout-public-bad.jsonl');
+  await Bun.write(badRollout,bad.map(v=>JSON.stringify(v)).join('\n')+'\n'+
     JSON.stringify({timestamp:stamp,type:'event_msg',payload:{type:'item_completed',data:'x'.repeat(4*1024*1024+64)}})+'\n');
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&p.task_observations?.['codex:public-good']))`);
   await root.wait(`${ongoing}===2`);
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id==='codex:public-good'&&t.status==='running'&&!t.stale));
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+  const readState=`document.querySelector('[data-source-id="codex"] .read-state')`;
+  await ui.wait(`${readState}?.textContent==='Some sessions need attention'`);
+  // The source badge has its own receiver and clock. Observe it independently
+  // of the dashboard so a steady headline cannot hide a settings regression.
+  await ui.evaluate(`(()=>{const badge=${readState};window.__sourceReadSamples=[badge.textContent];window.__sourceReadObserver=new MutationObserver(()=>window.__sourceReadSamples.push(badge.textContent));window.__sourceReadObserver.observe(badge,{childList:true,characterData:true,subtree:true});})()`);
   // A one-shot wait can pass on a clock tick while every following provider
   // delivery briefly hides both sessions. Observe all rendered count changes
   // across real collection cycles, including arrivals between clock ticks.
@@ -175,17 +182,29 @@ accept_since_ms=${now}`:''}`).join('\n')}
     attempts.push((await root.invoke('get_providers')).find((p:any)=>p.provider==='codex').last_attempt);
   }
   const ongoingSamples:number[]=await root.evaluate(`(()=>{window.__ongoingObserver.disconnect();return window.__ongoingSamples;})()`);
+  const sourceReadSamples:string[]=await ui.evaluate(`(()=>{window.__sourceReadObserver.disconnect();return window.__sourceReadSamples;})()`);
   assert.equal(new Set(attempts).size,8,'Eight distinct native collection attempts are required');
   assert.ok(ongoingSamples.length>0);
   assert.ok(ongoingSamples.every(count=>count===2),`Running count flickered between clock ticks: ${JSON.stringify(ongoingSamples)}`);
+  assert.ok(sourceReadSamples.every(label=>label==='Some sessions need attention'),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
   checks.push('two running sessions stay visible across eight partial-source collections between UI clock ticks');
+  checks.push('settings partial-source badge stays stable across the same eight collections');
   // Once that session itself is no longer verified, its previous proof must
   // disappear even though the same partial source continues polling.
   await rename(rollout,join(codex,'moved-good.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!p.task_observations?.['codex:public-good']))`);
   await root.wait(`${ongoing}===1`);
+  await ui.wait(`${readState}?.textContent==='Some sessions need attention'`);
   checks.push('partial Codex collection preserves an independently verified ongoing task; missing task proof is revoked');
+  await rename(join(codex,'sessions/rollout-public-second.jsonl'),join(codex,'moved-second.jsonl'));
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!Object.keys(p.task_observations??{}).length))`);
+  await root.wait(`${ongoing}===0`);
+  await ui.wait(`${readState}?.textContent==='Source access failed'`);
+  await rename(badRollout,join(codex,'moved-bad.jsonl'));
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
+  await ui.wait(`${readState}?.textContent==='Source access healthy'`);
+  checks.push('source badge still reports unavailable session evidence and real source recovery');
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)]},errors},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
   console.log('Dashboard polish acceptance passed:',checks.length,'checks');
 });
