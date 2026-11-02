@@ -89,34 +89,19 @@ jobs:
         run: python scripts/mcp-smoke.py --exe src-tauri/target/debug/agent-tray.exe
       # Opt-in live Agent/SSH/WSL and GUI acceptance tests are not unattended CI.
       # No tags, installers, release publication or write-capable token here.
-      - name: Prepare ordinary-user native verification
-        shell: pwsh
-        run: |
-          # Reuse the installer acceptance de-elevation helper. WebView2 150+
-          # ignores debug environment switches in elevated applications.
-          $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
-          if ($gsudo) { $gsudoPath = $gsudo.Source } else {
-            winget install --id gerardog.gsudo --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
-            if ($LASTEXITCODE -ne 0) { throw 'Could not install CI de-elevation helper' }
-            $gsudoPath = Join-Path $env:ProgramFiles 'gsudo\Current\gsudo.exe'
-          }
-          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing CI de-elevation helper' }
-          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
-          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
-          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
-          if ($LASTEXITCODE -ne 0) { throw 'Could not grant access to native test evidence' }
-      - name: Verify default development data isolation with native WebView2
+      - name: Verify default development isolation as a real standard Windows account
+        shell: powershell
         run: |
           $bun = (Get-Command bun.exe).Source
-          $smoke = Join-Path $env:GITHUB_WORKSPACE 'scripts/native-development-smoke.ts'
-          $exe = Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target/debug/agent-tray.exe'
-          & "$env:GSUDO_EXE" --integrity Medium --direct $bun $smoke --exe $exe
-          if ($LASTEXITCODE -ne 0) { throw 'Native development verification failed' }
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/native-standard-user.ps1 -Bun $bun -Exe src-tauri/target/debug/agent-tray.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native standard-account verification failed' }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
           name: development-evidence-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
-          path: src-tauri/target/ui-smoke/evidence/development-native-*/
+          path: |
+            src-tauri/target/ui-smoke/evidence/development-native-*/
+            src-tauri/target/ui-smoke/evidence/standard-user-*/
           retention-days: 7
           if-no-files-found: warn
       - name: Stage a portable development build
