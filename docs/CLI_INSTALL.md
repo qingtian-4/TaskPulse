@@ -30,6 +30,10 @@ Windows 打开标准 NSIS 安装向导；MSI 用户继续使用 MSI，切换格�
 
 Windows opens the standard NSIS setup wizard. Existing MSI users should stay with MSI; uninstall before switching formats. Download-only creates a new version directory without overwriting an existing one.
 
+GitHub API 限流时，稳定版和明确指定的版本会改用同一仓库的公开 Release 页面确定版本，仍核对安装包、manifest 和 SHA-256。临时连接失败会重试一次；失败信息包含具体附件及官方地址。可将该地址在浏览器中打开，区分脚本读取成功与附件下载是否可达。
+
+If the GitHub API is rate limited, stable and explicitly selected versions use the same repository's public release page. Package, manifest and SHA-256 verification remain required. Transient connection failures retry once; errors identify the asset and official URL so you can check the download in a browser.
+
 ## macOS Apple Silicon and Intel
 
 ```sh

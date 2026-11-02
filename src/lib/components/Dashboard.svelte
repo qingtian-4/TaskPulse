@@ -89,6 +89,13 @@
   });
   const degraded = $derived(providers.filter(p => p.status === 'degraded'));
 
+  function applyDashboardSnapshot(snapshot:DashboardSnapshot) {
+    // A collection can finish between the one-second display ticks. Compare
+    // its proof against receipt time, never the previous tick's cached time.
+    now=Date.now();
+    dashboardRevision=snapshot.revision; tasks=snapshot.tasks; providers=snapshot.providers;
+  }
+
   async function snapshots() {
     const requestGeneration=++snapshotRequestGeneration;
     const epoch=messagesEpoch;
@@ -96,7 +103,7 @@
       invoke<DashboardSnapshot>('get_dashboard_snapshot'), invoke<DashboardSettings>('get_monitoring_settings'), invoke<TaskSnapshot[]>('get_archived_attention'), invoke<TaskSnapshot[]>('get_pending_task_prompts')
     ]);
     if(!shouldApplyDashboardSnapshot(dashboardRevision,snapshot.revision,requestGeneration,snapshotRequestGeneration))return;
-    dashboardRevision=snapshot.revision; tasks=snapshot.tasks; providers=snapshot.providers; settings=nextSettings; archived=nextArchived; pendingPrompts=nextPrompts;
+    applyDashboardSnapshot(snapshot); settings=nextSettings; archived=nextArchived; pendingPrompts=nextPrompts;
     const center=await invoke<MessageCenterState>('get_message_center');
     if(epoch===messagesEpoch)messages=acceptMessageState(messages,center);
   }
@@ -210,7 +217,7 @@
     async function subscribe(promise:Promise<()=>void>) { const cleanup=await promise; if(mounted)cleanups.push(cleanup);else cleanup(); }
     void (async()=>{
       try {
-        await subscribe(listen<DashboardSnapshot>('dashboard-snapshot-updated',e=>{if(e.payload.revision>=dashboardRevision){dashboardRevision=e.payload.revision;tasks=e.payload.tasks;providers=e.payload.providers;}}));
+        await subscribe(listen<DashboardSnapshot>('dashboard-snapshot-updated',e=>{if(e.payload.revision>=dashboardRevision)applyDashboardSnapshot(e.payload);}));
         await subscribe(listen<TaskSnapshot[]>('archived-attention-updated',e=>archived=e.payload));
         await subscribe(listen<TaskSnapshot[]>('pending-prompts-updated',e=>pendingPrompts=e.payload));
         await subscribe(listen<MessageCenterState>('messages-updated',e=>{messagesEpoch++;messages=acceptMessageState(messages,e.payload);}));

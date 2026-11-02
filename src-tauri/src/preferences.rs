@@ -102,8 +102,7 @@ pub struct AutostartStatus {
     pub available: bool,
 }
 fn startup_available() -> bool {
-    cfg!(all(feature = "custom-protocol", not(debug_assertions)))
-        && std::env::var_os("TASKPULSE_HOME").is_none()
+    cfg!(all(feature = "custom-protocol", not(debug_assertions))) && !crate::runtime::isolated()
 }
 #[tauri::command]
 pub fn get_autostart(app: AppHandle) -> Result<AutostartStatus, String> {

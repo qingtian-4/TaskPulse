@@ -21,7 +21,9 @@
     "test:integration-contract": "bun test ./scripts/integration-contract.test.ts",
     "test:smoke-cleanup": "bun test ./scripts/smoke-workspace.test.ts",
     "release:check": "bun scripts/release.ts check",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dev:desktop": "bun scripts/develop.ts",
+    "test:workflow": "bun test ./scripts/development.test.ts"
   },
   "dependencies": {
     "@lucide/svelte": "^1.7.0",

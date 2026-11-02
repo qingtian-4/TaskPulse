@@ -2,7 +2,7 @@
  * Run: bun scripts/native-dashboard-smoke.ts --exe <unused-built-exe>
  * No native process scanning, login registration, Agent hooks or real user state. */
 import assert from 'node:assert/strict';
-import {mkdir,copyFile} from 'node:fs/promises';
+import {mkdir,copyFile,rename} from 'node:fs/promises';
 import {resolve,join,dirname} from 'node:path';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
@@ -62,7 +62,8 @@ accept_since_ms=${now}`:''}`).join('\n')}
 `);
   const reserve=createServer();await new Promise<void>(ok=>reserve.listen(0,'127.0.0.1',ok));
   const port=(reserve.address() as {port:number}).port;await new Promise<void>((ok,fail)=>reserve.close(e=>e?fail(e):ok()));
-  const env={...process.env,TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`};
+  const codex=join(owned,'codex');await mkdir(join(codex,'sessions'),{recursive:true});
+  const env={...process.env,CODEX_HOME:codex,TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:`--remote-debugging-port=${port}`};
   let app:ChildProcess|undefined;const sockets:WebSocket[]=[];let stderr='';const errors:string[]=[];
   onStop(async()=>{sockets.forEach(ws=>ws.close());await stopOwnedChild(app);});
   type Tab={url:string;webSocketDebuggerUrl:string};
@@ -140,7 +141,70 @@ accept_since_ms=${now}`:''}`).join('\n')}
     assert.ok(box.bottom<=height+1);
   }
   checks.push('compact and standard dashboard layouts');
+  // A valid current session must survive an unrelated parser gap. This uses
+  // the real Rust collector/IPC/renderer, never a mocked dashboard response.
+  const rollout=join(codex,'sessions/rollout-public-good.jsonl');
+  const stamp=new Date().toISOString();
+  const lines=(id:string)=>[
+    {type:'session_meta',payload:{id,source:'vscode',cwd:'D:/Public Fixture'}},
+    {timestamp:stamp,type:'event_msg',payload:{type:'task_started',turn_id:'turn-'+id}},
+    {timestamp:stamp,type:'event_msg',payload:{type:'user_message',message:'Public native partial-read fixture'}}
+  ];
+  await Bun.write(rollout,lines('public-good').map(v=>JSON.stringify(v)).join('\n')+'\n');
+  await Bun.write(join(codex,'sessions/rollout-public-second.jsonl'),lines('public-second').map(v=>JSON.stringify(v)).join('\n')+'\n');
+  const previous=await root.invoke('get_monitoring_settings');
+  await root.invoke('save_monitoring_settings',{expected:previous,settings:{...previous,sources:[...previous.sources,
+    {id:'codex',name:'Public Codex fixture',kind:'codex',enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:1000}]}});
+  const ongoing=`JSON.parse(document.querySelector('.dashboard').dataset.continuity).sources.find(s=>s.source_id==='codex')?.global.ongoing`;
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
+  await root.wait(`${ongoing}===2`);
+  const bad=lines('public-bad');
+  const badRollout=join(codex,'sessions/rollout-public-bad.jsonl');
+  await Bun.write(badRollout,bad.map(v=>JSON.stringify(v)).join('\n')+'\n'+
+    JSON.stringify({timestamp:stamp,type:'event_msg',payload:{type:'item_completed',data:'x'.repeat(4*1024*1024+64)}})+'\n');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&p.task_observations?.['codex:public-good']))`);
+  await root.wait(`${ongoing}===2`);
+  assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id==='codex:public-good'&&t.status==='running'&&!t.stale));
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+  const readState=`document.querySelector('[data-source-id="codex"] .read-state')`;
+  await ui.wait(`${readState}?.textContent==='Some sessions need attention'`);
+  // The source badge has its own receiver and clock. Observe it independently
+  // of the dashboard so a steady headline cannot hide a settings regression.
+  await ui.evaluate(`(()=>{const badge=${readState};window.__sourceReadSamples=[badge.textContent];window.__sourceReadObserver=new MutationObserver(()=>window.__sourceReadSamples.push(badge.textContent));window.__sourceReadObserver.observe(badge,{childList:true,characterData:true,subtree:true});})()`);
+  // A one-shot wait can pass on a clock tick while every following provider
+  // delivery briefly hides both sessions. Observe all rendered count changes
+  // across real collection cycles, including arrivals between clock ticks.
+  await root.evaluate(`(()=>{window.__ongoingSamples=[${ongoing}];window.__ongoingObserver=new MutationObserver(()=>window.__ongoingSamples.push(${ongoing}));window.__ongoingObserver.observe(document.querySelector('.dashboard'),{attributes:true,attributeFilter:['data-continuity']});})()`);
+  const attempts:number[]=[];
+  for(let poll=0;poll<8;poll++){
+    const last=(await root.invoke('get_providers')).find((p:any)=>p.provider==='codex').last_attempt;
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.last_attempt>${last}))`);
+    attempts.push((await root.invoke('get_providers')).find((p:any)=>p.provider==='codex').last_attempt);
+  }
+  const ongoingSamples:number[]=await root.evaluate(`(()=>{window.__ongoingObserver.disconnect();return window.__ongoingSamples;})()`);
+  const sourceReadSamples:string[]=await ui.evaluate(`(()=>{window.__sourceReadObserver.disconnect();return window.__sourceReadSamples;})()`);
+  assert.equal(new Set(attempts).size,8,'Eight distinct native collection attempts are required');
+  assert.ok(ongoingSamples.length>0);
+  assert.ok(ongoingSamples.every(count=>count===2),`Running count flickered between clock ticks: ${JSON.stringify(ongoingSamples)}`);
+  assert.ok(sourceReadSamples.every(label=>label==='Some sessions need attention'),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
+  checks.push('two running sessions stay visible across eight partial-source collections between UI clock ticks');
+  checks.push('settings partial-source badge stays stable across the same eight collections');
+  // Once that session itself is no longer verified, its previous proof must
+  // disappear even though the same partial source continues polling.
+  await rename(rollout,join(codex,'moved-good.jsonl'));
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!p.task_observations?.['codex:public-good']))`);
+  await root.wait(`${ongoing}===1`);
+  await ui.wait(`${readState}?.textContent==='Some sessions need attention'`);
+  checks.push('partial Codex collection preserves an independently verified ongoing task; missing task proof is revoked');
+  await rename(join(codex,'sessions/rollout-public-second.jsonl'),join(codex,'moved-second.jsonl'));
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!Object.keys(p.task_observations??{}).length))`);
+  await root.wait(`${ongoing}===0`);
+  await ui.wait(`${readState}?.textContent==='Source access failed'`);
+  await rename(badRollout,join(codex,'moved-bad.jsonl'));
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
+  await ui.wait(`${readState}?.textContent==='Source access healthy'`);
+  checks.push('source badge still reports unavailable session evidence and real source recovery');
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,errors},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
   console.log('Dashboard polish acceptance passed:',checks.length,'checks');
 });

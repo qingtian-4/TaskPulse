@@ -98,7 +98,10 @@ fn aggregate(snapshot: &DashboardSnapshot) -> TrayPresentation {
                 .providers
                 .iter()
                 .find(|p| &p.provider == id)
-                .is_none_or(|p| p.status == ProviderStatus::Degraded || p.last_success.is_none())
+                .is_none_or(|p| {
+                    (p.status == ProviderStatus::Degraded || p.last_success.is_none())
+                        && !p.verifies_task(task, std::time::SystemTime::now())
+                })
         }) || task.host.as_ref().is_some_and(|host| {
             snapshot
                 .hosts
@@ -224,7 +227,7 @@ pub fn toggle_popup(app: &AppHandle) {
             PINNED.store(false, Ordering::SeqCst);
             set_popup_always_on_top(app, false);
             let _ = app.emit("pinned-changed", false);
-            if std::env::var_os("TASKPULSE_HOME").is_none() {
+            if !crate::runtime::isolated() {
                 let _ = app.save_window_state(StateFlags::POSITION);
             }
             let _ = win.hide();
@@ -279,13 +282,19 @@ fn create_popup(app: &AppHandle) {
         emit_current_state(&ready);
     });
     let builder = WebviewWindowBuilder::new(app, "popup", WebviewUrl::default());
-    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+    let builder = if crate::runtime::isolated() {
         builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
     } else {
         builder
     };
+    #[cfg(target_os = "macos")]
+    let builder = if crate::runtime::isolated() {
+        builder.incognito(true)
+    } else {
+        builder
+    };
     match builder
-        .title("TaskPulse")
+        .title(crate::runtime::display_name())
         .inner_size(DASHBOARD_WIDTH, f64::from(DASHBOARD_MAX_HEIGHT))
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
@@ -336,13 +345,23 @@ pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<
                 .into(),
         ),
     );
-    let builder = if std::env::var_os("TASKPULSE_HOME").is_some() {
+    let builder = if crate::runtime::isolated() {
         builder.data_directory(crate::providers::remote_tmux::config::config_dir().join("webview2"))
     } else {
         builder
     };
+    #[cfg(target_os = "macos")]
+    let builder = if crate::runtime::isolated() {
+        builder.incognito(true)
+    } else {
+        builder
+    };
     let window = builder
-        .title(format!("TaskPulse · {}", crate::localization::text("设置")))
+        .title(format!(
+            "{} · {}",
+            crate::runtime::display_name(),
+            crate::localization::text("设置")
+        ))
         .inner_size(960.0, 704.0)
         .resizable(false)
         .maximizable(false)
@@ -560,7 +579,7 @@ pub fn hide_popup(app: &AppHandle) {
     set_popup_always_on_top(app, false);
     let _ = app.emit("pinned-changed", false);
     if let Some(win) = app.get_webview_window("popup") {
-        if std::env::var_os("TASKPULSE_HOME").is_none() {
+        if !crate::runtime::isolated() {
             let _ = app.save_window_state(StateFlags::POSITION);
         }
         let _ = win.hide();
@@ -798,12 +817,38 @@ mod tests {
 
     fn health(status: ProviderStatus) -> crate::providers::ProviderHealth {
         crate::providers::ProviderHealth {
+            task_observations: Default::default(),
             provider: "fixture-source".into(),
             status,
             last_success: Some(SystemTime::now()),
             last_attempt: Some(SystemTime::now()),
             message: None,
         }
+    }
+
+    #[test]
+    fn partial_codex_observation_updates_tray_without_hiding_source_warning() {
+        let now = SystemTime::now();
+        let mut current = task(TaskStatus::Running);
+        current.source = crate::domain::TaskSource::Codex;
+        current.source_instance = Some("fixture-source".into());
+        let mut provider = health(ProviderStatus::Degraded);
+        provider.last_success = None;
+        provider.last_attempt = Some(now);
+        provider.task_observations.insert(
+            current.id.clone(),
+            crate::providers::TaskObservation {
+                observed_at: crate::providers::resources::epoch_ms(now),
+                state: crate::providers::task_observation_state(&current),
+            },
+        );
+        let mut state = snapshot(vec![current]);
+        state.providers.push(provider);
+        let shown = aggregate(&state);
+        assert!(shown.tooltip.contains("进行中 1"));
+        assert!(shown.tooltip.contains("来源异常 1"));
+        state.tasks[0].turn_key = Some("different-turn".into());
+        assert!(aggregate(&state).tooltip.contains("进行中 0"));
     }
 
     #[test]

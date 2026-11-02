@@ -571,5 +571,8 @@
   "无法保存登录启动设置。": "Could not save the login startup setting.",
   "请检查系统启动设置或安全软件的拦截记录。TaskPulse 不会自动重试开启。": "Check your system startup settings or security software block history. TaskPulse will not automatically try to enable startup again.",
   "重新检查": "Check again",
-  "正在核对系统启动设置…": "Checking system startup settings…"
+  "正在核对系统启动设置…": "Checking system startup settings…",
+  "部分会话需检查": "Some sessions need attention",
+  "该会话已更新；同一来源的其他会话需检查": "This session is up to date; other sessions from this source need attention",
+  "Configure hooks in the installed TaskPulse application": "Configure hooks in the installed TaskPulse application"
 }

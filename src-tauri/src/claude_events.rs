@@ -7,6 +7,10 @@ use std::hash::{Hash, Hasher};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::Path;
 
+pub fn default_dir() -> std::path::PathBuf {
+    crate::runtime::state_root().join("claude-events")
+}
+
 const MAX_ENVELOPE_BYTES: usize = 60 * 1024;
 const MAX_JOURNAL_BYTES: u64 = 8 * 1024 * 1024;
 

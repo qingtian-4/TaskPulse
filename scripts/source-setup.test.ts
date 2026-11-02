@@ -32,3 +32,11 @@ test('manual test waits for a new matching success, never borrows stale success'
   expect(readTestResult(s.id,[{...h,provider:'other'}],100)).toBe('pending');
   expect(sourceCapability('generic_event')).not.toMatch(/自动全面支持|无需配置/);
 });
+
+test('partial Codex health remains a warning while identifying verified sessions',()=>{
+  const health:ProviderHealth={provider:s.id,status:'degraded',last_attempt:99000,task_observations:{good:{observed_at:99000,state:'fixture'}}};
+  expect(sourceReadState(s,config,[health],100000)).toBe('部分会话需检查');
+  expect(sourceReadTone(s,config,[health],100000)).toBe('stale');
+  expect(sourceReadState(s,config,[{...health,task_observations:{good:{observed_at:98000,state:'fixture'}}}],100000)).toContain('读取异常');
+  expect(sourceReadState(s,config,[health],140000)).toContain('读取异常');
+});
