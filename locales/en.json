@@ -564,5 +564,6 @@
   "Login startup entry points to a different command": "Login startup entry points to a different command",
   "Unknown Windows login startup approval state": "Unknown Windows login startup approval state",
   "Login startup command needs repair; check registry permissions": "Login startup command needs repair; check registry permissions",
-  "添加来源": "Add source"
+  "添加来源": "Add source",
+  "Configure hooks in the installed TaskPulse application": "Configure hooks in the installed TaskPulse application"
 }

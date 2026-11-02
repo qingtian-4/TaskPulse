@@ -20,6 +20,9 @@ jobs:
     timeout-minutes: 35
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.0"
@@ -38,6 +41,8 @@ jobs:
       # mask an earlier failed fmt/lint/test exit code.
       - name: Check frontend types
         run: bun run check
+      - name: Test development workflow and artifact boundaries
+        run: bun run test:workflow
       - name: Test installation preview contracts
         run: bun run test:installation-preview
       - name: Test documentation links and candidate source instructions
@@ -84,3 +89,55 @@ jobs:
         run: python scripts/mcp-smoke.py --exe src-tauri/target/debug/agent-tray.exe
       # Opt-in live Agent/SSH/WSL and GUI acceptance tests are not unattended CI.
       # No tags, installers, release publication or write-capable token here.
+      - name: Prepare ordinary-user native verification
+        shell: pwsh
+        run: |
+          # Reuse the installer acceptance de-elevation helper. WebView2 150+
+          # ignores debug environment switches in elevated applications.
+          $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
+          if ($gsudo) { $gsudoPath = $gsudo.Source } else {
+            winget install --id gerardog.gsudo --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install CI de-elevation helper' }
+            $gsudoPath = Join-Path $env:ProgramFiles 'gsudo\Current\gsudo.exe'
+          }
+          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing CI de-elevation helper' }
+          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
+          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not grant access to native test evidence' }
+      - name: Verify default development data isolation with native WebView2
+        run: |
+          $bun = (Get-Command bun.exe).Source
+          $smoke = Join-Path $env:GITHUB_WORKSPACE 'scripts/native-development-smoke.ts'
+          $exe = Join-Path $env:GITHUB_WORKSPACE 'src-tauri/target/debug/agent-tray.exe'
+          & "$env:GSUDO_EXE" --integrity Medium --direct $bun $smoke --exe $exe
+          if ($LASTEXITCODE -ne 0) { throw 'Native development verification failed' }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: development-evidence-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: src-tauri/target/ui-smoke/evidence/development-native-*/
+          retention-days: 7
+          if-no-files-found: warn
+      - name: Stage a portable development build
+        env:
+          SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}
+        run: bun scripts/development-artifact.ts --exe src-tauri/target/debug/agent-tray.exe --out dist/development --commit "$env:SOURCE_COMMIT"
+      - name: Export development dependency notices
+        run: bun scripts/dependency-notices.ts dist/development x86_64-pc-windows-msvc
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        id: development
+        with:
+          name: taskpulse-dev-windows-x64-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist/development/
+          retention-days: 7
+          if-no-files-found: error
+      - name: Link the temporary build in the run summary
+        env:
+          ARTIFACT_URL: ${{ steps.development.outputs.artifact-url }}
+          ARTIFACT_DIGEST: ${{ steps.development.outputs.artifact-digest }}
+        run: |
+          "### TaskPulse Dev (expires in 7 days)" >> $env:GITHUB_STEP_SUMMARY
+          "[Download the portable Windows build]($env:ARTIFACT_URL)" >> $env:GITHUB_STEP_SUMMARY
+          "ZIP SHA-256: $env:ARTIFACT_DIGEST" >> $env:GITHUB_STEP_SUMMARY
+          "Extract into a new directory and run agent-tray.exe. No installation or production data migration." >> $env:GITHUB_STEP_SUMMARY

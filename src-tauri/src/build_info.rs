@@ -1,5 +1,8 @@
 #[derive(serde::Serialize)]
 pub struct BuildInfo {
+    process_id: u32,
+    channel: &'static str,
+    state_directory: String,
     version: &'static str,
     commit: &'static str,
     modified: bool,
@@ -10,6 +13,13 @@ pub struct BuildInfo {
 #[tauri::command]
 pub fn get_build_info() -> BuildInfo {
     BuildInfo {
+        process_id: std::process::id(),
+        channel: if cfg!(debug_assertions) {
+            "development"
+        } else {
+            "release"
+        },
+        state_directory: crate::runtime::state_root().display().to_string(),
         version: env!("CARGO_PKG_VERSION"),
         commit: env!("TASKPULSE_BUILD_SHA"),
         modified: env!("TASKPULSE_BUILD_DIRTY") == "true",

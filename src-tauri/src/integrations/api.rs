@@ -3,7 +3,7 @@ use serde_json::{json, Value};
 
 #[tauri::command]
 pub fn integration_environment() -> Value {
-    json!({"isolated":std::env::var_os("TASKPULSE_HOME").is_some(),"platform":std::env::consts::OS,"state_directory":crate::providers::remote_tmux::config::config_dir(),"executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION")})
+    json!({"isolated":crate::runtime::isolated(),"platform":std::env::consts::OS,"state_directory":crate::providers::remote_tmux::config::config_dir(),"executable":std::env::current_exe().ok(),"version":env!("CARGO_PKG_VERSION")})
 }
 
 #[tauri::command]
@@ -138,8 +138,11 @@ pub fn integration_export(source_id: String) -> Result<Value, String> {
     let mcp = if config.adapter_id == "standard-events" {
         let mut server = json!({"command":exe,"args":["--integration-mcp","--source",source_id]});
         // An isolated profile's export must never silently write the user's real state.
-        if let Some(home) = std::env::var_os("TASKPULSE_HOME") {
-            let home = home.into_string().map_err(|_| "state_directory_not_utf8")?;
+        if crate::runtime::isolated() {
+            let home = crate::runtime::state_root()
+                .into_os_string()
+                .into_string()
+                .map_err(|_| "state_directory_not_utf8")?;
             server["env"] = json!({"TASKPULSE_HOME":home});
         }
         Some(json!({"mcpServers":{"taskpulse":server}}))

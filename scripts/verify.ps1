@@ -27,9 +27,12 @@ try {
     if ($Frontend) {
         & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cache-tools.test.ps1
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        $bun = Join-Path $env:LOCALAPPDATA 'hermes\node\bun.cmd'
-        if (-not (Test-Path -LiteralPath $bun)) { $bun = 'bun.cmd' }
+        $nativeBun = Get-Command bun.exe -ErrorAction SilentlyContinue
+        $bun = if ($nativeBun) { $nativeBun.Source } else { Join-Path $env:LOCALAPPDATA 'hermes\node\bun.cmd' }
+        if (-not (Test-Path -LiteralPath $bun)) { throw 'Install Bun or add bun.exe to PATH before verification.' }
         & $bun run audit:frontend
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        & $bun run test:workflow
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         & $bun run check
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -52,6 +52,14 @@ pub fn backup(path: &Path, extension: &str) -> Result<(), String> {
         return Ok(());
     }
     let parent = path.parent().ok_or("invalid_backup_path")?;
+    #[cfg(windows)]
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|_| "checkpoint_backup_failed")?;
+    #[cfg(windows)]
+    let parent = canonical_parent.as_path();
+    #[cfg(windows)]
+    let target = parent.join(target.file_name().ok_or("invalid_backup_path")?);
     let mut temp =
         tempfile::NamedTempFile::new_in(parent).map_err(|_| "checkpoint_backup_failed")?;
     let mut input = File::open(path).map_err(|_| "checkpoint_backup_failed")?;
@@ -129,6 +137,18 @@ pub fn atomic(path: &Path, value: &impl Serialize) -> Result<(), String> {
 pub fn atomic_bounded(path: &Path, value: &impl Serialize, limit: usize) -> Result<(), String> {
     let parent = path.parent().ok_or("invalid_state_path")?;
     std::fs::create_dir_all(parent).map_err(|_| "create_directory_failed")?;
+    // tempfile persists through raw Win32 APIs. Both names need the verbatim
+    // parent returned by canonicalize when a worktree profile exceeds MAX_PATH.
+    #[cfg(windows)]
+    let canonical_parent = parent
+        .canonicalize()
+        .map_err(|_| "state_directory_failed")?;
+    #[cfg(windows)]
+    let parent = canonical_parent.as_path();
+    #[cfg(windows)]
+    let destination = parent.join(path.file_name().ok_or("invalid_state_path")?);
+    #[cfg(windows)]
+    let path = destination.as_path();
     let mut temporary = tempfile::NamedTempFile::new_in(parent).map_err(|_| "state_temp_failed")?;
     let mut writer = LimitedWriter {
         inner: temporary.as_file_mut(),

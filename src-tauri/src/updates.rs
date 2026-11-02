@@ -40,8 +40,7 @@ fn state() -> &'static Mutex<State> {
     })
 }
 fn install_supported() -> bool {
-    if !cfg!(all(feature = "custom-protocol", not(debug_assertions)))
-        || std::env::var_os("TASKPULSE_HOME").is_some()
+    if !cfg!(all(feature = "custom-protocol", not(debug_assertions))) || crate::runtime::isolated()
     {
         return false;
     }
@@ -272,7 +271,7 @@ pub async fn install_application_update(
     Err("更新未完成，请重新检查更新".into())
 }
 pub fn start(app: AppHandle) {
-    if std::env::var_os("TASKPULSE_HOME").is_some() {
+    if crate::runtime::isolated() {
         return;
     }
     // One scheduler for the application, independent of settings-window lifetime.

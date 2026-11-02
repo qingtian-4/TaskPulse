@@ -5,13 +5,13 @@ name: Installation preview
 on:
   pull_request:
     branches: [main]
-    types: [opened, synchronize, reopened, ready_for_review]
+    types: [opened, synchronize, reopened, ready_for_review, labeled]
 
 permissions:
   contents: read
 
 concurrency:
-  group: installation-preview-${{ github.event.pull_request.number }}
+  group: installation-preview-${{ github.event.pull_request.number }}-${{ github.event.action == 'labeled' && github.event.label.name != 'test:installers' && github.run_id || 'build' }}
   cancel-in-progress: true
 
 env:
@@ -19,7 +19,7 @@ env:
 
 jobs:
   prepare:
-    if: github.event.pull_request.head.repo.full_name == github.repository
+    if: github.event.pull_request.head.repo.full_name == github.repository && contains(github.event.pull_request.labels.*.name, 'test:installers') && (github.event.action != 'labeled' || github.event.label.name == 'test:installers')
     runs-on: ubuntu-latest
     outputs:
       commit: ${{ steps.source.outputs.commit }}
@@ -127,6 +127,7 @@ jobs:
         run: bun scripts/dependency-notices.ts dist/release x86_64-pc-windows-msvc
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
+          retention-days: 7
           name: installation-preview-windows-x64-${{ needs.prepare.outputs.commit }}
           path: dist/release/*
           if-no-files-found: error
@@ -177,6 +178,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
+          retention-days: 7
           name: preview-evidence-windows-${{ matrix.installer }}-${{ matrix.round }}-${{ needs.prepare.outputs.commit }}
           path: dist/installer-smoke/
           if-no-files-found: warn
@@ -257,6 +259,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always() && steps.stage.outcome == 'success'
         with:
+          retention-days: 7
           name: installation-preview-${{ matrix.platform }}-${{ needs.prepare.outputs.commit }}
           if-no-files-found: error
           path: |
@@ -264,6 +267,7 @@ jobs:
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
+          retention-days: 7
           name: preview-evidence-${{ matrix.platform }}-${{ needs.prepare.outputs.commit }}
           path: |
             dist/macos-evidence/
