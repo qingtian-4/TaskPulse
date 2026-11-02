@@ -14,14 +14,14 @@ if ($ChildMode) {
     }
     $env:TEMP=$env:TMP=Join-Path $env:LOCALAPPDATA 'Temp'
     [void][IO.Directory]::CreateDirectory($env:TEMP)
-    $version=& $Bun --version
-    $versionCode=$LASTEXITCODE
-    @{phase='runtime-version';exit_code=$versionCode;version=($version|Out-String).Trim();runtime_hash=(Get-FileHash -LiteralPath $Bun -Algorithm SHA256).Hash} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Evidence 'runtime.json') -Encoding UTF8
-    if($versionCode -ne 0){throw "Native fixture runtime failed to start: $versionCode"}
+    $version=Invoke-InstallerProcess -FilePath $Bun -Arguments '--version' -TimeoutMilliseconds 15000
+    @{phase='runtime-version';exit_code=$version.ExitCode;version=$version.StdOut.Trim();stderr=$version.StdErr;runtime_hash=(Get-FileHash -LiteralPath $Bun -Algorithm SHA256).Hash} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Evidence 'runtime.json') -Encoding UTF8
+    if($null -eq $version.ExitCode -or $version.ExitCode -ne 0 -or -not $version.StdOut.Trim()){throw "Native fixture runtime failed to start: $($version.ExitCode)"}
     $before=@(Get-ChildItem -LiteralPath (Join-Path $repo 'src-tauri\target\ui-smoke\evidence') -Directory -Filter 'development-native-*' -ErrorAction SilentlyContinue | ForEach-Object {$_.FullName})
     Set-Location $repo
-    & $Bun (Join-Path $PSScriptRoot 'native-development-smoke.ts') --exe $Exe
-    $code=$LASTEXITCODE
+    $probe=Invoke-InstallerProcess -FilePath $Bun -Arguments ('"'+(Join-Path $PSScriptRoot 'native-development-smoke.ts')+'" --exe "'+$Exe+'"') -TimeoutMilliseconds 120000
+    [Console]::Out.Write($probe.StdOut);[Console]::Error.Write($probe.StdErr)
+    $code=$probe.ExitCode
     @{phase='native-script';exit_code=$code} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Evidence 'native-command.json') -Encoding UTF8
     if($code -ne 0){throw "Native fixture command failed: $code; see retained startup evidence"}
     $after=@(Get-ChildItem -LiteralPath (Join-Path $repo 'src-tauri\target\ui-smoke\evidence') -Directory -Filter 'development-native-*' | Where-Object {$_.FullName -notin $before})
