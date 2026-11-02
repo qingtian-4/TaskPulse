@@ -44,6 +44,10 @@ pub fn refresh_native(app: &AppHandle) {
         }
     }
     if let Some(window) = app.get_webview_window("management") {
-        let _ = window.set_title(&format!("TaskPulse · {}", text("设置")));
+        let _ = window.set_title(&format!(
+            "{} · {}",
+            crate::runtime::display_name(),
+            text("设置")
+        ));
     }
 }
