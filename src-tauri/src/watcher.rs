@@ -16,7 +16,6 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime};
-use tauri::Manager;
 
 use crate::attention::AttentionTracker;
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
@@ -283,6 +282,7 @@ pub fn select_task(app: &AppHandle, task: TaskSnapshot) {
 #[tauri::command]
 pub fn open_task(app: AppHandle, id: String) -> Result<String, String> {
     let task = crate::monitoring::find_session(&id).ok_or("未发现该任务")?;
+    let mut outcome = "details";
     if task.can_focus {
         if let Some(terminal) = &task.terminal {
             if crate::focusers::dispatch(&terminal.kind, &terminal.focus_id, &terminal.outer_id)
@@ -291,10 +291,13 @@ pub fn open_task(app: AppHandle, id: String) -> Result<String, String> {
                 // A generic terminal/window focus is not proof that this session was read.
                 return Ok("window_focused".into());
             }
+            if terminal.kind == "windows_native" {
+                outcome = "focus_unavailable";
+            }
         }
     }
     select_task(&app, task);
-    Ok("details".into())
+    Ok(outcome.into())
 }
 
 /// Update one task's TaskPulse-owned attention state.
@@ -450,79 +453,6 @@ pub fn request_refresh() -> u64 {
     crate::providers::codex::request_quota_refresh();
     MANUAL_REFRESH_REQUESTED.store(true, Ordering::Release);
     requested_at
-}
-
-/// Tauri command: install or uninstall AgentTray/TaskPulse hooks for a CLI
-/// tool. `cli` = "claude", "codex", "gemini", or "all"; `uninstall` removes.
-#[tauri::command]
-pub fn install_hooks(app: AppHandle, cli: String, uninstall: bool) -> Result<String, String> {
-    if crate::runtime::isolated() {
-        return Err("Configure hooks in the installed TaskPulse application".into());
-    }
-    let base_dir = app
-        .path()
-        .resource_dir()
-        .ok()
-        .filter(|d| d.join("scripts/hooks").exists())
-        .or_else(|| {
-            std::env::current_exe()
-                .ok()
-                .and_then(|p| p.parent().map(|d| d.to_path_buf()))
-                .and_then(|dir| {
-                    dir.ancestors()
-                        .find(|d| d.join("scripts").exists())
-                        .map(|d| d.to_path_buf())
-                        .or(Some(dir))
-                })
-        })
-        .ok_or_else(|| "Could not locate scripts directory".to_string())?;
-
-    let (program, script) = if cfg!(target_os = "windows") {
-        let ps1 = base_dir.join("scripts/hooks/install-hooks.ps1");
-        if ps1.exists() {
-            ("powershell".to_string(), ps1)
-        } else {
-            let sh = base_dir.join("scripts/hooks/install-hooks.sh");
-            ("bash".to_string(), sh)
-        }
-    } else {
-        let sh = base_dir.join("scripts/hooks/install-hooks.sh");
-        ("bash".to_string(), sh)
-    };
-
-    if !script.exists() {
-        return Err(format!("Hook installer not found at: {}", script.display()));
-    }
-
-    let mut cmd = std::process::Command::new(&program);
-    if program == "powershell" {
-        cmd.args(["-NoProfile", "-ExecutionPolicy", "Bypass", "-File"]);
-        cmd.arg(&script);
-        cmd.args(["-Target", &cli]);
-        if uninstall {
-            cmd.arg("-Uninstall");
-        }
-    } else {
-        cmd.arg(&script).arg(&cli);
-        if uninstall {
-            cmd.arg("--uninstall");
-        }
-    }
-
-    let output = cmd
-        .output()
-        .map_err(|e| format!("Failed to run installer: {e}"))?;
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-
-    if output.status.success() {
-        log::info!("Hook installation succeeded");
-        Ok(stdout)
-    } else {
-        let msg = if stderr.is_empty() { &stdout } else { &stderr };
-        log::error!("Hook installation failed; details available in local application state");
-        Err(format!("Installation failed: {}", msg.trim()))
-    }
 }
 
 /// Cross-provider dedup: when a hook/file task and a scan task share the same

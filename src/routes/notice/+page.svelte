@@ -45,11 +45,20 @@
   onMount(()=>{
     if(!isTauri()){error='任务提醒仅在托盘应用中显示。';return;}
     let mounted=true;let cleanup:(()=>void) | undefined;
+    let generation=0;
+    async function refresh(){
+      const request=++generation;
+      try{
+        const state=await invoke<NoticeState>('get_task_notice');
+        if(mounted&&request===generation)apply(state);
+      }catch(e){if(mounted&&request===generation)error=String(e);}
+    }
     void(async()=>{
       try{
-        const unsubscribe=await listen<NoticeState>('task-notice-updated',e=>apply(e.payload));
+        // Webviews can emit events. Only trust notice state returned by native IPC.
+        const unsubscribe=await listen('task-notice-updated',()=>void refresh());
         if(!mounted){unsubscribe();return;}cleanup=unsubscribe;
-        const state=await invoke<NoticeState>('get_task_notice');if(mounted)apply(state);
+        await refresh();
       }catch(e){if(mounted)error=String(e);}
     })();
     let last=performance.now();

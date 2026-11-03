@@ -14,8 +14,8 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await Bun.write(join(home,'config.toml'),'[dashboard]\nversion=2\nonboarding_complete=true\nnotifications=true\nnotification_mode="popup"\nsound=false\ndefault_view="tasks"\n'+source('a')+source('b'));
   const tabs=async():Promise<any[]>=>fetch('http://127.0.0.1:9337/json').then(r=>r.json());
   assert.equal(await tabs().then(()=>true).catch(()=>false),false,'Refusing occupied CDP port');
-  let app:ChildProcess|undefined,root:any;
-  onStop(async()=>{root?.close();await stopOwnedChild(app);});
+  let app:ChildProcess|undefined,root:any,management:any,noticeView:any;
+  onStop(async()=>{noticeView?.close();management?.close();root?.close();await stopOwnedChild(app);});
   async function connect(tab:any){
     const ws=new WebSocket(tab.webSocketDebuggerUrl);await new Promise<void>((ok,fail)=>{ws.onopen=()=>ok();ws.onerror=()=>fail(Error('CDP failed'));});
     let seq=0;const pending=new Map<number,any>();
@@ -26,6 +26,22 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
     const wait=async(expression:string,timeout=25000)=>{const caller=new Error().stack;const end=Date.now()+timeout;while(Date.now()<end){if(await evaluate(expression))return;await Bun.sleep(100);}await Bun.write(join(owned,'failure.json'),JSON.stringify({expression,caller,visible:await invoke('plugin:window|is_visible',{label:'popup'}),ui:await evaluate(`({center:!!document.querySelector('.message-center'),visibility:document.visibilityState,buttons:[...document.querySelectorAll('.message-center button')].map(b=>({text:b.textContent,disabled:b.disabled})),height:innerHeight})`),center:await invoke('get_message_center')},null,2));throw Error('Native assertion timeout: '+expression+'\n'+caller);};
     return {send,evaluate,invoke,wait,close:()=>ws.close()};
   }
+  async function connectRoute(route:string){
+    for(let n=0;n<150;n++){
+      const page=(await tabs()).find(t=>t.url.includes(route));
+      if(page){
+        const view=await connect(page);
+        await view.wait(`typeof globalThis.__TAURI_INTERNALS__?.invoke==='function'`);
+        return view;
+      }
+      await Bun.sleep(100);
+    }
+    throw Error('Native route unavailable: '+route);
+  }
+  async function openManagement(){
+    await root.invoke('open_management',{section:'sources'});
+    management=await connectRoute('/manage');
+  }
   async function start(){
     app=spawn(exe,['--show'],{env,windowsHide:true,stdio:'ignore'});let failure=false;app.once('error',()=>failure=true);
     let tab:any;for(let n=0;n<200;n++){assert.ok(!failure&&app.exitCode===null,'Owned app exited');tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&!/\/(manage|notice)/.test(t.url));if(tab)break;await Bun.sleep(100);}
@@ -35,7 +51,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
     await root.invoke('plugin:window|show',{label:'popup'});
     await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.length===2&&p.every(s=>s.status==='connected'))`);
   }
-  async function stop(){root?.close();await stopOwnedChild(app);root=undefined;app=undefined;for(let n=0;n<100;n++){if(!await tabs().then(()=>true).catch(()=>false))return;await Bun.sleep(100);}throw Error('Owned debug listener did not close');}
+  async function stop(){noticeView?.close();management?.close();root?.close();await stopOwnedChild(app);root=undefined;app=undefined;for(let n=0;n<100;n++){if(!await tabs().then(()=>true).catch(()=>false))return;await Bun.sleep(100);}throw Error('Owned debug listener did not close');}
   let sequence=0;
   const send=(session:string,kind:string,extra:any={},source='a')=>{
     const host=source==='a'&&['request','legacy-request'].includes(session);
@@ -58,7 +74,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
     }
   };
   const checks:string[]=[];
-  await start();assert.equal((await center()).unread,0);
+  await start();await openManagement();assert.equal((await center()).unread,0);
   await root.wait('innerHeight===400');
   const outer=await root.invoke('plugin:window|outer_size',{label:'popup'});
   const inner=await root.invoke('plugin:window|inner_size',{label:'popup'});
@@ -94,7 +110,8 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(n=>n.current?.task_id===${JSON.stringify(requestTask.id)}&&n.current.auto_dismiss_ms===null)`);
   assert.equal((await center()).unread,0);assert.equal((await center()).entries.length,3);
   const notice=await root.invoke('get_task_notice');assert.ok(notice.current);assert.equal(notice.current.auto_dismiss_ms,null);
-  await root.invoke('dismiss_task_notice',{id:notice.current.id});
+  noticeView=await connectRoute('/notice');
+  await noticeView.invoke('dismiss_task_notice',{id:notice.current.id});
   assert.equal((await center()).unread,0);assert.ok((await root.invoke('get_agents')).find((t:any)=>t.id===requestTask.id).input_request_ids.includes('q1'));
   if(process.argv.includes('--capture')){
     await click('[aria-label="关闭消息中心"]');
@@ -137,13 +154,13 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await root.wait(`__TAURI_INTERNALS__.invoke('get_message_center').then(c=>c.entries.length===6&&c.unread===0)`);
   const settings=await root.invoke('get_monitoring_settings'),failed=structuredClone(settings);
   Object.assign(failed.sources[0],{kind:'codex_wsl',location:'TaskPulse-Absent-Distro-Probe'});delete failed.sources[0].integration;
-  await root.invoke('save_monitoring_settings',{settings:failed});
+  await management.invoke('save_monitoring_settings',{settings:failed});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(x=>x.provider==='a'&&x.status==='degraded'))`);
   await root.wait(`document.querySelector('.counts [data-tone="action"] b').textContent==='0'`);
   c=await center();assert.equal(c.unread,0);assert.equal(c.entries.find((e:any)=>e.request_id==='q3').state,'unconfirmed');
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id===requestTask.id));
   assert.ok(await root.evaluate(`document.querySelector('.signals')?.textContent.includes('来源待更新')`));
-  await root.invoke('save_monitoring_settings',{settings});
+  await management.invoke('save_monitoring_settings',{settings});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(x=>x.provider==='a'&&x.status==='connected'))`);
   send('request','input.requested',{request_id:'q3',payload:{request_kind:'question'}});
   await root.wait(`document.querySelector('.counts [data-tone="action"] b').textContent==='1'`);
@@ -171,7 +188,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await click('[aria-label="关闭消息中心"]');
   await root.invoke('update_task_attention',{id:done.id,action:'viewed'});
   await root.invoke('update_task_attention',{id:requestTask.id,action:'pin',pinned:true});
-  await stop();await start();
+  await stop();await start();await openManagement();
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.every(s=>s.status==='connected'))`);
   c=await center();assert.equal(c.unread,0);assert.equal(c.entries.length,15);assert.deepEqual(c.entries.map((e:any)=>e.id),ids);
   const pending=await root.invoke('get_pending_task_prompts');assert.ok(pending.some((t:any)=>t.id===requestTask.id&&t.input_request_ids.includes('q3')));
@@ -181,16 +198,17 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   // A pending fact that has no inbox event (e.g. pre-upgrade or reminders off)
   // must remain manually reopenable without backfilling new unread messages.
   const preferences=await root.invoke('get_monitoring_settings');
-  await root.invoke('save_monitoring_settings',{settings:{...preferences,notifications:false}});
+  await management.invoke('save_monitoring_settings',{settings:{...preferences,notifications:false}});
   send('legacy-request','turn.started');send('legacy-request','input.requested',{request_id:'legacy-q'});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_pending_task_prompts').then(p=>p.some(t=>t.session_id==='legacy-request'&&!t.stale))`);
-  await root.invoke('save_monitoring_settings',{settings:preferences});
+  await management.invoke('save_monitoring_settings',{settings:preferences});
   await click('[aria-label^="消息中心："]');await click('.pending-history summary');
   const legacy=(await root.invoke('get_pending_task_prompts')).find((t:any)=>t.session_id==='legacy-request');
   await click(`[data-prompt-id="${legacy.id}"] .link`);
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(n=>n.current?.task_id===${JSON.stringify(legacy.id)})`);
   const historicalNotice=await root.invoke('get_task_notice');assert.ok(historicalNotice.current);assert.equal(historicalNotice.current.task_id,legacy.id);
-  await root.invoke('dismiss_task_notice',{id:historicalNotice.current.id});
+  noticeView=await connectRoute('/notice');
+  await noticeView.invoke('dismiss_task_notice',{id:historicalNotice.current.id});
   assert.equal((await center()).entries.length,15);assert.equal((await center()).unread,0);
   checks.push('fresh historical request without an inbox event remains manually reopenable without creating unread');
   checks.push('412x620/380x640/320x480/440x720 at DPR 1/1.25/1.5/2 real layout; explicit all-read; parallel source identity; restart preserves seen/viewed/pin/pending without replay; disk payload minimal');

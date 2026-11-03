@@ -5,7 +5,6 @@ mod build_info;
 mod claude_events;
 mod claude_integration;
 mod domain;
-mod focus;
 mod focusers;
 mod heuristics;
 mod history;
@@ -245,7 +244,6 @@ fn main() {
             integrations::api::integration_diagnose,
             integrations::api::integration_test,
             integrations::api::integration_export,
-            focus::focus_terminal,
             watcher::get_agents,
             watcher::get_dashboard_snapshot,
             watcher::get_archived_attention,
@@ -263,7 +261,6 @@ fn main() {
             monitoring::save_monitoring_settings,
             monitoring::discover_sources,
             monitoring::list_discovered_sessions,
-            watcher::install_hooks,
             claude_integration::configure_claude_events,
             notifier::test_notification,
             notifier::get_notification_error,

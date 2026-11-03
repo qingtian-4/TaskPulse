@@ -194,6 +194,9 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 
 ## Settings presentation
 
+- Every custom IPC command needs a checked-in application permission and explicit local window capability. Settings, updates, integration writes, and startup changes belong to management. Reminder actions belong to task-notice, which fetches current state from native IPC before trusting a notification event. Keep confirmation, backups, CAS, and isolated-profile guards inside their existing handlers. Legacy status-file readers do not require the old hook installer IPC.
+- Windows window focus uses an observed process lifetime and validates the live window owner through Win32. Keep PID-only legacy status readable, with task details as the fallback. Never turn focus metadata into shell source.
+
 - The management window uses one close-request owner in SourceSettings. Tauri's onCloseRequested destroys the window independently per listener unless prevented; additional listeners must not bypass source drafts or pending preference saves.
 - Save preferences through their compare-and-swap endpoint. Preserve unsaved source arrays when preference-only settings broadcasts refresh the editor baseline; real source changes require conflict resolution.
 - Translate only application-owned copy. Never translate or rewrite native task titles, project paths, source names chosen by the user or reported model IDs. Both locale catalogs must retain matching keys.

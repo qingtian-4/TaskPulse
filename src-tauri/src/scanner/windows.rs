@@ -247,6 +247,9 @@ pub fn terminal_info(
     let mut cur = p.ppid;
     let mut term_label = String::new();
     let mut term_pid: u32 = 0;
+    let mut term_creation = None;
+    let creation_ticks = |instance: Option<&str>| instance?.parse::<u64>().ok();
+    let mut child_creation = creation_ticks(p.process_instance.as_deref());
 
     // Walk parent process chain to find the terminal emulator.
     // Continue past console-only shells (PowerShell, cmd) to find the outer
@@ -259,6 +262,14 @@ pub fn terminal_info(
         let Some(record) = snapshot.processes.get(&cur) else {
             break;
         };
+        // A recycled parent PID can appear in the same sample, but its new
+        // process must not be newer than the child it supposedly launched.
+        let parent_creation = creation_ticks(record.process_instance.as_deref());
+        let verified_creation = parent_creation
+            .zip(child_creation)
+            .filter(|(parent, child)| parent <= child)
+            .map(|(parent, _)| parent);
+        child_creation = verified_creation;
         let exe_name = record.name.trim();
         if let Some(label) = known_terminal(exe_name) {
             if is_console_shell(label) {
@@ -266,11 +277,13 @@ pub fn terminal_info(
                 if term_pid == 0 {
                     term_label = label.to_string();
                     term_pid = cur;
+                    term_creation = verified_creation;
                 }
             } else {
                 // GUI terminal emulator — prefer this over any previous shell match
                 term_label = label.to_string();
                 term_pid = cur;
+                term_creation = verified_creation;
                 break;
             }
         }
@@ -282,17 +295,25 @@ pub fn terminal_info(
         return None;
     }
 
-    let window_title = cache
-        .entry(term_pid)
-        .or_insert_with(|| powershell_window_title(term_pid))
-        .clone();
+    // Convert the existing CIM lifetime to FILETIME without changing task IDs.
+    const FILETIME_EPOCH_TICKS: u64 = 504_911_232_000_000_000;
+    let observation = term_creation
+        .and_then(|ticks| ticks.checked_sub(FILETIME_EPOCH_TICKS))
+        .and_then(|ticks| {
+            cache
+                .entry(term_pid)
+                .or_insert_with(|| crate::focusers::windows_native::observe_window(term_pid, ticks))
+                .as_ref()
+        });
 
     Some(TerminalInfo {
         kind: "windows_native".to_string(),
         focus_id: term_pid.to_string(),
-        outer_id: String::new(),
+        outer_id: observation
+            .map(|window| window.identity.clone())
+            .unwrap_or_default(),
         label: term_label,
-        window_title,
+        window_title: observation.and_then(|window| window.title.clone()),
     })
 }
 
@@ -307,23 +328,6 @@ pub fn count_children(pid: u32, excluded: &[&str], snapshot: &ProcessSnapshot) -
                 .any(|excluded| record.command_line.contains(excluded))
         })
         .count() as u32
-}
-
-fn powershell_window_title(pid: u32) -> Option<String> {
-    let cmd = format!("(Get-Process -Id {}).MainWindowTitle", pid);
-    let output = hidden_output(
-        "powershell",
-        &["-NoProfile", "-Command", &cmd],
-        Duration::from_secs(1),
-        MAX_AUXILIARY_OUTPUT_BYTES,
-    )
-    .ok()?;
-    let name = String::from_utf8_lossy(&output.stdout).trim().to_string();
-    if name.is_empty() {
-        None
-    } else {
-        Some(name)
-    }
 }
 
 /// Read a single environment variable from a running process on Windows.
@@ -440,6 +444,64 @@ mod tests {
         assert_eq!(first, second);
         println!("native CIM + common scanner: 3/3 unique tasks, stable after Scanner restart, elapsed={:?}; synthetic processes only", start.elapsed());
         drop(fixtures);
+    }
+
+    #[test]
+    fn reused_parent_pid_does_not_inherit_a_focus_target() {
+        const TERMINAL: u64 = 638_999_999_999_999_990;
+        let strategies = super::super::strategies::all_strategies();
+        let batch = match_snapshot(
+            [
+                (
+                    10,
+                    ProcessRecord {
+                        name: Some("WindowsTerminal.exe".into()),
+                        process_id: Some(10),
+                        parent_process_id: Some(1),
+                        command_line: None,
+                        user_mode_time: None,
+                        kernel_mode_time: None,
+                        creation_date: Some(TERMINAL.to_string()),
+                    },
+                ),
+                (
+                    20,
+                    ProcessRecord {
+                        name: Some("codex.exe".into()),
+                        process_id: Some(20),
+                        parent_process_id: Some(10),
+                        command_line: None,
+                        user_mode_time: None,
+                        kernel_mode_time: None,
+                        creation_date: Some((TERMINAL - 10).to_string()),
+                    },
+                ),
+            ]
+            .into(),
+            &strategies,
+        );
+        let (mut child, _) = batch
+            .matched
+            .into_iter()
+            .next()
+            .expect("matched synthetic Codex child");
+        let mut cache = [(
+            10,
+            Some(crate::focusers::windows_native::ObservedWindow {
+                identity: "123:42:21".into(),
+                title: Some("Fixture".into()),
+            }),
+        )]
+        .into();
+        let stale = terminal_info(&mut cache, &child, &batch.snapshot).unwrap();
+        assert_eq!(stale.focus_id, "10", "PID stays available as metadata");
+        assert!(
+            stale.outer_id.is_empty(),
+            "newer parent is not the original process"
+        );
+        child.process_instance = Some((TERMINAL + 10).to_string());
+        let valid = terminal_info(&mut cache, &child, &batch.snapshot).unwrap();
+        assert_eq!(valid.outer_id, "123:42:21");
     }
 
     #[test]

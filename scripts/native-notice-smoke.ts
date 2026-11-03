@@ -26,7 +26,7 @@ async function connect(tab:Tab){
 let popup:Tab|undefined;
 for(let n=0;n<100;n++){popup=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&!t.url.includes('/manage')&&!t.url.includes('/notice'));if(popup)break;await Bun.sleep(100);}
 if(!popup)throw Error('Start real embedded TaskPulse with temporary CDP 9337');
-const root=await connect(popup);let alert:Awaited<ReturnType<typeof connect>>|undefined;let original:any;
+const root=await connect(popup);let alert:Awaited<ReturnType<typeof connect>>|undefined;let original:any;let management:Awaited<ReturnType<typeof connect>>|undefined;let saved=false;
 let phase='startup';
 try{
   await root.wait(`!!globalThis.__TAURI_INTERNALS__ && !!document.querySelector('.dashboard')`);
@@ -36,13 +36,20 @@ try{
   if(await root.evaluate(`[...document.querySelectorAll('.dashboard .row-status>span:first-child,.dashboard .detail-heading>span')].some(e=>e.textContent.includes('授权待确认'))`))throw Error('Actual dashboard still shows inferred approval status');
   const existing=await root.invoke('get_task_notice');
   if(existing.current)throw Error('A real user reminder is pending; refusing to dismiss it for tests');
-  await root.invoke('save_monitoring_settings',{settings:{...original,notifications:true,notification_mode:'popup',sound:false}});
+  await root.invoke('open_management');
+  let manageTab:Tab|undefined;
+  for(let n=0;n<100;n++){manageTab=(await tabs()).find(t=>t.url.includes('/manage'));if(manageTab)break;await Bun.sleep(100);}
+  if(!manageTab)throw Error('Real management window unavailable');
+  management=await connect(manageTab);
+  await management.wait(`!!globalThis.__TAURI_INTERNALS__`);
+  saved=true;
+  await management!.invoke('save_monitoring_settings',{settings:{...original,notifications:true,notification_mode:'popup',sound:false}});
   await root.invoke('plugin:window|show',{label:'popup'});
   if(!lockedDesktop){
     await root.invoke('plugin:window|set_focus',{label:'popup'});
     await root.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'popup'})`);
   }
-  await root.invoke('test_notification',{kind:'turn_ended'});
+  await management!.invoke('test_notification',{kind:'turn_ended'});
   let tab:Tab|undefined;
   for(let n=0;n<100;n++){tab=(await tabs()).find(t=>t.url.includes('/notice'));if(tab)break;await Bun.sleep(100);}
   if(!tab)throw Error('Actual alert window not created');
@@ -62,15 +69,15 @@ try{
   await Bun.sleep(1200);
   if(await alert.evaluate(`document.querySelector('.progress').style.width`)!==paused)throw Error('Hover timer did not pause');
   await Bun.write(out+'/native-completion-notice.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await root.invoke('test_notification',{kind:'failed'});
-  await root.invoke('test_notification',{kind:'approval'});
+  await management!.invoke('test_notification',{kind:'failed'});
+  await management!.invoke('test_notification',{kind:'approval'});
   const queued=await root.invoke('get_task_notice');
   if(queued.pending!==2||queued.current.id!==first.current.id)throw Error('Separate alert queue failed');
   await alert.wait(`document.querySelector('.close')?.disabled===false`);
   await alert.evaluate(`document.querySelector('[aria-label="关闭提醒（保持未查看）"]').click()`);
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('任务失败')`);
   const second=await root.invoke('get_task_notice');
-  await root.invoke('dismiss_task_notice',{id:first.current.id});
+  await alert!.invoke('dismiss_task_notice',{id:first.current.id});
   if((await root.invoke('get_task_notice')).current.id!==second.current.id)throw Error('Late old timer closed the next alert');
   await alert.wait(`document.querySelector('.later')?.disabled===false`);
   await Bun.sleep(200);
@@ -80,7 +87,7 @@ try{
   const stickyApproval=await root.invoke('get_task_notice');
   if(stickyApproval.current.auto_dismiss_ms!==null)throw Error('Confirmed approval still has an automatic timer');
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
-  await root.invoke('dismiss_task_notice',{id:stickyApproval.current.id,reason:'timeout'});
+  await alert!.invoke('dismiss_task_notice',{id:stickyApproval.current.id,reason:'timeout'});
   if((await root.invoke('get_task_notice')).current?.id!==stickyApproval.current.id)throw Error('Backend allowed timeout to dismiss a blocker');
   await Bun.sleep(16000);
   if((await root.invoke('get_task_notice')).current?.id!==stickyApproval.current.id)throw Error('Approval disappeared after 15 seconds');
@@ -94,45 +101,45 @@ try{
   if(await root.invoke('plugin:window|is_visible',{label:'task-notice'}))throw Error('Dismissed alert still visible');
   phase='removed inferred approval event';
   let rejected=false;
-  try{await root.invoke('test_notification',{kind:'approval_check'});}catch{rejected=true;}
+  try{await management!.invoke('test_notification',{kind:'approval_check'});}catch{rejected=true;}
   if(!rejected || (await root.invoke('get_task_notice')).current)throw Error('Removed inferred approval test still creates a reminder');
   phase='confirmed approval queue rotation';
-  await root.invoke('test_notification',{kind:'approval'});
+  await management!.invoke('test_notification',{kind:'approval'});
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
   const check=await root.invoke('get_task_notice');
   if(check.current.auto_dismiss_ms!==null)throw Error('Confirmed approval reminder is not sticky');
-  await root.invoke('test_notification',{kind:'turn_ended'});
+  await management!.invoke('test_notification',{kind:'turn_ended'});
   await alert.wait(`!!document.querySelector('button.pending')`);
   await alert.evaluate(`document.querySelector('button.pending').click()`);
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('本轮结束')`);
-  await root.invoke('dismiss_task_notice',{id:check.current.id,reason:'timeout'});
+  await alert!.invoke('dismiss_task_notice',{id:check.current.id,reason:'timeout'});
   if((await root.invoke('get_task_notice')).current?.test!==true)throw Error('Late timeout affected the current test reminder');
   const endQueued=await root.invoke('get_task_notice');
-  await root.invoke('dismiss_task_notice',{id:endQueued.current.id});
+  await alert!.invoke('dismiss_task_notice',{id:endQueued.current.id});
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
   const rotated=await root.invoke('get_task_notice');
   if(rotated.current.id===check.current.id)throw Error('Rotated reminder reused a stale presentation ID');
   await alert.wait(`document.querySelector('.close')?.disabled===false`);
   await Bun.sleep(200); // Capture after the entrance animation, not at partial opacity.
   await Bun.write(out+'/native-approval-queue.png',Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await root.invoke('dismiss_task_notice',{id:rotated.current.id});
+  await alert!.invoke('dismiss_task_notice',{id:rotated.current.id});
   phase='automatic blocker rotation without dismissal';
-  await root.invoke('test_notification',{kind:'approval'});
+  await management!.invoke('test_notification',{kind:'approval'});
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
   const beforeAutomaticRotation=await root.invoke('get_task_notice');
-  await root.invoke('test_notification',{kind:'turn_ended'});
+  await management!.invoke('test_notification',{kind:'turn_ended'});
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('本轮结束')`,20000);
   const automaticRotation=await root.invoke('get_task_notice');
   if(automaticRotation.pending!==1)throw Error('Automatic rotation dismissed the unresolved blocker');
-  await root.invoke('dismiss_task_notice',{id:beforeAutomaticRotation.current.id,reason:'timeout'});
+  await alert!.invoke('dismiss_task_notice',{id:beforeAutomaticRotation.current.id,reason:'timeout'});
   if((await root.invoke('get_task_notice')).current?.id!==automaticRotation.current.id)throw Error('Old blocker timer dismissed the completion after rotation');
-  await root.invoke('dismiss_task_notice',{id:automaticRotation.current.id});
+  await alert!.invoke('dismiss_task_notice',{id:automaticRotation.current.id});
   await alert.wait(`document.querySelector('.summary')?.textContent.includes('需要授权')`);
   const restoredBlocker=await root.invoke('get_task_notice');
   if(restoredBlocker.current.auto_dismiss_ms!==null || restoredBlocker.current.id===beforeAutomaticRotation.current.id)throw Error('Blocker not preserved with a fresh presentation after rotation');
-  await root.invoke('dismiss_task_notice',{id:restoredBlocker.current.id});
-  await root.invoke('test_notification');
+  await alert!.invoke('dismiss_task_notice',{id:restoredBlocker.current.id});
+  await management!.invoke('test_notification');
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:410,y:260});
   await alert.wait(`document.querySelector('footer')?.textContent.includes('秒后收起')`);
@@ -150,7 +157,7 @@ try{
   if(!visible||!automatic)throw Error('No matching automatic-dismiss evidence (manual close/interference): '+JSON.stringify(timerEvidence.map((r:any)=>({at:r.at,stage:r.stage}))));
   const autoDismissMs=automatic.at-visible.at;
   if(autoDismissMs<14000)throw Error('Alert disappeared too early: '+JSON.stringify({autoDismissMs,pollObservedAutoDismissMs}));
-  await root.invoke('test_notification',{kind:'long_title'});
+  await management!.invoke('test_notification',{kind:'long_title'});
   await alert.wait(`document.querySelector('.heading')?.textContent.includes('长标题排版验收（测试）')`);
   await alert.wait(`document.querySelector('.message')?.disabled===false`);
   await alert.send('Input.dispatchMouseEvent',{type:'mouseMoved',x:100,y:80});
@@ -163,8 +170,8 @@ try{
   await alert.send('Input.dispatchMouseEvent',{type:'mousePressed',x:100,y:80,button:'left',clickCount:1});
   await alert.send('Input.dispatchMouseEvent',{type:'mouseReleased',x:100,y:80,button:'left',clickCount:1});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>!s.current)`);
-  await root.invoke('test_notification');
-  await root.invoke('save_monitoring_settings',{settings:{...original,notifications:false,notification_mode:'popup',sound:false}});
+  await management!.invoke('test_notification');
+  await management!.invoke('save_monitoring_settings',{settings:{...original,notifications:false,notification_mode:'popup',sound:false}});
   if((await root.invoke('get_task_notice')).current)throw Error('Disabling reminders did not clear popup');
   const after=await root.invoke('get_agents');
   if(after.some((t:any)=>t.id==='notification-test'))throw Error('Test polluted attention');
@@ -174,19 +181,10 @@ try{
   const tested=delivery.filter((r:any)=>r.test);
   for(const stage of ['queued','window_visible','rendered','auto_dismissed','user_dismissed','details_opened'])if(!tested.some((r:any)=>r.stage===stage))throw Error('Missing real delivery stage: '+stage);
   phase='management delivery log';
-  await root.invoke('open_management');
-  let manageTab:Tab|undefined;
-  for(let n=0;n<100;n++){manageTab=(await tabs()).find(t=>t.url.includes('/manage'));if(manageTab)break;await Bun.sleep(100);}
-  if(!manageTab)throw Error('Real management window unavailable');
-  const management=await connect(manageTab);
-  try{
-    await management.wait(`!!document.querySelector('nav[aria-label="管理页面"]')`);
-    await management.evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='通知与显示').click()`);
-    await management.wait(`document.querySelectorAll('.delivery-row').length>0`);
-    if(await management.evaluate(`!!document.querySelector('.delivery [role=alert]')`))throw Error('Delivery log failed in real management IPC');
-    // Keep the IPC caller alive: closing its own WebView can lose the response.
-    await root.invoke('plugin:window|close',{label:'management'});
-  }finally{management.close();}
+  await management.wait(`!!document.querySelector('nav[aria-label="管理页面"]')`);
+  await management.evaluate(`[...document.querySelectorAll('nav button')].find(b=>b.textContent==='通知与显示').click()`);
+  await management.wait(`document.querySelectorAll('.delivery-row').length>0`);
+  if(await management.evaluate(`!!document.querySelector('.delivery [role=alert]')`))throw Error('Delivery log failed in real management IPC');
   const result={passed:true,layout,longTitleLayout,focusPreserved,autoDismissMs,checks:['actual completion/failure/approval windows rendered','approval remains beyond 15s and backend refuses timeout','removed inferred approval event is rejected without a popup','queue navigation preserves pending blocker with fresh presentation ID','delivery stages persisted without asserting user-read','native task title is primary heading','narrow dark strip and long title layout','action buttons inside compact window','message card pointer click opens dashboard','separate queued alerts','late callback safe','hover pauses timer','view details opens dashboard','15s auto-hide for ordinary results','master off clears popup','no fake task or viewed-state mutations','no native console/CSP errors'],notVerified:[...(lockedDesktop ? ['editor focus preservation (Windows desktop locked)'] : []),'fresh real Agent task finish during acceptance','OS system banner delivery','exact approval stream not exposed by current Desktop rollout']};
   await Bun.write(out+'/native-notice-result.json',JSON.stringify(result,null,2));
   console.log(JSON.stringify(result));
@@ -197,7 +195,14 @@ try{
   throw error;
 }finally{
   try{
-    for(let n=0;n<4;n++){const state=await root.invoke('get_task_notice').catch(()=>null);if(!state?.current?.test)break;await root.invoke('dismiss_task_notice',{id:state.current.id});}
-    if(original)await root.invoke('save_monitoring_settings',{settings:original});
-  }finally{alert?.close();root.close();}
+    try {
+      for(let n=0;n<4;n++){
+        const state=await root.invoke('get_task_notice').catch(()=>null);
+        if(!state?.current?.test||!alert)break;
+        await alert.invoke('dismiss_task_notice',{id:state.current.id});
+      }
+    } finally {
+      if(saved&&original)await management!.invoke('save_monitoring_settings',{settings:original});
+    }
+  }finally{if(management)await root.invoke('plugin:window|close',{label:'management'}).catch(()=>{});management?.close();alert?.close();root.close();}
 }

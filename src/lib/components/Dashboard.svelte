@@ -168,7 +168,12 @@
   }
   async function open(task: TaskSnapshot) {
     if (!isTauri()) return;
-    try { const outcome=await invoke<string>('open_task',{id:task.id}); note=outcome==='window_focused' ? '已聚焦运行窗口；请在查看结果后标记已查看' : '已定位任务详情；此来源暂不支持精确会话跳转'; }
+    try {
+      const outcome=await invoke<string>('open_task',{id:task.id});
+      if(outcome==='window_focused')note='已聚焦运行窗口；请在查看结果后标记已查看';
+      else if(outcome==='focus_unavailable')note='无法聚焦原窗口，已打开任务详情';
+      else note='已定位任务详情；此来源暂不支持精确会话跳转';
+    }
     catch(e) { error=String(e); }
   }
   // Grow within one opening, using attention cards rather than hidden process

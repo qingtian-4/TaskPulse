@@ -20,5 +20,6 @@ fn main() {
     println!("cargo:rerun-if-changed=../.git/index");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=../src");
+    // The checked-in application permissions make unlisted commands fail closed.
     tauri_build::build();
 }

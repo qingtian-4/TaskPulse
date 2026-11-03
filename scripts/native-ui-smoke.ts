@@ -61,6 +61,22 @@ if (!popup) throw Error('No live TaskPulse popup at CDP 9337');
 const native = await client(popup);
 let original: any;
 let changed = false;
+let manager: Awaited<ReturnType<typeof client>> | undefined;
+async function openManagement(){
+  await native.invoke('open_management');
+  for(let n=0;n<100;n++){
+    const page=(await tabs()).find(t=>t.url.includes('/manage'));
+    if(page){
+      const view=await client(page);
+      try{
+        await view.waitFor(`typeof globalThis.__TAURI_INTERNALS__?.invoke==='function'`);
+        return view;
+      }catch(error){view.close();throw error;}
+    }
+    await Bun.sleep(100);
+  }
+  throw Error('Management window not created');
+}
 try {
   await native.waitFor(`!!globalThis.__TAURI_INTERNALS__&&!!document.querySelector('.dashboard')`);
   original = await native.invoke('get_monitoring_settings');
@@ -82,15 +98,7 @@ try {
   if (initial.some((t: any) => t.internal) || directory.items.some((v: any) => v.task.internal)) throw Error('Internal service task leaked');
   const layout = await native.evaluate(`(()=>{const p=document.querySelector('.dashboard');return {width:p?.getBoundingClientRect().width,height:p?.getBoundingClientRect().height,errors:[...document.querySelectorAll('[role=alert]')].map(x=>x.textContent),isTauri:globalThis.isTauri};})()`);
   if (layout.errors.length || layout.width > 440.1 || layout.height > 720.1 || !layout.isTauri) throw Error(JSON.stringify(layout));
-  await native.invoke('open_management');
-  let management: Tab | undefined;
-  for (let n = 0; n < 100; n++) {
-    management = (await tabs()).find(t => t.url.includes('manage'));
-    if (management) break;
-    await Bun.sleep(100);
-  }
-  if (!management) throw Error('Management window not created');
-  const manage = await client(management);
+  const manage = await openManagement();
   try {
     await manage.waitFor(`document.querySelectorAll('.source-item').length===${original.sources.length}`);
     if ((await manage.evaluate(`document.querySelectorAll('[role=alert]').length`)) || manage.errors.length) throw Error('Management UI error: ' + manage.errors.join(';'));
@@ -115,16 +123,17 @@ try {
     if(!closed)throw Error('Confirmed management close did not destroy native window');
   } finally { manage.close(); }
   console.log('Native management UI rendered');
+  manager=await openManagement();
   const disabled = structuredClone(original);
   const codex = disabled.sources.find((s: any) => s.kind === 'codex' && s.enabled);
   if (!codex) throw Error('No enabled local Codex source');
   codex.enabled = false;
   changed = true;
-  await native.invoke('save_monitoring_settings', { settings: disabled });
+  await (manager??=await openManagement()).invoke('save_monitoring_settings', { settings: disabled });
   await Bun.sleep(1400);
   const afterDisable = await native.invoke('get_agents');
   if (afterDisable.some((t: any) => t.source_instance === codex.id || t.source === 'codex' && !t.remote)) throw Error('Disabled Codex leaked through scanner');
-  await native.invoke('save_monitoring_settings', { settings: original });
+  await (manager??=await openManagement()).invoke('save_monitoring_settings', { settings: original });
   await native.invoke('request_refresh');
   await native.waitFor(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(s=>s.provider==='codex'&&s.status==='connected'))`);
   const restored = await native.invoke('get_agents');
@@ -142,7 +151,7 @@ try {
   }
   const refreshFeedback=await native.evaluate(`document.querySelector('[role="status"]')?.textContent ?? document.querySelector('[role="alert"]')?.textContent ?? ''`);
   if(!refreshFeedback.includes('刷新') && !refreshFeedback.includes('采集结果'))throw Error('No actual refresh feedback');
-  await native.invoke('test_notification');
+  await manager.invoke('test_notification');
   if (native.errors.length) throw Error('Popup console/CSP errors: ' + native.errors.join(';'));
   const result = {
     passed: true, layout, initialTasks: initial.length, archivedTasks:archived.length, discoveredSessions: directory.total, refreshFeedback,
@@ -154,6 +163,6 @@ try {
   await Bun.write(out + '/native-dashboard.png', Buffer.from((await native.send('Page.captureScreenshot', { format: 'png' })).data, 'base64'));
   console.log(JSON.stringify(result));
 } finally {
-  try { if (changed && original) await native.invoke('save_monitoring_settings', { settings: original }); }
-  finally { native.close(); }
+  try { if (changed && original) await (manager??=await openManagement()).invoke('save_monitoring_settings', { settings: original }); }
+  finally { manager?.close();native.close(); }
 }

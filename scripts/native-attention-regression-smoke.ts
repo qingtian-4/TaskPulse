@@ -41,8 +41,8 @@ assert.equal(await tabs().then(()=>true).catch(()=>false),false,'Owned CDP port 
 app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});
 app.once('error',error=>spawnFailure=error);
 let stderr='';app.stderr?.on('data',d=>stderr=(stderr+String(d)).slice(-4000));
-async function page(notice=false){
-  let tab:any;for(let i=0;i<200;i++){if(spawnFailure)throw spawnFailure;tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&(notice?t.url.includes('/notice'):!t.url.includes('/notice')&&!t.url.includes('/manage')));if(tab)break;if(app?.exitCode!==null)throw Error('Owned app exited');await Bun.sleep(100);}
+async function page(route?:'/notice'|'/manage'){
+  let tab:any;for(let i=0;i<200;i++){if(spawnFailure)throw spawnFailure;tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&(route?t.url.includes(route):!t.url.includes('/notice')&&!t.url.includes('/manage')));if(tab)break;if(app?.exitCode!==null)throw Error('Owned app exited');await Bun.sleep(100);}
   if(!tab)throw Error('Native page unavailable');const ws=new WebSocket(tab.webSocketDebuggerUrl);sockets.push(ws);
   await new Promise<void>((ok,fail)=>{ws.onopen=()=>ok();ws.onerror=()=>fail(Error('CDP connection failed'));});
   let seq=0;const pending=new Map<number,any>();
@@ -100,7 +100,7 @@ try{
   assert.equal((await root.invoke('get_task_notice')).current,null,'Uncertainty/recovery must not fabricate a completion');
   event('one','a','input.requested',{request_kind:'question'},{request_id:'q1'});
   await until(async()=> Boolean((await root.invoke('get_task_notice')).current));
-  const alert=await page(true);await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('需处理：等待输入')`));
+  const alert=await page('/notice');await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('需处理：等待输入')`));
   assert.equal((await root.invoke('get_task_notice')).current.auto_dismiss_ms,null);
   assert.equal((await root.invoke('get_task_notice')).current.context.task_name,'合成：任务一');
   assert.equal(await alert.evaluate(`document.querySelector('.summary')?.textContent.includes('本轮结束')`),false,'A question is not a completed turn');
@@ -112,11 +112,14 @@ try{
   assert.equal((await root.invoke('get_task_notice')).current.auto_dismiss_ms,15000);
   event('one','b','turn.started');
   await until(async()=> !(await root.invoke('get_task_notice')).current);
-  await root.invoke('test_notification',{kind:'quota_exhausted'});
+  await root.invoke('open_management',{section:'notifications'});
+  const management=await page('/manage');
+  await until(()=>management.evaluate(`typeof globalThis.__TAURI_INTERNALS__?.invoke==='function'`));
+  await management.invoke('test_notification',{kind:'quota_exhausted'});
   await until(()=>alert.evaluate(`document.querySelector('.summary')?.textContent.includes('额度已用完')`));
   const quota=await root.invoke('get_task_notice');assert.equal(quota.current.test,true);assert.equal(quota.current.task_id,null);assert.equal(quota.current.auto_dismiss_ms,null);
   await Bun.write(join(owned,'quota.png'),Buffer.from((await alert.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await root.invoke('dismiss_task_notice',{id:quota.current.id});
+  await alert.invoke('dismiss_task_notice',{id:quota.current.id});
   await Bun.write(join(owned,'dashboard.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   const result={passed:true,size,staleDiagnostics:staleEvidence,checks:['two running tasks visible','thinking does not notify','stale Running stays visible as unconfirmed, with a working global recovery hint and no fake fresh running count','question says action required and waiting input for the matching task, without a completion label or timer','matching answer clears notice','real turn end has a separate completion label and timer','new turn withdraws obsolete result','quota test is sticky and never creates a task'],realHostTested:false};
   await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify({...result,evidence}));

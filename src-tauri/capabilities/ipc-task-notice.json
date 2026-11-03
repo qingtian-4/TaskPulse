@@ -1,0 +1,12 @@
+{
+  "identifier": "ipc-task-notice",
+  "description": "TaskPulse application commands for task-notice",
+  "windows": [
+    "task-notice"
+  ],
+  "permissions": [
+    "app-preferences-read",
+    "app-notice-read",
+    "app-notice-actions"
+  ]
+}

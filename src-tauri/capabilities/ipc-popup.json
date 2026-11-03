@@ -1,0 +1,14 @@
+{
+  "identifier": "ipc-popup",
+  "description": "TaskPulse application commands for popup",
+  "windows": [
+    "popup"
+  ],
+  "permissions": [
+    "app-preferences-read",
+    "app-task-read",
+    "app-task-actions",
+    "app-dashboard",
+    "app-notice-read"
+  ]
+}

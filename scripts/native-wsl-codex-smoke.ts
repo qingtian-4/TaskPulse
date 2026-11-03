@@ -72,9 +72,9 @@ try{
   const enabled=await root.invoke('get_monitoring_settings');
   const disabled=structuredClone(enabled);disabled.sources.find((s:any)=>s.id===source.id).enabled=false;
   saved=true;
-  await root.invoke('save_monitoring_settings',{settings:disabled});
+  await manage!.invoke('save_monitoring_settings',{settings:disabled});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>!t.some(x=>x.source_instance===${JSON.stringify(source.id)}))`);
-  await root.invoke('save_monitoring_settings',{settings:enabled});
+  await manage!.invoke('save_monitoring_settings',{settings:enabled});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(s=>s.provider===${JSON.stringify(source.id)}&&s.status==='connected'))`);
   await manage.invoke('plugin:window|show',{label:'management'});
   await Bun.write(out+'/native-wsl-source.png',Buffer.from((await manage.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -87,7 +87,7 @@ try{
   console.log(JSON.stringify(result));success=true;
 }finally{
   try{
-    if(saved&&original&&(!success||process.env.TASKPULSE_KEEP_WSL_CODEX!=='1'))await root.invoke('save_monitoring_settings',{settings:original});
+    if(saved&&original&&(!success||process.env.TASKPULSE_KEEP_WSL_CODEX!=='1'))await manage!.invoke('save_monitoring_settings',{settings:original});
     if(manage)await manage.invoke('plugin:window|close',{label:'management'});
   }finally{manage?.close();root.close();}
 }

@@ -129,7 +129,7 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
 
         let can_focus = terminal
             .as_ref()
-            .map(|t| !t.focus_id.is_empty() && t.focus_id != "0")
+            .map(|t| t.kind != "windows_native" && !t.focus_id.is_empty() && t.focus_id != "0")
             .unwrap_or(false);
 
         // v2-only fields
@@ -510,6 +510,17 @@ mod tests {
         assert_eq!(t.confidence, DetectionConfidence::Hook);
         assert!(t.can_focus);
         assert_eq!(t.source, TaskSource::LocalFile);
+    }
+
+    #[test]
+    fn legacy_windows_status_is_readable_without_trusting_its_focus_metadata() {
+        let f = temp_file(
+            r#"{"v":1,"status":"working","terminal":{"kind":"windows_native","focus_id":"42","outer_id":"","label":"Terminal"}}"#,
+        );
+        let task = parse_status_file(f.path(), now()).unwrap();
+        assert_eq!(task.status, TaskStatus::Running);
+        assert_eq!(task.terminal.unwrap().focus_id, "42");
+        assert!(!task.can_focus);
     }
 
     #[test]

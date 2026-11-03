@@ -574,5 +574,6 @@
   "正在核对系统启动设置…": "Checking system startup settings…",
   "部分会话需检查": "Some sessions need attention",
   "该会话已更新；同一来源的其他会话需检查": "This session is up to date; other sessions from this source need attention",
-  "Configure hooks in the installed TaskPulse application": "Configure hooks in the installed TaskPulse application"
+  "Configure hooks in the installed TaskPulse application": "Configure hooks in the installed TaskPulse application",
+  "无法聚焦原窗口，已打开任务详情": "Could not focus the original window. Opened task details."
 }
