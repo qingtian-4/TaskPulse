@@ -30,3 +30,20 @@ catch [TimeoutException] { $timedOut = $true }
 if (-not $timedOut) { throw 'Timeout was not enforced' }
 Write-Output 'Fast zero/nonzero exits, output capture and bounded timeout passed (no installers executed).'
 Write-Output "Final-path identity passed: $powerShellExe / $shortExe"
+
+& {
+    # The identity probe must still work when the optional CIM query fails.
+    function Get-CimInstance { throw 'Injected CIM outage' }
+    $probe = Join-Path $PSScriptRoot 'native-process-evidence.ps1'
+    $identity = & $probe -ProcessId $PID -Exe $powerShellExe | ConvertFrom-Json
+    if ($identity.pid -ne $PID -or $identity.owned_executable -ne $true -or $identity.user_matches_caller -ne $true -or $identity.elevated -isnot [bool] -or $identity.integrity_rid -le 0) {
+        throw 'Required Windows process identity evidence was lost'
+    }
+    $childQueryFailed = $false
+    try { $null = & $probe -ProcessId $PID -Exe $powerShellExe -ChildrenOnly -DebugPort 9222 }
+    catch {
+        if ($_.Exception.Message -ne 'Injected CIM outage') { throw }
+        $childQueryFailed = $true
+    }
+    if (-not $childQueryFailed) { throw 'Child diagnostics did not reach the injected CIM query' }
+}
