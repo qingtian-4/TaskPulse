@@ -97,6 +97,7 @@ pub struct RemoteSourceHealth {
     pub host: String,
     pub source: crate::domain::TaskSource,
     pub authoritative: bool,
+    pub detected_data: bool,
     pub error: Option<String>,
 }
 
@@ -159,6 +160,8 @@ impl ProviderOutput {
         self.tasks.is_empty() && self.hosts.is_empty()
     }
 }
+
+pub const PROVIDER_TIMEOUT: &str = "采集超过 30 秒未返回；保留上次状态";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -224,7 +227,24 @@ pub fn task_observation_state(task: &TaskSnapshot) -> String {
 }
 
 impl ProviderHealth {
+    fn observation_is_current(&self, proof: &TaskObservation, now_ms: u64) -> bool {
+        Some(proof.observed_at) == self.last_attempt.map(resources::epoch_ms)
+            && now_ms >= proof.observed_at
+            && now_ms - proof.observed_at <= 30_000
+    }
+
+    pub fn has_fresh_observations(&self, now: SystemTime) -> bool {
+        let now_ms = resources::epoch_ms(now);
+        self.task_observations
+            .values()
+            .any(|proof| self.observation_is_current(proof, now_ms))
+    }
+
     pub fn verifies_task(&self, task: &TaskSnapshot, now: SystemTime) -> bool {
+        self.status == ProviderStatus::Degraded && self.matches_latest_observation(task, now)
+    }
+
+    pub fn matches_latest_observation(&self, task: &TaskSnapshot, now: SystemTime) -> bool {
         let now = resources::epoch_ms(now);
         task.source == crate::domain::TaskSource::Codex
             && !task.stale
@@ -241,11 +261,8 @@ impl ProviderHealth {
                     .iter()
                     .any(|id| !id.trim().is_empty()))
             && task.source_instance.as_deref() == Some(&self.provider)
-            && self.status == ProviderStatus::Degraded
             && self.task_observations.get(&task.id).is_some_and(|proof| {
-                Some(proof.observed_at) == self.last_attempt.map(resources::epoch_ms)
-                    && now >= proof.observed_at
-                    && now - proof.observed_at <= 30_000
+                self.observation_is_current(proof, now)
                     && proof.state == task_observation_state(task)
             })
     }

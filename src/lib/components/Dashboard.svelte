@@ -5,11 +5,12 @@
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery } from '$lib/types';
+  import { CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery, type DashboardView, type DashboardSnapshot } from '$lib/types';
   import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import MessageCenter from './MessageCenter.svelte';
-  import {observedDashboardTasks,preferredDashboardHeight} from '$lib/dashboard';
+  import {projectDashboardTasks,preferredDashboardHeight} from '$lib/dashboard';
+  import {summarizeSources} from '$lib/source-setup';
   import {acceptMessageState} from '$lib/messages';
   import type {MessageCenterState} from '$lib/types';
   import Settings from '@lucide/svelte/icons/settings';
@@ -46,10 +47,11 @@
   let pendingPrompts = $state<TaskSnapshot[]>([]);
   let showPrompts = $state(false);
   let messages = $state<MessageCenterState>({revision:0,unread:0,entries:[],error:null});
-  type DashboardSnapshot={revision:number;tasks:TaskSnapshot[];hosts:unknown[];providers:ProviderHealth[]};
+  let snapshotView=$state<DashboardView|null>(null);
   let dashboardRevision=$state(0);
   let snapshotRequestGeneration=0;
   let messagesEpoch=0;
+  let settingsEpoch=0;
   let panel = $state<HTMLDivElement | null>(null);
   let demo = $state(false);
   let lastHidden = $state<{task:TaskSnapshot;action:'restore'|'unignore'} | null>(null);
@@ -58,7 +60,7 @@
   let sessionHeight = $state(400);
   let resizeQueue:Promise<unknown> = Promise.resolve();
   const progress = $derived(refreshProgress(settings,providers,refreshSince));
-  const confirmedTasks = $derived(demo ? tasks : observedDashboardTasks(tasks,providers,settings,now));
+  const confirmedTasks = $derived(projectDashboardTasks(tasks,snapshotView?.unconfirmed_task_ids??[]));
   const selectedTask = $derived([...confirmedTasks,...archived].find(t => t.id === selected?.id) ?? selected);
   const candidates = $derived(dashboardCandidates(confirmedTasks));
   const archiveTasks = $derived(dashboardCandidates(archived));
@@ -85,23 +87,34 @@
     }
     return [...groups.values()];
   });
-  const degraded = $derived(providers.filter(p => p.status === 'degraded'));
+  const sourceSummary=$derived(summarizeSources(snapshotView?.sources??[]));
+  const sourceIssues=$derived(sourceSummary.issues+providers.filter(p=>p.provider.startsWith('state:')&&p.status==='degraded').length);
+  const overview=$derived(snapshotView?.counts??{
+    ongoing:candidates.filter(t=>taskSection(t)==='ongoing').length,
+    action:candidates.filter(t=>matchesSignal(t,'action')).length,
+    results:candidates.filter(t=>taskSection(t)==='results').length,
+    uncertain:uncertainTasks.length,
+  });
 
   function applyDashboardSnapshot(snapshot:DashboardSnapshot) {
     // A collection can finish between the one-second display ticks. Compare
     // its proof against receipt time, never the previous tick's cached time.
     now=Date.now();
-    dashboardRevision=snapshot.revision; tasks=snapshot.tasks; providers=snapshot.providers;
+    dashboardRevision=snapshot.revision; tasks=snapshot.tasks; providers=snapshot.providers; snapshotView=snapshot.view;
   }
 
   async function snapshots() {
     const requestGeneration=++snapshotRequestGeneration;
     const epoch=messagesEpoch;
+    const settingsAtRequest=settingsEpoch;
     const [snapshot,nextSettings,nextArchived,nextPrompts] = await Promise.all([
       invoke<DashboardSnapshot>('get_dashboard_snapshot'), invoke<DashboardSettings>('get_monitoring_settings'), invoke<TaskSnapshot[]>('get_archived_attention'), invoke<TaskSnapshot[]>('get_pending_task_prompts')
     ]);
-    if(!shouldApplyDashboardSnapshot(dashboardRevision,snapshot.revision,requestGeneration,snapshotRequestGeneration))return;
-    applyDashboardSnapshot(snapshot); settings=nextSettings; archived=nextArchived; pendingPrompts=nextPrompts;
+    if(requestGeneration!==snapshotRequestGeneration)return;
+    if(shouldApplyDashboardSnapshot(dashboardRevision,snapshot.revision,requestGeneration,snapshotRequestGeneration)){
+      applyDashboardSnapshot(snapshot); archived=nextArchived; pendingPrompts=nextPrompts;
+    }
+    if(settingsEpoch===settingsAtRequest)settings=nextSettings;
     const center=await invoke<MessageCenterState>('get_message_center');
     if(epoch===messagesEpoch)messages=acceptMessageState(messages,center);
   }
@@ -212,7 +225,7 @@
     const discover=async()=>{
       try {
         const found=await invoke<SourceDiscovery[]>('discover_sources');
-        if(mounted)newSources=found.filter(s=>s.available && s.candidate && !['hooks','scanner'].includes(s.candidate.kind)).length;
+        if(mounted)newSources=found.filter(s=>s.data_location_detected===true && s.candidate && !['hooks','scanner'].includes(s.candidate.kind)).length;
       } catch { /* Candidate hints must not block normal monitoring. */ }
     };
     const discoveryTimer=setInterval(()=>void discover(),30000);
@@ -223,7 +236,7 @@
         await subscribe(listen<TaskSnapshot[]>('archived-attention-updated',e=>archived=e.payload));
         await subscribe(listen<TaskSnapshot[]>('pending-prompts-updated',e=>pendingPrompts=e.payload));
         await subscribe(listen<MessageCenterState>('messages-updated',e=>{messagesEpoch++;messages=acceptMessageState(messages,e.payload);}));
-        await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settings=e.payload;view=e.payload.default_view;void discover();}));
+        await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settingsEpoch++;settings=e.payload;view=e.payload.default_view;void discover();}));
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selectTask(e.payload)));
         await subscribe(listen<boolean>('pinned-changed',e=>pinned=e.payload));
         await subscribe(listen('popup-opened',()=>{if(!pinned)sessionHeight=400;}));
@@ -257,16 +270,16 @@
     </div>
   </header>
   <div class="counts" aria-label={$t("任务概览")} aria-describedby="count-help">
-    <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title={$t("来源新鲜的运行任务，包含明确待处理请求")} onclick={()=>chooseSection('ongoing')}><span>{$t("进行中")}</span><b>{candidates.filter(t=>taskSection(t)==='ongoing').length}</b></button>
-    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title={$t("进行中的子集：明确待批准、待回答或额度耗尽")} onclick={()=>chooseSignal('action')}><span>{$t("待处理")}</span><b>{candidates.filter(t=>matchesSignal(t,'action')).length}</b></button>
-    <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title={$t("尚未查看的本轮结果，包括失败")} onclick={()=>chooseSection('results')}><span>{$t("待查看")}</span><b>{candidates.filter(t=>taskSection(t)==='results').length}</b></button>
+    <button class="overview tp-tone" data-tone="running" class:active={filterSection==='ongoing'} aria-pressed={filterSection==='ongoing'} title={$t("来源新鲜的运行任务，包含明确待处理请求")} onclick={()=>chooseSection('ongoing')}><span>{$t("进行中")}</span><b>{overview.ongoing}</b></button>
+    <button class="overview tp-tone" data-tone="action" class:active={filterSignal==='action'} aria-pressed={filterSignal==='action'} title={$t("进行中的子集：明确待批准、待回答或额度耗尽")} onclick={()=>chooseSignal('action')}><span>{$t("待处理")}</span><b>{overview.action}</b></button>
+    <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title={$t("尚未查看的本轮结果，包括失败")} onclick={()=>chooseSection('results')}><span>{$t("待查看")}</span><b>{overview.results}</b></button>
   </div>
   <p id="count-help" class="sr-only">{$t("待处理包含在进行中，计数不相加。")}</p>
-  {#if candidates.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed')) || degraded.length}<div class="signals">
+  {#if candidates.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed')) || sourceIssues}<div class="signals">
     {#if candidates.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>{$t("待批准")} {candidates.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
     {#if candidates.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>{$t("待回答")} {candidates.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
     {#if candidates.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>{$t("失败结果")} {candidates.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
-    {#if degraded.length}<button class="tp-chip tp-tone" data-tone="stale" onclick={manage}>{$t("来源待更新")} {degraded.length}</button>{/if}
+    {#if sourceIssues}<button class="tp-chip tp-tone" data-tone="stale" onclick={manage}>{$t("来源待更新")} {sourceIssues}</button>{/if}
   </div>{/if}
   <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>{$t("当前关注")} {attentionTasks.length}</button>{#if uncertainTasks.length}<button class:active={filterSection==='uncertain'} onclick={()=>chooseSection('uncertain')}>{$t("状态待更新")} {uncertainTasks.length}</button>{/if}{#if archiveTasks.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>{$t("较早关注")} {archiveTasks.length}</button>{/if}<button class="filter-toggle tp-btn" class:active={!!filterText} data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?$t('收起筛选'):$t('筛选 / 分组')}</button></div>
   <div class="search-bar"><label class="search"><Search size={14}/><input aria-label={$t("搜索任务")} placeholder={$t("搜索任务、项目、Agent 或模型   /")} bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label={$t("清除搜索")}>×</button>{/if}</label></div>
@@ -316,7 +329,15 @@
     </aside>
   {/if}
   <footer>
-    <button class:degraded={degraded.length>0} onclick={manage} title={$t("管理来源；任务详情可查看采集时间")}>{settings?.sources.filter(s=>s.enabled).length ?? 0} {$t("个来源")}{degraded.length ? ' · '+degraded.length+' 个待检查' : $t(' · 正常')}</button>
+    <button class:degraded={sourceIssues>0} onclick={manage} title={$t("管理来源；任务详情可查看采集时间")}>
+      {#if !demo&&dashboardRevision===0}{$t('正在读取来源状态')}
+      {:else if sourceSummary.enabled===0}{$t('无启用来源')}
+      {:else}{$t('{count} 个启用来源',{count:sourceSummary.enabled})}
+        {#if sourceSummary.waiting} · {$t('{count} 个等待首次读取',{count:sourceSummary.waiting})}{/if}
+        {#if sourceIssues} · {$t('{count} 个待检查',{count:sourceIssues})}{/if}
+        {#if !sourceSummary.waiting&&!sourceIssues} · {$t('读取正常')}{/if}
+      {/if}
+    </button>
     <!-- Local account quota is intentionally hidden until the feature is ready. -->
   </footer>
 </div>
@@ -348,7 +369,7 @@
   .command{max-height:72px;overflow:auto;margin:8px 0;padding:8px;background:var(--tp-input);border:1px solid var(--tp-border);border-radius:4px}.command span{font-size:11px;color:var(--tp-quiet)}.command pre{white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:12px;line-height:1.5;color:var(--tp-text);margin:4px 0}
   .evidence{font-size:11px;color:var(--tp-muted);margin:8px 0}.evidence>summary{padding:4px 8px}.evidence p{padding:0 8px}
   .detail-actions{display:flex;gap:8px;flex-wrap:wrap}.detail-actions>.tp-btn{font-size:11px;min-height:28px;padding:4px 8px}.more{font-size:11px;color:var(--tp-muted);width:100%}.more summary{padding:4px 8px}.more button{display:block;padding:8px;white-space:normal;text-align:left;font-size:11px}
-  footer{display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--tp-border);padding:8px 12px;font-size:11px;color:var(--tp-muted);flex:none;min-height:40px}footer>button{font-size:11px;white-space:nowrap;color:var(--tp-muted)}footer>button.degraded{color:var(--tp-action)}
+  footer{display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--tp-border);padding:8px 12px;font-size:11px;color:var(--tp-muted);flex:none;min-height:40px}footer>button{font-size:11px;text-align:left;min-width:0;color:var(--tp-muted)}footer>button.degraded{color:var(--tp-action)}
   .onboarding{padding:12px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:14px}.onboarding p{font-size:12px;color:var(--tp-muted);line-height:1.6;margin:8px 0}
   @media(max-width:380px){header{min-height:46px;padding:6px 10px 6px 12px}.counts{gap:6px;padding:8px 10px 6px}.overview{padding:6px 10px}.overview b{font-size:22px;margin-top:2px}.header-actions{gap:2px}footer{min-height:36px;padding-top:6px;padding-bottom:6px}}
   @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.search-bar{padding-left:8px;padding-right:8px}footer{padding:8px;font-size:10px}footer>button{font-size:10px}.detail-heading{flex-wrap:wrap}}

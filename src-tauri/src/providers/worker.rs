@@ -13,6 +13,7 @@ pub struct Observation {
 
 pub struct Worker {
     pub observations: Receiver<Observation>,
+    pub started_at: Instant,
     refresh: SyncSender<()>,
 }
 
@@ -47,6 +48,7 @@ impl Worker {
         });
         Self {
             observations,
+            started_at: Instant::now(),
             refresh,
         }
     }

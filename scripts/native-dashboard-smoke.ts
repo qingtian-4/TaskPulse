@@ -1,25 +1,42 @@
 /** Windows WebView2 dashboard/notice acceptance using an isolated profile and synthetic task records.
  * Run: bun scripts/native-dashboard-smoke.ts --exe <unused-built-exe>
+ * Use --source-status-only to omit the independent foreground-focus scenarios.
  * No native process scanning, login registration, Agent hooks or real user state. */
 import assert from 'node:assert/strict';
 import {mkdir,copyFile,rename} from 'node:fs/promises';
 import {resolve,join,dirname} from 'node:path';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
+import {createReadStream} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {verifyDevelopmentBuild} from './development-artifact';
 import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
+const sourceStatusOnly=process.argv.includes('--source-status-only');
+const expectedAt=process.argv.indexOf('--expected-commit');
+const expected=expectedAt<0?null:process.argv[expectedAt+1]??'';
+if(expected!==null)assert.match(expected,/^[a-f0-9]{40}$/,'Expected full source SHA');
+const version=(await Bun.file(new URL('../package.json',import.meta.url)).json()).version;
+async function fileSha256(path:string){
+  const hash=createHash('sha256');
+  for await(const chunk of createReadStream(path))hash.update(chunk);
+  return hash.digest('hex');
+}
 await withSmokeWorkspace('dashboard-polish',async({owned,onStop})=>{
   const home=join(owned,'profile');await mkdir(home);
   const exe=join(owned,'agent-tray.exe');await copyFile(original,exe);
   if(await Bun.file(join(dirname(original),'WebView2Loader.dll')).exists())await copyFile(join(dirname(original),'WebView2Loader.dll'),join(owned,'WebView2Loader.dll'));
+  const executableSha256=await fileSha256(original);
+  assert.equal(await fileSha256(exe),executableSha256);
   const focusState=join(owned,'focus-window.json'),focusControl=join(owned,'focus-control.json');
-  const focusWindow=spawn('powershell.exe',['-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',resolve(import.meta.dir,'native-focus-window.ps1'),'-StatePath',focusState,'-ControlPath',focusControl],{windowsHide:true,stdio:['ignore','ignore','pipe']});
-  let focusError='';focusWindow.stderr?.on('data',chunk=>focusError+=String(chunk));
-  focusWindow.once('error',error=>focusError+=String(error));
-  onStop(()=>stopOwnedChild(focusWindow));
+  const focusWindow=sourceStatusOnly ? null : spawn('powershell.exe',['-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',resolve(import.meta.dir,'native-focus-window.ps1'),'-StatePath',focusState,'-ControlPath',focusControl],{windowsHide:true,stdio:['ignore','ignore','pipe']});
+  let focusError='';focusWindow?.stderr?.on('data',chunk=>focusError+=String(chunk));
+  focusWindow?.once('error',error=>focusError+=String(error));
+  if(focusWindow)onStop(()=>stopOwnedChild(focusWindow));
   type FocusState={pid:number;identity:string;hwnd:number;foreground:boolean;minimized:boolean;request_id:number;visible:boolean;identity_matches:boolean};
   async function waitFocus(accept:(state:FocusState)=>boolean){
+    assert.ok(focusWindow,'Test focus window was not started');
     let last:FocusState|undefined;
     for(let n=0;n<150;n++){
       if(focusWindow.exitCode!==null||focusWindow.signalCode!==null)throw Error('Test-owned focus window exited: '+JSON.stringify({exitCode:focusWindow.exitCode,signal:focusWindow.signalCode,state:await Bun.file(focusState).json().catch(()=>undefined)})+' '+focusError);
@@ -30,14 +47,14 @@ await withSmokeWorkspace('dashboard-polish',async({owned,onStop})=>{
     }
     throw Error('Test-owned foreground/minimized state not reached: '+JSON.stringify(last)+' '+focusError);
   }
-  const focusTarget=await waitFocus(state=>!!state.identity&&state.visible&&state.identity_matches);
-  assert.equal(focusTarget.pid,focusWindow.pid,'The fixture must own the observed window process');
+  const focusTarget=focusWindow ? await waitFocus(state=>!!state.identity&&state.visible&&state.identity_matches) : null;
+  if(focusTarget)assert.equal(focusTarget.pid,focusWindow?.pid,'The fixture must own the observed window process');
   const now=Date.now();
   const tasks=[
     {id:'file:running',name:'验收：运行中的任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'run-1',confidence:'hook',remote:false,updated_at:now,started_at:now-60000,unread:true,pinned:false},
     {id:'file:done',name:'验收：未查看的结果',source:'local_file',source_instance:'local_file',status:'succeeded',turn_key:'done-1',confidence:'exact',remote:false,updated_at:now,finished_at:now,exit_code:0,unread:true,pinned:false},
     {id:'file:offline',name:'验收：离线任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'offline-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:false},
-    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:true,can_focus:true,terminal:{kind:'windows_native',focus_id:String(focusTarget.pid),outer_id:focusTarget.identity,label:'Test-owned focus window'}},
+    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:true,can_focus:!!focusTarget,terminal:focusTarget?{kind:'windows_native',focus_id:String(focusTarget.pid),outer_id:focusTarget.identity,label:'Test-owned focus window'}:undefined},
     {id:'scan:codex:anonymous',name:'unknown',source:'codex',source_instance:'scanner',status:'running',confidence:'inferred',remote:false,updated_at:now,unread:true,pinned:false},
   ];
   const records=Object.fromEntries(tasks.map(task=>[task.id,{task,unread:task.unread,pinned:task.pinned,pin_override:task.pinned?true:null,last_execution_at:now,last_turn_key:task.turn_key??null,last_status:task.status,hidden:false,ignored:false}]));
@@ -104,10 +121,17 @@ accept_since_ms=${now}`:''}`).join('\n')}
   const start=()=>{app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});app.stderr?.on('data',chunk=>stderr+=String(chunk));app.once('error',e=>stderr+=String(e));};
   start();const root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const build=await root.invoke('get_build_info');
+  if(expected!==null)verifyDevelopmentBuild(build,expected,version);
 
   await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.tasks.length>=5 && s.tasks.some(t=>t.id==='file:running'&&!t.stale) && s.providers.some(p=>p.provider==='local_file' && p.status==='connected'))`);
   await root.wait(`document.querySelectorAll('.task-item').length>=3`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.view?.sources.some(row=>row.id==='scanner'&&row.read_state==='healthy'))`);
   const before=await root.invoke('get_dashboard_snapshot');
+  assert.equal(before.view.counts.ongoing,1);
+  assert.equal(before.view.counts.action,0);
+  const emptySource=before.view.sources.find((row:any)=>row.id==='scanner');
+  assert.deepEqual(emptySource,{id:'scanner',enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0});
+  assert.equal(before.view.sources.find((row:any)=>row.id==='local_file')?.current_tasks,1);
   const titles=()=>root.evaluate(`[...document.querySelectorAll('.task-item .row-title')].map(e=>e.textContent.trim())`);
   const initial=await titles();
   console.log('default cards:',JSON.stringify(initial));
@@ -115,30 +139,32 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.equal(await root.evaluate(`!!document.querySelector('.pending-running,.filter-note,.quota')`),false,'Red-box content must be removed');
   const checks=['default task set excludes stale unpinned and anonymous scanner rows','removed red-box content'];
   const focusEvidence=[];
-  for(const minimized of [false,true]){
-    console.log('Focus acceptance: initiallyMinimized='+minimized);
-    if(minimized){
-      await Bun.write(focusControl,JSON.stringify({id:1,action:'minimize'}));
-      await waitFocus(state=>state.request_id===1&&state.minimized);
+  if(focusWindow&&focusTarget){
+    for(const minimized of [false,true]){
+      console.log('Focus acceptance: initiallyMinimized='+minimized);
+      if(minimized){
+        await Bun.write(focusControl,JSON.stringify({id:1,action:'minimize'}));
+        await waitFocus(state=>state.request_id===1&&state.minimized);
+      }
+      await root.invoke('plugin:window|show',{label:'popup'});
+      await root.invoke('plugin:window|set_focus',{label:'popup'});
+      await root.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'popup'})`);
+      await waitFocus(state=>!state.foreground&&state.minimized===minimized);
+      const priorSelection=await root.invoke('get_selected_task');
+      const outcome=await root.invoke('open_task',{id:'file:pinned'});
+      assert.equal(outcome,'window_focused',JSON.stringify({build,target:focusTarget,current:await waitFocus(()=>true),task:(await root.invoke('get_agents')).find((t:any)=>t.id==='file:pinned'),outcome}));
+      const actual=await waitFocus(state=>state.foreground&&!state.minimized);
+      assert.equal(actual.hwnd,focusTarget.hwnd,'The originally observed window must actually become foreground');
+      assert.equal((await root.invoke('get_agents')).find((t:any)=>t.id==='file:pinned').unread,true);
+      const persisted=await Bun.file(join(home,'attention.json')).json();
+      assert.equal(persisted.records['file:pinned'].unread,true,'Successful focus must preserve durable unread state');
+      assert.deepEqual(await root.invoke('get_selected_task'),priorSelection,'Successful focus must not fall back to details');
+      focusEvidence.push({initiallyMinimized:minimized,foreground:actual.foreground,minimized:actual.minimized,unread:true});
     }
-    await root.invoke('plugin:window|show',{label:'popup'});
-    await root.invoke('plugin:window|set_focus',{label:'popup'});
-    await root.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'popup'})`);
-    await waitFocus(state=>!state.foreground&&state.minimized===minimized);
-    const priorSelection=await root.invoke('get_selected_task');
-    const outcome=await root.invoke('open_task',{id:'file:pinned'});
-    assert.equal(outcome,'window_focused',JSON.stringify({build,target:focusTarget,current:await waitFocus(()=>true),task:(await root.invoke('get_agents')).find((t:any)=>t.id==='file:pinned'),outcome}));
-    const actual=await waitFocus(state=>state.foreground&&!state.minimized);
-    assert.equal(actual.hwnd,focusTarget.hwnd,'The originally observed window must actually become foreground');
-    assert.equal((await root.invoke('get_agents')).find((t:any)=>t.id==='file:pinned').unread,true);
-    const persisted=await Bun.file(join(home,'attention.json')).json();
-    assert.equal(persisted.records['file:pinned'].unread,true,'Successful focus must preserve durable unread state');
-    assert.deepEqual(await root.invoke('get_selected_task'),priorSelection,'Successful focus must not fall back to details');
-    focusEvidence.push({initiallyMinimized:minimized,foreground:actual.foreground,minimized:actual.minimized,unread:true});
+    checks.push('test-owned normal window actually becomes foreground without acknowledging its task',
+      'test-owned minimized window restores and actually becomes foreground without acknowledging its task');
+    await stopOwnedChild(focusWindow);
   }
-  checks.push('test-owned normal window actually becomes foreground without acknowledging its task',
-    'test-owned minimized window restores and actually becomes foreground without acknowledging its task');
-  await stopOwnedChild(focusWindow);
   await root.invoke('plugin:window|show',{label:'popup'});
   await Bun.write(join(owned,'dashboard-light.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('状态待更新')).click()`);
@@ -212,7 +238,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id==='codex:public-good'&&t.status==='running'&&!t.stale));
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   const readState=`document.querySelector('[data-source-id="codex"] .read-state')`;
-  await ui.wait(`${readState}?.textContent==='Some sessions need attention'`);
+  await ui.wait(`${readState}?.textContent?.includes('Some sessions need attention')`);
   // The source badge has its own receiver and clock. Observe it independently
   // of the dashboard so a steady headline cannot hide a settings regression.
   await ui.evaluate(`(()=>{const badge=${readState};window.__sourceReadSamples=[badge.textContent];window.__sourceReadObserver=new MutationObserver(()=>window.__sourceReadSamples.push(badge.textContent));window.__sourceReadObserver.observe(badge,{childList:true,characterData:true,subtree:true});})()`);
@@ -231,7 +257,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.equal(new Set(attempts).size,8,'Eight distinct native collection attempts are required');
   assert.ok(ongoingSamples.length>0);
   assert.ok(ongoingSamples.every(count=>count===2),`Running count flickered between clock ticks: ${JSON.stringify(ongoingSamples)}`);
-  assert.ok(sourceReadSamples.every(label=>label==='Some sessions need attention'),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
+  assert.ok(sourceReadSamples.every(label=>label.includes('Some sessions need attention')),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
   checks.push('two running sessions stay visible across eight partial-source collections between UI clock ticks');
   checks.push('settings partial-source badge stays stable across the same eight collections');
   // Once that session itself is no longer verified, its previous proof must
@@ -239,22 +265,53 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await rename(rollout,join(codex,'moved-good.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!p.task_observations?.['codex:public-good']))`);
   await root.wait(`${ongoing}===1`);
-  await ui.wait(`${readState}?.textContent==='Some sessions need attention'`);
+  await ui.wait(`${readState}?.textContent?.includes('Some sessions need attention')`);
   checks.push('partial Codex collection preserves an independently verified ongoing task; missing task proof is revoked');
   await rename(join(codex,'sessions/rollout-public-second.jsonl'),join(codex,'moved-second.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!Object.keys(p.task_observations??{}).length))`);
   await root.wait(`${ongoing}===0`);
-  await ui.wait(`${readState}?.textContent==='Source access failed'`);
+  await ui.wait(`${readState}?.textContent?.includes('Source access failed')`);
   await rename(badRollout,join(codex,'moved-bad.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
-  await ui.wait(`${readState}?.textContent==='Source access healthy'`);
+  await ui.wait(`${readState}?.textContent?.includes('Source access healthy')`);
   checks.push('source badge still reports unavailable session evidence and real source recovery');
-  assert.equal(await root.invoke('open_task',{id:'file:pinned'}),'focus_unavailable');
-  const selected=await root.invoke('get_selected_task');
-  assert.equal(selected.id,'file:pinned');
-  assert.equal(selected.unread,true,'Falling back to details must preserve unread state');
-  checks.push('expired native window reports failed focus and opens task details without marking it read');
+  if(focusTarget){
+    assert.equal(await root.invoke('open_task',{id:'file:pinned'}),'focus_unavailable');
+    const selected=await root.invoke('get_selected_task');
+    assert.equal(selected.id,'file:pinned');
+    assert.equal(selected.unread,true,'Falling back to details must preserve unread state');
+    checks.push('expired native window reports failed focus and opens task details without marking it read');
+  }
+  await ui.evaluate(`[...document.querySelectorAll('.settings-tabs button')].find(b=>b.textContent==='Custom integrations').click()`);
+  await ui.wait(`document.querySelector('[data-source-id="scanner"]')?.textContent.includes('No data detected')`);
+  checks.push('healthy generic source without an event reports no data, sessions or current tasks');
+  const stampNow=Date.now();
+  await Bun.write(join(home,'blocker.pending'),JSON.stringify({v:2,name:'Public request fixture',status:'needs-input',turn_key:'public-blocker',
+    waiting_reason:'question',input_request_id:'public-question',execution_activity_at:stampNow,confidence:'hook'}));
+  await rename(join(home,'blocker.pending'),join(home,'blocker.status'));
+  await root.wait(`document.querySelector('.counts [data-tone="action"] b')?.textContent==='1'`);
+  const counted=(await root.invoke('get_dashboard_snapshot')).view.counts;
+  assert.equal(counted.ongoing,2);
+  assert.equal(counted.action,1);
+  await root.evaluate(`document.querySelector('.counts [data-tone="running"]').click()`);
+  assert.equal((await titles()).length,counted.ongoing);
+  await root.evaluate(`document.querySelector('.counts [data-tone="action"]').click()`);
+  assert.deepEqual(await titles(),['Public request fixture']);
+  checks.push('headline counts, ongoing filter and action filter match the native tray projection');
+  await rename(join(home,'blocker.status'),join(home,'blocker.removed'));
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.view.counts.action===0&&s.tasks.some(t=>t.id==='file:blocker'&&t.input_request_id==='public-question'&&t.stale))`);
+  const noRequest=await root.invoke('get_dashboard_snapshot');
+  assert.equal(noRequest.view.counts.ongoing,1);
+  assert.equal(noRequest.view.sources.find((row:any)=>row.id==='local_file').read_state,'healthy');
+  checks.push('a vanished request becomes uncertain even when the source still reads normally');
+  const currentSettings=await ui.invoke('get_monitoring_settings');
+  await ui.invoke('save_monitoring_settings',{expected:currentSettings,settings:{...currentSettings,sources:[]}});
+  await root.wait(`document.querySelector('.dashboard footer')?.textContent.includes('No enabled sources')`);
+  assert.equal((await root.invoke('get_dashboard_snapshot')).view.sources.length,0);
+  checks.push('zero enabled sources is explicit in the native dashboard');
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,focus:focusEvidence,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
+  assert.equal(await fileSha256(exe),executableSha256);
+  assert.equal(await fileSha256(original),executableSha256);
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,mode:sourceStatusOnly?'source-status':'full',build,executableSha256,checks,contrasts,focus:focusEvidence,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
   console.log('Dashboard polish acceptance passed:',checks.length,'checks');
 });

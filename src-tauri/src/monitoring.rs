@@ -110,7 +110,14 @@ struct Runtime {
     settings: Option<DashboardSettings>,
     revision: u64,
     catalog: HashMap<String, TaskSnapshot>,
+    source_evidence: HashMap<String, SourceEvidence>,
     config_error: Option<String>,
+}
+
+#[derive(Default)]
+struct SourceEvidence {
+    data_seen: bool,
+    discovered_sessions: HashSet<String>,
 }
 static RUNTIME: OnceLock<Mutex<Runtime>> = OnceLock::new();
 static SETTINGS_WRITER: Mutex<()> = Mutex::new(());
@@ -555,6 +562,35 @@ fn apply_settings(
     write_settings(&config::config_path(), &settings)?;
     {
         let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
+        // Counts belong to a connection, even when an edited connection
+        // retains the same source ID. Scope changes or disable/re-enable do
+        // not erase already discovered sessions.
+        if let Some(previous) = &state.settings {
+            let retained: HashSet<_> = settings
+                .sources
+                .iter()
+                .filter(|next| {
+                    previous.sources.iter().any(|old| {
+                        old.id == next.id
+                            && old.kind == next.kind
+                            && old.location == next.location
+                            && match (&old.integration, &next.integration) {
+                                (Some(old), Some(next)) => {
+                                    old.agent_id == next.agent_id
+                                        && old.adapter_id == next.adapter_id
+                                        && old.transport == next.transport
+                                }
+                                (None, None) => true,
+                                _ => false,
+                            }
+                    })
+                })
+                .map(|s| s.id.as_str())
+                .collect();
+            state
+                .source_evidence
+                .retain(|id, _| retained.contains(id.as_str()));
+        }
         state.settings = Some(settings.clone());
         state.config_error = None;
         state.revision += 1;
@@ -610,7 +646,7 @@ fn record_discovery_choices(previous: &DashboardSettings, next: &mut DashboardSe
         && std::env::var_os("TASKPULSE_HOME").is_none()
     {
         for row in discover_source_rows_with_wsl(next, &[]) {
-            if row.available {
+            if row.data_location_detected == Some(true) {
                 seen.insert(row.id);
             }
         }
@@ -625,7 +661,9 @@ fn merge_discovered(settings: &mut DashboardSettings, discoveries: Vec<SourceDis
     }
     let before = settings.clone();
     for row in discoveries {
-        if !row.available || settings.auto_discovery_seen.contains(&row.id) {
+        if row.data_location_detected != Some(true)
+            || settings.auto_discovery_seen.contains(&row.id)
+        {
             continue;
         }
         let source = settings.sources.iter_mut().find(|s| s.id == row.id);
@@ -818,12 +856,66 @@ pub fn allows(task: &TaskSnapshot) -> bool {
     exclusion(&get_monitoring_settings(), task).is_none()
 }
 
-pub fn observe(tasks: &[TaskSnapshot]) {
+pub fn observe(tasks: &[TaskSnapshot], revision: u64) {
     let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
+    record_observations(&mut state, tasks, revision);
+}
+
+fn record_observations(state: &mut Runtime, tasks: &[TaskSnapshot], revision: u64) {
+    if state.revision != revision {
+        return;
+    }
     for task in tasks {
         let merged = catalog_observation(state.catalog.get(&task.id), task);
+        let source = if task.id.starts_with("file:") && !task.remote {
+            "local_file".into()
+        } else {
+            source_id(&merged)
+        };
+        if merged.internal {
+            if let Some(evidence) = state.source_evidence.get_mut(&source) {
+                evidence.discovered_sessions.remove(&task.id);
+            }
+        } else if !task.stale {
+            let evidence = state.source_evidence.entry(source).or_default();
+            evidence.data_seen = true;
+            if crate::dashboard_view::task_candidate(&merged) {
+                evidence.discovered_sessions.insert(task.id.clone());
+            }
+        }
         state.catalog.insert(task.id.clone(), merged);
     }
+}
+
+/// Record raw transport data that did not produce a task, such as an idle
+/// SSH pane. This does not update health, session count or attention.
+pub fn observe_source_data(id: &str, revision: u64) {
+    let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
+    if state.revision == revision {
+        state
+            .source_evidence
+            .entry(id.into())
+            .or_default()
+            .data_seen = true;
+    }
+}
+
+/// Avoid scanning the catalog or cloning session IDs on the dashboard hot path.
+pub type SourceEvidenceSummary = HashMap<String, (bool, usize)>;
+
+pub fn dashboard_inputs(revision: u64) -> Option<(DashboardSettings, SourceEvidenceSummary)> {
+    let state = runtime().lock().unwrap_or_else(|e| e.into_inner());
+    if state.revision != revision {
+        return None;
+    }
+    Some((
+        state.settings.clone()?,
+        state
+            .source_evidence
+            .iter()
+            .map(|(id, e)| (id.clone(), (e.data_seen, e.discovered_sessions.len())))
+            .collect(),
+    ))
 }
 
 fn catalog_observation(previous: Option<&TaskSnapshot>, incoming: &TaskSnapshot) -> TaskSnapshot {
@@ -870,7 +962,7 @@ pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
             known.project_path = meta.project_path.clone();
             known.internal = meta.internal;
             known.new_execution = false;
-            if known.status == crate::domain::TaskStatus::Running {
+            if known.status == crate::domain::TaskStatus::Running || known.requires_action() {
                 known.stale = true;
             }
             tasks.push(known);
@@ -971,7 +1063,7 @@ pub fn find_session(id: &str) -> Option<TaskSnapshot> {
 #[derive(Clone, Serialize)]
 pub struct SourceDiscovery {
     pub id: String,
-    pub available: bool,
+    pub data_location_detected: Option<bool>,
     pub detail: String,
     pub candidate: Option<SourceConfig>,
 }
@@ -989,7 +1081,7 @@ fn discover_source_rows() -> Vec<SourceDiscovery> {
             .iter()
             .map(|s| SourceDiscovery {
                 id: s.id.clone(),
-                available: s.kind == SourceKind::GenericEvent,
+                data_location_detected: None,
                 detail: "隔离状态目录；未探测真实 Agent 数据".into(),
                 candidate: None,
             })
@@ -1026,7 +1118,7 @@ fn discover_source_rows_with_wsl(
     sources
         .iter()
         .map(|source| {
-            let (available, detail) = match source.kind {
+            let (detected, detail) = match source.kind {
                 SourceKind::Opencode => {
                     let path=if source.location.is_empty(){crate::providers::opencode::default_db()}else{PathBuf::from(&source.location)};
                     (path.is_file(),format!("{} · 原生任务；不提供独立提问/审批事件",path.display()))
@@ -1093,11 +1185,14 @@ fn discover_source_rows_with_wsl(
                 SourceKind::RemoteCodex | SourceKind::Tmux => {
                     (false, format!("SSH {} · 启用后验证连接", source.location))
                 }
-                _ => (true, "本机状态采集".into()),
+                SourceKind::GenericEvent | SourceKind::Hooks | SourceKind::Scanner => (false, "启用后读取数据".into()),
             };
             SourceDiscovery {
                 id: source.id.clone(),
-                available,
+                data_location_detected: if matches!(source.kind,
+                    SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::Tmux
+                    | SourceKind::GenericEvent | SourceKind::Hooks | SourceKind::Scanner
+                ) { None } else { Some(detected) },
                 detail,
                 candidate: (!settings.sources.iter().any(|s| s.id == source.id))
                     .then(|| source.clone()),
@@ -1110,11 +1205,11 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
     let mut cfg = TaskPulseConfig::default();
     cfg.monitoring.remote_codex.clear();
     let mut hosts = HashSet::new();
-    for source in settings
-        .sources
-        .iter()
-        .filter(|s| s.enabled && matches!(s.kind, SourceKind::RemoteCodex | SourceKind::Tmux))
-    {
+    for source in settings.sources.iter().filter(|s| {
+        settings.onboarding_complete
+            && s.enabled
+            && matches!(s.kind, SourceKind::RemoteCodex | SourceKind::Tmux)
+    }) {
         if hosts.insert(&source.location) {
             let tmux = settings
                 .sources
@@ -1158,6 +1253,45 @@ pub fn remote_config(settings: &DashboardSettings) -> TaskPulseConfig {
 mod tests {
     use super::*;
     #[test]
+    fn collector_discovery_ignores_late_generations_and_separates_process_evidence() {
+        let mut runtime = Runtime {
+            revision: 2,
+            ..Runtime::default()
+        };
+        let old = TaskSnapshot::new(
+            "ssh:one",
+            "old",
+            TaskSource::RemoteTmux,
+            crate::domain::TaskStatus::Running,
+            crate::domain::DetectionConfidence::Exact,
+            std::time::SystemTime::now(),
+        );
+        let mut anonymous = old.clone();
+        anonymous.id = "scan:codex:process".into();
+        anonymous.name = "unknown".into();
+        anonymous.source = TaskSource::Codex;
+        anonymous.confidence = crate::domain::DetectionConfidence::Inferred;
+        let mut file = old.clone();
+        file.id = "file:codex-wrapper".into();
+        file.source = TaskSource::Codex;
+        record_observations(&mut runtime, &[old], 1);
+        assert!(runtime.source_evidence.is_empty() && runtime.catalog.is_empty());
+        record_observations(&mut runtime, &[anonymous, file.clone(), file], 2);
+        assert!(runtime.source_evidence["scanner"].data_seen);
+        assert!(runtime.source_evidence["scanner"]
+            .discovered_sessions
+            .is_empty());
+        assert!(runtime.source_evidence["local_file"].data_seen);
+        assert_eq!(
+            runtime.source_evidence["local_file"]
+                .discovered_sessions
+                .len(),
+            1
+        );
+        assert!(!runtime.source_evidence.contains_key("codex"));
+    }
+
+    #[test]
     fn newly_supported_native_agents_join_opted_in_discovery_without_overriding_a_disabled_source()
     {
         let mut settings = from_legacy(&TaskPulseConfig::default(), false);
@@ -1169,7 +1303,7 @@ mod tests {
                 let s = settings.sources.iter().find(|s| s.kind == kind).unwrap();
                 SourceDiscovery {
                     id: s.id.clone(),
-                    available: true,
+                    data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
                 }
@@ -1222,7 +1356,7 @@ mod tests {
             &mut next,
             vec![SourceDiscovery {
                 id: "custom-zcode".into(),
-                available: true,
+                data_location_detected: Some(true),
                 detail: String::new(),
                 candidate: None
             }]
@@ -1237,19 +1371,19 @@ mod tests {
             vec![
                 SourceDiscovery {
                     id: "codex".into(),
-                    available: true,
+                    data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
                 },
                 SourceDiscovery {
                     id: "codex-wsl:ubuntu".into(),
-                    available: true,
+                    data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
                 },
                 SourceDiscovery {
                     id: "local_file".into(),
-                    available: true,
+                    data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
                 },
@@ -1278,7 +1412,7 @@ mod tests {
             &mut settings,
             vec![SourceDiscovery {
                 id: "codex".into(),
-                available: true,
+                data_location_detected: Some(true),
                 detail: String::new(),
                 candidate: Some(candidate)
             }]
@@ -1302,7 +1436,7 @@ mod tests {
             &mut absent,
             vec![SourceDiscovery {
                 id: "zcode".into(),
-                available: true,
+                data_location_detected: Some(true),
                 detail: String::new(),
                 candidate: None
             }]
@@ -1342,7 +1476,7 @@ mod tests {
         let rows = discover_source_rows_with_wsl(&settings, &discoveries);
         let candidates: Vec<_> = rows
             .iter()
-            .filter(|r| r.available)
+            .filter(|r| r.data_location_detected == Some(true))
             .filter_map(|r| r.candidate.as_ref())
             .filter(|s| s.kind == SourceKind::CodexWsl)
             .collect();
@@ -1357,14 +1491,14 @@ mod tests {
         settings.sources.push(manual.clone());
         let original = settings.clone();
         let rows = discover_source_rows_with_wsl(&settings, &discoveries);
-        assert!(rows
-            .iter()
-            .any(|r| r.id == manual.id && r.available && r.candidate.is_none()));
+        assert!(rows.iter().any(|r| r.id == manual.id
+            && r.data_location_detected == Some(true)
+            && r.candidate.is_none()));
         assert!(!rows.iter().any(|r| r.id == "codex-wsl:ubuntu"));
         // Stop/disconnect does not delete, disable or broaden a saved source.
         let stopped = discover_source_rows_with_wsl(&settings, &[]);
         let row = stopped.iter().find(|r| r.id == manual.id).unwrap();
-        assert!(!row.available && row.candidate.is_none());
+        assert!(row.data_location_detected != Some(true) && row.candidate.is_none());
         assert_eq!(settings, original);
 
         let mut docker = source(
@@ -1376,9 +1510,9 @@ mod tests {
         docker.enabled = true;
         settings.sources.push(docker.clone());
         let rows = discover_source_rows_with_wsl(&settings, &discoveries);
-        assert!(rows
-            .iter()
-            .any(|r| r.id == docker.id && !r.available && r.candidate.is_none()));
+        assert!(rows.iter().any(|r| r.id == docker.id
+            && r.data_location_detected != Some(true)
+            && r.candidate.is_none()));
         assert_eq!(settings.sources.last(), Some(&docker));
     }
 

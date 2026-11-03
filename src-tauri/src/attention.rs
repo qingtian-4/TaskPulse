@@ -293,8 +293,7 @@ impl AttentionTracker {
         // snapshot only when the user still owes it attention or pinned it.
         for (id, record) in &mut self.records {
             if !observed_ids.contains(id)
-                && record.task.status == TaskStatus::Running
-                && (record.unread || record.pinned)
+                && (record.task.status == TaskStatus::Running || record.task.requires_action())
             {
                 record.task.stale = true;
             }
@@ -1025,6 +1024,22 @@ mod tests {
         assert_eq!(tracker.mark_viewed("gate").unwrap().len(), 1);
         assert!(tracker.hide("gate").unwrap().is_empty());
         assert_eq!(tracker.restore("gate").unwrap().len(), 1);
+    }
+
+    #[test]
+    fn absent_viewed_request_becomes_stale_without_resolving_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut tracker = AttentionTracker::open(dir.path().join("attention.json"));
+        let mut gate = task("gate", TaskStatus::WaitingInput, Some("turn"));
+        gate.waiting_reason = Some(crate::domain::WaitingReason::Question);
+        gate.input_request_id = Some("request".into());
+        tracker.reconcile(vec![gate]);
+        tracker.mark_viewed("gate").unwrap();
+        tracker.reconcile(vec![]);
+        let known = tracker.known();
+        assert!(known[0].stale && !known[0].unread && !known[0].pinned);
+        assert!(known[0].requires_action());
+        assert_eq!(known[0].input_request_id.as_deref(), Some("request"));
     }
 
     fn task(id: &str, status: TaskStatus, turn: Option<&str>) -> TaskSnapshot {

@@ -35,7 +35,7 @@ try{
   original=await root.invoke('get_monitoring_settings');
   const discovery=await root.invoke('discover_sources');
   let source=original.sources.find((s:any)=>s.kind==='codex_wsl'&&s.location.toLowerCase()===distro.toLowerCase());
-  const candidate=discovery.find((s:any)=>s.available&&s.candidate?.kind==='codex_wsl'&&s.candidate.location.toLowerCase()===distro.toLowerCase());
+  const candidate=discovery.find((s:any)=>s.data_location_detected===true&&s.candidate?.kind==='codex_wsl'&&s.candidate.location.toLowerCase()===distro.toLowerCase());
   if(!source&&!candidate)throw Error('No running WSL candidate: '+distro);
   await root.invoke('plugin:window|show',{label:'popup'});
   await root.evaluate(`document.querySelector('[aria-label="管理监控来源"]').click()`);
