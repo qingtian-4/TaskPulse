@@ -13,12 +13,31 @@ await withSmokeWorkspace('dashboard-polish',async({owned,onStop})=>{
   const home=join(owned,'profile');await mkdir(home);
   const exe=join(owned,'agent-tray.exe');await copyFile(original,exe);
   if(await Bun.file(join(dirname(original),'WebView2Loader.dll')).exists())await copyFile(join(dirname(original),'WebView2Loader.dll'),join(owned,'WebView2Loader.dll'));
+  const focusState=join(owned,'focus-window.json'),focusControl=join(owned,'focus-control.json');
+  const focusWindow=spawn('powershell.exe',['-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',resolve(import.meta.dir,'native-focus-window.ps1'),'-StatePath',focusState,'-ControlPath',focusControl],{windowsHide:true,stdio:['ignore','ignore','pipe']});
+  let focusError='';focusWindow.stderr?.on('data',chunk=>focusError+=String(chunk));
+  focusWindow.once('error',error=>focusError+=String(error));
+  onStop(()=>stopOwnedChild(focusWindow));
+  type FocusState={pid:number;identity:string;hwnd:number;foreground:boolean;minimized:boolean;request_id:number;visible:boolean;identity_matches:boolean};
+  async function waitFocus(accept:(state:FocusState)=>boolean){
+    let last:FocusState|undefined;
+    for(let n=0;n<150;n++){
+      if(focusWindow.exitCode!==null||focusWindow.signalCode!==null)throw Error('Test-owned focus window exited: '+JSON.stringify({exitCode:focusWindow.exitCode,signal:focusWindow.signalCode,state:await Bun.file(focusState).json().catch(()=>undefined)})+' '+focusError);
+      const state:FocusState|undefined=await Bun.file(focusState).json().catch(()=>undefined);
+      if(state)last=state;
+      if(state&&accept(state))return state;
+      await Bun.sleep(100);
+    }
+    throw Error('Test-owned foreground/minimized state not reached: '+JSON.stringify(last)+' '+focusError);
+  }
+  const focusTarget=await waitFocus(state=>!!state.identity&&state.visible&&state.identity_matches);
+  assert.equal(focusTarget.pid,focusWindow.pid,'The fixture must own the observed window process');
   const now=Date.now();
   const tasks=[
     {id:'file:running',name:'验收：运行中的任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'run-1',confidence:'hook',remote:false,updated_at:now,started_at:now-60000,unread:true,pinned:false},
     {id:'file:done',name:'验收：未查看的结果',source:'local_file',source_instance:'local_file',status:'succeeded',turn_key:'done-1',confidence:'exact',remote:false,updated_at:now,finished_at:now,exit_code:0,unread:true,pinned:false},
     {id:'file:offline',name:'验收：离线任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'offline-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:false},
-    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:true,can_focus:true,terminal:{kind:'windows_native',focus_id:'4294967295',outer_id:'1:1:1',label:'Expired fixture window'}},
+    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:true,can_focus:true,terminal:{kind:'windows_native',focus_id:String(focusTarget.pid),outer_id:focusTarget.identity,label:'Test-owned focus window'}},
     {id:'scan:codex:anonymous',name:'unknown',source:'codex',source_instance:'scanner',status:'running',confidence:'inferred',remote:false,updated_at:now,unread:true,pinned:false},
   ];
   const records=Object.fromEntries(tasks.map(task=>[task.id,{task,unread:task.unread,pinned:task.pinned,pin_override:task.pinned?true:null,last_execution_at:now,last_turn_key:task.turn_key??null,last_status:task.status,hidden:false,ignored:false}]));
@@ -95,6 +114,32 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.deepEqual([...initial].sort(),['验收：运行中的任务','验收：未查看的结果','验收：手动固定'].sort());
   assert.equal(await root.evaluate(`!!document.querySelector('.pending-running,.filter-note,.quota')`),false,'Red-box content must be removed');
   const checks=['default task set excludes stale unpinned and anonymous scanner rows','removed red-box content'];
+  const focusEvidence=[];
+  for(const minimized of [false,true]){
+    console.log('Focus acceptance: initiallyMinimized='+minimized);
+    if(minimized){
+      await Bun.write(focusControl,JSON.stringify({id:1,action:'minimize'}));
+      await waitFocus(state=>state.request_id===1&&state.minimized);
+    }
+    await root.invoke('plugin:window|show',{label:'popup'});
+    await root.invoke('plugin:window|set_focus',{label:'popup'});
+    await root.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'popup'})`);
+    await waitFocus(state=>!state.foreground&&state.minimized===minimized);
+    const priorSelection=await root.invoke('get_selected_task');
+    const outcome=await root.invoke('open_task',{id:'file:pinned'});
+    assert.equal(outcome,'window_focused',JSON.stringify({build,target:focusTarget,current:await waitFocus(()=>true),task:(await root.invoke('get_agents')).find((t:any)=>t.id==='file:pinned'),outcome}));
+    const actual=await waitFocus(state=>state.foreground&&!state.minimized);
+    assert.equal(actual.hwnd,focusTarget.hwnd,'The originally observed window must actually become foreground');
+    assert.equal((await root.invoke('get_agents')).find((t:any)=>t.id==='file:pinned').unread,true);
+    const persisted=await Bun.file(join(home,'attention.json')).json();
+    assert.equal(persisted.records['file:pinned'].unread,true,'Successful focus must preserve durable unread state');
+    assert.deepEqual(await root.invoke('get_selected_task'),priorSelection,'Successful focus must not fall back to details');
+    focusEvidence.push({initiallyMinimized:minimized,foreground:actual.foreground,minimized:actual.minimized,unread:true});
+  }
+  checks.push('test-owned normal window actually becomes foreground without acknowledging its task',
+    'test-owned minimized window restores and actually becomes foreground without acknowledging its task');
+  await stopOwnedChild(focusWindow);
+  await root.invoke('plugin:window|show',{label:'popup'});
   await Bun.write(join(owned,'dashboard-light.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('状态待更新')).click()`);
   await root.wait(`document.querySelector('.task-scroll').textContent.includes('验收：离线任务')`);
@@ -210,6 +255,6 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.equal(selected.unread,true,'Falling back to details must preserve unread state');
   checks.push('expired native window reports failed focus and opens task details without marking it read');
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,focus:focusEvidence,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
   console.log('Dashboard polish acceptance passed:',checks.length,'checks');
 });
