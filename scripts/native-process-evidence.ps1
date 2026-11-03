@@ -7,10 +7,20 @@ function Write-EvidenceStage([string]$Stage) {
 }
 Write-EvidenceStage 'script-entry'
 . (Join-Path $PSScriptRoot 'installer-process.ps1')
+Write-EvidenceStage 'get-process'
 $owned=Get-Process -Id $ProcessId
 try {
+    Write-EvidenceStage 'open-process-handle'
     $handle=$owned.Handle
-    if ($owned.HasExited -or -not (Test-InstallerSameExecutable $owned.Path $Exe)) { throw 'Native evidence process ownership mismatch' }
+    Write-EvidenceStage 'check-process-exit'
+    if ($owned.HasExited) { throw 'Native evidence process ownership mismatch' }
+    Write-EvidenceStage 'read-process-path'
+    $actualPath=$owned.Path
+    if (-not $actualPath -or -not $Exe) { throw 'Native evidence process ownership mismatch' }
+    Write-EvidenceStage 'compile-installer-paths'
+    Initialize-InstallerPaths
+    Write-EvidenceStage 'compare-final-paths'
+    if (-not (Test-InstallerSameExecutable $actualPath $Exe)) { throw 'Native evidence process ownership mismatch' }
     Write-EvidenceStage 'verified-executable'
     if ($ChildrenOnly) {
         $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" | Select-Object -First 16 | ForEach-Object {
@@ -24,6 +34,7 @@ try {
         [pscustomobject]@{children=$children} | ConvertTo-Json -Depth 5 -Compress
         return
     }
+    Write-EvidenceStage 'compile-token-probe'
     Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;

@@ -67,7 +67,8 @@ await withSmokeWorkspace('development-native',async({owned,onStop})=>{
       try{
         const probe=await windowsTestProcess(powershell,[...args,...extra],timeout);
         if(probe.exitCode!==0)return {error:probe.stderr.slice(-1500),exit_code:probe.exitCode,timings:probe.timings};
-        try{return {...JSON.parse(probe.stdout),timings:probe.timings};}
+        const stages=probe.stderr.split(/\r?\n/).filter(line=>/^TaskPulseProbe stage=[a-z-]+ elapsed_ms=\d+$/.test(line)).slice(-32);
+        try{return {...JSON.parse(probe.stdout),timings:probe.timings,stages};}
         catch{return {error:'Invalid native process evidence',timings:probe.timings};}
       }catch(error){return {error:String(error)};}
     }
