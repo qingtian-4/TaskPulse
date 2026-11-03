@@ -38,6 +38,24 @@ test('both READMEs expose the actual one-line installation commands before isola
   expect(read('README.en.md')).not.toContain('install.sh | sh');
 });
 
+test('both READMEs separate installer builds from isolated development',()=>{
+  for(const [file,dev,build,contribute] of [
+    ['README.md','本地开发','从源码构建','贡献与许可'],
+    ['README.en.md','Develop locally','Build from source','Contributing and license'],
+  ]){
+    const body=read(file);
+    const devAt=body.indexOf('## '+dev+'\n');
+    const buildAt=body.indexOf('## '+build+'\n');
+    const contributeAt=body.indexOf('## '+contribute+'\n');
+    expect(devAt,file).toBeGreaterThanOrEqual(0);
+    expect(buildAt,file).toBeGreaterThan(devAt);
+    expect(contributeAt,file).toBeGreaterThan(buildAt);
+    expect(body.slice(devAt,buildAt),file).toContain('bun run dev:desktop');
+    expect(body.slice(buildAt,contributeAt),file).toContain('bun run tauri build');
+    expect(body.slice(buildAt,contributeAt),file).toContain('src-tauri/target/release/bundle/');
+  }
+});
+
 test('both READMEs show four native figures at half their actual PNG resolution',()=>{
   const figures=[['dashboard',368,840],['notice-input',320,132],['notice-approval',320,132],['notice-completed',320,132]] as const;
   for(const [name,width,height] of figures){

@@ -128,6 +128,16 @@ bun run dev:desktop
 
 这会启动真实托盘应用，使用独立开发配置。日常开发、便携测试包和按需安装验收见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
+## 从源码构建
+
+完成上一节的克隆和依赖安装后，在仓库根目录执行：
+
+```sh
+bun run tauri build
+```
+
+默认安装包输出到 `src-tauri/target/release/bundle/`。
+
 ## 贡献与许可
 
 欢迎[反馈问题](https://github.com/qingtian-4/TaskPulse/issues)、改进文档或贡献 Agent 适配器。[贡献指南](CONTRIBUTING.md) · [安全反馈](SECURITY.md) · [行为准则](CODE_OF_CONDUCT.md)
