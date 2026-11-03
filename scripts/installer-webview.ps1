@@ -36,8 +36,8 @@ function Invoke-InstallerCDPEvaluate($Socket, $Token, [string]$Expression, [int]
 function Invoke-InstallerWebViewProbe {
     param([string]$Url, [AllowEmptyCollection()][Collections.Generic.List[object]]$Trace, [int]$TimeoutMilliseconds=15000)
     $socket = New-Object System.Net.WebSockets.ClientWebSocket
-    $timeout = New-Object System.Threading.CancellationTokenSource($TimeoutMilliseconds)
     $clock = [Diagnostics.Stopwatch]::StartNew()
+    $timeout = New-Object System.Threading.CancellationTokenSource($TimeoutMilliseconds)
     $id = 0
     $stage = 'connect'
     try {
@@ -69,7 +69,7 @@ function Invoke-InstallerWebViewProbe {
             }
             Start-Sleep -Milliseconds 100
         }
-        if (-not $ready) { throw 'Native frontend readiness timed out' }
+        if (-not $ready) { throw [TimeoutException]::new('Native frontend readiness timed out') }
         $stage = 'ipc'; $id++
         $reply = Invoke-InstallerCDPEvaluate $socket $timeout.Token '(async()=>{const invoke=globalThis.__TAURI_INTERNALS__.invoke;const s=await invoke("get_monitoring_settings");const tasks=await invoke("get_agents");const prompts=await invoke("get_pending_task_prompts");return {embedded:!!document.querySelector(".dashboard"),onboarding:s.onboarding_complete,tasks:tasks.length,prompts:prompts.length};})()' $id $stage $clock
         $entry = @{stage=$stage;id=$id;elapsed_ms=$clock.ElapsedMilliseconds}
@@ -86,9 +86,26 @@ function Invoke-InstallerWebViewProbe {
         $entry.validated=$true; $Trace.Add($entry)
         return $value
     } catch {
-        if ($stage -eq 'readiness' -and $clock.ElapsedMilliseconds -ge $TimeoutMilliseconds) {
-            $Trace.Add(@{stage=$stage;elapsed_ms=$clock.ElapsedMilliseconds;failure='Native frontend readiness timed out'})
-            throw 'Native frontend readiness timed out'
+        # Use the actual cancellation, not a second clock's boundary. Windows
+        # PowerShell wraps awaiter exceptions; Framework ConnectAsync reports
+        # cancellation as WebException/RequestCanceled rather than OCE.
+        $cause = $_.Exception
+        $cancelled = $false
+        while ($null -ne $cause) {
+            if ($cause -is [OperationCanceledException] -or
+                ($stage -eq 'connect' -and $cause -is [Net.WebException] -and
+                 $cause.Status -eq [Net.WebExceptionStatus]::RequestCanceled)) { $cancelled=$true }
+            $cause = $cause.InnerException
+        }
+        if (($stage -eq 'readiness' -and $_.Exception -is [TimeoutException]) -or
+            ($timeout.IsCancellationRequested -and $cancelled)) {
+            $failure = switch ($stage) {
+                'connect' { 'Native CDP connection timed out' }
+                'readiness' { 'Native frontend readiness timed out' }
+                'ipc' { 'Native WebView IPC timed out' }
+            }
+            $Trace.Add(@{stage=$stage;elapsed_ms=$clock.ElapsedMilliseconds;failure=$failure;timeout=$true})
+            throw $failure
         }
         $Trace.Add(@{stage=$stage;elapsed_ms=$clock.ElapsedMilliseconds;failure=$_.Exception.Message})
         throw
