@@ -1,4 +1,4 @@
-param([Parameter(Mandatory=$true)][int]$ProcessId,[Parameter(Mandatory=$true)][string]$Exe,[int]$DebugPort)
+param([Parameter(Mandatory=$true)][int]$ProcessId,[Parameter(Mandatory=$true)][string]$Exe,[int]$DebugPort,[switch]$ChildrenOnly)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
 . (Join-Path $PSScriptRoot 'installer-process.ps1')
@@ -6,6 +6,17 @@ $owned=Get-Process -Id $ProcessId
 try {
     $handle=$owned.Handle
     if ($owned.HasExited -or -not (Test-InstallerSameExecutable $owned.Path $Exe)) { throw 'Native evidence process ownership mismatch' }
+    if ($ChildrenOnly) {
+        $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" | Select-Object -First 16 | ForEach-Object {
+            $version=$null
+            if ($_.ExecutablePath) { try {$version=[Diagnostics.FileVersionInfo]::GetVersionInfo($_.ExecutablePath).FileVersion} catch {} }
+            # Never export command lines; retain only the relevant browser switch.
+            $debug=if($_.CommandLine){$DebugPort -gt 0 -and $_.CommandLine -match ('--remote-debugging-port(?:=|\s+)"?'+$DebugPort+'(?:\D|$)')}else{$null}
+            [pscustomobject]@{pid=$_.ProcessId;name=$_.Name;file_version=$version;requested_debug_port=$debug}
+        })
+        [pscustomobject]@{children=$children} | ConvertTo-Json -Depth 5 -Compress
+        return
+    }
     Add-Type -TypeDefinition @'
 using System;
 using System.ComponentModel;
@@ -52,13 +63,6 @@ public static class TaskPulseTokenEvidence {
     }
 }
 '@
-    $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" | Select-Object -First 16 | ForEach-Object {
-        $version=$null
-        if ($_.ExecutablePath) { try {$version=[Diagnostics.FileVersionInfo]::GetVersionInfo($_.ExecutablePath).FileVersion} catch {} }
-        # Never export command lines; retain only the relevant browser switch.
-        $debug=if($_.CommandLine){$DebugPort -gt 0 -and $_.CommandLine -match ('--remote-debugging-port(?:=|\s+)"?'+$DebugPort+'(?:\D|$)')}else{$null}
-        [pscustomobject]@{pid=$_.ProcessId;name=$_.Name;file_version=$version;requested_debug_port=$debug}
-    })
     $title=[string]$owned.MainWindowTitle
-    [pscustomobject]@{pid=$ProcessId;owned_executable=$true;user_matches_caller=[TaskPulseTokenEvidence]::UserMatches($handle,[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);elevated=([TaskPulseTokenEvidence]::Read($handle,20) -ne 0);elevation_type=[TaskPulseTokenEvidence]::Read($handle,18);integrity_rid=[TaskPulseTokenEvidence]::Integrity($handle);main_window_title=$title.Substring(0,[Math]::Min(256,$title.Length));children=$children} | ConvertTo-Json -Depth 5 -Compress
+    [pscustomobject]@{pid=$ProcessId;owned_executable=$true;user_matches_caller=[TaskPulseTokenEvidence]::UserMatches($handle,[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);elevated=([TaskPulseTokenEvidence]::Read($handle,20) -ne 0);elevation_type=[TaskPulseTokenEvidence]::Read($handle,18);integrity_rid=[TaskPulseTokenEvidence]::Integrity($handle);main_window_title=$title.Substring(0,[Math]::Min(256,$title.Length))} | ConvertTo-Json -Depth 5 -Compress
 } finally {$owned.Dispose()}

@@ -57,13 +57,24 @@ await withSmokeWorkspace('development-native',async({owned,onStop})=>{
   const readinessMs=Math.round(performance.now()-started);
   // Collect after deciding readiness: diagnostics must not extend its deadline.
   let nativeProcess:any={unavailable:true};
+  let childDiagnostics:unknown;
   if(process.platform==='win32' && app.pid){
-    const probe=spawnSync(join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./native-process-evidence.ps1',import.meta.url)),'-ProcessId',String(app.pid),'-Exe',exe,'-DebugPort',String(port)],{encoding:'utf8',windowsHide:true,timeout:20000,maxBuffer:65536});
-    try{nativeProcess=probe.status===0?JSON.parse(probe.stdout):{error:probe.error?.message??probe.stderr.slice(-1500),exit_code:probe.status};}catch{nativeProcess={error:'Invalid native process evidence'};}
+    const powershell=join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe');
+    const script=fileURLToPath(new URL('./native-process-evidence.ps1',import.meta.url));
+    const args=['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-ProcessId',String(app.pid),'-Exe',exe];
+    function collect(extra:string[],timeout:number){
+      const probe=spawnSync(powershell,[...args,...extra],{encoding:'utf8',windowsHide:true,timeout,maxBuffer:65536});
+      try{return probe.status===0?JSON.parse(probe.stdout):{error:probe.error?.message??probe.stderr.slice(-1500),exit_code:probe.status};}
+      catch{return {error:'Invalid native process evidence'};}
+    }
+    nativeProcess=collect([],20000);
+    // CIM is only useful for diagnosing a missing browser target. Run it in
+    // its own bounded process so it cannot suppress the identity evidence.
+    if(!target)childDiagnostics=collect(['-ChildrenOnly','-DebugPort',String(port)],5000);
   }
   let browser:any;
   try{const value:any=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(1000)}).then(r=>r.json());browser={browser:value.Browser,protocol:value['Protocol-Version']};}catch{/* The absence of this endpoint is retained in startup evidence. */}
-  const startup=startupEvidence={commit:profile.commit,deadline_ms:24000,readiness_ms:readinessMs,elapsed_ms:Math.round(performance.now()-started),attempts,pid:app.pid,exit_code:app.exitCode,spawn_error:spawnError,stderr,last_http_status:lastHttpStatus,last_cdp_error:lastCdpError,pages:pages.slice(0,8).map(t=>({type:String(t.type??'').slice(0,32),route:String(t.url??'').split(/[?#]/)[0].slice(0,256)})),process:nativeProcess,browser};
+  const startup=startupEvidence={commit:profile.commit,deadline_ms:24000,readiness_ms:readinessMs,elapsed_ms:Math.round(performance.now()-started),attempts,pid:app.pid,exit_code:app.exitCode,spawn_error:spawnError,stderr,last_http_status:lastHttpStatus,last_cdp_error:lastCdpError,pages:pages.slice(0,8).map(t=>({type:String(t.type??'').slice(0,32),route:String(t.url??'').split(/[?#]/)[0].slice(0,256)})),process:nativeProcess,child_diagnostics:childDiagnostics,browser};
   if(!target)await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,phase:'native-startup',error:'Native development popup is missing',startup},null,2));
   assert.ok(target,'Native development popup is missing');
   async function connect(page:{webSocketDebuggerUrl:string}){
