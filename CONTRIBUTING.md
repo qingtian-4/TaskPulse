@@ -43,6 +43,8 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
 
 It reuses the repository's audit, documentation, release-contract, unit and native bridge checks, and builds into the separate `codex-check` target. Run the relevant `scripts/native-*-smoke.ts --exe <unused-built-exe>` for UI/window changes; on Windows, `native-development-smoke.ts` verifies automatic development isolation without a `TASKPULSE_HOME` override. Provider changes also need real-source validation when available. The opt-in live SSH/WSL tests must use an already available, explicitly selected source.
 
+Windows tray acceptance requires a clean binary for an explicit full commit SHA. Run `bun scripts/native-tray-smoke.ts --exe <unused-built-exe> --expected-commit <full-SHA> --callbacks-only`, then repeat with `--physical-only` during a quiet desktop interval. Reports retain the compiled commit, dirty flag, executable SHA-256 and separate cleanup evidence.
+
 ## Share a temporary test build
 
 Every successful **Windows quality** run uploads an **installation-free Windows development build**. Open its run summary for the download link and ZIP SHA-256, or download the artifact named `taskpulse-dev-windows-x64-<full-SHA>` with the GitHub CLI. Extract the whole ZIP into a new folder and run `agent-tray.exe`. The manifest identifies the exact source SHA, channel and per-file SHA-256 values; keep `WebView2Loader.dll` beside the executable when present. This uses the isolated development profile above, so the installed application can stay open.

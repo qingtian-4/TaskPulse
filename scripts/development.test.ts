@@ -3,10 +3,20 @@ import {mkdtempSync,writeFileSync,mkdirSync,readFileSync,rmSync,symlinkSync} fro
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {developmentConfig} from './develop';
-import {stageDevelopment} from './development-artifact';
+import {stageDevelopment,verifyDevelopmentBuild} from './development-artifact';
 import {sha256} from './release';
 import {windowsTestProcess} from './windows-test-process';
 const read=(path:string)=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
+
+test('native acceptance rejects stale, dirty or unidentifiable builds',()=>{
+  const commit='a'.repeat(40);
+  const build={channel:'development',commit,modified:false,version:'1.0.2'};
+  expect(()=>verifyDevelopmentBuild(build,commit,'1.0.2')).not.toThrow();
+  for(const change of [{modified:true},{modified:undefined},{commit:'b'.repeat(40)},{channel:'release'},{version:'1.0.1'}]){
+    expect(()=>verifyDevelopmentBuild({...build,...change},commit,'1.0.2')).toThrow('does not match');
+  }
+  expect(()=>verifyDevelopmentBuild(build,'main','1.0.2')).toThrow('full source SHA');
+});
 
 test('parallel worktrees use separate development identities and exact loopback HMR origins',()=>{
   const a=developmentConfig('/worktree-a',5333),b=developmentConfig('/worktree-b',5444);

@@ -4,17 +4,36 @@ import {copyFile,mkdir} from 'node:fs/promises';
 import {join,resolve,dirname} from 'node:path';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
+import {createReadStream} from 'node:fs';
+import {createHash} from 'node:crypto';
 import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
+import {windowsTestProcess} from './windows-test-process';
+import {verifyDevelopmentBuild} from './development-artifact';
 const at=process.argv.indexOf('--exe');if(at<0)throw Error('--exe required');
 const original=resolve(process.argv[at+1]);
+const expectedAt=process.argv.indexOf('--expected-commit');
+const expectedCommit=expectedAt>=0?process.argv[expectedAt+1]:'';
+assert.match(expectedCommit??'',/^[a-f0-9]{40}$/,'--expected-commit requires the full source SHA');
+const version=(await Bun.file(new URL('../package.json',import.meta.url)).json()).version;
+async function fileSha256(path:string){
+  const hash=createHash('sha256');
+  for await(const chunk of createReadStream(path))hash.update(chunk);
+  return hash.digest('hex');
+}
 const reproduce=process.argv.includes('--reproduce');
 const callbacksOnly=process.argv.includes('--callbacks-only');
 const physicalOnly=process.argv.includes('--physical-only');
+assert.ok([reproduce,callbacksOnly,physicalOnly].filter(Boolean).length<=1,'Choose one native acceptance mode');
 await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
   const home=join(owned,'profile');await mkdir(home);
   await Bun.write(join(home,'config.toml'),'[dashboard]\nversion=2\nonboarding_complete=true\nauto_discover_local=false\nauto_check_updates=false\nnotifications=false\nsound=false\n[dashboard.preferences]\nshow_on_start=false\nlanguage="zh-CN"\n');
   const exe=join(owned,'agent-tray.exe');await copyFile(original,exe);
   if(await Bun.file(join(dirname(original),'WebView2Loader.dll')).exists())await copyFile(join(dirname(original),'WebView2Loader.dll'),join(owned,'WebView2Loader.dll'));
+  const executableSha256=await fileSha256(original);
+  assert.equal(await fileSha256(exe),executableSha256,'Test executable copy must match the supplied file');
+  const profileInfo=await windowsTestProcess(exe,['--profile-info'],15000);
+  assert.equal(profileInfo.exitCode,0,profileInfo.stderr);
+  verifyDevelopmentBuild(JSON.parse(profileInfo.stdout),expectedCommit,version);
   const server=createServer();await new Promise<void>(ok=>server.listen(0,'127.0.0.1',ok));
   const port=(server.address() as {port:number}).port;await new Promise<void>(ok=>server.close(()=>ok()));
   let driver:ChildProcess|undefined;let stderr='',lines='';const sockets:WebSocket[]=[];
@@ -45,6 +64,13 @@ await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
   }
   const root=await connect();await root.wait(`!!document.querySelector('.dashboard')`);
   const build=await root.invoke('get_build_info');assert.equal(build.process_id,app.pid);
+  verifyDevelopmentBuild(build,expectedCommit,version);
+  const mode=physicalOnly?'physical-only':callbacksOnly?'callbacks-only':reproduce?'reproduce':'full';
+  async function result(report:Record<string,unknown>){
+    assert.equal(await fileSha256(exe),executableSha256,'The tested executable changed during acceptance');
+    assert.equal(await fileSha256(original),executableSha256,'The supplied executable changed during acceptance');
+    await Bun.write(join(owned,'result.json'),JSON.stringify({...report,build,mode,expected_commit:expectedCommit,executable_sha256:executableSha256},null,2));
+  }
   await root.evaluate(`window.__trayProbe=[];window.addEventListener('blur',()=>window.__trayProbe.push({event:'blur',at:performance.now()}));window.addEventListener('focus',()=>window.__trayProbe.push({event:'focus',at:performance.now()}));`);
   const statePath=join(owned,'state.json'),control=join(owned,'control.json');
   driver=spawn('powershell.exe',['-NoProfile','-NonInteractive','-STA','-ExecutionPolicy','Bypass','-File',resolve(import.meta.dir,'native-tray-driver.ps1'),'-AppProcessId',String(app.pid),'-Exe',exe,'-StatePath',statePath,'-ControlPath',control],{windowsHide:true,stdio:['ignore','ignore','pipe']});
@@ -110,7 +136,7 @@ await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
       console.log('Physical long press and double-click passed');
       }
       if(physicalOnly){
-        await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,backendInputs,physicalEvidence},null,2));
+        await result({passed:true,checks,backendInputs,physicalEvidence});
         return;
       }
       mark=(await waitState(()=>true)).events.length;
@@ -161,8 +187,8 @@ await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
       }
       checks.push('actual multi-monitor opening, work-area fitting and pinned focus loss');
       state=await waitState(()=>true);assert.equal(state.overflow,false);assert.deepEqual(await root.invoke('get_agents'),[]);
-      await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,rounds:100,roundTransitions:['show,hide'],backendInputs,physicalPointVerified:state.physical_point_verified,monitors:monitorEvidence},null,2));
-    }else await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,reproduce,events:afterRelease.events.slice(start),beforeRelease},null,2));
+      await result({passed:true,checks,rounds:100,roundTransitions:['show,hide'],backendInputs,physicalPointVerified:state.physical_point_verified,monitors:monitorEvidence});
+    }else await result({passed:true,checks,reproduce,events:afterRelease.events.slice(start),beforeRelease});
     console.log('Native tray acceptance passed:',checks.length,'checks');
   }catch(error){
     await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),build,last,backendInputs,physicalEvidence,stderr,frontend:await root.evaluate('window.__trayProbe').catch(()=>[]),driverError},null,2));
