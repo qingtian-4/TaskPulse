@@ -1,11 +1,17 @@
 param([Parameter(Mandatory=$true)][int]$ProcessId,[Parameter(Mandatory=$true)][string]$Exe,[int]$DebugPort,[switch]$ChildrenOnly)
 $ErrorActionPreference='Stop'
 [Console]::OutputEncoding=[Text.UTF8Encoding]::new($false)
+$clock = [Diagnostics.Stopwatch]::StartNew()
+function Write-EvidenceStage([string]$Stage) {
+    [Console]::Error.WriteLine(("TaskPulseProbe stage={0} elapsed_ms={1}" -f $Stage,$clock.ElapsedMilliseconds))
+}
+Write-EvidenceStage 'script-entry'
 . (Join-Path $PSScriptRoot 'installer-process.ps1')
 $owned=Get-Process -Id $ProcessId
 try {
     $handle=$owned.Handle
     if ($owned.HasExited -or -not (Test-InstallerSameExecutable $owned.Path $Exe)) { throw 'Native evidence process ownership mismatch' }
+    Write-EvidenceStage 'verified-executable'
     if ($ChildrenOnly) {
         $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" | Select-Object -First 16 | ForEach-Object {
             $version=$null
@@ -14,6 +20,7 @@ try {
             $debug=if($_.CommandLine){$DebugPort -gt 0 -and $_.CommandLine -match ('--remote-debugging-port(?:=|\s+)"?'+$DebugPort+'(?:\D|$)')}else{$null}
             [pscustomobject]@{pid=$_.ProcessId;name=$_.Name;file_version=$version;requested_debug_port=$debug}
         })
+        Write-EvidenceStage 'queried-children'
         [pscustomobject]@{children=$children} | ConvertTo-Json -Depth 5 -Compress
         return
     }
@@ -63,6 +70,8 @@ public static class TaskPulseTokenEvidence {
     }
 }
 '@
+    Write-EvidenceStage 'loaded-token-probe'
     $title=[string]$owned.MainWindowTitle
     [pscustomobject]@{pid=$ProcessId;owned_executable=$true;user_matches_caller=[TaskPulseTokenEvidence]::UserMatches($handle,[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);elevated=([TaskPulseTokenEvidence]::Read($handle,20) -ne 0);elevation_type=[TaskPulseTokenEvidence]::Read($handle,18);integrity_rid=[TaskPulseTokenEvidence]::Integrity($handle);main_window_title=$title.Substring(0,[Math]::Min(256,$title.Length))} | ConvertTo-Json -Depth 5 -Compress
+    Write-EvidenceStage 'wrote-identity'
 } finally {$owned.Dispose()}
