@@ -18,6 +18,20 @@ test('native acceptance rejects stale, dirty or unidentifiable builds',()=>{
   expect(()=>verifyDevelopmentBuild(build,'main','1.0.2')).toThrow('full source SHA');
 });
 
+test('native identity probe works in a cold session with module autoload disabled',async()=>{
+  if(process.platform!=='win32')return;
+  const {fileURLToPath}=await import('node:url');
+  const probe=fileURLToPath(new URL('./native-process-evidence.ps1',import.meta.url)).replaceAll("'","''");
+  const result=await windowsTestProcess('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',
+    `$PSModuleAutoLoadingPreference='None';$nativeExe=[Diagnostics.Process]::GetCurrentProcess().MainModule.FileName;& '${probe}' -ProcessId $PID -Exe $nativeExe`],20000);
+  expect(result.exitCode,result.stderr).toBe(0);
+  const identity=JSON.parse(result.stdout);
+  expect(identity.owned_executable).toBe(true);
+  expect(identity.user_matches_caller).toBe(true);
+  expect(typeof identity.elevated).toBe('boolean');
+  expect(identity.integrity_rid).toBeGreaterThan(0);
+},25000);
+
 test('parallel worktrees use separate development identities and exact loopback HMR origins',()=>{
   const a=developmentConfig('/worktree-a',5333),b=developmentConfig('/worktree-b',5444);
   expect(a.identifier).not.toBe(b.identifier);expect(a.bundle.active).toBe(false);

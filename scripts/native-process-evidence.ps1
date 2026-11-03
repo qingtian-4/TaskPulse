@@ -6,8 +6,8 @@ function Write-EvidenceStage([string]$Stage) {
     [Console]::Error.WriteLine(("TaskPulseProbe stage={0} elapsed_ms={1}" -f $Stage,$clock.ElapsedMilliseconds))
 }
 Write-EvidenceStage 'script-entry'
-# The sibling path is already absolute. Avoid PowerShell provider resolution
-# here, which stalled before Get-Process on fresh hosted standard accounts.
+# Compute the known sibling path without requiring a provider cmdlet during
+# the short-lived probe's bootstrap.
 $installerPaths = [IO.Path]::Combine($PSScriptRoot, 'installer-process.ps1')
 Write-EvidenceStage 'load-installer-paths'
 . $installerPaths
@@ -23,6 +23,15 @@ try {
     Write-EvidenceStage 'read-process-path'
     $actualPath=$owned.MainModule.FileName
     if (-not $actualPath -or -not $Exe) { throw 'Native evidence process ownership mismatch' }
+    # A fresh standard-account session can stall while auto-discovering its
+    # first module command. Import the required inbox module by trusted path,
+    # within the same probe deadline, before resolving its compiler/serializer.
+    Write-EvidenceStage 'import-utility-module'
+    $importModule=$ExecutionContext.InvokeCommand.GetCommand('Import-Module',[Management.Automation.CommandTypes]::Cmdlet)
+    if ($null -eq $importModule) { throw 'Native evidence module loader unavailable' }
+    $utilityModule=[IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Utility','Microsoft.PowerShell.Utility.psd1')
+    & $importModule -Name $utilityModule -Scope Local -ErrorAction Stop
+    Write-EvidenceStage 'imported-utility-module'
     Write-EvidenceStage 'resolve-add-type'
     $addTypeCommand=$ExecutionContext.InvokeCommand.GetCommand('Add-Type',[Management.Automation.CommandTypes]::Cmdlet)
     if ($null -eq $addTypeCommand) { throw 'Native evidence compiler command unavailable' }
