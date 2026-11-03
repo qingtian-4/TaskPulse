@@ -1,6 +1,6 @@
 [package]
 name        = "agent-tray"
-version     = "1.0.1"
+version     = "1.0.2"
 edition     = "2021"
 rust-version = "1.90"
 description = "TaskPulse - Attention dashboard for AI coding-agent tasks"
@@ -36,7 +36,7 @@ sys-locale = "0.3"
 [target.'cfg(target_os = "windows")'.dependencies]
 windows-registry = "0.6.1"
 winrt-notification = { package = "tauri-winrt-notification", version = "0.8.1" }
-windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_WindowsAndMessaging"] }
+windows-sys = { version = "0.61.2", features = ["Win32_Foundation", "Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_JobObjects", "Win32_System_Pipes", "Win32_System_Threading", "Win32_System_Diagnostics_ToolHelp", "Win32_UI_WindowsAndMessaging", "Win32_UI_Shell", "Win32_UI_Input_KeyboardAndMouse"] }
 
 [build-dependencies]
 tauri-build = { version = "2", features = [] }

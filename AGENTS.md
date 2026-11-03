@@ -109,6 +109,8 @@ The tray PNGs are compile-time embedded. Do not add `icons/tray-*.png` back to T
 
 Windows WebView2 creation must use async commands or a separate thread, never synchronous IPC/event handlers. Keep the narrowly scoped `ipc:` / `http://ipc.localhost` CSP connect permissions; actual native IPC/window tests catch failures that browser mocks cannot.
 
+Popup visibility belongs to the backend `popup_interaction` coordinator. Frontend focus handlers refresh content only. A Windows tray press decides once; release, native double-click and late WebView readiness cannot invert a newer intent. Update controller state and release its lock before native setters. Native menu observation is restricted to the app-owned tray window; development acceptance must not take the installed app's global shortcut.
+
 Reminder delivery defaults to the independent TaskPulse popup (`dashboard.notification_mode=popup`, alternatives `system`/`both`). The master `notifications` switch covers all channels. Only lifecycle events trigger task alerts; tests are explicitly labelled and never imported as monitored tasks. Run `scripts/native-notice-smoke.ts` for actual popup visual/click/focus acceptance, not just system notification API success.
 
 While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps1`; it builds into `src-tauri/target/codex-check`, so the linker never replaces the live executable. To rebuild the executable used by the tray itself, stop only the workspace-owned process, run the normal build, and restart it. Never kill unrelated processes by name without verifying their executable path.

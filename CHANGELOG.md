@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased · 1.0.2
+
+Fix Windows tray clicks reopening the task panel after focus loss. Add Settings to the tray menu, and make Show and Hide idempotent.
+
+修复 Windows 托盘失焦隐藏后松开鼠标又打开的问题。右键菜单增加“设置”，“显示”和“隐藏”分别保持单一动作。
+
 ## 1.0.1 · 2026-10-31
 
 Fix macOS command-line installation when optional release metadata fields are absent. [Release details](docs/releases/1.0.1.md)

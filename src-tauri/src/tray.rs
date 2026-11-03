@@ -15,6 +15,7 @@ use tauri::{AppHandle, Emitter, Listener, Manager, WebviewUrl};
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 use crate::domain::{TaskSnapshot, TaskStatus, WaitingReason};
+use crate::popup_interaction::{FocusContext, Input, Popup};
 use crate::providers::{HostStatus, ProviderStatus};
 use crate::watcher::DashboardSnapshot;
 
@@ -42,7 +43,7 @@ impl AppliedPresentation {
         self.tooltip.as_deref() != Some(tooltip)
     }
 }
-static PINNED: AtomicBool = AtomicBool::new(false);
+static POPUP: Mutex<Popup> = Mutex::new(Popup::new());
 static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 
 // Keep text readable; the narrow CSS layout reduces spacing instead of fonts.
@@ -204,82 +205,212 @@ pub fn update_icon(app: &AppHandle, snapshot: &DashboardSnapshot) {
     }
 }
 
-pub fn pin_popup(app: &AppHandle) {
-    PINNED.store(true, Ordering::SeqCst);
-    set_popup_always_on_top(app, true);
-    let _ = app.emit("pinned-changed", true);
-
-    if let Some(win) = app.get_webview_window("popup") {
-        if !win.is_visible().unwrap_or(false) {
-            let _ = win.show();
-            let _ = win.set_focus();
-            emit_current_state(app);
-        }
-        return;
-    }
-
-    toggle_popup(app);
+#[derive(Debug)]
+enum PopupEvent {
+    Intent(Input),
+    FocusChanged,
+    #[cfg(windows)]
+    MenuClosed,
+    #[cfg(windows)]
+    TrayLeft,
 }
 
-pub fn toggle_popup(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("popup") {
-        if win.is_visible().unwrap_or(false) {
-            PINNED.store(false, Ordering::SeqCst);
-            set_popup_always_on_top(app, false);
-            let _ = app.emit("pinned-changed", false);
-            if !crate::runtime::isolated() {
-                let _ = app.save_window_state(StateFlags::POSITION);
+fn focus_context(app: &AppHandle) -> FocusContext {
+    #[cfg(windows)]
+    let same_process = crate::tray_windows::foreground_in_process();
+    let Some(win) = app.get_webview_window("popup") else {
+        return FocusContext::default();
+    };
+    let cursor = win.cursor_position().ok();
+    let over_popup = cursor
+        .zip(win.outer_position().ok())
+        .zip(win.outer_size().ok())
+        .is_some_and(|((point, position), size)| {
+            point.x >= f64::from(position.x)
+                && point.y >= f64::from(position.y)
+                && point.x < f64::from(position.x) + f64::from(size.width)
+                && point.y < f64::from(position.y) + f64::from(size.height)
+        });
+    #[cfg(windows)]
+    let over_popup = over_popup && same_process;
+    #[cfg(windows)]
+    let over_tray = cursor
+        .zip(app.tray_by_id("main").and_then(|t| t.rect().ok().flatten()))
+        .is_some_and(|(point, rect)| {
+            let position = rect.position.to_physical::<i32>(1.0);
+            let size = rect.size.to_physical::<u32>(1.0);
+            point.x >= f64::from(position.x)
+                && point.y >= f64::from(position.y)
+                && point.x < f64::from(position.x) + f64::from(size.width)
+                && point.y < f64::from(position.y) + f64::from(size.height)
+        });
+    #[cfg(not(windows))]
+    let over_tray = false;
+    #[cfg(windows)]
+    let (focused, visible) = crate::tray_windows::window_state(&win);
+    #[cfg(not(windows))]
+    let (focused, visible) = (
+        win.is_focused().unwrap_or(false),
+        win.is_visible().unwrap_or(false),
+    );
+    FocusContext {
+        focused,
+        visible,
+        over_popup,
+        over_tray,
+        #[cfg(windows)]
+        button_down: crate::tray_windows::tray_button_down(),
+        #[cfg(not(windows))]
+        button_down: false,
+        #[cfg(windows)]
+        tray_host_focused: crate::tray_windows::tray_host_focused(),
+        #[cfg(not(windows))]
+        tray_host_focused: false,
+        #[cfg(windows)]
+        same_process,
+        #[cfg(not(windows))]
+        same_process: false,
+    }
+}
+
+fn dispatch_popup(app: &AppHandle, event: PopupEvent) {
+    let handle = app.clone();
+    if let Err(error) = app.run_on_main_thread(move || {
+        let input = match event {
+            PopupEvent::Intent(input) => input,
+            PopupEvent::FocusChanged => Input::Focus(focus_context(&handle)),
+            #[cfg(windows)]
+            PopupEvent::MenuClosed => Input::MenuClosed(focus_context(&handle)),
+            #[cfg(windows)]
+            PopupEvent::TrayLeft => Input::TrayLeft(focus_context(&handle)),
+        };
+        let effects = {
+            let mut popup = POPUP.lock().unwrap_or_else(|e| e.into_inner());
+            let effects = popup.apply(input);
+            log::debug!(
+                "Popup input={input:?} visible={} pinned={} effects={effects:?}",
+                popup.visible,
+                popup.pinned
+            );
+            effects
+        };
+        // Native setters can synchronously emit follow-up focus/window events.
+        // The authoritative state is updated and its lock released first.
+        if let Some(pinned) = effects.pin {
+            set_popup_always_on_top(&handle, pinned);
+            let _ = handle.emit("pinned-changed", pinned);
+        }
+        if let Some(win) = handle.get_webview_window("popup") {
+            if effects.hide {
+                if !crate::runtime::isolated() {
+                    let _ = handle.save_window_state(StateFlags::POSITION);
+                }
+                if let Err(error) = win.hide() {
+                    log::warn!("Cannot hide popup: {error}");
+                }
             }
-            let _ = win.hide();
-            return;
+            if effects.show {
+                let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true);
+                if let Err(error) = win.show() {
+                    log::warn!("Cannot show popup: {error}");
+                }
+            }
+            if effects.opened {
+                let _ = handle.emit("popup-opened", ());
+                emit_current_state(&handle);
+            }
+            if effects.focus {
+                if let Err(error) = win.set_focus() {
+                    log::warn!("Cannot focus popup: {error}");
+                }
+            }
+        } else if effects.create && !POPUP_CREATING.swap(true, Ordering::AcqRel) {
+            let app = handle.clone();
+            std::thread::spawn(move || {
+                create_popup(&app);
+                POPUP_CREATING.store(false, Ordering::Release);
+            });
         }
-        let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true);
-        set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
-        let _ = win.show();
-        let _ = app.emit("popup-opened", ());
-        let _ = win.set_focus();
-        emit_current_state(app);
-        return;
+    }) {
+        log::warn!("Cannot schedule popup interaction: {error}");
     }
-
-    show_popup(app);
 }
 
-/// Notification activation must show, never toggle/hide an existing popup.
-pub fn show_popup(app: &AppHandle) {
-    if let Some(win) = app.get_webview_window("popup") {
-        let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true);
-        set_popup_always_on_top(app, PINNED.load(Ordering::SeqCst));
-        let was_hidden = !win.is_visible().unwrap_or(false);
-        let _ = win.show();
-        if was_hidden {
-            let _ = app.emit("popup-opened", ());
-        }
-        let _ = win.set_focus();
-        emit_current_state(app);
+pub fn handle_tray_event(app: &AppHandle, event: tauri::tray::TrayIconEvent) {
+    use tauri::tray::{MouseButton, MouseButtonState, TrayIconEvent};
+    #[cfg(windows)]
+    if matches!(&event, TrayIconEvent::Leave { .. }) {
+        dispatch_popup(app, PopupEvent::TrayLeft);
         return;
     }
+    #[cfg(windows)]
+    let input = match event {
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Down,
+            ..
+        } => Some(Input::TrayDown),
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } => Some(Input::TrayUp),
+        TrayIconEvent::DoubleClick {
+            button: MouseButton::Left,
+            ..
+        } => Some(Input::TrayDouble),
+        TrayIconEvent::Click {
+            button: MouseButton::Right,
+            button_state: MouseButtonState::Down,
+            ..
+        } => Some(Input::TrayMenuDown),
+        _ => None,
+    };
+    #[cfg(not(windows))]
+    let input = match event {
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Down,
+            ..
+        } => Some(Input::PlatformDown),
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        } => Some(Input::PlatformUp),
+        _ => None,
+    };
+    if let Some(input) = input {
+        dispatch_popup(app, PopupEvent::Intent(input));
+    }
+}
 
-    // WebView2 window creation deadlocks inside synchronous IPC/event handlers.
-    // Tray clicks and notification activation can reach this before a popup exists.
-    if POPUP_CREATING.swap(true, Ordering::AcqRel) {
-        return;
-    }
-    let app = app.clone();
-    std::thread::spawn(move || {
-        create_popup(&app);
-        POPUP_CREATING.store(false, Ordering::Release);
-    });
+pub fn shortcut(app: &AppHandle, pressed: bool) {
+    dispatch_popup(app, PopupEvent::Intent(Input::Shortcut(pressed)));
+}
+
+#[cfg(windows)]
+pub fn menu_opened(app: &AppHandle) {
+    dispatch_popup(app, PopupEvent::Intent(Input::MenuOpened));
+}
+#[cfg(windows)]
+pub fn menu_closed(app: &AppHandle) {
+    dispatch_popup(app, PopupEvent::MenuClosed);
+}
+
+pub fn pin_popup(app: &AppHandle) {
+    dispatch_popup(app, PopupEvent::Intent(Input::Pin));
+}
+
+/// Notifications, task selection and the menu's Show are idempotent requests.
+pub fn show_popup(app: &AppHandle) {
+    dispatch_popup(app, PopupEvent::Intent(Input::Show));
 }
 
 fn create_popup(app: &AppHandle) {
     let ready = app.clone();
-    app.once("popup-ready", move |_| {
-        if let Some(win) = ready.get_webview_window("popup") {
-            let _ = win.show();
-            let _ = win.set_focus();
-        }
-        emit_current_state(&ready);
+    let listener = app.once("popup-ready", move |_| {
+        dispatch_popup(&ready, PopupEvent::Intent(Input::Ready));
     });
     let builder = WebviewWindowBuilder::new(app, "popup", WebviewUrl::default());
     let builder = if crate::runtime::isolated() {
@@ -302,13 +433,21 @@ fn create_popup(app: &AppHandle) {
         .shadow(false)
         .transparent(true)
         .background_color(Color(0, 0, 0, 0))
-        .always_on_top(PINNED.load(Ordering::SeqCst))
+        .always_on_top(get_pinned())
         .skip_taskbar(true)
         .resizable(false)
         .visible(false)
         .build()
     {
         Ok(win) => {
+            let events = app.clone();
+            win.on_window_event(move |event| match event {
+                tauri::WindowEvent::Focused(_) => dispatch_popup(&events, PopupEvent::FocusChanged),
+                tauri::WindowEvent::Destroyed => {
+                    dispatch_popup(&events, PopupEvent::Intent(Input::Destroyed))
+                }
+                _ => {}
+            });
             let _ = fit_popup(&win, DASHBOARD_MAX_HEIGHT, false);
             #[cfg(target_os = "linux")]
             {
@@ -320,12 +459,25 @@ fn create_popup(app: &AppHandle) {
                     .output();
             }
         }
-        Err(e) => log::error!("Failed to create popup window: {e}"),
+        Err(e) => {
+            app.unlisten(listener);
+            dispatch_popup(app, PopupEvent::Intent(Input::Destroyed));
+            log::error!("Failed to create popup window: {e}");
+        }
     }
 }
 
 #[tauri::command]
 pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<(), String> {
+    dispatch_popup(&app, PopupEvent::Intent(Input::Management(true)));
+    let result = open_management_window(app.clone(), section).await;
+    if result.is_err() && app.get_webview_window("management").is_none() {
+        dispatch_popup(&app, PopupEvent::Intent(Input::Management(false)));
+    }
+    result
+}
+
+async fn open_management_window(app: AppHandle, section: Option<String>) -> Result<(), String> {
     let section = management_section(section.as_deref());
     if let Some(win) = app.get_webview_window("management") {
         if let Some(section) = section {
@@ -429,6 +581,7 @@ pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<
             }
         }
         if matches!(event, tauri::WindowEvent::Destroyed) {
+            dispatch_popup(&app, PopupEvent::Intent(Input::Management(false)));
             let _ = app.emit("management-closed", ());
         }
     });
@@ -563,32 +716,16 @@ fn emit_current_state(app: &AppHandle) {
 
 #[tauri::command]
 pub fn toggle_pin(app: AppHandle) {
-    let pinned = if PINNED.load(Ordering::SeqCst) {
-        PINNED.store(false, Ordering::SeqCst);
-        false
-    } else {
-        PINNED.store(true, Ordering::SeqCst);
-        true
-    };
-    set_popup_always_on_top(&app, pinned);
-    let _ = app.emit("pinned-changed", pinned);
+    dispatch_popup(&app, PopupEvent::Intent(Input::TogglePin));
 }
 
 pub fn hide_popup(app: &AppHandle) {
-    PINNED.store(false, Ordering::SeqCst);
-    set_popup_always_on_top(app, false);
-    let _ = app.emit("pinned-changed", false);
-    if let Some(win) = app.get_webview_window("popup") {
-        if !crate::runtime::isolated() {
-            let _ = app.save_window_state(StateFlags::POSITION);
-        }
-        let _ = win.hide();
-    }
+    dispatch_popup(app, PopupEvent::Intent(Input::Hide));
 }
 
 #[tauri::command]
 pub fn get_pinned() -> bool {
-    PINNED.load(Ordering::SeqCst)
+    POPUP.lock().unwrap_or_else(|e| e.into_inner()).pinned
 }
 
 fn set_popup_always_on_top(app: &AppHandle, pinned: bool) {
