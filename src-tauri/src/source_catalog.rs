@@ -1,5 +1,6 @@
 //! The UI discovers supported connections from data, not per-brand UI branches.
-use crate::monitoring::SourceKind;
+use crate::integrations::manifest::Manifest;
+use crate::monitoring::{SourceConfig, SourceKind};
 use serde::Serialize;
 
 #[derive(Serialize)]
@@ -14,7 +15,178 @@ pub struct SourceDefinition {
     pub platforms: Vec<String>,
     pub adapter_id: Option<String>,
     pub agent_id: Option<String>,
-    pub capabilities: serde_json::Value,
+    pub capabilities: Capabilities,
+    pub verified_platforms: Vec<String>,
+    pub default_source: Option<SourceConfig>,
+}
+/// Catalog claims describe what a reader can observe, never authorize action.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Evidence {
+    Unsupported,
+    Explicit,
+    Inferred,
+    Hook,
+    Producer,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReturnTarget {
+    Details,
+    HostWindow,
+}
+
+#[derive(Debug, Serialize)]
+pub struct Capabilities {
+    pub discovery: Evidence,
+    pub model: Evidence,
+    pub turn_start: Evidence,
+    pub turn_end: Evidence,
+    pub approval: Evidence,
+    pub question: Evidence,
+    pub return_target: ReturnTarget,
+}
+
+fn native_capabilities(kind: SourceKind) -> Capabilities {
+    use Evidence::*;
+    use SourceKind::*;
+    let (discovery, model, turn_start, turn_end, approval, question, return_target) = match kind {
+        Codex | CodexWsl => (
+            Explicit,
+            Explicit,
+            Explicit,
+            Explicit,
+            Hook,
+            Explicit,
+            ReturnTarget::Details,
+        ),
+        RemoteCodex => (
+            Explicit,
+            Explicit,
+            Inferred,
+            Inferred,
+            Unsupported,
+            Explicit,
+            ReturnTarget::Details,
+        ),
+        ClaudeCode => (
+            Explicit,
+            Explicit,
+            Inferred,
+            Explicit,
+            Hook,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
+        Hermes => (
+            Explicit,
+            Explicit,
+            Inferred,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
+        DeepseekDesktop | DeepseekWsl => (
+            Explicit,
+            Explicit,
+            Inferred,
+            Explicit,
+            Unsupported,
+            Explicit,
+            ReturnTarget::Details,
+        ),
+        Opencode | Workbuddy | Zcode => (
+            Explicit,
+            Explicit,
+            Inferred,
+            Explicit,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
+        Doubao => (
+            Explicit,
+            Unsupported,
+            Inferred,
+            Explicit,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
+        Tmux => (
+            Inferred,
+            Unsupported,
+            Inferred,
+            Inferred,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
+        Hooks => (
+            Producer,
+            Unsupported,
+            Producer,
+            Producer,
+            Producer,
+            Producer,
+            ReturnTarget::Details,
+        ),
+        Scanner => (
+            Inferred,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::HostWindow,
+        ),
+        GenericEvent => (
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
+    };
+    Capabilities {
+        discovery,
+        model,
+        turn_start,
+        turn_end,
+        approval,
+        question,
+        return_target,
+    }
+}
+
+fn event_capabilities(manifest: &Manifest) -> Capabilities {
+    let claims = &manifest.capabilities;
+    let get = |key| match claims.get(key).map(|c| c.support.as_str()) {
+        Some("explicit") => Evidence::Producer,
+        Some("inferred") => Evidence::Inferred,
+        _ => Evidence::Unsupported,
+    };
+    Capabilities {
+        discovery: get("session_discovery"),
+        model: if claims.contains_key("model") {
+            get("model")
+        } else if manifest.adapter_id == "standard-events" || manifest.fields.contains_key("model")
+        {
+            Evidence::Producer
+        } else {
+            Evidence::Unsupported
+        },
+        turn_start: get("turn_start"),
+        turn_end: get("final_end"),
+        approval: get("approval_request"),
+        question: get("question"),
+        // A self-reported event has no authenticated window or session target.
+        return_target: ReturnTarget::Details,
+    }
 }
 fn definition(
     id: &str,
@@ -36,7 +208,7 @@ fn definition(
             SourceKind::Codex => "原生标题、项目与 rollout 执行阶段；仅明确结束事件提醒。命令审批需可选的官方观察 Hook，安装后还需在 Codex /hooks 中信任。",
             SourceKind::CodexWsl => "独立读取已运行发行版的 Codex 数据；不唤醒 WSL，不借用 Windows 额度。命令审批需在该发行版安装并信任观察 Hook。",
             SourceKind::RemoteCodex => "读取已配置 SSH 主机的 Codex 会话；依赖主机可达、权限与远端数据格式。",
-            SourceKind::ClaudeCode => "原生会话读取为尽力推断；精确生命周期需自愿配置官方 Hook，与代理模型无关。",
+            SourceKind::ClaudeCode => "原生会话读取为尽力推断。自愿接入 Hook 后可观察审批；提问接口目前无法同时确认对话框和匹配解除。",
             SourceKind::Hermes => "原生标题、项目和运行租约；没有明确结束证据时不猜测任务完成。",
             SourceKind::DeepseekDesktop => "读取原生 Desktop / CLI 存储，支持旧版与 v4 日志；状态能力取决于宿主记录。",
             SourceKind::DeepseekWsl => "独立读取已启用 WSL 安装，不与 Windows 桌面会话混合。",
@@ -50,7 +222,9 @@ fn definition(
         platforms: vec!["windows".into(), "macos".into(), "linux".into()],
         adapter_id: None,
         agent_id: None,
-        capabilities: serde_json::json!({}),
+        capabilities: native_capabilities(kind),
+        verified_platforms: if kind == SourceKind::Doubao { vec!["windows".into()] } else { vec![] },
+        default_source: None,
     }
 }
 #[tauri::command]
@@ -96,12 +270,11 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
         definition("tmux", "tmux · SSH", Tmux, "remote", "host"),
         definition("local_file", "兼容状态文件", Hooks, "custom", "none"),
     ];
+    let defaults = crate::monitoring::from_legacy(&Default::default(), false).sources;
     for entry in &mut entries {
+        entry.default_source = defaults.iter().find(|s| s.kind == entry.kind).cloned();
         if matches!(entry.kind, CodexWsl | DeepseekWsl) {
             entry.platforms = vec!["windows".into()];
-        }
-        if entry.kind == Scanner {
-            entry.capabilities = serde_json::json!({"discovery":"process","turn_end":"unsupported","approval":"unsupported"});
         }
     }
     for manifest in crate::integrations::api::integration_catalog() {
@@ -109,6 +282,7 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
         if manifest.adapter_id == "workbuddy-candidate" {
             continue;
         }
+        let capabilities = event_capabilities(&manifest);
         entries.push(SourceDefinition {
             id: format!("integration:{}", manifest.adapter_id),
             name: manifest.display_name,
@@ -120,7 +294,9 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
             platforms: manifest.systems,
             adapter_id: Some(manifest.adapter_id),
             agent_id: Some(manifest.agent_id),
-            capabilities: serde_json::to_value(manifest.capabilities).unwrap_or_default(),
+            capabilities,
+            verified_platforms: vec![],
+            default_source: None,
         });
     }
     entries
@@ -135,7 +311,18 @@ mod tests {
             .iter()
             .find(|e| e.kind == SourceKind::Scanner)
             .unwrap();
-        assert_eq!(process.capabilities["turn_end"], "unsupported");
+        assert_eq!(process.capabilities.turn_end, Evidence::Unsupported);
+        assert_eq!(process.capabilities.approval, Evidence::Unsupported);
+        assert!(entries
+            .iter()
+            .all(|e| e.verified_platforms.iter().all(|p| e.platforms.contains(p))));
+        let event = entries
+            .iter()
+            .find(|e| e.id == "integration:standard-events")
+            .unwrap();
+        assert_eq!(event.capabilities.approval, Evidence::Producer);
+        assert_eq!(event.capabilities.return_target, ReturnTarget::Details);
+        assert!(event.verified_platforms.is_empty());
         assert_eq!(entries.iter().filter(|e| e.category == "local").count(), 9);
         assert!(entries
             .iter()

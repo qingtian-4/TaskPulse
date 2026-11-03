@@ -208,11 +208,14 @@ impl CodexProvider {
         normalize_windows_path(path)
     }
 
-    pub fn new() -> Self {
-        let home = dirs_next::home_dir().unwrap_or_default();
-        let root = std::env::var_os("CODEX_HOME")
+    pub fn default_root() -> PathBuf {
+        std::env::var_os("CODEX_HOME")
             .map(PathBuf::from)
-            .unwrap_or_else(|| home.join(".codex"));
+            .unwrap_or_else(|| dirs_next::home_dir().unwrap_or_default().join(".codex"))
+    }
+
+    pub fn new() -> Self {
+        let root = Self::default_root();
         let mut provider = Self::with_root(root.join("sessions"));
         let db = root.join("state_5.sqlite");
         provider.state_db = db.exists().then_some(db);

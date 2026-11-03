@@ -29,6 +29,7 @@ pub struct NoticeContext {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_name: Option<String>,
     pub task_name: String,
+    pub can_focus_host: bool,
     pub source: TaskSource,
     pub project: Option<String>,
     pub host: Option<String>,
@@ -39,6 +40,7 @@ impl From<&TaskSnapshot> for NoticeContext {
         Self {
             agent_name: task.agent_name.clone(),
             task_name: task.name.clone(),
+            can_focus_host: crate::watcher::host_focus_candidate(task),
             source: task.source,
             project: task.project.clone(),
             host: task.host.clone(),
@@ -165,15 +167,7 @@ impl NoticeQueue {
                 }
                 return relevant;
             }
-            let same_request = previous.requires_action()
-                && current.requires_action()
-                && current.waiting_reason == previous.waiting_reason
-                && (current.input_request_id == previous.input_request_id
-                    || previous
-                        .input_request_id
-                        .as_ref()
-                        .is_some_and(|id| current.input_request_ids.contains(id)))
-                && current.turn_key == previous.turn_key;
+            let same_request = matches_notice_request(previous, current);
             if !same_request {
                 removed.push(entry.clone());
             }
@@ -439,8 +433,23 @@ pub fn reconcile(app: &AppHandle, tasks: &[TaskSnapshot]) {
     publish(app);
 }
 
+fn matches_notice_request(previous: &TaskSnapshot, current: &TaskSnapshot) -> bool {
+    previous.id == current.id
+        && previous.turn_key == current.turn_key
+        && previous.requires_action()
+        && current.requires_action()
+        && previous.waiting_reason == current.waiting_reason
+        && (previous.input_request_id.as_ref().is_some_and(|id| {
+            current.input_request_id.as_ref() == Some(id) || current.input_request_ids.contains(id)
+        }) || previous.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted))
+}
+
 #[tauri::command]
-pub async fn open_task_notice(app: AppHandle, id: u64) -> Result<(), String> {
+pub async fn open_task_notice(
+    app: AppHandle,
+    id: u64,
+    prefer_host: Option<bool>,
+) -> Result<String, String> {
     let entry = QUEUE
         .lock()
         .unwrap_or_else(|e| e.into_inner())
@@ -449,12 +458,38 @@ pub async fn open_task_notice(app: AppHandle, id: u64) -> Result<(), String> {
         .filter(|e| e.notice.id == id)
         .cloned()
         .ok_or("这条提醒已关闭")?;
-    if let Some(task) = entry.task.clone() {
-        let current = crate::monitoring::find_session(&task.id).unwrap_or_else(|| task.clone());
+    if let Some(task) = entry.task.as_ref() {
+        let current = crate::watcher::known_sessions()
+            .into_iter()
+            .find(|t| t.id == task.id)
+            .or_else(|| crate::monitoring::find_session(&task.id))
+            .unwrap_or_else(|| task.clone());
         if current.turn_key != task.turn_key {
             return Err(
                 "这条提醒对应旧轮次；请从任务面板查看当前执行，不会将旧操作作用于新轮次。".into(),
             );
+        }
+        if prefer_host == Some(true) && task.requires_action() {
+            // Only an exact current request can use a live host target.
+            // Revalidate the presentation ID after reading current proofs.
+            let live = get_pending_task_prompts()
+                .into_iter()
+                .find(|t| !t.stale && matches_notice_request(task, t));
+            let current_notice = QUEUE
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .entries
+                .front()
+                .is_some_and(|e| e.notice.id == id);
+            if !current_notice {
+                return Err("这条提醒已关闭".into());
+            }
+            if live.as_ref().is_some_and(crate::watcher::focus_task_host) {
+                audit(&entry, "host_window_focused");
+                // Leave the request in the queue until matching source evidence
+                // clears it (or the user dismisses the reminder).
+                return Ok("window_focused".into());
+            }
         }
         crate::watcher::select_task(&app, current);
     } else {
@@ -462,7 +497,7 @@ pub async fn open_task_notice(app: AppHandle, id: u64) -> Result<(), String> {
     }
     audit(&entry, "details_opened");
     dismiss_task_notice(app, id, Some("details".into()));
-    Ok(())
+    Ok("details".into())
 }
 
 pub fn clear(app: &AppHandle) {

@@ -1,32 +1,71 @@
 import type { DashboardSettings, MonitorSource, ProviderHealth, SourceKind, SourceDiscovery, SourceSnapshot, SourceReadState } from './types';
 
+export type CapabilityEvidence='unsupported'|'explicit'|'inferred'|'hook'|'producer';
+export interface SourceCapabilities {
+  discovery:CapabilityEvidence; model:CapabilityEvidence; turn_start:CapabilityEvidence;
+  turn_end:CapabilityEvidence; approval:CapabilityEvidence; question:CapabilityEvidence;
+  return_target:'details'|'host_window';
+}
 export interface SourceDefinition {
   description?:string; id:string; name:string; kind:SourceKind; category:string;
   location_kind:string; platforms:string[]; adapter_id?:string; agent_id?:string;
   multiple_instances?:boolean;
+  capabilities?:SourceCapabilities; verified_platforms?:string[]; default_source?:MonitorSource;
 }
 export function sourceDefinitionFor(catalog:SourceDefinition[],source:MonitorSource):SourceDefinition {
   return catalog.find(d=>d.kind===source.kind&&(d.kind!=='generic_event'||d.adapter_id===source.integration?.adapter_id))
     ??{id:source.id,name:source.name,kind:source.kind,category:'custom',location_kind:'none',platforms:[]};
 }
-export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []) {
+export interface SourceCatalogRow {
+  definition:SourceDefinition; source?:MonitorSource; candidate?:MonitorSource; observation?:SourceSnapshot;
+  supported:boolean; locationDetected:boolean|null; dataDetected:boolean|null;
+}
+export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []):SourceCatalogRow[] {
   const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)
     .map(source=>{
       const definition=sourceDefinitionFor(catalog,source);
       const observation=live.find(row=>row.id===source.id&&row.kind===source.kind&&row.location===source.location);
-      return {definition,source,observation,supported:catalog.includes(definition) && (!definition.platforms.length || definition.platforms.includes(platform)),
+      return {definition,source,observation,candidate:undefined as MonitorSource|undefined,supported:catalog.includes(definition) && (!definition.platforms.length || definition.platforms.includes(platform)),
         locationDetected:discovery.find(d=>d.id===source.id&&d.location===source.location)?.data_location_detected??null,
         dataDetected:observation?.data_detected??null};
     });
   const supported=catalog.filter(d=>d.category===category&&(!d.platforms.length||d.platforms.includes(platform)));
   const additions=supported.filter(d=>d.multiple_instances||!saved.some(r=>r.definition.id===d.id))
-    .map(definition=>{
+    .flatMap<SourceCatalogRow>(definition=>{
       const matches=discovery.filter(d=>d.candidate && (d.id===definition.id || d.candidate.kind===definition.kind && definition.kind!=='generic_event'));
-      const locationDetected=matches.some(d=>d.data_location_detected===true) ? true : matches.some(d=>d.data_location_detected===false) ? false : null;
-      return {definition,source:undefined,observation:undefined,supported:true,locationDetected,dataDetected:null};
+      const candidates=matches.filter(d=>d.data_location_detected===true&&d.candidate&&
+        !sources.some(s=>s.id===d.candidate!.id||s.kind===d.candidate!.kind&&s.location.toLowerCase()===d.candidate!.location.toLowerCase()));
+      const detected:SourceCatalogRow[]=candidates.map(d=>({definition,supported:true,locationDetected:true,dataDetected:null,candidate:d.candidate}));
+      if(detected.length&&!definition.multiple_instances)return detected;
+      const locationDetected=matches.some(d=>d.data_location_detected===false) ? false : null;
+      return [...detected,{definition,supported:true,locationDetected,dataDetected:null}];
     });
   return [...saved,...additions].filter(r=>!foundOnly||r.dataDetected===true||r.locationDetected===true);
 }
+
+export function sourceSections(catalog:SourceDefinition[],settings:DashboardSettings,discovery:SourceDiscovery[],platform:string,live:SourceSnapshot[],selected:string) {
+  const result:{primary:SourceCatalogRow[];supported:SourceCatalogRow[];advanced:SourceCatalogRow[]}={primary:[],supported:[],advanced:[]};
+  for(const category of ['local','remote','custom']){
+    for(const row of sourceCatalogRows(catalog,settings.sources,discovery,category,platform,false,live)){
+      const source=row.source, seed=row.definition.default_source;
+      const configured=source && (source.id===selected || source.enabled || settings.auto_discovery_seen?.includes(source.id) ||
+        !seed || source.id!==seed.id || source.name!==seed.name || source.location!==seed.location ||
+        source.poll_interval_ms!==seed.poll_interval_ms || JSON.stringify(source.projects)!==JSON.stringify(seed.projects) ||
+        !!(source.excluded_projects.length||source.tmux_sessions.length||source.tmux_panes.length||source.integration));
+      if(configured || category==='local'&&(row.locationDetected===true||row.dataDetected===true))result.primary.push(row);
+      else if(category==='local')result.supported.push(row);
+      else result.advanced.push(row);
+    }
+  }
+  return result;
+}
+
+export const CAPABILITY_NAMES = {
+  discovery:'发现会话',model:'模型信息',turn_start:'本轮开始',turn_end:'本轮结束',approval:'审批请求',question:'输入请求',
+} as const;
+export const CAPABILITY_EVIDENCE:Record<CapabilityEvidence,string>={
+  unsupported:'不支持',explicit:'明确证据',inferred:'有限推断',hook:'需自愿接入 Hook',producer:'由事件生产者提供',
+};
 
 const READ_LABELS:Record<SourceReadState,string>={
   disabled:'未读取',waiting:'等待首次读取',healthy:'来源读取正常',

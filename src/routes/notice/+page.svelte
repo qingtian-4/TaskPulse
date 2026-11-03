@@ -1,6 +1,6 @@
 <script lang="ts">
   import {t} from '$lib/i18n';
-  import { onMount } from 'svelte';
+  import { onMount, tick } from 'svelte';
   import { Activity, CircleAlert, CircleCheck, ArrowUpRight, X } from '@lucide/svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { listen } from '@tauri-apps/api/event';
@@ -13,6 +13,7 @@
   let busy=$state(false);
   let error=$state('');
   let currentId:number | null=null;
+  let messageElement=$state<HTMLButtonElement|null>(null);
   let acknowledgedId:number | null=null;
   let acknowledging=false;
   const content=$derived(noticeState.current ? noticeContent(noticeState.current) : null);
@@ -34,12 +35,19 @@
     const id=noticeState.current?.id;
     if(!id || id===acknowledgedId || acknowledging)return;
     acknowledging=true;
-    try{if(await invoke<boolean>('ack_task_notice',{id}))acknowledgedId=id;}catch(e){error='展示记录未确认：'+String(e);}finally{acknowledging=false;}
+    try{
+      await tick();
+      // The first frame schedules paint; the next frame runs after that
+      // paint opportunity. Native IPC also checks the window is visible.
+      await new Promise<void>(done=>requestAnimationFrame(()=>requestAnimationFrame(()=>done())));
+      if(currentId===id&&messageElement?.isConnected&&messageElement.getClientRects().length&&
+        await invoke<boolean>('ack_task_notice',{id}))acknowledgedId=id;
+    }catch(e){error='展示记录未确认：'+String(e);}finally{acknowledging=false;}
   }
-  async function open(){
+  async function open(preferHost=false){
     if(!noticeState.current || busy)return;
     busy=true;
-    try{await invoke('open_task_notice',{id:noticeState.current.id});apply(await invoke<NoticeState>('get_task_notice'));}
+    try{await invoke('open_task_notice',{id:noticeState.current.id,preferHost});apply(await invoke<NoticeState>('get_task_notice'));}
     catch(e){error=String(e);}finally{busy=false;}
   }
   onMount(()=>{
@@ -76,7 +84,7 @@
   <button class="close tp-icon" aria-label={$t("关闭提醒（保持未查看）")} title={$t("关闭提醒，任务仍未查看")} disabled={busy || !noticeState.current} onclick={()=>void dismiss()}><X size={16} strokeWidth={1.7}/></button>
   {#if noticeState.current && content}
     {#key noticeState.current.id}
-      <button class="message" disabled={busy} aria-label={'查看任务详情：'+content.heading} onclick={open}>
+      <button class="message" bind:this={messageElement} disabled={busy} aria-label={'查看任务详情：'+content.heading} onclick={()=>void open()}>
         <span class="avatar" aria-hidden="true">{#if content.tone==='success'}<CircleCheck size={17} strokeWidth={1.7}/>{:else if content.tone==='attention' || content.tone==='danger'}<CircleAlert size={17} strokeWidth={1.7}/>{:else}<Activity size={17} strokeWidth={1.7}/>{/if}<span class={'status-dot '+content.tone}></span></span>
         <span class="copy">
           <span class="sender-line">
@@ -95,7 +103,7 @@
         {:else if noticeTimeout(noticeState.current)===null}<span>{$t("等待处理，不会自动收起")}</span>
         {:else}<span>{hovered?$t('鼠标移开后自动收起'):$t('{seconds} 秒后收起',{seconds:Math.ceil(remaining/1000)})}</span>{/if}
       </div>
-      <div class="actions"><button class="later tp-btn" data-variant="ghost" title={$t("收起提醒，保持未查看")} disabled={busy} onclick={()=>void dismiss()}>{$t("稍后处理")}</button><button class="primary tp-btn" data-variant="ghost" disabled={busy} onclick={open}>{$t("查看详情")}<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
+      <div class="actions"><button class="later tp-btn" data-variant="ghost" title={$t("收起提醒，保持未查看")} disabled={busy} onclick={()=>void dismiss()}>{$t("稍后处理")}</button><button class="primary tp-btn" data-variant="ghost" disabled={busy} onclick={()=>void open(noticeState.current?.auto_dismiss_ms===null&&noticeState.current?.context?.can_focus_host===true)}>{$t(noticeState.current.auto_dismiss_ms===null&&noticeState.current.context?.can_focus_host?'返回宿主窗口':'查看详情')}<ArrowUpRight size={12} strokeWidth={1.8}/></button></div>
     </footer>
     {#if noticeTimeout(noticeState.current)!==null}<div class="progress-track" aria-hidden="true"><div class="progress" style:width={(remaining/(noticeTimeout(noticeState.current) ?? 15000)*100)+'%'}></div></div>{/if}
   {:else if error}
