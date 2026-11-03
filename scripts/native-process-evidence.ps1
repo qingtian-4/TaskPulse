@@ -6,7 +6,11 @@ function Write-EvidenceStage([string]$Stage) {
     [Console]::Error.WriteLine(("TaskPulseProbe stage={0} elapsed_ms={1}" -f $Stage,$clock.ElapsedMilliseconds))
 }
 Write-EvidenceStage 'script-entry'
-. (Join-Path $PSScriptRoot 'installer-process.ps1')
+# The sibling path is already absolute. Avoid PowerShell provider resolution
+# here, which stalled before Get-Process on fresh hosted standard accounts.
+$installerPaths = [IO.Path]::Combine($PSScriptRoot, 'installer-process.ps1')
+Write-EvidenceStage 'load-installer-paths'
+. $installerPaths
 Write-EvidenceStage 'get-process'
 $owned=Get-Process -Id $ProcessId
 try {

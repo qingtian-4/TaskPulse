@@ -32,9 +32,11 @@ Write-Output 'Fast zero/nonzero exits, output capture and bounded timeout passed
 Write-Output "Final-path identity passed: $powerShellExe / $shortExe"
 
 & {
-    # The identity probe must still work when the optional CIM query fails.
-    function Get-CimInstance { throw 'Injected CIM outage' }
+    # The identity probe must still work when PowerShell provider path
+    # resolution or the optional CIM query is unavailable.
     $probe = Join-Path $PSScriptRoot 'native-process-evidence.ps1'
+    function Join-Path { throw 'Injected provider path-resolution outage' }
+    function Get-CimInstance { throw 'Injected CIM outage' }
     $identity = & $probe -ProcessId $PID -Exe $powerShellExe | ConvertFrom-Json
     if ($identity.pid -ne $PID -or $identity.owned_executable -ne $true -or $identity.user_matches_caller -ne $true -or $identity.elevated -isnot [bool] -or $identity.integrity_rid -le 0) {
         throw 'Required Windows process identity evidence was lost'
