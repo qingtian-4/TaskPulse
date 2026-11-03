@@ -3,7 +3,7 @@ import {sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summar
 import type {MonitorSource,ProviderHealth,SourceSnapshot} from '../src/lib/types';
 
 const s:MonitorSource={id:'one',kind:'remote_codex',name:'test',enabled:true,location:'public-test',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
-const empty:SourceSnapshot={id:s.id,enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0};
+const empty:SourceSnapshot={id:s.id,kind:s.kind,location:s.location,enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0};
 test('support, data detection, first read, health and current work are independent',()=>{
   const ssh:SourceDefinition={id:'remote_codex',kind:'remote_codex',name:'SSH',category:'remote',platforms:[],location_kind:'host',multiple_instances:true};
   const wsl:SourceDefinition={...ssh,id:'deepseek_harness',kind:'deepseek_wsl',platforms:['windows']};
@@ -13,6 +13,8 @@ test('support, data detection, first read, health and current work are independe
   expect(rows).toHaveLength(1);
   expect(rows[0]).toMatchObject({supported:true,dataDetected:true,source:{id:s.id},observation:{discovered_sessions:7,current_tasks:0}});
   expect(sourceCatalogRows([ssh],[s],[],'remote','windows',true,[empty])).toEqual([]);
+  const edited=sourceCatalogRows([ssh],[{...s,location:'other-host'}],[],'remote','windows',false,[found])[0];
+  expect(edited.observation).toBeUndefined();expect(edited.dataDetected).toBeNull();
   expect(sourceCatalogRows([wsl],[wslSource],[],'remote','macos',false)).toMatchObject([{supported:false,dataDetected:null}]);
   expect(sourceReadState(undefined,true)).toBe('等待首次读取');
   expect(sourceReadState(empty,true)).toBe('来源读取正常');

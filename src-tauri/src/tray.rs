@@ -1036,6 +1036,8 @@ mod tests {
             .sources
             .push(crate::dashboard_view::SourceSnapshot {
                 id: "waiting".into(),
+                kind: crate::monitoring::SourceKind::Codex,
+                location: String::new(),
                 enabled: true,
                 read_state: ReadState::Waiting,
                 data_detected: None,

@@ -109,7 +109,7 @@ export interface MessageEntry {
   request_id?:string; turn_key?:string;
 }
 export interface MessageCenterState { revision:number; unread:number; entries:MessageEntry[]; error:string|null }
-export interface SourceDiscovery { id: string; data_location_detected: boolean | null; detail: string; candidate?: MonitorSource }
+export interface SourceDiscovery { id: string; location: string; data_location_detected: boolean | null; detail: string; candidate?: MonitorSource }
 export interface SessionPage { items: Array<{ task: TaskSnapshot; reason: string }>; total: number }
 
 export interface HostHealth {
@@ -253,7 +253,7 @@ export interface UpdateStatus {phase:string;current_version:string;version:strin
 
 export type SourceReadState = 'disabled' | 'waiting' | 'healthy' | 'partial' | 'failed' | 'stale';
 export interface SourceSnapshot {
-  id: string; enabled: boolean; read_state: SourceReadState; data_detected: boolean | null;
+  id: string; kind: SourceKind; location: string; enabled: boolean; read_state: SourceReadState; data_detected: boolean | null;
   discovered_sessions: number; current_tasks: number;
 }
 export interface DashboardView {

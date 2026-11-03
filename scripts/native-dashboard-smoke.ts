@@ -130,7 +130,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.equal(before.view.counts.ongoing,1);
   assert.equal(before.view.counts.action,0);
   const emptySource=before.view.sources.find((row:any)=>row.id==='scanner');
-  assert.deepEqual(emptySource,{id:'scanner',enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0});
+  assert.deepEqual(emptySource,{id:'scanner',kind:'generic_event',location:'',enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0});
   assert.equal(before.view.sources.find((row:any)=>row.id==='local_file')?.current_tasks,1);
   const titles=()=>root.evaluate(`[...document.querySelectorAll('.task-item .row-title')].map(e=>e.textContent.trim())`);
   const initial=await titles();
@@ -287,10 +287,16 @@ accept_since_ms=${now}`:''}`).join('\n')}
   checks.push('healthy generic source without an event reports no data, sessions or current tasks');
   const stampNow=Date.now();
   await Bun.write(join(home,'blocker.pending'),JSON.stringify({v:2,name:'Public request fixture',status:'needs-input',turn_key:'public-blocker',
-    waiting_reason:'question',input_request_id:'public-question',execution_activity_at:stampNow,confidence:'hook'}));
+    waiting_reason:'question',input_request_id:'public-question',execution_activity_at:stampNow,confidence:'hook',cli:'codex'}));
   await rename(join(home,'blocker.pending'),join(home,'blocker.status'));
   await root.wait(`document.querySelector('.counts [data-tone="action"] b')?.textContent==='1'`);
-  const counted=(await root.invoke('get_dashboard_snapshot')).view.counts;
+  const projected=(await root.invoke('get_dashboard_snapshot')).view;
+  const counted=projected.counts;
+  assert.equal(projected.sources.find((row:any)=>row.id==='local_file').current_tasks,2);
+  assert.equal(projected.sources.find((row:any)=>row.id==='codex').current_tasks,0);
+  const localCatalog=await root.invoke('list_discovered_sessions',{source:'local_file',query:'Public request fixture'});
+  assert.equal(localCatalog.total,1);
+  assert.equal(localCatalog.items[0].task.id,'file:blocker');
   assert.equal(counted.ongoing,2);
   assert.equal(counted.action,1);
   await root.evaluate(`document.querySelector('.counts [data-tone="running"]').click()`);
@@ -303,7 +309,9 @@ accept_since_ms=${now}`:''}`).join('\n')}
   const noRequest=await root.invoke('get_dashboard_snapshot');
   assert.equal(noRequest.view.counts.ongoing,1);
   assert.equal(noRequest.view.sources.find((row:any)=>row.id==='local_file').read_state,'healthy');
-  checks.push('a vanished request becomes uncertain even when the source still reads normally');
+  const pending=await root.invoke('get_pending_task_prompts');
+  assert.equal(pending.find((task:any)=>task.id==='file:blocker').stale,true);
+  checks.push('a vanished CLI-tagged request becomes uncertain in the dashboard and inbox while its actual file reader stays healthy');
   const currentSettings=await ui.invoke('get_monitoring_settings');
   await ui.invoke('save_monitoring_settings',{expected:currentSettings,settings:{...currentSettings,sources:[]}});
   await root.wait(`document.querySelector('.dashboard footer')?.textContent.includes('No enabled sources')`);

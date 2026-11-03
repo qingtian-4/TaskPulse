@@ -13,9 +13,9 @@ export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSour
   const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)
     .map(source=>{
       const definition=sourceDefinitionFor(catalog,source);
-      const observation=live.find(row=>row.id===source.id);
+      const observation=live.find(row=>row.id===source.id&&row.kind===source.kind&&row.location===source.location);
       return {definition,source,observation,supported:catalog.includes(definition) && (!definition.platforms.length || definition.platforms.includes(platform)),
-        locationDetected:discovery.find(d=>d.id===source.id)?.data_location_detected??null,
+        locationDetected:discovery.find(d=>d.id===source.id&&d.location===source.location)?.data_location_detected??null,
         dataDetected:observation?.data_detected??null};
     });
   const supported=catalog.filter(d=>d.category===category&&(!d.platforms.length||d.platforms.includes(platform)));

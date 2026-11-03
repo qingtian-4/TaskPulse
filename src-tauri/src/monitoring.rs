@@ -769,6 +769,33 @@ pub fn source_for<'a>(
     })
 }
 
+fn compatibility_status_file(task: &TaskSnapshot) -> bool {
+    !task.remote && task.id.starts_with("file:")
+}
+
+pub fn collector_id(task: &TaskSnapshot) -> String {
+    if compatibility_status_file(task) {
+        "local_file".into()
+    } else {
+        source_id(task)
+    }
+}
+
+/// Resolve which reader produced the task for presentation and health checks.
+/// Keep historical CLI-based scope rules in source_for/exclusion.
+pub fn collector_for<'a>(
+    settings: &'a DashboardSettings,
+    task: &TaskSnapshot,
+) -> Option<&'a SourceConfig> {
+    if compatibility_status_file(task) {
+        return settings
+            .sources
+            .iter()
+            .find(|s| s.id == "local_file" && s.kind == SourceKind::Hooks);
+    }
+    source_for(settings, task)
+}
+
 fn project_matches(pattern: &str, task: &TaskSnapshot) -> bool {
     if pattern == "*" {
         return true;
@@ -867,11 +894,7 @@ fn record_observations(state: &mut Runtime, tasks: &[TaskSnapshot], revision: u6
     }
     for task in tasks {
         let merged = catalog_observation(state.catalog.get(&task.id), task);
-        let source = if task.id.starts_with("file:") && !task.remote {
-            "local_file".into()
-        } else {
-            source_id(&merged)
-        };
+        let source = collector_id(&merged);
         if merged.internal {
             if let Some(evidence) = state.source_evidence.get_mut(&source) {
                 evidence.discovered_sessions.remove(&task.id);
@@ -1007,7 +1030,7 @@ pub fn list_discovered_sessions(
         .filter(|task| {
             source
                 .as_ref()
-                .is_none_or(|s| source_for(&settings, task).is_some_and(|v| &v.id == s))
+                .is_none_or(|s| collector_for(&settings, task).is_some_and(|v| &v.id == s))
         })
         .filter(|task| {
             format!(
@@ -1063,6 +1086,7 @@ pub fn find_session(id: &str) -> Option<TaskSnapshot> {
 #[derive(Clone, Serialize)]
 pub struct SourceDiscovery {
     pub id: String,
+    pub location: String,
     pub data_location_detected: Option<bool>,
     pub detail: String,
     pub candidate: Option<SourceConfig>,
@@ -1081,6 +1105,7 @@ fn discover_source_rows() -> Vec<SourceDiscovery> {
             .iter()
             .map(|s| SourceDiscovery {
                 id: s.id.clone(),
+                location: s.location.clone(),
                 data_location_detected: None,
                 detail: "隔离状态目录；未探测真实 Agent 数据".into(),
                 candidate: None,
@@ -1189,6 +1214,7 @@ fn discover_source_rows_with_wsl(
             };
             SourceDiscovery {
                 id: source.id.clone(),
+                location: source.location.clone(),
                 data_location_detected: if matches!(source.kind,
                     SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::Tmux
                     | SourceKind::GenericEvent | SourceKind::Hooks | SourceKind::Scanner
@@ -1303,6 +1329,7 @@ mod tests {
                 let s = settings.sources.iter().find(|s| s.kind == kind).unwrap();
                 SourceDiscovery {
                     id: s.id.clone(),
+                    location: String::new(),
                     data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
@@ -1356,6 +1383,7 @@ mod tests {
             &mut next,
             vec![SourceDiscovery {
                 id: "custom-zcode".into(),
+                location: String::new(),
                 data_location_detected: Some(true),
                 detail: String::new(),
                 candidate: None
@@ -1371,18 +1399,21 @@ mod tests {
             vec![
                 SourceDiscovery {
                     id: "codex".into(),
+                    location: String::new(),
                     data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
                 },
                 SourceDiscovery {
                     id: "codex-wsl:ubuntu".into(),
+                    location: String::new(),
                     data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
                 },
                 SourceDiscovery {
                     id: "local_file".into(),
+                    location: String::new(),
                     data_location_detected: Some(true),
                     detail: String::new(),
                     candidate: None,
@@ -1412,6 +1443,7 @@ mod tests {
             &mut settings,
             vec![SourceDiscovery {
                 id: "codex".into(),
+                location: String::new(),
                 data_location_detected: Some(true),
                 detail: String::new(),
                 candidate: Some(candidate)
@@ -1436,6 +1468,7 @@ mod tests {
             &mut absent,
             vec![SourceDiscovery {
                 id: "zcode".into(),
+                location: String::new(),
                 data_location_detected: Some(true),
                 detail: String::new(),
                 candidate: None

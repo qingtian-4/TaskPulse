@@ -148,6 +148,7 @@ export function defaultDashboardTasks(tasks:TaskSnapshot[]):TaskSnapshot[] {
   return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task));
 }
 export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
+  if(!task.remote&&task.id.startsWith('file:'))return settings?.sources.find(s=>s.id==='local_file'&&s.kind==='hooks');
   if(task.source_instance)return settings?.sources.find(s => s.id === task.source_instance);
   const nativeId = task.source === 'deepseek_harness'
     ? (task.id.startsWith('dsh-native:') ? 'deepseek_harness_desktop' : 'deepseek_harness')

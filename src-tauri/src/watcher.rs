@@ -449,6 +449,11 @@ fn watch_dashboard_expiry(app: AppHandle) {
         if let Some(snapshot) = snapshot {
             crate::tray::update_icon(&app, &snapshot);
             let _ = app.emit("dashboard-snapshot-updated", &snapshot);
+            crate::message_center::publish(&app);
+            let _ = app.emit(
+                "pending-prompts-updated",
+                crate::task_notice::get_pending_task_prompts(),
+            );
         }
     });
 }
@@ -471,6 +476,33 @@ fn latest_dashboard_snapshot() -> DashboardSnapshot {
             e.into_inner()
         })
         .clone()
+}
+
+/// Health from an old connection with the same source ID cannot validate a
+/// restored request after a settings save.
+pub fn providers_for_settings(
+    settings: &crate::monitoring::DashboardSettings,
+) -> Vec<ProviderHealth> {
+    let latest = LATEST_DASHBOARD.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(policy) = &latest.projection else {
+        return Vec::new();
+    };
+    latest
+        .providers
+        .iter()
+        .filter(|provider| {
+            settings.sources.iter().any(|next| {
+                next.id == provider.provider
+                    && next.enabled
+                    && policy
+                        .settings
+                        .sources
+                        .iter()
+                        .any(|old| old.enabled && same_collector(old, next))
+            })
+        })
+        .cloned()
+        .collect()
 }
 
 /// Tauri command: return the platform-appropriate status directory path.

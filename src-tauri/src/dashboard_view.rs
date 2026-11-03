@@ -6,7 +6,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use serde::Serialize;
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus, WaitingReason};
-use crate::monitoring::{source_for, DashboardSettings, SourceEvidenceSummary, SourceKind};
+use crate::monitoring::{collector_for, DashboardSettings, SourceEvidenceSummary, SourceKind};
 use crate::providers::{resources::epoch_ms, ProviderHealth, ProviderStatus};
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize)]
@@ -23,6 +23,10 @@ pub enum ReadState {
 #[derive(Clone, Debug, Serialize)]
 pub struct SourceSnapshot {
     pub id: String,
+    // Compare the observed connection with the current draft/applied row.
+    // A saved source can retain its ID while changing its location.
+    pub kind: SourceKind,
+    pub location: String,
     pub enabled: bool,
     pub read_state: ReadState,
     /// Collector evidence, independent of local discovery or connection health.
@@ -80,7 +84,8 @@ fn consider_expiry(view: &mut DashboardView, now: SystemTime, observed_ms: u64, 
     }
 }
 
-fn read_fresh(health: &ProviderHealth, now: SystemTime, poll_interval_ms: u64) -> bool {
+pub fn read_fresh(health: Option<&ProviderHealth>, now: SystemTime, poll_interval_ms: u64) -> bool {
+    let Some(health) = health else { return false };
     let now = epoch_ms(now);
     health.status == ProviderStatus::Connected
         && health.last_attempt.is_some()
@@ -89,12 +94,15 @@ fn read_fresh(health: &ProviderHealth, now: SystemTime, poll_interval_ms: u64) -
         })
 }
 
-fn explicit_request(task: &TaskSnapshot, now: SystemTime) -> bool {
+pub fn has_current_request(task: &TaskSnapshot, now: SystemTime) -> bool {
     let generic = task.source == TaskSource::GenericEvent;
     let credible = task.confidence != DetectionConfidence::Inferred
         || generic
             && task.evidence_channel.as_deref() == Some("self_reported")
-            && task.integration_epoch.is_some()
+            && task
+                .integration_epoch
+                .as_deref()
+                .is_some_and(|epoch| !epoch.is_empty())
             && task.integration_sequence > 0;
     credible
         && (task.waiting_reason == Some(WaitingReason::QuotaExhausted)
@@ -108,6 +116,24 @@ fn explicit_request(task: &TaskSnapshot, now: SystemTime) -> bool {
                 let now = epoch_ms(now);
                 now >= at && now - at <= 30_000
             }))
+}
+
+/// The same read evidence gates headline counts and manual prompt reopening.
+pub fn task_read_fresh(
+    task: &TaskSnapshot,
+    source_kind: SourceKind,
+    provider: Option<&ProviderHealth>,
+    now: SystemTime,
+    interval: u64,
+) -> bool {
+    if matches!(source_kind, SourceKind::Codex | SourceKind::CodexWsl) {
+        provider.is_some_and(|h| {
+            h.verifies_task(task, now)
+                || read_fresh(Some(h), now, interval) && h.matches_latest_observation(task, now)
+        })
+    } else {
+        read_fresh(provider, now, interval)
+    }
 }
 
 pub fn task_candidate(task: &TaskSnapshot) -> bool {
@@ -172,7 +198,7 @@ pub fn project(
                     ReadState::Failed
                 }
             }
-            Some(h) if read_fresh(h, now, source.poll_interval_ms) => ReadState::Healthy,
+            Some(h) if read_fresh(Some(h), now, source.poll_interval_ms) => ReadState::Healthy,
             Some(_) => ReadState::Stale,
         };
         if let Some(h) = provider {
@@ -197,6 +223,8 @@ pub fn project(
         indices.insert(source.id.as_str(), view.sources.len());
         view.sources.push(SourceSnapshot {
             id: source.id.clone(),
+            kind: source.kind,
+            location: source.location.clone(),
             enabled,
             read_state,
             data_detected: if data_seen {
@@ -216,19 +244,17 @@ pub fn project(
         let mut stale = task.stale;
         if ongoing && !stale {
             stale = true;
-            if let Some(source) = source_for(settings, task) {
+            if let Some(source) = collector_for(settings, task) {
                 let row = &mut view.sources[indices[source.id.as_str()]];
                 if row.enabled {
-                    let provider = health.get(source.id.as_str());
-                    let fresh = if !task.id.starts_with("file:")
-                        && matches!(source.kind, SourceKind::Codex | SourceKind::CodexWsl)
-                    {
-                        matches!(row.read_state, ReadState::Healthy | ReadState::Partial)
-                            && provider.is_some_and(|h| h.matches_latest_observation(task, now))
-                    } else {
-                        row.read_state == ReadState::Healthy
-                    };
-                    stale = !fresh || action && !explicit_request(task, now);
+                    let fresh = task_read_fresh(
+                        task,
+                        source.kind,
+                        health.get(source.id.as_str()).copied(),
+                        now,
+                        source.poll_interval_ms,
+                    );
+                    stale = !fresh || action && !has_current_request(task, now);
                     if !stale {
                         row.current_tasks += 1;
                         if action && task.source == TaskSource::GenericEvent {

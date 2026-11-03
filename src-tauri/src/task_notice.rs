@@ -258,7 +258,7 @@ pub fn get_task_notice() -> NoticeState {
 #[tauri::command]
 pub fn get_pending_task_prompts() -> Vec<TaskSnapshot> {
     let settings = crate::monitoring::get_monitoring_settings();
-    let health = crate::watcher::get_providers();
+    let health = crate::watcher::providers_for_settings(&settings);
     let now = SystemTime::now();
     let mut tasks: Vec<_> = crate::watcher::known_sessions()
         .into_iter()
@@ -269,16 +269,18 @@ pub fn get_pending_task_prompts() -> Vec<TaskSnapshot> {
                 && !crate::watcher::is_ignored(&t.id)
         })
         .map(|mut task| {
-            let source = crate::monitoring::source_for(&settings, &task);
-            let provider = source.and_then(|s| health.iter().find(|p| p.provider == s.id));
-            let interval = source.map_or(3000, |s| s.poll_interval_ms);
-            let fresh = prompt_task_source_fresh(&task, provider, now, interval);
-            task.stale |= !fresh;
-            if task.source == TaskSource::GenericEvent {
-                task.stale |= task
-                    .pending_confirmed_at
-                    .is_none_or(|at| crate::integrations::now_ms().saturating_sub(at) > 30_000);
-            }
+            let fresh = crate::monitoring::collector_for(&settings, &task)
+                .filter(|s| s.enabled && settings.onboarding_complete)
+                .is_some_and(|source| {
+                    crate::dashboard_view::task_read_fresh(
+                        &task,
+                        source.kind,
+                        health.iter().find(|p| p.provider == source.id),
+                        now,
+                        source.poll_interval_ms,
+                    )
+                });
+            task.stale |= !fresh || !crate::dashboard_view::has_current_request(&task, now);
             task
         })
         .collect();
@@ -288,30 +290,6 @@ pub fn get_pending_task_prompts() -> Vec<TaskSnapshot> {
             .then_with(|| a.id.cmp(&b.id))
     });
     tasks
-}
-
-fn prompt_source_fresh(
-    health: Option<&crate::providers::ProviderHealth>,
-    now: SystemTime,
-    interval: u64,
-) -> bool {
-    health.is_some_and(|h| {
-        h.status == crate::providers::ProviderStatus::Connected
-            && h.last_success
-                .and_then(|at| now.duration_since(at).ok())
-                .is_some_and(|age| {
-                    age.as_millis() <= u128::from(interval.saturating_mul(3).max(30_000))
-                })
-    })
-}
-
-fn prompt_task_source_fresh(
-    task: &TaskSnapshot,
-    health: Option<&crate::providers::ProviderHealth>,
-    now: SystemTime,
-    interval: u64,
-) -> bool {
-    prompt_source_fresh(health, now, interval) || health.is_some_and(|p| p.verifies_task(task, now))
 }
 
 fn reopenable(task: &TaskSnapshot) -> bool {
@@ -674,6 +652,8 @@ fn audit_current(stage: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dashboard_view::{read_fresh as prompt_source_fresh, task_read_fresh};
+    use crate::monitoring::SourceKind;
     #[test]
     fn lifecycle_queued_old_result_is_withdrawn_when_new_turn_is_running() {
         let mut queue = NoticeQueue::default();
@@ -773,12 +753,49 @@ mod tests {
             .into(),
         };
         assert!(!prompt_source_fresh(Some(&health), now, 3000));
-        assert!(prompt_task_source_fresh(&task, Some(&health), now, 3000));
+        assert!(task_read_fresh(
+            &task,
+            SourceKind::Codex,
+            Some(&health),
+            now,
+            3000
+        ));
+        let healthy = ProviderHealth {
+            status: ProviderStatus::Connected,
+            last_success: Some(now),
+            ..health.clone()
+        };
+        assert!(task_read_fresh(
+            &task,
+            SourceKind::Codex,
+            Some(&healthy),
+            now,
+            3000
+        ));
         task.turn_key = Some("different-turn".into());
-        assert!(!prompt_task_source_fresh(&task, Some(&health), now, 3000));
+        assert!(!task_read_fresh(
+            &task,
+            SourceKind::Codex,
+            Some(&health),
+            now,
+            3000
+        ));
+        assert!(!task_read_fresh(
+            &task,
+            SourceKind::Codex,
+            Some(&healthy),
+            now,
+            3000
+        ));
         task.turn_key = Some("turn".into());
         task.input_request_id = Some("different-question".into());
-        assert!(!prompt_task_source_fresh(&task, Some(&health), now, 3000));
+        assert!(!task_read_fresh(
+            &task,
+            SourceKind::Codex,
+            Some(&health),
+            now,
+            3000
+        ));
     }
 
     #[test]
