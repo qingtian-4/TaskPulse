@@ -1022,6 +1022,14 @@ impl LocalProviders {
         let mut changed = false;
         for (name, _, worker) in &self.workers {
             while let Ok(mut observation) = worker.observations.try_recv() {
+                // Detection belongs to the successful scan, even when every
+                // row is later suppressed in favor of a native source.
+                if name == "scanner"
+                    && observation.output.authoritative
+                    && !observation.output.tasks.is_empty()
+                {
+                    crate::monitoring::observe_source_data(name, self.catalog_revision);
+                }
                 crate::monitoring::observe(&observation.output.catalog, self.catalog_revision);
                 self.ordered.append(&mut observation.output.ordered);
                 log::debug!(
@@ -1084,6 +1092,21 @@ impl LocalProviders {
         changed
     }
 
+    fn record_task_catalog(&self, tasks: &[TaskSnapshot]) {
+        // Failed scans may retain the last tasks for continuity. Those rows
+        // cannot add new detection or catalog evidence in this generation.
+        let fresh_scan = self
+            .latest
+            .get("scanner")
+            .is_some_and(|out| out.authoritative);
+        crate::monitoring::observe(
+            tasks
+                .iter()
+                .filter(|task| fresh_scan || !is_scanner_observation(task)),
+            self.catalog_revision,
+        );
+    }
+
     fn poll(&mut self, now: SystemTime) -> LocalBatch {
         self.configure(&crate::monitoring::get_monitoring_settings());
         self.collect_ready();
@@ -1144,7 +1167,7 @@ impl LocalProviders {
         dedup_codex_over_scan(&mut tasks);
         dedup_hermes_over_scan(&mut tasks);
         dedup_dsh_over_scan(&mut tasks);
-        crate::monitoring::observe(&tasks, self.catalog_revision);
+        self.record_task_catalog(&tasks);
         let wsl_before: Vec<_> = self
             .configured
             .iter()
@@ -1974,6 +1997,72 @@ mod tests {
         assert_eq!(reopened.tasks, final_snapshot.tasks);
         assert_eq!(reopened.hosts, final_snapshot.hosts);
         assert_eq!(reopened.providers, final_snapshot.providers);
+    }
+
+    #[test]
+    fn scanner_detection_survives_native_dedup_and_rejects_cached_results() {
+        let now = SystemTime::now();
+        let mut native = TaskSnapshot::new(
+            "codex:scanner-evidence",
+            "Native session",
+            TaskSource::Codex,
+            TaskStatus::Running,
+            DetectionConfidence::Exact,
+            now,
+        );
+        native.session_id = Some("scanner-evidence".into());
+        let mut scan = native.clone();
+        scan.id = "scan:codex:scanner-evidence".into();
+        scan.cli = Some("codex".into());
+        scan.confidence = DetectionConfidence::Inferred;
+        let (send, receive) = std::sync::mpsc::channel();
+        let worker = crate::providers::worker::Worker::spawn(Duration::from_secs(60), move |_| {
+            receive
+                .recv_timeout(Duration::from_secs(5))
+                .unwrap_or_default()
+        });
+        let mut providers = LocalProviders {
+            ordered: vec![],
+            file: LocalFileProvider::new(),
+            workers: vec![("scanner".into(), vec![], worker)],
+            latest: Default::default(),
+            observed_at: Default::default(),
+            catalog_revision: crate::monitoring::revision(),
+            health: vec![],
+            configured: vec![],
+        };
+        let evidence = || crate::monitoring::source_evidence_for_test("scanner");
+        for (output, stale_revision, expected) in [
+            (ProviderOutput::tasks(vec![]), false, (false, 0)),
+            (
+                ProviderOutput::degraded(vec![scan.clone()], "cached"),
+                false,
+                (false, 0),
+            ),
+            (ProviderOutput::tasks(vec![scan.clone()]), true, (false, 0)),
+            (ProviderOutput::tasks(vec![scan]), false, (true, 0)),
+        ] {
+            providers.catalog_revision = crate::monitoring::revision() + u64::from(stale_revision);
+            send.send(output).unwrap();
+            providers.workers[0].2.request_refresh();
+            let deadline = Instant::now() + Duration::from_secs(5);
+            while !providers.collect_ready() {
+                assert!(Instant::now() < deadline);
+                std::thread::sleep(Duration::from_millis(5));
+            }
+            let mut merged = vec![native.clone()];
+            merged.extend(providers.latest["scanner"].tasks.clone());
+            dedup_codex_over_scan(&mut merged);
+            assert_eq!(merged, [native.clone()]);
+            let latest = &providers.latest["scanner"];
+            if !latest.authoritative {
+                // Even a cached row that survives dedup must not be indexed.
+                providers.record_task_catalog(&latest.tasks);
+                assert!(crate::monitoring::find_session(&latest.tasks[0].id).is_none());
+            }
+            providers.record_task_catalog(&merged);
+            assert_eq!(evidence(), expected);
+        }
     }
 
     fn r03_source() -> crate::monitoring::SourceConfig {

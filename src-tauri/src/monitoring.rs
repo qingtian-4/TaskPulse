@@ -883,12 +883,16 @@ pub fn allows(task: &TaskSnapshot) -> bool {
     exclusion(&get_monitoring_settings(), task).is_none()
 }
 
-pub fn observe(tasks: &[TaskSnapshot], revision: u64) {
+pub fn observe<'a>(tasks: impl IntoIterator<Item = &'a TaskSnapshot>, revision: u64) {
     let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
     record_observations(&mut state, tasks, revision);
 }
 
-fn record_observations(state: &mut Runtime, tasks: &[TaskSnapshot], revision: u64) {
+fn record_observations<'a>(
+    state: &mut Runtime,
+    tasks: impl IntoIterator<Item = &'a TaskSnapshot>,
+    revision: u64,
+) {
     if state.revision != revision {
         return;
     }
@@ -910,8 +914,8 @@ fn record_observations(state: &mut Runtime, tasks: &[TaskSnapshot], revision: u6
     }
 }
 
-/// Record raw transport data that did not produce a task, such as an idle
-/// SSH pane. This does not update health, session count or attention.
+/// Record source data independently of any task or catalog entry.
+/// This does not update health, session count or attention.
 pub fn observe_source_data(id: &str, revision: u64) {
     let mut state = runtime().lock().unwrap_or_else(|e| e.into_inner());
     if state.revision == revision {
@@ -921,6 +925,15 @@ pub fn observe_source_data(id: &str, revision: u64) {
             .or_default()
             .data_seen = true;
     }
+}
+
+#[cfg(test)]
+pub fn source_evidence_for_test(id: &str) -> (bool, usize) {
+    let state = runtime().lock().unwrap_or_else(|e| e.into_inner());
+    state
+        .source_evidence
+        .get(id)
+        .map_or((false, 0), |e| (e.data_seen, e.discovered_sessions.len()))
 }
 
 /// Avoid scanning the catalog or cloning session IDs on the dashboard hot path.
