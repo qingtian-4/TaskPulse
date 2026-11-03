@@ -5,6 +5,7 @@ import {join} from 'node:path';
 import {developmentConfig} from './develop';
 import {stageDevelopment} from './development-artifact';
 import {sha256} from './release';
+import {windowsTestProcess} from './windows-test-process';
 const read=(path:string)=>readFileSync(new URL('../'+path,import.meta.url),'utf8');
 
 test('parallel worktrees use separate development identities and exact loopback HMR origins',()=>{
@@ -18,6 +19,27 @@ test('parallel worktrees use separate development identities and exact loopback 
   expect(JSON.parse(read('src-tauri/tauri.conf.json')).identifier).toBe('app.taskpulse.desktop');
   expect(JSON.parse(read('src-tauri/tauri.conf.json')).app.security.csp).not.toContain('ws:');
 });
+test('native standard-account setup refuses execution outside disposable hosted CI',async()=>{
+  if(process.platform!=='win32')return;
+  const helper=new URL('./native-standard-user.ps1',import.meta.url);
+  const {fileURLToPath}=await import('node:url');
+  const result=await windowsTestProcess('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-Command',`$env:GITHUB_ACTIONS='';$env:RUNNER_ENVIRONMENT=''; & '${fileURLToPath(helper).replaceAll("'","''")}' -Bun missing.exe -Exe missing.exe`]);
+  expect(result.exitCode).not.toBe(0);expect(result.stderr).toContain('Disposable hosted CI only');
+},15000);
+test('native account mode parameters cannot alias the process instance variable',async()=>{
+  if(process.platform!=='win32')return;
+  const source=read('scripts/native-standard-user.ps1');
+  const parameters=source.split(/\r?\n/)[0];
+  const allocation=source.match(/(\$\w+)=\[Diagnostics\.Process\]::new\(\)/);
+  expect(allocation).not.toBeNull();
+  const root=mkdtempSync(join(tmpdir(),'taskpulse-native-parameters-'));
+  try{
+    const fixture=join(root,'parameters.ps1');
+    writeFileSync(fixture,`${parameters}\n$ErrorActionPreference='Stop';${allocation![0]};if(${allocation![1]} -isnot [Diagnostics.Process]){throw 'Process allocation failed'};${allocation![1]}.Dispose();Write-Output 'native-parameters-ok'`);
+    const result=await windowsTestProcess('powershell.exe',['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',fixture,'-Bun','unused.exe','-Exe','unused.exe']);
+    expect(result.exitCode,result.stderr).toBe(0);expect(result.stdout).toContain('native-parameters-ok');
+  }finally{rmSync(root,{recursive:true,force:true});}
+},15000);
 test('development artifacts allowlist runtime files, pin checksums and reject stale or incorrect packages',()=>{
   const root=mkdtempSync(join(tmpdir(),'taskpulse-dev-stage-'));
   try{

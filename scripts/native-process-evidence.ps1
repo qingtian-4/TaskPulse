@@ -10,6 +10,7 @@ try {
 using System;
 using System.ComponentModel;
 using System.Runtime.InteropServices;
+using System.Security.Principal;
 public static class TaskPulseTokenEvidence {
     [DllImport("advapi32.dll",SetLastError=true)] static extern bool OpenProcessToken(IntPtr process,uint access,out IntPtr token);
     [DllImport("advapi32.dll",SetLastError=true)] static extern bool GetTokenInformation(IntPtr token,int kind,out int value,int size,out int needed);
@@ -37,6 +38,18 @@ public static class TaskPulseTokenEvidence {
             return Marshal.ReadInt32(GetSidSubAuthority(sid,(uint)(count-1)));
         } finally {if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);CloseHandle(token);}
     }
+    public static bool UserMatches(IntPtr process,string expected) {
+        IntPtr token;
+        if(!OpenProcessToken(process,8,out token))throw new Win32Exception(Marshal.GetLastWin32Error());
+        IntPtr buffer=IntPtr.Zero;
+        try {
+            int needed;GetTokenBuffer(token,1,IntPtr.Zero,0,out needed);
+            if(needed<=0||needed>65536)throw new Exception("Invalid user evidence size");
+            buffer=Marshal.AllocHGlobal(needed);
+            if(!GetTokenBuffer(token,1,buffer,needed,out needed))throw new Win32Exception(Marshal.GetLastWin32Error());
+            return new SecurityIdentifier(Marshal.ReadIntPtr(buffer)).Value==expected;
+        } finally {if(buffer!=IntPtr.Zero)Marshal.FreeHGlobal(buffer);CloseHandle(token);}
+    }
 }
 '@
     $children=@(Get-CimInstance Win32_Process -Filter "ParentProcessId = $ProcessId" | Select-Object -First 16 | ForEach-Object {
@@ -47,5 +60,5 @@ public static class TaskPulseTokenEvidence {
         [pscustomobject]@{pid=$_.ProcessId;name=$_.Name;file_version=$version;requested_debug_port=$debug}
     })
     $title=[string]$owned.MainWindowTitle
-    [pscustomobject]@{pid=$ProcessId;owned_executable=$true;elevated=([TaskPulseTokenEvidence]::Read($handle,20) -ne 0);elevation_type=[TaskPulseTokenEvidence]::Read($handle,18);integrity_rid=[TaskPulseTokenEvidence]::Integrity($handle);main_window_title=$title.Substring(0,[Math]::Min(256,$title.Length));children=$children} | ConvertTo-Json -Depth 5 -Compress
+    [pscustomobject]@{pid=$ProcessId;owned_executable=$true;user_matches_caller=[TaskPulseTokenEvidence]::UserMatches($handle,[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);elevated=([TaskPulseTokenEvidence]::Read($handle,20) -ne 0);elevation_type=[TaskPulseTokenEvidence]::Read($handle,18);integrity_rid=[TaskPulseTokenEvidence]::Integrity($handle);main_window_title=$title.Substring(0,[Math]::Min(256,$title.Length));children=$children} | ConvertTo-Json -Depth 5 -Compress
 } finally {$owned.Dispose()}
