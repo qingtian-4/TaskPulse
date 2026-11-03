@@ -115,18 +115,18 @@ Automatic discovery covers supported native data formats. WSL, SSH and event int
 - [ ] Android / iOS apps for tasks and notifications after the desktop app is stable
 - [ ] Task progress and notifications on smartwatches and fitness bands
 
-## Build from source
+## Develop locally
 
-Install Bun, Rust 1.90+ and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/).
+Install Bun, Rust 1.90+, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/), then clone the repository and start the development app:
 
 ```sh
 git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
 cd TaskPulse
 bun install --frozen-lockfile
-bun run tauri build
+bun run dev:desktop
 ```
 
-Packages are written to `src-tauri/target/release/bundle/`. Use `bun run tauri dev` to run locally.
+This starts the native tray app with an isolated development profile. See [CONTRIBUTING.md](CONTRIBUTING.md) for daily development, portable builds, and on-demand installer acceptance.
 
 ## Contributing and license
 

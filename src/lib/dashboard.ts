@@ -16,36 +16,11 @@ export function shouldApplyDashboardSnapshot(currentRevision:number,incomingRevi
 }
 export const SECTION_ORDER: TaskSection[] = ['ongoing', 'results', 'uncertain', 'pinned'];
 export const SECTION_NAMES: Record<TaskSection,string> = {ongoing:'进行中',results:'结果待查看',uncertain:'状态待更新',pinned:'固定与已查看'};
-// A source can be partially degraded by an unrelated rollout. Per-task proof
-// must come from its latest collection, never from task activity or cached health.
-export function taskObservationState(task:TaskSnapshot):string {
-  const ids=[...new Set([...(task.input_request_ids??[]),...(task.input_request_id?[task.input_request_id]:[])])].sort();
-  return JSON.stringify([task.session_id??null,task.turn_key??null,task.status,task.waiting_reason??null,task.updated_at,task.finished_at??null,ids]);
-}
-export function hasFreshCodexObservation(task:TaskSnapshot, source:ReturnType<typeof taskSource>, health:ProviderHealth|undefined, now:number):boolean {
-  const proof=health?.task_observations?.[task.id];
-  const at=proof?.observed_at;
-  return task.source==='codex' && task.stale!==true && !task.internal && task.confidence!=='inferred' && !!source?.enabled &&
-    (source.kind==='codex'||source.kind==='codex_wsl') && health?.provider===source.id &&
-    at!==undefined && at===health.last_attempt && Number.isFinite(at) && now>=at &&
-    now-at<=30000 && proof?.state===taskObservationState(task);
-}
-export function observedDashboardTasks(tasks:TaskSnapshot[], providers:ProviderHealth[], settings:DashboardSettings|null, now:number):TaskSnapshot[] {
-  return tasks.map(task=>{
-    if(task.status!=='running' && !needsAction(task))return task;
-    const source=taskSource(task,settings??undefined);
-    const health=providers.find(provider=>provider.provider===source?.id);
-    const fresh=source?.enabled && ((health?.status==='connected' && health.last_success!==undefined &&
-      now-health.last_success<=Math.max(30000,(source.poll_interval_ms??3000)*3)) ||
-      health?.status==='degraded' && hasFreshCodexObservation(task,source,health,now));
-    const eventEvidence=task.confidence!=='inferred' || task.source==='generic_event' &&
-      task.evidence_channel==='self_reported' && !!task.integration_epoch && (task.integration_sequence??0)>0;
-    const explicit=!needsAction(task) || eventEvidence &&
-      (task.waiting_reason==='quota_exhausted' || !!task.input_request_id?.trim() || !!task.input_request_ids?.some(id=>!!id.trim()));
-    const confirmed=task.source!=='generic_event' || !needsAction(task) ||
-      task.pending_confirmed_at!==undefined && now-task.pending_confirmed_at<=30000;
-    return fresh&&explicit&&confirmed ? task : {...task,stale:true};
-  });
+// Apply the same projection the native tray used for this revision. Raw
+// lifecycle/attention data remains unchanged in the snapshot.
+export function projectDashboardTasks(tasks:TaskSnapshot[], unconfirmed:string[]):TaskSnapshot[] {
+  const ids=new Set(unconfirmed);
+  return tasks.map(task=>ids.has(task.id) ? {...task,stale:true} : task);
 }
 export function sectionRank(task: TaskSnapshot): number { return SECTION_ORDER.indexOf(taskSection(task)); }
 export function matchesSignal(task:TaskSnapshot, signal:TaskSignal):boolean {
@@ -152,7 +127,7 @@ export function taskSection(task: TaskSnapshot): TaskSection {
   if (task.stale) return 'uncertain';
   if (task.status === 'running' || needsAction(task)) return 'ongoing';
   if (isEndedResult(task)) return 'results';
-  if (task.status === 'unknown' || task.status === 'disconnected' || task.status === 'waiting_input') return 'uncertain';
+  if (task.status === 'unknown' || task.status === 'disconnected' || task.status === 'waiting_input' && task.waiting_reason !== 'turn_ended') return 'uncertain';
   return 'pinned';
 }
 
@@ -173,12 +148,13 @@ export function defaultDashboardTasks(tasks:TaskSnapshot[]):TaskSnapshot[] {
   return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task));
 }
 export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
-  const explicit = settings?.sources.find(s => s.id === task.source_instance);
+  if(!task.remote&&task.id.startsWith('file:'))return settings?.sources.find(s=>s.id==='local_file'&&s.kind==='hooks');
+  if(task.source_instance)return settings?.sources.find(s => s.id === task.source_instance);
   const nativeId = task.source === 'deepseek_harness'
     ? (task.id.startsWith('dsh-native:') ? 'deepseek_harness_desktop' : 'deepseek_harness')
     : task.source === 'claude_code' && task.id.startsWith('claude:') ? 'claude_code'
     : task.source === 'claude_code' || task.source === 'gemini' ? 'scanner' : task.source;
-  return explicit ?? (task.remote
+  return (task.remote
     ? settings?.sources.find(s => s.location === task.host && s.kind === (task.source === 'codex' ? 'remote_codex' : 'tmux'))
     : settings?.sources.find(s => s.id === nativeId));
 }
@@ -196,7 +172,7 @@ export function projectKey(task: TaskSnapshot, settings?: DashboardSettings | nu
 export function sourceFreshness(task: TaskSnapshot, settings: DashboardSettings | null, providers: ProviderHealth[], now: number): string {
   const source = taskSource(task, settings);
   const health = providers.find(p => p.provider === (source?.id ?? task.source_instance));
-  if(health?.status==='degraded' && hasFreshCodexObservation(task,source,health,now))return '该会话已更新；同一来源的其他会话需检查';
+  if(health?.status==='degraded' && source?.enabled && (source.kind==='codex'||source.kind==='codex_wsl') && !task.stale && (task.status==='running'||needsAction(task)) && health.task_observations?.[task.id])return '该会话已更新；同一来源的其他会话需检查';
   if (!health?.last_success) return '来源尚未成功采集';
   const age = now - health.last_success;
   const stale = health.status === 'degraded' || age > Math.max(30000, (source?.poll_interval_ms ?? 3000) * 3);
@@ -216,5 +192,5 @@ export function isEndedResult(task: TaskSnapshot): boolean {
 }
 
 export function isInferredCommandEnd(task:TaskSnapshot):boolean {
-  return task.source==='remote_tmux' && task.confidence==='inferred' && task.status==='idle' && task.finished_at!==undefined && task.exit_code===undefined;
+  return task.source==='remote_tmux' && task.session_id==null && task.confidence==='inferred' && task.status==='idle' && task.finished_at!==undefined && task.exit_code===undefined;
 }

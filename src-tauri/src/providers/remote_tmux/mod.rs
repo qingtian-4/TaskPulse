@@ -499,12 +499,15 @@ impl RemoteTmuxProvider {
                 host: ssh_host.into(),
                 source: TaskSource::RemoteTmux,
                 authoritative: tmux_ok,
+                detected_data: (snapshot.tmux_ok && !snapshot.panes.is_empty())
+                    || (snapshot.runs_ok && !snapshot.runs.is_empty()),
                 error: (!tmux_ok).then(|| snapshot.errors.join("; ")),
             },
             crate::providers::RemoteSourceHealth {
                 host: ssh_host.into(),
                 source: TaskSource::Codex,
                 authoritative: snapshot.codex_ok,
+                detected_data: false, // Codex tasks and catalog supply the evidence.
                 error: (!snapshot.codex_ok).then(|| snapshot.errors.join("; ")),
             },
         ];
@@ -555,6 +558,7 @@ impl RemoteTmuxProvider {
                     host: ssh_host.into(),
                     source,
                     authoritative: false,
+                    detected_data: false,
                     error: Some("SSH 采集失败；保留上次观察".into()),
                 });
         }

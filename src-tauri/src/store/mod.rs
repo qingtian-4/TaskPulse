@@ -66,7 +66,7 @@ impl TaskStore {
             .active
             .iter()
             .filter(|(id, task)| {
-                authoritative.contains(&crate::monitoring::source_id(task))
+                authoritative.contains(&crate::monitoring::collector_id(task))
                     && !ids.contains(id.as_str())
             })
             .map(|(id, _)| id.clone())

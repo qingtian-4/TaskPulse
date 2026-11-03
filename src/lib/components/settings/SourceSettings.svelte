@@ -17,13 +17,19 @@
   import { sourceReadState, readTestResult, sourceCapability, sourceCatalogRows, sourceDefinitionFor, type SourceDefinition as Definition } from '$lib/source-setup';
   import { deliveryStage } from '$lib/notice';
   import type { DeliveryRecord } from '$lib/types';
-  import { formatAgo, type DashboardSettings, type MonitorSource, type SourceDiscovery, type SourceKind, type SessionPage, type ProviderHealth } from '$lib/types';
+  import { formatAgo, type DashboardSettings, type MonitorSource, type SourceDiscovery, type SourceKind, type SessionPage, type ProviderHealth, type DashboardSnapshot, type SourceSnapshot } from '$lib/types';
   let {onDirtyChange,onAttention}:{onDirtyChange:(value:boolean)=>void;onAttention:()=>void}=$props();
   $effect(()=>onDirtyChange(dirty||saving||conflict));
   let catalog=$state<Definition[]>([]),category=$state('local'),foundOnly=$state(false),platform=$state('windows');
   let settings=$state<DashboardSettings | null>(null);
   let discovery=$state<SourceDiscovery[]>([]);
   let health=$state<ProviderHealth[]>([]);
+  let liveSources=$state<SourceSnapshot[]>([]);
+  let liveRevision=0;
+  function applySnapshot(next:DashboardSnapshot) {
+    if(next.revision<liveRevision)return;
+    liveRevision=next.revision;health=next.providers;liveSources=next.view.sources;
+  }
   let tab=$state<'sources'|'sessions'|'notifications'|'updates'>('sources');
   let selected=$state('');
   let query=$state('');
@@ -47,12 +53,6 @@
   let conflict=$state(false);
   let closePrompt=$state(false);
   let closing=false;
-  let now=$state(Date.now());
-  function applyProviderHealth(next:ProviderHealth[]) {
-    // Fresh proof may arrive between display ticks. Match the receipt time
-    // used by the dashboard before interpreting this collection's health.
-    now=Date.now();health=next;
-  }
   let reading=$state(false), readTest=$state<{id:string;message:string;passed?:boolean}|null>(null);
   let notificationTest=$state(false);
   const testStage=$derived(deliveryRecords.some(r=>r.test && r.stage==='rendered')?'已有测试渲染记录（非已读）':notificationTest?'已提交 · 请确认是否看到':'本窗口暂无测试记录');
@@ -63,8 +63,7 @@
       const since=await invoke<number>('request_refresh');
       for(let n=0;n<100;n++){
         await new Promise(r=>setTimeout(r,300));
-        applyProviderHealth(await invoke<ProviderHealth[]>('get_providers'));
-        const result=readTestResult(id,health,since);
+        const result=readTestResult(id,await invoke<ProviderHealth[]>('get_providers'),since);
         if(result!=='pending'){readTest={id,passed:result==='passed',message:result==='passed'?'已连接，等待新任务':'本次读取失败 · 查看高级诊断'};return;}
       }
       readTest={id,message:'读取超时 · 保留原状态，不视为任务结束'};
@@ -72,7 +71,7 @@
   }
   let editor=$derived(settings?.sources.find(s=>s.id===selected) ?? null);
   const kinds=$derived(catalog.map(d=>({kind:d.kind,name:d.name})));
-  const candidates=$derived(discovery.filter(d=>d.available && d.candidate && !settings?.sources.some(s=>s.id===d.candidate!.id || s.kind===d.candidate!.kind && s.location.toLowerCase()===d.candidate!.location.toLowerCase())));
+  const candidates=$derived(discovery.filter(d=>d.data_location_detected===true && d.candidate && !settings?.sources.some(s=>s.id===d.candidate!.id || s.kind===d.candidate!.kind && s.location.toLowerCase()===d.candidate!.location.toLowerCase())));
   function addCandidate(candidate:MonitorSource) {
     if(!settings)return;
     settings.sources.push({...candidate,enabled:true});selected=candidate.id;dirty=true;notice='已添加 '+candidate.name+'；保存后开始关注新执行。';
@@ -120,7 +119,7 @@
       notice='来源开关已即时生效，其他编辑仍需应用。';
     }catch(e){source.enabled=previous;configError(e);}finally{saving=false;}
   }
-  function sourceState(source:MonitorSource){return sourceReadState(source,applied,health,now);}
+
   async function saveAndClose(){await save();if(!dirty && !error){closing=true;await getCurrentWindow().close();}}
   async function discardAndClose(){closing=true;await getCurrentWindow().close();}
   async function reloadSettings(){
@@ -169,13 +168,13 @@
         applied=structuredClone($state.snapshot(settings));
         error=await invoke<string | null>('get_monitoring_error') ?? '';
         discovery=await invoke<SourceDiscovery[]>('discover_sources');
-        applyProviderHealth(await invoke<ProviderHealth[]>('get_providers'));
+        const healthCleanup=await listen<DashboardSnapshot>('dashboard-snapshot-updated',e=>applySnapshot(e.payload));if(mounted)cleanups.push(healthCleanup);else healthCleanup();
+        applySnapshot(await invoke<DashboardSnapshot>('get_dashboard_snapshot'));
         notificationError=await invoke<string | null>('get_notification_error') ?? '';
-        if(!settings.onboarding_complete){for(const source of settings.sources){source.enabled=['codex','claude_code','hermes','deepseek_desktop','doubao','zcode','opencode','workbuddy'].includes(source.kind) && (discovery.find(d=>d.id===source.id)?.available ?? false);}dirty=true;}
+        if(!settings.onboarding_complete){for(const source of settings.sources){source.enabled=['codex','claude_code','hermes','deepseek_desktop','doubao','zcode','opencode','workbuddy'].includes(source.kind) && (discovery.find(d=>d.id===source.id)?.data_location_detected===true);}dirty=true;}
         selected='';
         const updateCleanup=await listen<{phase:string}>('application-update',e=>updating=['downloading','verifying','installing'].includes(e.payload.phase));if(mounted)cleanups.push(updateCleanup);else updateCleanup();
         const currentUpdate=await invoke<{phase:string}>('get_update_status');updating=['downloading','verifying','installing'].includes(currentUpdate.phase);
-        const cleanup=await listen<ProviderHealth[]>('providers-updated',e=>applyProviderHealth(e.payload));if(mounted)cleanups.push(cleanup);else cleanup();
         const notificationCleanup=await listen<string>('notification-error',e=>notificationError=e.payload);if(mounted)cleanups.push(notificationCleanup);else notificationCleanup();
         const settingsCleanup=await listen<DashboardSettings>('monitoring-settings-updated',e=>{
           if(saving)return;
@@ -190,15 +189,14 @@
     })();
     const interval=setInterval(()=>{if(tab==='sessions')void loadSessions();if(notificationTest)void loadDelivery();},3000);
     const discoveryTimer=setInterval(()=>{if(tab==='sources')void invoke<SourceDiscovery[]>('discover_sources').then(value=>discovery=value).catch(e=>error=String(e));},30000);
-    const clock=setInterval(()=>now=Date.now(),1000);
-    return()=>{mounted=false;clearInterval(interval);clearInterval(discoveryTimer);clearInterval(clock);cleanups.forEach(fn=>fn());};
+    return()=>{mounted=false;clearInterval(interval);clearInterval(discoveryTimer);cleanups.forEach(fn=>fn());};
   });
 
   function definitionFor(source:MonitorSource):Definition {
-    return sourceDefinitionFor(catalog,source,platform);
+    return sourceDefinitionFor(catalog,source);
   }
   function rows(){
-    return sourceCatalogRows(catalog,settings?.sources??[],discovery,category,platform,foundOnly);
+    return sourceCatalogRows(catalog,settings?.sources??[],discovery,category,platform,foundOnly,liveSources);
   }
   function choose(definition:Definition,source?:MonitorSource){
     if(!settings)return;
@@ -223,9 +221,11 @@
   <fieldset disabled={updating}>
   {#if tab==='sources'&&settings}
     {#if category==='local'}<div class="settings-group"><SettingRow label={$t("自动发现本机 Agent")} description={$t("识别新的只读本机来源，保留已关闭来源和项目范围。")}><input class="settings-switch" type="checkbox" role="switch" aria-label={$t("自动发现本机 Agent")} checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} onchange={e=>autoDiscover(e.currentTarget.checked,e.currentTarget)}/></SettingRow></div>{/if}
-    <div class="source-toolbar"><div class="settings-actions"><button class="settings-tab" aria-pressed={!foundOnly} onclick={()=>foundOnly=false}>{$t("全部接入")}</button><button class="settings-tab" aria-pressed={foundOnly} onclick={()=>foundOnly=true}>{$t("已发现")}</button></div><button class="tp-btn" onclick={detect}>{$t("重新检测")}</button></div>
+    <div class="source-toolbar"><div class="settings-actions"><button class="settings-tab" aria-pressed={!foundOnly} onclick={()=>foundOnly=false}>{$t("全部接入")}</button><button class="settings-tab" aria-pressed={foundOnly} onclick={()=>foundOnly=true}>{$t("已检测到")}</button></div><button class="tp-btn" onclick={detect}>{$t("重新检测")}</button></div>
     <div class="source-list">{#each rows() as row (row.definition.id+':'+(row.source?.id??''))}
-      <article class="source-card" data-definition={row.definition.id} data-source-id={row.source?.id??''}><div class="source-row"><div class="source-identity"><strong>{row.source?.name??$t(row.definition.name)}</strong><small>{row.definition.kind==='scanner'?$t('仅进程识别'):row.definition.kind==='generic_event'?$t('事件接入'):row.definition.category==='remote'?$t('独立连接'):$t('原生会话读取')} · {row.found?$t('已发现'):$t('尚未发现数据')}</small></div>{#if row.source}<span class="read-state">{$t(sourceState(row.source))}</span><input class="settings-switch" type="checkbox" role="switch" aria-label={'启用 '+row.source.name} checked={row.source.enabled} disabled={saving} onchange={async e=>{const control=e.currentTarget;await toggleSource(row.source!,control.checked);control.checked=row.source!.enabled;}}/>{/if}<button class="tp-btn source-expand" aria-label={(row.source?.name??$t(row.definition.name))+' 设置'} aria-expanded={!!row.source&&selected===row.source.id} onclick={()=>choose(row.definition,row.source)}>{!row.source?$t('添加来源'):selected===row.source.id?$t('收起'):$t('配置')}</button></div>
+      {@const saved=applied?.sources.find(s=>s.id===row.source?.id)}
+      {@const enabled=!!(applied?.onboarding_complete && saved?.enabled)}
+      <article class="source-card" data-definition={row.definition.id} data-source-id={row.source?.id??''}><div class="source-row"><div class="source-identity"><strong>{row.source?.name??$t(row.definition.name)}</strong><small>{row.definition.kind==='scanner'?$t('仅进程识别'):row.definition.kind==='generic_event'?$t('事件接入'):row.definition.category==='remote'?$t('独立连接'):$t('原生会话读取')} · {$t(row.supported?'支持此平台':'当前平台未列出支持')} · {$t(row.dataDetected===true?'已检测到数据':row.locationDetected===true?'已检测到数据位置':row.dataDetected===false||row.locationDetected===false?'未检测到数据':'数据尚未确认')}</small>{#if row.source}<small>{$t('本次发现会话 {count}',{count:row.observation?.discovered_sessions??0})} · {$t('当前任务 {count}',{count:enabled?(row.observation?.current_tasks??0):0})}</small>{/if}</div>{#if row.source}<span class="read-state">{$t(!saved||!applied?.onboarding_complete?'未保存 · 尚未监控':enabled?'已启用':'已停用')} · {$t(sourceReadState(row.observation,enabled))}</span><input class="settings-switch" type="checkbox" role="switch" aria-label={$t('启用 {name}',{name:row.source.name})} checked={row.source.enabled} disabled={saving} onchange={async e=>{const control=e.currentTarget;await toggleSource(row.source!,control.checked);control.checked=row.source!.enabled;}}/>{/if}<button class="tp-btn source-expand" aria-label={(row.source?.name??$t(row.definition.name))+' 设置'} aria-expanded={!!row.source&&selected===row.source.id} onclick={()=>choose(row.definition,row.source)}>{!row.source?$t('添加来源'):selected===row.source.id?$t('收起'):$t('配置')}</button></div>
       {#if editor&&row.source?.id===editor.id}<div class="source-editor"><label>{$t('来源名称')}<input bind:value={editor.name} oninput={changed}/></label>
           <div class="capability-note tp-surface"><Info size={15} aria-hidden="true"/><p>{$t(row.definition.description??sourceCapability(editor.kind))}</p></div>
           <div class="source-tests"><button class="secondary tp-btn" title={$t("只检查所选来源本次读取，不验收 Agent 结束事件")} disabled={dirty || saving || reading || !editor.enabled} onclick={testRead}><Radio size={14}/>{reading?$t('正在读取…'):$t('测试读取来源')}</button><button class="secondary tp-btn" title={$t("只测试全局通知通道，不创建任务")} disabled={dirty || saving} onclick={testNotification}><Bell size={14}/>{$t("发送测试提醒")}</button></div>

@@ -1,42 +1,44 @@
-import type { DashboardSettings, MonitorSource, ProviderHealth, SourceKind, SourceDiscovery } from './types';
+import type { DashboardSettings, MonitorSource, ProviderHealth, SourceKind, SourceDiscovery, SourceSnapshot, SourceReadState } from './types';
 
 export interface SourceDefinition {
   description?:string; id:string; name:string; kind:SourceKind; category:string;
   location_kind:string; platforms:string[]; adapter_id?:string; agent_id?:string;
   multiple_instances?:boolean;
 }
-export function sourceDefinitionFor(catalog:SourceDefinition[],source:MonitorSource,platform:string):SourceDefinition {
+export function sourceDefinitionFor(catalog:SourceDefinition[],source:MonitorSource):SourceDefinition {
   return catalog.find(d=>d.kind===source.kind&&(d.kind!=='generic_event'||d.adapter_id===source.integration?.adapter_id))
-    ??{id:source.id,name:source.name,kind:source.kind,category:'custom',location_kind:'none',platforms:[platform]};
+    ??{id:source.id,name:source.name,kind:source.kind,category:'custom',location_kind:'none',platforms:[]};
 }
-export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean) {
-  const saved=sources.filter(s=>sourceDefinitionFor(catalog,s,platform).category===category)
-    .map(source=>({definition:sourceDefinitionFor(catalog,source,platform),source,found:discovery.find(d=>d.id===source.id)?.available??false}));
-  const available=catalog.filter(d=>d.category===category&&(!d.platforms.length||d.platforms.includes(platform)));
-  const additions=available.filter(d=>d.multiple_instances||!saved.some(r=>r.definition.id===d.id))
-    .map(definition=>({definition,source:undefined as MonitorSource|undefined,found:discovery.some(d=>d.available&&(d.id===definition.id||d.candidate?.kind===definition.kind&&definition.kind!=='generic_event'))}));
-  return [...saved,...additions].filter(r=>!foundOnly||r.found);
-}
-
-// Readability is a transport observation, never proof of Agent lifecycle support.
-export function sourceReadState(source:MonitorSource, applied:DashboardSettings|null, health:ProviderHealth[], now:number):string {
-  const saved=applied?.sources.find(s=>s.id===source.id);
-  if(!saved || !applied?.onboarding_complete)return '未保存 · 尚未监控';
-  if(!saved.enabled)return '已保存 · 已停用';
-  const h=health.find(h=>h.provider===source.id);
-  if(!h?.last_attempt)return '已保存 · 等待首次读取';
-  if(h.status==='degraded')return (saved.kind==='codex'||saved.kind==='codex_wsl') &&
-    now>=h.last_attempt && now-h.last_attempt<=30000 &&
-    Object.values(h.task_observations??{}).some(proof=>proof.observed_at===h.last_attempt)?'部分会话需检查':'读取异常 · 需检查';
-  if(!h.last_success || now-h.last_success>Math.max(30000,saved.poll_interval_ms*3))return '读取结果待更新';
-  return '来源读取正常';
+export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []) {
+  const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)
+    .map(source=>{
+      const definition=sourceDefinitionFor(catalog,source);
+      const observation=live.find(row=>row.id===source.id&&row.kind===source.kind&&row.location===source.location);
+      return {definition,source,observation,supported:catalog.includes(definition) && (!definition.platforms.length || definition.platforms.includes(platform)),
+        locationDetected:discovery.find(d=>d.id===source.id&&d.location===source.location)?.data_location_detected??null,
+        dataDetected:observation?.data_detected??null};
+    });
+  const supported=catalog.filter(d=>d.category===category&&(!d.platforms.length||d.platforms.includes(platform)));
+  const additions=supported.filter(d=>d.multiple_instances||!saved.some(r=>r.definition.id===d.id))
+    .map(definition=>{
+      const matches=discovery.filter(d=>d.candidate && (d.id===definition.id || d.candidate.kind===definition.kind && definition.kind!=='generic_event'));
+      const locationDetected=matches.some(d=>d.data_location_detected===true) ? true : matches.some(d=>d.data_location_detected===false) ? false : null;
+      return {definition,source:undefined,observation:undefined,supported:true,locationDetected,dataDetected:null};
+    });
+  return [...saved,...additions].filter(r=>!foundOnly||r.dataDetected===true||r.locationDetected===true);
 }
 
-export function sourceReadTone(source:MonitorSource, applied:DashboardSettings|null, health:ProviderHealth[], now:number):'neutral'|'stale'|'success' {
-  const saved=applied?.sources.find(s=>s.id===source.id);
-  if(!saved || !applied?.onboarding_complete || !saved.enabled)return 'neutral';
-  const h=health.find(h=>h.provider===source.id);
-  return h?.status==='connected' && !!h.last_attempt && !!h.last_success && now-h.last_success<=Math.max(30000,saved.poll_interval_ms*3)?'success':'stale';
+const READ_LABELS:Record<SourceReadState,string>={
+  disabled:'未读取',waiting:'等待首次读取',healthy:'来源读取正常',
+  partial:'部分会话需检查',failed:'读取异常 · 需检查',stale:'读取结果待更新',
+};
+export function sourceReadState(observation:SourceSnapshot|undefined, enabled:boolean):string {
+  return READ_LABELS[enabled ? observation?.enabled ? observation.read_state : 'waiting' : 'disabled'];
+}
+export function summarizeSources(sources:SourceSnapshot[]) {
+  const enabled=sources.filter(s=>s.enabled);
+  return {enabled:enabled.length,waiting:enabled.filter(s=>s.read_state==='waiting').length,
+    issues:enabled.filter(s=>['partial','failed','stale'].includes(s.read_state)).length};
 }
 
 // A visual hint only. Reaching step 4 is NOT host lifecycle certification.

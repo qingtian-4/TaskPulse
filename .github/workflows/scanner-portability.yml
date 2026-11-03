@@ -1,20 +1,26 @@
-name: Scanner macOS compile boundary
+name: macOS compile
 
 on:
   pull_request:
     paths:
-      - 'src-tauri/src/scanner/**'
-      - 'src-tauri/src/process/**'
-      - 'src-tauri/src/process.rs'
+      - 'src-tauri/**/*.rs'
+      - 'src-tauri/.cargo/**'
+      - 'src-tauri/capabilities/**'
+      - 'src-tauri/permissions/**'
+      - 'src-tauri/tauri*.conf.json'
+      - 'locales/**'
       - 'src-tauri/Cargo.toml'
       - 'src-tauri/Cargo.lock'
       - '.github/workflows/scanner-portability.yml'
   push:
-    branches: ['codex/**']
+    branches: [main, 'codex/**']
     paths:
-      - 'src-tauri/src/scanner/**'
-      - 'src-tauri/src/process/**'
-      - 'src-tauri/src/process.rs'
+      - 'src-tauri/**/*.rs'
+      - 'src-tauri/.cargo/**'
+      - 'src-tauri/capabilities/**'
+      - 'src-tauri/permissions/**'
+      - 'src-tauri/tauri*.conf.json'
+      - 'locales/**'
       - 'src-tauri/Cargo.toml'
       - 'src-tauri/Cargo.lock'
       - '.github/workflows/scanner-portability.yml'
@@ -23,7 +29,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: scanner-portability-${{ github.head_ref || github.ref_name }}
+  group: macos-compile-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
@@ -33,6 +39,9 @@ jobs:
     timeout-minutes: 25
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
       - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
           toolchain: "1.98.0"

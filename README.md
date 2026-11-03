@@ -115,18 +115,18 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 - [ ] 桌面端稳定后推出 Android / iOS App，随时查看任务与提醒
 - [ ] 支持在智能手表、手环上查看任务进度与提醒
 
-## 从源码构建
+## 本地开发
 
-需要 Bun、Rust 1.90+ 和 [Tauri 开发环境](https://v2.tauri.app/start/prerequisites/)。
+安装 Bun、Rust 1.90+ 和 [Tauri 开发依赖](https://v2.tauri.app/start/prerequisites/)，然后克隆仓库并启动开发版：
 
 ```sh
 git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git
 cd TaskPulse
 bun install --frozen-lockfile
-bun run tauri build
+bun run dev:desktop
 ```
 
-安装包位于 `src-tauri/target/release/bundle/`。本地运行使用 `bun run tauri dev`。
+这会启动真实托盘应用，使用独立开发配置。日常开发、便携测试包和按需安装验收见 [CONTRIBUTING.md](CONTRIBUTING.md)。
 
 ## 贡献与许可
 

@@ -37,7 +37,7 @@ try{
   original=await root.invoke('get_monitoring_settings');
   const discovery=await root.invoke('discover_sources');
   let source=original.sources.find((s:any)=>s.kind==='claude_code');
-  const candidate=discovery.find((s:any)=>s.available&&s.candidate?.kind==='claude_code');
+  const candidate=discovery.find((s:any)=>s.data_location_detected===true&&s.candidate?.kind==='claude_code');
   if(!source&&!candidate)throw Error('No actual installed Claude data source');
   await root.invoke('plugin:window|show',{label:'popup'});
   await root.evaluate(`document.querySelector('[aria-label="管理监控来源"]').click()`);

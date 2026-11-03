@@ -9,7 +9,7 @@ test('public documentation links resolve using tracked files, not local reports'
   expect(documentationErrors(root,gitFiles(root))).toEqual([]);
 });
 
-test('both READMEs expose the actual one-line installation commands before source builds',()=>{
+test('both READMEs expose the actual one-line installation commands before isolated development',()=>{
   const windows='irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex';
   const mac='curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash';
   for(const file of ['README.md','README.en.md']){
@@ -21,14 +21,15 @@ test('both READMEs expose the actual one-line installation commands before sourc
     expect(body).toContain('- [ ]');
     expect(body).toContain('ZCode');expect(body).toContain('WorkBuddy');
     expect(body).toContain('Apple Silicon');expect(body).toContain('Intel');
-    expect(body).toContain('bun run tauri build');
+    expect(body).toContain('bun run dev:desktop');
+    expect(body).toContain('(CONTRIBUTING.md)');
     expect(body).toContain('sprklai/agenttray');expect(body).toContain('(LICENSE)');
     expect(body).not.toMatch(/assets\/legacy-agenttray\//);
     expect(body).not.toMatch(/docs\/(?:internal|maintainers)\//);
     expect([...body.matchAll(/^git clone .+$/gm)].map(m=>m[0])).toEqual(['git clone --branch main --single-branch https://github.com/qingtian-4/TaskPulse.git']);
   }
-  expect(read('README.md').indexOf('## 从源码构建')).toBeLessThan(read('README.md').indexOf('## 贡献与许可'));
-  expect(read('README.en.md').indexOf('## Build from source')).toBeLessThan(read('README.en.md').indexOf('## Contributing and license'));
+  expect(read('README.md').indexOf('## 本地开发')).toBeLessThan(read('README.md').indexOf('## 贡献与许可'));
+  expect(read('README.en.md').indexOf('## Develop locally')).toBeLessThan(read('README.en.md').indexOf('## Contributing and license'));
   expect(read('README.md')).not.toMatch(/实验支持|测试版本|尚未公开发布|README 怎么呈现/);
   expect(read('README.en.md')).not.toMatch(/experimental|test candidate/);
   // Preserve real command contracts: the Mac bootstrap requires Bash.

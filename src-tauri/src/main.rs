@@ -4,6 +4,7 @@ mod attention;
 mod build_info;
 mod claude_events;
 mod claude_integration;
+mod dashboard_view;
 mod domain;
 mod focusers;
 mod heuristics;

@@ -14,6 +14,8 @@ use tauri::{AppHandle, Emitter, Listener, Manager, WebviewUrl};
 
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
+use crate::dashboard_view::ReadState;
+#[cfg(test)]
 use crate::domain::{TaskSnapshot, TaskStatus, WaitingReason};
 use crate::popup_interaction::{FocusContext, Input, Popup};
 use crate::providers::{HostStatus, ProviderStatus};
@@ -63,95 +65,73 @@ struct TrayPresentation {
     tooltip: String,
 }
 
-fn result_to_review(task: &TaskSnapshot) -> bool {
-    task.unread
-        && !task.requires_action()
-        && (matches!(task.status, TaskStatus::Succeeded | TaskStatus::Failed)
-            || task.status == TaskStatus::WaitingInput
-                && task.waiting_reason == Some(WaitingReason::TurnEnded)
-            || !task.is_agent_session()
-                && task.source == crate::domain::TaskSource::RemoteTmux
-                && task.confidence == crate::domain::DetectionConfidence::Inferred
-                && task.status == TaskStatus::Idle
-                && task.finished_at.is_some()
-                && task.exit_code.is_none())
-}
-
-fn aggregate(snapshot: &DashboardSnapshot) -> TrayPresentation {
-    let mut needs = 0;
-    let mut running = 0;
-    let mut unread = 0;
-    let mut failed = 0;
-    let mut uncertain = 0;
-    let unhealthy = snapshot
-        .providers
+fn aggregate(snapshot: &DashboardSnapshot, english: bool) -> TrayPresentation {
+    let counts = &snapshot.view.counts;
+    let sources = &snapshot.view.sources;
+    let enabled = sources.iter().filter(|s| s.enabled).count();
+    let waiting = sources
         .iter()
-        .filter(|p| p.status == ProviderStatus::Degraded || p.last_success.is_none())
+        .filter(|s| s.read_state == ReadState::Waiting)
         .count();
+    let unhealthy = sources
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.read_state,
+                ReadState::Failed | ReadState::Partial | ReadState::Stale
+            )
+        })
+        .count()
+        + snapshot
+            .providers
+            .iter()
+            .filter(|p| p.provider.starts_with("state:") && p.status == ProviderStatus::Degraded)
+            .count();
     let disconnected = snapshot
         .hosts
         .iter()
         .filter(|h| h.status == HostStatus::Disconnected)
         .count();
-    for task in &snapshot.tasks {
-        let source_unhealthy = task.source_instance.as_ref().is_some_and(|id| {
-            snapshot
-                .providers
-                .iter()
-                .find(|p| &p.provider == id)
-                .is_none_or(|p| {
-                    (p.status == ProviderStatus::Degraded || p.last_success.is_none())
-                        && !p.verifies_task(task, std::time::SystemTime::now())
-                })
-        }) || task.host.as_ref().is_some_and(|host| {
-            snapshot
-                .hosts
-                .iter()
-                .any(|h| &h.host == host && h.status == HostStatus::Disconnected)
-        });
-        let stale = task.stale || source_unhealthy;
-        if stale
-            || matches!(task.status, TaskStatus::Unknown | TaskStatus::Disconnected)
-            || task.status == TaskStatus::WaitingInput
-                && !task.requires_action()
-                && task.waiting_reason != Some(WaitingReason::TurnEnded)
-        {
-            uncertain += 1;
-        }
-        if stale {
-            continue;
-        }
-        if task.requires_action() {
-            needs += 1;
-        }
-        if task.status == TaskStatus::Running || task.requires_action() {
-            running += 1;
-        }
-        if result_to_review(task) {
-            unread += 1;
-        }
-        // A viewed result retained only by a pin does not demand attention again.
-        if task.status == TaskStatus::Failed && task.unread {
-            failed += 1;
-        }
-    }
     let starting = snapshot.revision == 0;
-    let icon = if needs > 0 {
+    let icon = if counts.action > 0 {
         "needs-input"
-    } else if failed > 0 || unhealthy > 0 || disconnected > 0 || uncertain > 0 || starting {
+    } else if counts.failed > 0
+        || unhealthy > 0
+        || disconnected > 0
+        || counts.uncertain > 0
+        || waiting > 0
+        || starting
+        || enabled == 0
+    {
         "error"
-    } else if unread > 0 {
+    } else if counts.results > 0 {
         "review"
-    } else if running > 0 {
+    } else if counts.ongoing > 0 {
         "working"
     } else {
         "idle"
     };
+    let source_state = match (english, starting, enabled, waiting) {
+        (true, true, _, _) => " · Starting".into(),
+        (false, true, _, _) => " · 正在初始化".into(),
+        (true, _, 0, _) => " · No sources".into(),
+        (false, _, 0, _) => " · 无启用来源".into(),
+        (_, _, _, 0) => String::new(),
+        (true, _, _, n) => format!(" · First read {n}"),
+        (false, _, _, n) => format!(" · 首次读取 {n}"),
+    };
     // Keep this comfortably below Windows' 127 UTF-16-unit tooltip limit.
-    let tooltip = format!(
-        "TaskPulse · 进行中 {running}（待处理 {needs}）· 待查看 {unread} · 任务失败 {failed} · 来源异常 {unhealthy} / 断连 {disconnected} · 状态待更新 {}",
-        uncertain + usize::from(starting)
-    );
+    let tooltip = if english {
+        format!(
+            "TaskPulse · Ongoing {} (Action {}) · Review {} · Failed {} · Check {unhealthy}/SSH {disconnected} · Uncertain {}{source_state}",
+            counts.ongoing, counts.action, counts.results, counts.failed, counts.uncertain
+        )
+    } else {
+        format!(
+            "TaskPulse · 进行中 {}（待处理 {}）· 待查看 {} · 任务失败 {} · 来源异常 {unhealthy} / 断连 {disconnected} · 状态待更新 {}{source_state}",
+            counts.ongoing, counts.action, counts.results, counts.failed, counts.uncertain
+        )
+    };
     TrayPresentation { icon, tooltip }
 }
 
@@ -166,7 +146,7 @@ fn icon_bytes(state: &str) -> &'static [u8] {
 }
 
 pub fn update_icon(app: &AppHandle, snapshot: &DashboardSnapshot) {
-    let next = aggregate(snapshot);
+    let next = aggregate(snapshot, crate::localization::english());
     let revision = snapshot.revision;
     let handle = app.clone();
     // Tauri setters wait for the main thread. Acquire the cache lock there,
@@ -934,7 +914,44 @@ mod tests {
             tasks,
             hosts: vec![],
             providers: vec![],
+            view: Default::default(),
+            projection: None,
         }
+    }
+
+    fn aggregate(input: &DashboardSnapshot) -> TrayPresentation {
+        let mut snapshot = input.clone();
+        let mut settings = crate::monitoring::from_legacy(&Default::default(), true);
+        settings.onboarding_complete = true;
+        let mut source = settings.sources.remove(0);
+        source.id = "fixture-source".into();
+        source.kind = if snapshot
+            .providers
+            .iter()
+            .any(|p| !p.task_observations.is_empty())
+        {
+            crate::monitoring::SourceKind::Codex
+        } else {
+            crate::monitoring::SourceKind::Hooks
+        };
+        source.enabled = true;
+        settings.sources = vec![source];
+        for task in &mut snapshot.tasks {
+            if task.source_instance.is_none() {
+                task.source_instance = Some("fixture-source".into());
+            }
+        }
+        if snapshot.providers.is_empty() {
+            snapshot.providers.push(health(ProviderStatus::Connected));
+        }
+        snapshot.view = crate::dashboard_view::project(
+            &snapshot.tasks,
+            &snapshot.providers,
+            &settings,
+            &Default::default(),
+            SystemTime::now(),
+        );
+        super::aggregate(&snapshot, false)
     }
 
     fn pending() -> TaskSnapshot {
@@ -1005,7 +1022,32 @@ mod tests {
         let mut first = snapshot(vec![]);
         first.revision = 0;
         assert_eq!(aggregate(&first).icon, "error");
-        assert!(aggregate(&first).tooltip.contains("状态待更新 1"));
+        assert!(aggregate(&first).tooltip.contains("正在初始化"));
+    }
+
+    #[test]
+    fn no_sources_and_waiting_sources_do_not_advertise_verified_idle() {
+        let mut state = snapshot(Vec::new());
+        let no_sources = super::aggregate(&state, true);
+        assert_eq!(no_sources.icon, "error");
+        assert!(no_sources.tooltip.contains("No sources"));
+        state
+            .view
+            .sources
+            .push(crate::dashboard_view::SourceSnapshot {
+                id: "waiting".into(),
+                kind: crate::monitoring::SourceKind::Codex,
+                location: String::new(),
+                enabled: true,
+                read_state: ReadState::Waiting,
+                data_detected: None,
+                discovered_sessions: 0,
+                current_tasks: 0,
+            });
+        let first = super::aggregate(&state, true);
+        assert_eq!(first.icon, "error");
+        assert!(first.tooltip.contains("First read 1"));
+        assert!(first.tooltip.encode_utf16().count() < 128);
     }
 
     #[test]
@@ -1118,7 +1160,7 @@ mod tests {
         shell.finished_at = Some(SystemTime::now());
         assert_eq!(aggregate(&snapshot(vec![shell.clone()])).icon, "review");
         shell.session_id = Some("agent-session".into());
-        assert!(!result_to_review(&shell));
+        assert!(!crate::dashboard_view::result_to_review(&shell));
     }
 
     #[test]

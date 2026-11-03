@@ -51,7 +51,7 @@ Every successful **Windows quality** run uploads an **installation-free Windows 
 
 Temporary development, installer-preview and upgrade-evidence artifacts expire after **7 days**. [GitHub artifact retention](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/remove-workflow-artifacts) applies to new uploads; existing older artifacts keep their previous expiry. Download through the run summary, check the SHA and save the final evidence locally before expiry. No application profiles, captured private sessions or signing keys belong in artifacts.
 
-For package-specific changes, opt into the existing heavier PR workflows:
+The **macOS compile** workflow checks shared Rust changes and their build inputs on PRs and on main. For package-specific changes, opt into the heavier PR workflows:
 
 | PR label | What it exercises |
 | --- | --- |
@@ -75,3 +75,26 @@ A formal Release is for an accepted **stable** version, not an iteration/testing
 3. Run `bun run release:check`, `bun run test:release`, `bun audit`, `bun run audit:rust` and `bun run audit:secrets`. Review lower advisories too; incomplete or failing mandatory checks block release.
 4. The maintainer creates and pushes the exact approved `vMAJOR.MINOR.PATCH` tag on `main`. The existing Release workflow builds Windows and both macOS architectures, validates installers/signatures, assembles the signed feed and creates a **draft only**. Prerelease tags are rejected by this formal workflow; use temporary Actions artifacts for testing.
 5. Recheck the draft's exact commit, manifests, checksums, platform evidence and update feed, then explicitly publish it. No ordinary PR, development build or verification command creates tags or publishes a Release.
+
+### Same-commit release evidence
+
+Choose one clean, full candidate SHA and record the version beside it. For each
+applicable check, record its status, run or report link, and tested SHA. Retain
+artifact manifests and SHA-256 checksums before Actions artifacts expire. A
+passing PR head can gate its merge; the resulting main commit has a different
+SHA and needs its own evidence for release. If a row was skipped or tested a
+different commit, leave it open or mark it out of scope with a reason.
+
+| Evidence | What to record |
+| --- | --- |
+| Source and checks | Full candidate SHA on main, version checks, Windows quality and Security runs, and lightweight macOS compile when shared Rust or its build inputs changed. Record frontend/Rust/history audit results separately. |
+| Native behavior | Exact build commit, clean-build flag, executable SHA-256, platform, exercised behavior and cleanup. Record provider fixtures, live Agent checks and physical desktop tests separately. |
+| Fresh installation | Windows NSIS and MSI separately; macOS arm64 and x64 separately. Record package hashes, matching manifests, install/launch/cleanup and the trust path actually exercised. |
+| Installed upgrade | For affected upgrade paths, record old version, candidate SHA, package and platform, preserved state, signature checks and restart result. Identify controlled-feed evidence separately from public-feed evidence. |
+| Draft assets | Verify the approved tag points at the candidate SHA, all packages and manifests match it, dependency notices and checksums are present, and the signed update feed matches the packages. Check the private vulnerability reporting setting and link. |
+
+Use the opt-in PR labels for installer and upgrade checks when the change needs
+them. The macOS compile job only type-checks Rust (including test code). It does
+not build installers, launch the application, or replace either macOS release
+artifact and its native acceptance. Keep the filled checklist with the local
+release evidence or PR; the checklist itself does not publish anything.

@@ -107,3 +107,22 @@ test('fast CI produces expiring SHA-bound development artifacts; installer and u
   const publish=w.jobs.draft.steps.find((s:any)=>s.uses?.startsWith('softprops/action-gh-release'));
   expect(publish.with.draft).toBe(true);expect(publish.with.prerelease).toBe(false);
 });
+
+test('shared Rust changes get exact-head macOS compilation without packaging',()=>{
+  const w=Bun.YAML.parse(read('.github/workflows/scanner-portability.yml')) as any;
+  for(const trigger of ['pull_request','push']){
+    expect(w.on[trigger].paths).toContain('src-tauri/**/*.rs');
+    expect(w.on[trigger].paths).toContain('src-tauri/Cargo.lock');
+  }
+  expect(w.on.push.branches).toContain('main');
+  expect(w.concurrency.group).toContain('github.ref');
+  expect(w.concurrency.group).not.toContain('github.head_ref');
+  expect(w.permissions).toEqual({contents:'read'});
+  const steps=w.jobs['macos-check'].steps;
+  expect(steps.find((s:any)=>s.uses?.startsWith('actions/checkout')).with).toEqual({
+    ref:'${{ github.event.pull_request.head.sha || github.sha }}','persist-credentials':false
+  });
+  expect(steps.filter((s:any)=>s.run).map((s:any)=>s.run)).toEqual([
+    'cargo check --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --tests'
+  ]);
+});
