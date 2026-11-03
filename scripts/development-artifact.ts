@@ -4,6 +4,16 @@ import {dirname,join,resolve} from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {sha256} from './release';
 
+export function verifyDevelopmentBuild(build:any,commit:string,version:string) {
+  if(!/^[a-f0-9]{40}$/.test(commit)) {
+    throw Error('A full source SHA is required');
+  }
+  if(build?.channel!=='development' || build.commit!==commit ||
+      build.modified!==false || build.version!==version) {
+    throw Error('Stale or non-development executable does not match the committed source');
+  }
+}
+
 export function stageDevelopment(executable:string,out:string,commit:string,version:string) {
   if(!/^[a-f0-9]{40}$/.test(commit))throw Error('A full source SHA is required');
   if(existsSync(out))throw Error('Development output already exists; use a fresh directory');
@@ -32,7 +42,7 @@ if(import.meta.main){
   const native=spawnSync(executable,['--profile-info'],{encoding:'utf8',windowsHide:true,timeout:15000});
   if(native.status!==0)throw Error('Cannot verify the built executable');
   const build=JSON.parse(native.stdout);
-  if(build.channel!=='development'||build.commit!==commit||build.modified!==false||build.version!==JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version)throw Error('Stale or non-development executable does not match the committed source');
+  verifyDevelopmentBuild(build,commit,JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version);
   stageDevelopment(resolve(arg('--exe')),resolve(arg('--out')),commit,JSON.parse(readFileSync(join(root,'package.json'),'utf8')).version);
   console.log(`Staged isolated Windows development build ${commit}`);
 }

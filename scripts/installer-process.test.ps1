@@ -36,6 +36,7 @@ Write-Output "Final-path identity passed: $powerShellExe / $shortExe"
     # resolution or the optional CIM query is unavailable.
     $probe = Join-Path $PSScriptRoot 'native-process-evidence.ps1'
     function Join-Path { throw 'Injected provider path-resolution outage' }
+    function Get-Process { throw 'Injected process cmdlet discovery outage' }
     function Get-CimInstance { throw 'Injected CIM outage' }
     $identity = & $probe -ProcessId $PID -Exe $powerShellExe | ConvertFrom-Json
     if ($identity.pid -ne $PID -or $identity.owned_executable -ne $true -or $identity.user_matches_caller -ne $true -or $identity.elevated -isnot [bool] -or $identity.integrity_rid -le 0) {

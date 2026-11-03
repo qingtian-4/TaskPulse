@@ -6,21 +6,36 @@ function Write-EvidenceStage([string]$Stage) {
     [Console]::Error.WriteLine(("TaskPulseProbe stage={0} elapsed_ms={1}" -f $Stage,$clock.ElapsedMilliseconds))
 }
 Write-EvidenceStage 'script-entry'
-# The sibling path is already absolute. Avoid PowerShell provider resolution
-# here, which stalled before Get-Process on fresh hosted standard accounts.
+# Compute the known sibling path without requiring a provider cmdlet during
+# the short-lived probe's bootstrap.
 $installerPaths = [IO.Path]::Combine($PSScriptRoot, 'installer-process.ps1')
 Write-EvidenceStage 'load-installer-paths'
 . $installerPaths
 Write-EvidenceStage 'get-process'
-$owned=Get-Process -Id $ProcessId
+# Query this process instance directly. Cmdlet discovery can cold-load the
+# Management module before Get-Process reaches the process query.
+$owned=[Diagnostics.Process]::GetProcessById($ProcessId)
 try {
     Write-EvidenceStage 'open-process-handle'
     $handle=$owned.Handle
     Write-EvidenceStage 'check-process-exit'
     if ($owned.HasExited) { throw 'Native evidence process ownership mismatch' }
     Write-EvidenceStage 'read-process-path'
-    $actualPath=$owned.Path
+    $actualPath=$owned.MainModule.FileName
     if (-not $actualPath -or -not $Exe) { throw 'Native evidence process ownership mismatch' }
+    # A fresh standard-account session can stall while auto-discovering its
+    # first module command. Import the required inbox module by trusted path,
+    # within the same probe deadline, before resolving its compiler/serializer.
+    Write-EvidenceStage 'import-utility-module'
+    $importModule=$ExecutionContext.InvokeCommand.GetCommand('Import-Module',[Management.Automation.CommandTypes]::Cmdlet)
+    if ($null -eq $importModule) { throw 'Native evidence module loader unavailable' }
+    $utilityModule=[IO.Path]::Combine($PSHOME,'Modules','Microsoft.PowerShell.Utility','Microsoft.PowerShell.Utility.psd1')
+    & $importModule -Name $utilityModule -Scope Local -ErrorAction Stop
+    Write-EvidenceStage 'imported-utility-module'
+    Write-EvidenceStage 'resolve-add-type'
+    $addTypeCommand=$ExecutionContext.InvokeCommand.GetCommand('Add-Type',[Management.Automation.CommandTypes]::Cmdlet)
+    if ($null -eq $addTypeCommand) { throw 'Native evidence compiler command unavailable' }
+    Write-EvidenceStage 'resolved-add-type'
     Write-EvidenceStage 'compile-installer-paths'
     Initialize-InstallerPaths
     Write-EvidenceStage 'compare-final-paths'
@@ -86,7 +101,9 @@ public static class TaskPulseTokenEvidence {
 }
 '@
     Write-EvidenceStage 'loaded-token-probe'
+    Write-EvidenceStage 'read-window-title'
     $title=[string]$owned.MainWindowTitle
+    Write-EvidenceStage 'read-token-evidence'
     [pscustomobject]@{pid=$ProcessId;owned_executable=$true;user_matches_caller=[TaskPulseTokenEvidence]::UserMatches($handle,[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);elevated=([TaskPulseTokenEvidence]::Read($handle,20) -ne 0);elevation_type=[TaskPulseTokenEvidence]::Read($handle,18);integrity_rid=[TaskPulseTokenEvidence]::Integrity($handle);main_window_title=$title.Substring(0,[Math]::Min(256,$title.Length))} | ConvertTo-Json -Depth 5 -Compress
     Write-EvidenceStage 'wrote-identity'
 } finally {$owned.Dispose()}
