@@ -211,6 +211,11 @@ impl Popup {
             Input::Management(open) => {
                 self.management = open;
                 self.clear_tray();
+                if open && !self.ready {
+                    // Settings supersedes an older, still-loading popup.
+                    // Keep the window hidden at Ready as Show can activate it.
+                    self.visible = false;
+                }
             }
             Input::Ready => {
                 self.ready = true;
@@ -427,6 +432,44 @@ mod tests {
         p.apply(Input::MenuOpened);
         assert!(p.apply(Input::MenuClosed(outside())).hide);
         assert!(!p.visible);
+    }
+
+    #[test]
+    fn settings_claims_focus_before_a_late_popup_ready() {
+        let mut p = Popup::new();
+        assert!(p.apply(Input::Show).create);
+        p.apply(Input::Management(true));
+        let ready = p.apply(Input::Ready);
+        assert!(
+            !ready.focus,
+            "Late Ready must preserve the newer settings focus"
+        );
+        assert!(
+            !ready.show,
+            "Showing an inactive Windows popup can itself activate it"
+        );
+        assert!(!p.visible);
+        let show = p.apply(Input::Show);
+        assert!(
+            show.show && show.focus,
+            "A later explicit Show must still activate the popup"
+        );
+    }
+
+    #[test]
+    fn a_show_after_settings_overrides_the_older_focus_request_before_ready() {
+        let mut p = Popup::new();
+        p.apply(Input::Show);
+        p.apply(Input::Management(true));
+        p.apply(Input::Show);
+        let ready = p.apply(Input::Ready);
+        assert!(ready.show && ready.focus);
+        let mut existing = visible();
+        existing.apply(Input::Management(true));
+        assert!(
+            existing.visible,
+            "Settings must preserve an already displayed popup"
+        );
     }
 
     #[test]
