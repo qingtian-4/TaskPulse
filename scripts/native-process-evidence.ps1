@@ -12,14 +12,16 @@ $installerPaths = [IO.Path]::Combine($PSScriptRoot, 'installer-process.ps1')
 Write-EvidenceStage 'load-installer-paths'
 . $installerPaths
 Write-EvidenceStage 'get-process'
-$owned=Get-Process -Id $ProcessId
+# Query this process instance directly. Cmdlet discovery can cold-load the
+# Management module before Get-Process reaches the process query.
+$owned=[Diagnostics.Process]::GetProcessById($ProcessId)
 try {
     Write-EvidenceStage 'open-process-handle'
     $handle=$owned.Handle
     Write-EvidenceStage 'check-process-exit'
     if ($owned.HasExited) { throw 'Native evidence process ownership mismatch' }
     Write-EvidenceStage 'read-process-path'
-    $actualPath=$owned.Path
+    $actualPath=$owned.MainModule.FileName
     if (-not $actualPath -or -not $Exe) { throw 'Native evidence process ownership mismatch' }
     Write-EvidenceStage 'compile-installer-paths'
     Initialize-InstallerPaths
@@ -86,7 +88,9 @@ public static class TaskPulseTokenEvidence {
 }
 '@
     Write-EvidenceStage 'loaded-token-probe'
+    Write-EvidenceStage 'read-window-title'
     $title=[string]$owned.MainWindowTitle
+    Write-EvidenceStage 'read-token-evidence'
     [pscustomobject]@{pid=$ProcessId;owned_executable=$true;user_matches_caller=[TaskPulseTokenEvidence]::UserMatches($handle,[Security.Principal.WindowsIdentity]::GetCurrent().User.Value);elevated=([TaskPulseTokenEvidence]::Read($handle,20) -ne 0);elevation_type=[TaskPulseTokenEvidence]::Read($handle,18);integrity_rid=[TaskPulseTokenEvidence]::Integrity($handle);main_window_title=$title.Substring(0,[Math]::Min(256,$title.Length))} | ConvertTo-Json -Depth 5 -Compress
     Write-EvidenceStage 'wrote-identity'
 } finally {$owned.Dispose()}
