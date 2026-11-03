@@ -1,0 +1,13 @@
+{
+  "identifier": "ipc-management",
+  "description": "TaskPulse application commands for management",
+  "windows": [
+    "management"
+  ],
+  "permissions": [
+    "app-preferences-read",
+    "app-task-read",
+    "app-task-actions",
+    "app-management"
+  ]
+}

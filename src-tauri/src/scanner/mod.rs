@@ -59,8 +59,11 @@ struct CpuSnapshot {
     cpu_history: VecDeque<f64>,
 }
 
-/// Per-terminal-PID cache for window IDs (shared across platforms).
+/// Per-terminal-PID observations, cleared before each successful batch.
+#[cfg(not(windows))]
 type WindowCache = HashMap<u32, Option<String>>;
+#[cfg(windows)]
+type WindowCache = HashMap<u32, Option<crate::focusers::windows_native::ObservedWindow>>;
 
 /// Scans for live CLI agent processes across platforms.
 pub struct Scanner {
@@ -273,7 +276,9 @@ impl Scanner {
 
             let can_focus = terminal
                 .as_ref()
-                .map(|t| !t.focus_id.is_empty())
+                .map(|t| {
+                    !t.focus_id.is_empty() && (t.kind != "windows_native" || !t.outer_id.is_empty())
+                })
                 .unwrap_or(false);
 
             // Read session ID from the process environment when the strategy

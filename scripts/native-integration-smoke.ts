@@ -70,14 +70,14 @@ try{
   assert.ok(await management.evaluate(`document.body.textContent.includes('Stop 不会自动产生完成提醒')`));
   assert.equal(await management.evaluate(`document.querySelectorAll('[aria-label="通用事件传输"] option:disabled').length`),2);
   checks.push('actual source creation/capabilities/disabled transports');
-  const tasksBefore=await root.invoke('get_agents');const test=await root.invoke('integration_test',{sourceId:kimi.id});assert.equal(test.test,true);assert.deepEqual(await root.invoke('get_agents'),tasksBefore);
+  const tasksBefore=await root.invoke('get_agents');const test=await management.invoke('integration_test',{sourceId:kimi.id});assert.equal(test.test,true);assert.deepEqual(await root.invoke('get_agents'),tasksBefore);
   checks.push('connection test stays outside tasks');
-  const preview=await root.invoke('integration_preview',{sourceId:kimi.id,remove:false});
+  const preview=await management.invoke('integration_preview',{sourceId:kimi.id,remove:false});
   assert.ok(preview.path.startsWith(home));assert.ok(!JSON.stringify(preview).includes('synthetic-model'));
   const changed=(await Bun.file(join(host,'config.toml')).text())+'\n# synthetic external edit\n';await Bun.write(join(host,'config.toml'),changed);
-  await assert.rejects(()=>root.invoke('integration_apply',{token:preview.token,confirmed:true}));assert.equal(await Bun.file(join(host,'config.toml')).text(),changed);
-  const next=await root.invoke('integration_preview',{sourceId:kimi.id,remove:false});
-  await assert.rejects(()=>root.invoke('integration_apply',{token:next.token,confirmed:false}));assert.equal(await Bun.file(join(host,'config.toml')).text(),changed);
+  await assert.rejects(()=>management.invoke('integration_apply',{token:preview.token,confirmed:true}));assert.equal(await Bun.file(join(host,'config.toml')).text(),changed);
+  const next=await management.invoke('integration_preview',{sourceId:kimi.id,remove:false});
+  await assert.rejects(()=>management.invoke('integration_apply',{token:next.token,confirmed:false}));assert.equal(await Bun.file(join(host,'config.toml')).text(),changed);
   // Exercise the actual consent UI, only after asserting sandbox environment.
   await management.evaluate(`document.querySelector('.integration-advanced').open=true`);
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='预览新增 Hook').click()`);
@@ -151,14 +151,14 @@ try{
   await Bun.write(join(owned,'management.png'),Buffer.from((await management.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   // R4: removing a monitored source must NOT make its registered Hook orphaned.
   const withoutKimi=await root.invoke('get_monitoring_settings');withoutKimi.sources=withoutKimi.sources.filter((s:any)=>s.id!==kimi.id);
-  await root.invoke('save_monitoring_settings',{settings:withoutKimi});
+  await management.invoke('save_monitoring_settings',{settings:withoutKimi});
   assert.equal(await Bun.file(join(host,'config.toml')).text(),installedText,'source removal must not implicitly edit host hooks');
-  let registrations=await root.invoke('integration_installations');assert.ok(registrations.some((r:any)=>r.source_id===kimi.id&&r.orphaned));
+  let registrations=await management.invoke('integration_installations');assert.ok(registrations.some((r:any)=>r.source_id===kimi.id&&r.orphaned));
   // Existing pre-index installations are reversible as well. Remove only this
   // sandbox's new index to simulate the older ownership-only format.
   const sourceHash=new Bun.CryptoHasher('sha256').update(kimi.id).digest('hex');
   await unlink(join(home,'integrations',sourceHash,'hook-installation.json'));
-  registrations=await root.invoke('integration_installations');assert.ok(registrations.some((r:any)=>r.source_id===kimi.id&&r.orphaned));
+  registrations=await management.invoke('integration_installations');assert.ok(registrations.some((r:any)=>r.source_id===kimi.id&&r.orphaned));
   await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='刷新 Hook 登记').click()`);
   await management.wait(`document.querySelector('[aria-label="已登记 Hook 清理"]').textContent.includes('来源已移除')`);
   // Remove only registered sandbox Hook entries, retaining the user's changes.
@@ -169,8 +169,8 @@ try{
   await management.wait(`!document.querySelector('[aria-label="已移除来源 Hook 撤销差异"]')`);
   const removed=await Bun.file(join(host,'config.toml')).text();assert.ok(removed.includes('synthetic-user-hook'));assert.ok(!removed.includes('EncodedCommand'));
   checks.push('R4 removed-source Hook cleanup remains accessible, explicit, and retains foreign settings/hooks');
-  assert.ok(!(await root.invoke('integration_installations')).some((r:any)=>r.source_id===kimi.id));
-  const restoredSettings=await root.invoke('get_monitoring_settings');restoredSettings.sources.push(kimi);await root.invoke('save_monitoring_settings',{settings:restoredSettings});
+  assert.ok(!(await management.invoke('integration_installations')).some((r:any)=>r.source_id===kimi.id));
+  const restoredSettings=await root.invoke('get_monitoring_settings');restoredSettings.sources.push(kimi);await management.invoke('save_monitoring_settings',{settings:restoredSettings});
   deliveryBefore=(await root.invoke('get_notification_log')).length;
   await stop();await start();await Bun.sleep(2500);
   const recovered=await root.invoke('get_agents');assert.ok(recovered.every((t:any)=>t.session_id!=='synthetic-session'||!t.unread));

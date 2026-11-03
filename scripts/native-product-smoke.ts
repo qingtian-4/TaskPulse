@@ -290,12 +290,12 @@ try{
   await screenshot(management,'sources-current',1040,900);
   checks.push('native source workflow/save/read test/event channel test; advanced Hook controls folded and no lifecycle overclaim');
   // Separate test notice is real renderer delivery, never a monitored Agent completion.
-  const config=await root.invoke('get_monitoring_settings');config.notifications=true;await root.invoke('save_monitoring_settings',{settings:config});
-  await root.invoke('test_notification');notice=await page('/notice');
+  const config=await root.invoke('get_monitoring_settings');config.notifications=true;await management.invoke('save_monitoring_settings',{settings:config});
+  await management.invoke('test_notification');notice=await page('/notice');
   await notice.wait(`document.body.innerText.includes('测试')`);
   await checkScales(notice,'notice',320,132);
-  await root.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
-  await root.invoke('test_notification',{kind:'long_title'});
+  await notice.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
+  await management.invoke('test_notification',{kind:'long_title'});
   await notice.wait(`document.querySelector('.heading')?.textContent.includes('长标题排版验收（测试）')`);
   await checkScales(notice,'notice',300,124);
   const compactNoticeId=(await root.invoke('get_task_notice')).current.id;
@@ -303,13 +303,13 @@ try{
   await notice.send('Input.dispatchMouseEvent',{type:'mousePressed',...bounds,button:'left',clickCount:1});
   await notice.send('Input.dispatchMouseEvent',{type:'mouseReleased',...bounds,button:'left',clickCount:1});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.id!==${compactNoticeId})`);
-  await root.invoke('test_notification');
+  await management.invoke('test_notification');
   await notice.wait(`document.querySelector('.heading')?.textContent.includes('通知测试成功')`);
   await screenshot(notice,'notice-current',320,132);
   await root.wait(`__TAURI_INTERNALS__.invoke('get_notification_log').then(r=>r.some(r=>r.test&&r.stage==='rendered'))`);
   assert.equal((await root.invoke('get_agents')).length,count);
   checks.push('native test-notice delivery and compact 300x124 long-title layout/pointer click without task import');
-  await root.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
+  await notice.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
   // Public screenshots of actual pending requests through the standard-event
   // pipeline, in this isolated profile. Never inject/rewrite the rendered DOM.
   for(const [kind,title,label] of [
@@ -325,7 +325,7 @@ try{
     await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(label)})`);
     assert.equal((await root.invoke('get_task_notice')).current.auto_dismiss_ms,null);
     await screenshot(notice,'notice-'+kind+'-current',320,132);
-    await root.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
+    await notice.invoke('dismiss_task_notice',{id:(await root.invoke('get_task_notice')).current.id});
     const pending=(await root.invoke('get_agents')).find((t:any)=>t.id===id);
     assert.equal(pending.status,'waiting_input');assert.equal(pending.input_request_id,requestId);
     event(session,'input.resolved',{}, {request_id:requestId});
@@ -373,8 +373,8 @@ try{
   // path without installing an Agent or touching its actual files.
   {
     const settings=await root.invoke('get_monitoring_settings');
-    settings.notifications=false;await root.invoke('save_monitoring_settings',{settings});
-    for(let n=0;n<32;n++){const current=(await root.invoke('get_task_notice')).current;if(!current)break;await root.invoke('dismiss_task_notice',{id:current.id});}
+    settings.notifications=false;await management.invoke('save_monitoring_settings',{settings});
+    for(let n=0;n<32;n++){const current=(await root.invoke('get_task_notice')).current;if(!current)break;await notice.invoke('dismiss_task_notice',{id:current.id});}
     const ocPath=join(owned,'public-opencode.db'),wbRoot=join(owned,'public-workbuddy');
     await mkdir(join(wbRoot,'projects','public'),{recursive:true});
     const oc=new Database(ocPath),wb=new Database(join(wbRoot,'workbuddy.db'));
@@ -390,7 +390,7 @@ try{
       const wbEvents:any[]=[{id:'old-user',sessionId:'public-native-session',type:'message',role:'user',timestamp:100000},{id:'old-end',sessionId:'public-native-session',type:'message',role:'assistant',status:'completed',timestamp:101000}];
       await Bun.write(wbLog,wbEvents.map(e=>JSON.stringify(e)+'\n').join(''));
       for(const [kind,location] of [['opencode',ocPath],['workbuddy',wbRoot]])settings.sources.push({id:'public-native-'+kind,name:kind==='opencode'?'OpenCode · 公开合成验收':'WorkBuddy · 公开合成验收',kind,location,enabled:true,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:500});
-      await root.invoke('save_monitoring_settings',{settings});
+      await management.invoke('save_monitoring_settings',{settings});
       await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(h=>['opencode','workbuddy'].every(k=>h.some(h=>h.provider==='public-native-'+k&&h.status==='connected')))`);
       assert.equal((await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-')).length,0,'New sources must not import finished native history');
       const started=Date.now();
@@ -413,7 +413,7 @@ try{
       await Bun.write(wbLog,wbEvents.map(e=>JSON.stringify(e)+'\n').join(''));
       await root.invoke('request_refresh');await Bun.sleep(1000);
       assert.equal((await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-')&&t.status==='running').length,2);
-      settings.notifications=true;await root.invoke('save_monitoring_settings',{settings});
+      settings.notifications=true;await management.invoke('save_monitoring_settings',{settings});
       const finished=Date.now();
       oc.query("INSERT INTO session_message VALUES(?,'public-native-session','idle',5,?,?,?)").run('current-idle',finished,finished,JSON.stringify({time:{created:finished},outcome:'succeeded'}));
       wbEvents.push({id:'current-end',sessionId:'public-native-session',type:'message',role:'assistant',status:'completed',timestamp:finished});
@@ -422,12 +422,12 @@ try{
       await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.filter(t=>t.source_instance?.startsWith('public-native-')&&t.finished_at&&t.unread).length===2)`);
       for(let n=0;n<2;n++){
         await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current&&${JSON.stringify(nativeBefore.map((t:any)=>t.id))}.includes(s.current.task_id))`);
-        const current=(await root.invoke('get_task_notice')).current;await root.invoke('dismiss_task_notice',{id:current.id});
+        const current=(await root.invoke('get_task_notice')).current;await notice.invoke('dismiss_task_notice',{id:current.id});
       }
       assert.ok((await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-')).every((t:any)=>t.unread),'Dismissing native reminders cannot acknowledge results');
       await management.wait(`document.body.innerText.includes('OpenCode')&&document.body.innerText.includes('WorkBuddy')`);
       checks.push('OpenCode/WorkBuddy native SQLite+JSONL through settings/provider/store/UI: no history import, stable rename, models, tool return stays running, explicit end and unread-preserving reminders (public fixtures, not host certification)');
-      settings.sources=settings.sources.filter((s:any)=>!s.id.startsWith('public-native-'));await root.invoke('save_monitoring_settings',{settings});
+      settings.sources=settings.sources.filter((s:any)=>!s.id.startsWith('public-native-'));await management.invoke('save_monitoring_settings',{settings});
     }finally{oc.close();wb.close();}
   }
   assert.equal(errors.length,0,JSON.stringify(errors));
@@ -437,10 +437,10 @@ try{
     const settings=await root.invoke('get_monitoring_settings');
     settings.notifications=false;
     settings.sources.find((s:any)=>s.id===source.id).name='示例 Agent';
-    await root.invoke('save_monitoring_settings',{settings});
+    await management.invoke('save_monitoring_settings',{settings});
     for(let n=0;n<32;n++){
       const current=(await root.invoke('get_task_notice')).current;if(!current)break;
-      await root.invoke('dismiss_task_notice',{id:current.id});
+      await notice.invoke('dismiss_task_notice',{id:current.id});
     }
     for(const task of await root.invoke('get_agents'))if(task.status==='running'){
       assert.equal(task.source_instance,source.id,'Only owned sample sessions may be ended for the capture');
@@ -471,7 +471,7 @@ try{
     await Bun.sleep(8000); // Capture a live elapsed clock, not a just-created 0s task.
     await screenshot(root,'readme-dashboard',368,840);
     assert.ok(await root.evaluate(`[...document.querySelectorAll('.task-item')].every(e=>{const r=e.getBoundingClientRect(),list=document.querySelector('.task-scroll').getBoundingClientRect();return r.top>=list.top&&r.bottom<=list.bottom})`),'Every representative task must be visible');
-    settings.notifications=true;await root.invoke('save_monitoring_settings',{settings});
+    settings.notifications=true;await management.invoke('save_monitoring_settings',{settings});
     for(const [kind,title,project,label] of [
       ['input','确认导出文件格式','TaskPulse 示例','等待输入'],
       ['approval','运行项目测试','TaskPulse 示例','需要授权'],
@@ -489,7 +489,7 @@ try{
       if(kind!=='completed')assert.equal(current.auto_dismiss_ms,null);
       const unreadBefore=(await root.invoke('get_agents')).find((t:any)=>t.id===id).unread;
       await screenshot(notice,'readme-notice-'+kind,320,132);
-      await root.invoke('dismiss_task_notice',{id:current.id});
+      await notice.invoke('dismiss_task_notice',{id:current.id});
       const task=(await root.invoke('get_agents')).find((t:any)=>t.id===id);
       assert.equal(task.unread,unreadBefore,'Capturing/dismissing a notification must not mark it viewed');
       if(kind!=='completed'){

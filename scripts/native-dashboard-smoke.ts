@@ -18,7 +18,7 @@ await withSmokeWorkspace('dashboard-polish',async({owned,onStop})=>{
     {id:'file:running',name:'验收：运行中的任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'run-1',confidence:'hook',remote:false,updated_at:now,started_at:now-60000,unread:true,pinned:false},
     {id:'file:done',name:'验收：未查看的结果',source:'local_file',source_instance:'local_file',status:'succeeded',turn_key:'done-1',confidence:'exact',remote:false,updated_at:now,finished_at:now,exit_code:0,unread:true,pinned:false},
     {id:'file:offline',name:'验收：离线任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'offline-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:false},
-    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:true},
+    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:true,can_focus:true,terminal:{kind:'windows_native',focus_id:'4294967295',outer_id:'1:1:1',label:'Expired fixture window'}},
     {id:'scan:codex:anonymous',name:'unknown',source:'codex',source_instance:'scanner',status:'running',confidence:'inferred',remote:false,updated_at:now,unread:true,pinned:false},
   ];
   const records=Object.fromEntries(tasks.map(task=>[task.id,{task,unread:task.unread,pinned:task.pinned,pin_override:task.pinned?true:null,last_execution_at:now,last_turn_key:task.turn_key??null,last_status:task.status,hidden:false,ignored:false}]));
@@ -116,9 +116,9 @@ accept_since_ms=${now}`:''}`).join('\n')}
   const contrasts:any[]=[];
   for(const theme of ['light','dark'])for(const language of ['zh-CN','en']){
     const settings=await root.invoke('get_monitoring_settings');
-    await root.invoke('save_preferences',{expected:{preferences:settings.preferences,default_view:settings.default_view,recent_days:settings.recent_days,notifications:settings.notifications,sound:settings.sound,notification_mode:settings.notification_mode,auto_check_updates:settings.auto_check_updates,auto_discover_local:settings.auto_discover_local},values:{preferences:{...settings.preferences,theme,language},default_view:settings.default_view,recent_days:settings.recent_days,notifications:settings.notifications,sound:settings.sound,notification_mode:settings.notification_mode,auto_check_updates:settings.auto_check_updates,auto_discover_local:settings.auto_discover_local}});
+    await ui.invoke('save_preferences',{expected:{preferences:settings.preferences,default_view:settings.default_view,recent_days:settings.recent_days,notifications:settings.notifications,sound:settings.sound,notification_mode:settings.notification_mode,auto_check_updates:settings.auto_check_updates,auto_discover_local:settings.auto_discover_local},values:{preferences:{...settings.preferences,theme,language},default_view:settings.default_view,recent_days:settings.recent_days,notifications:settings.notifications,sound:settings.sound,notification_mode:settings.notification_mode,auto_check_updates:settings.auto_check_updates,auto_discover_local:settings.auto_discover_local}});
     await root.wait(`document.documentElement.dataset.theme==='${theme}' && document.documentElement.lang==='${language}'`);
-    await root.invoke('test_notification',{kind:'turn_ended'});
+    await ui.invoke('test_notification',{kind:'turn_ended'});
     const notice=await connect(await tab('/notice'));await notice.wait(`!!document.querySelector('.summary')`);
     await notice.wait(`document.documentElement.dataset.theme==='${theme}' && document.documentElement.lang==='${language}'`);
     const colors=await notice.evaluate(String.raw`(()=>{const rgb=s=>s.match(/\d+(?:\.\d+)?/g).slice(0,3).map(Number);const lum=c=>c.map(v=>{v/=255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4}).reduce((s,v,i)=>s+v*[.2126,.7152,.0722][i],0);const bg=getComputedStyle(document.querySelector('footer')).backgroundColor;const b=lum(rgb(bg));return {background:bg,items:['.hint','.later','.primary'].map(sel=>{const el=document.querySelector(sel),fg=getComputedStyle(el).color,a=lum(rgb(fg));return {selector:sel,text:el.textContent,color:fg,contrast:(Math.max(a,b)+.05)/(Math.min(a,b)+.05)};})};})()`);
@@ -130,7 +130,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
       assert.equal(await notice.evaluate(`document.querySelector('.summary').getBoundingClientRect().bottom<=document.querySelector('footer').getBoundingClientRect().top`),true);
     }
     await Bun.write(join(owned,`notice-${theme}-${language}.png`),Buffer.from((await notice.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-    const current=await root.invoke('get_task_notice');await root.invoke('dismiss_task_notice',{id:current.current.id,reason:'user'});
+    const current=await root.invoke('get_task_notice');await notice.invoke('dismiss_task_notice',{id:current.current.id,reason:'user'});
   }
   checks.push('light/dark notice footer contrast >= 4.5 for hints and both actions','Chinese/English notice layouts at 320 and 368 pixels');
   await root.evaluate(`document.querySelector('.all-tasks').click()`);
@@ -153,7 +153,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await Bun.write(rollout,lines('public-good').map(v=>JSON.stringify(v)).join('\n')+'\n');
   await Bun.write(join(codex,'sessions/rollout-public-second.jsonl'),lines('public-second').map(v=>JSON.stringify(v)).join('\n')+'\n');
   const previous=await root.invoke('get_monitoring_settings');
-  await root.invoke('save_monitoring_settings',{expected:previous,settings:{...previous,sources:[...previous.sources,
+  await ui.invoke('save_monitoring_settings',{expected:previous,settings:{...previous,sources:[...previous.sources,
     {id:'codex',name:'Public Codex fixture',kind:'codex',enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:1000}]}});
   const ongoing=`JSON.parse(document.querySelector('.dashboard').dataset.continuity).sources.find(s=>s.source_id==='codex')?.global.ongoing`;
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
@@ -204,6 +204,11 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
   await ui.wait(`${readState}?.textContent==='Source access healthy'`);
   checks.push('source badge still reports unavailable session evidence and real source recovery');
+  assert.equal(await root.invoke('open_task',{id:'file:pinned'}),'focus_unavailable');
+  const selected=await root.invoke('get_selected_task');
+  assert.equal(selected.id,'file:pinned');
+  assert.equal(selected.unread,true,'Falling back to details must preserve unread state');
+  checks.push('expired native window reports failed focus and opens task details without marking it read');
   assert.deepEqual(errors,[]);
   await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,build,checks,contrasts,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
   console.log('Dashboard polish acceptance passed:',checks.length,'checks');

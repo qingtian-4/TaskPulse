@@ -1,0 +1,95 @@
+# Application commands are denied unless a local window capability grants them.
+
+[[permission]]
+identifier = "app-preferences-read"
+description = "Read settings for the shared application layout"
+commands.allow = [
+  "get_monitoring_settings",
+]
+
+[[permission]]
+identifier = "app-task-read"
+description = "Read dashboard state and diagnostics"
+commands.allow = [
+  "get_build_info",
+  "get_agents",
+  "get_dashboard_snapshot",
+  "get_archived_attention",
+  "get_hosts",
+  "get_providers",
+  "get_codex_quota",
+  "get_resource_diagnostics",
+  "get_status_dir",
+  "get_monitoring_error",
+  "get_notification_error",
+  "get_notification_log",
+  "integration_environment",
+  "get_autostart",
+  "get_update_status",
+  "get_source_catalog",
+  "discover_sources",
+  "get_pending_task_prompts",
+  "list_discovered_sessions",
+]
+
+[[permission]]
+identifier = "app-task-actions"
+description = "Refresh sources and edit task attention"
+commands.allow = [
+  "request_refresh",
+  "update_task_attention",
+]
+
+[[permission]]
+identifier = "app-dashboard"
+description = "Operate the dashboard and its message inbox"
+commands.allow = [
+  "open_task",
+  "get_selected_task",
+  "get_message_center",
+  "mark_messages_seen",
+  "reopen_task_prompt",
+  "toggle_pin",
+  "get_pinned",
+  "resize_dashboard",
+  "open_management",
+  "close_popup",
+]
+
+[[permission]]
+identifier = "app-notice-read"
+description = "Read current reminder state"
+commands.allow = [
+  "get_task_notice",
+]
+
+[[permission]]
+identifier = "app-notice-actions"
+description = "Operate only the current reminder"
+commands.allow = [
+  "dismiss_task_notice",
+  "next_task_notice",
+  "ack_task_notice",
+  "open_task_notice",
+]
+
+[[permission]]
+identifier = "app-management"
+description = "Manage settings, integrations, startup, and application updates"
+commands.allow = [
+  "save_preferences",
+  "set_autostart",
+  "check_application_update",
+  "install_application_update",
+  "integration_catalog",
+  "integration_installations",
+  "integration_import",
+  "integration_preview",
+  "integration_apply",
+  "integration_diagnose",
+  "integration_test",
+  "integration_export",
+  "save_monitoring_settings",
+  "configure_claude_events",
+  "test_notification",
+]

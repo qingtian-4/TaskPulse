@@ -303,7 +303,11 @@ impl ClaudeCodeProvider {
                     > Duration::from_secs(30);
             }
             task.terminal = ide_terminal(&self.root, task.project_path.as_deref());
-            task.can_focus = task.terminal.is_some();
+            // IDE lock files provide a PID, but no Windows process lifetime.
+            task.can_focus = task
+                .terminal
+                .as_ref()
+                .is_some_and(|t| t.kind != "windows_native");
             // Do not bootstrap old truncated/incomplete history as live work.
             // Previously observed tasks retain their last state as stale.
             if task.status == TaskStatus::Running

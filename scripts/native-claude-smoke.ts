@@ -84,7 +84,7 @@ try{
   console.log(JSON.stringify(result));success=true;
 }finally{
   try{
-    if(saved&&original&&(!success||process.env.TASKPULSE_KEEP_CLAUDE!=='1'))await root.invoke('save_monitoring_settings',{settings:original});
+    if(saved&&original&&(!success||process.env.TASKPULSE_KEEP_CLAUDE!=='1'))await manage!.invoke('save_monitoring_settings',{settings:original});
     if(manage)await manage.invoke('plugin:window|close',{label:'management'});
   }finally{manage?.close();root.close();}
 }
