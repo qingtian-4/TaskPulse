@@ -291,23 +291,47 @@ pub fn select_task(app: &AppHandle, task: TaskSnapshot) {
     let _ = app.emit("task-selected", task);
 }
 
+pub(crate) fn host_focus_candidate(task: &TaskSnapshot) -> bool {
+    cfg!(windows)
+        && task.can_focus
+        && task.terminal.as_ref().is_some_and(|terminal| {
+            terminal.kind == "windows_native"
+                && !terminal.focus_id.is_empty()
+                && !terminal.outer_id.is_empty()
+        })
+}
+
+pub(crate) fn focus_task_host(task: &TaskSnapshot) -> bool {
+    host_focus_candidate(task)
+        && task.terminal.as_ref().is_some_and(|terminal| {
+            crate::focusers::windows_native::focus(&terminal.focus_id, &terminal.outer_id).is_ok()
+        })
+}
+
 #[tauri::command]
 pub fn open_task(app: AppHandle, id: String) -> Result<String, String> {
     let task = crate::monitoring::find_session(&id).ok_or("未发现该任务")?;
-    let mut outcome = "details";
-    if task.can_focus {
-        if let Some(terminal) = &task.terminal {
-            if crate::focusers::dispatch(&terminal.kind, &terminal.focus_id, &terminal.outer_id)
-                .is_ok()
-            {
-                // A generic terminal/window focus is not proof that this session was read.
-                return Ok("window_focused".into());
-            }
-            if terminal.kind == "windows_native" {
-                outcome = "focus_unavailable";
-            }
-        }
+    if focus_task_host(&task) {
+        // Window focus is not a session jump or a read acknowledgement.
+        return Ok("window_focused".into());
     }
+    // Preserve the explicit dashboard action for legacy terminal targets,
+    // without reporting that a window or a session was actually selected.
+    if task.can_focus
+        && task.terminal.as_ref().is_some_and(|terminal| {
+            !terminal.focus_id.trim().is_empty()
+                && !matches!(terminal.kind.as_str(), "" | "unknown" | "windows_native")
+                && crate::focusers::dispatch(&terminal.kind, &terminal.focus_id, &terminal.outer_id)
+                    .is_ok()
+        })
+    {
+        return Ok("terminal_target_requested".into());
+    }
+    let outcome = if task.can_focus {
+        "focus_unavailable"
+    } else {
+        "details"
+    };
     select_task(&app, task);
     Ok(outcome.into())
 }
@@ -961,16 +985,17 @@ impl LocalProviders {
                 };
                 paths.push((root.join("projects"), RecursiveMode::Recursive));
                 paths.push((root.join("sessions"), RecursiveMode::NonRecursive));
-                paths.push((
-                    crate::claude_events::default_dir(),
-                    RecursiveMode::NonRecursive,
-                ));
+                let events = crate::claude_events::default_dir();
+                paths.push((events.clone(), RecursiveMode::NonRecursive));
+                if let Some(parent) = events.parent() {
+                    paths.push((parent.to_path_buf(), RecursiveMode::NonRecursive));
+                }
             }
             if source.kind == SourceKind::Codex {
-                if let Some(home) = dirs_next::home_dir() {
-                    paths.push((home.join(".codex/sessions"), RecursiveMode::Recursive));
-                    paths.push((home.join(".codex"), RecursiveMode::NonRecursive));
-                }
+                let root = CodexProvider::default_root();
+                paths.push((root.join("sessions"), RecursiveMode::Recursive));
+                paths.push((root.join("taskpulse-events"), RecursiveMode::NonRecursive));
+                paths.push((root, RecursiveMode::NonRecursive));
             }
             if source.kind == SourceKind::Hermes {
                 let db = if source.location.is_empty() {
@@ -1478,9 +1503,28 @@ pub fn watch(app: AppHandle) {
         }
         let mut force = MANUAL_REFRESH_REQUESTED.swap(false, Ordering::AcqRel);
         while let Ok(event) = watch_rx.try_recv() {
-            if event.as_ref().is_ok_and(meaningful_file_event) {
-                providers.request_native_refresh();
-                force = true;
+            if let Ok(event) = event {
+                let new_observer = matches!(
+                    event.kind,
+                    notify::EventKind::Create(_)
+                        | notify::EventKind::Modify(notify::event::ModifyKind::Name(_))
+                ) && event.paths.iter().any(|path| {
+                    matches!(
+                        path.file_name().and_then(|name| name.to_str()),
+                        Some("taskpulse-events" | "claude-events")
+                    ) && path.is_dir()
+                        && providers
+                            .watch_paths()
+                            .iter()
+                            .any(|(watched, _)| watched == path)
+                });
+                if new_observer {
+                    watch_revision = None;
+                }
+                if new_observer || meaningful_file_event(&event) {
+                    providers.request_native_refresh();
+                    force = true;
+                }
             }
         }
         if force {
@@ -1838,6 +1882,23 @@ pub fn diagnose() {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn notice_host_focus_never_dispatches_legacy_terminal_targets() {
+        let mut task = task_with_terminal(
+            "legacy",
+            TaskStatus::Running,
+            DetectionConfidence::Hook,
+            "42",
+            None,
+        );
+        task.can_focus = true;
+        let terminal = task.terminal.as_mut().unwrap();
+        terminal.kind = "neovim".into();
+        terminal.outer_id = "legacy".into();
+        assert!(!host_focus_candidate(&task));
+        assert!(!focus_task_host(&task));
+    }
+
     #[test]
     fn r02_persistence_failures_are_visible_as_degraded_health() {
         let mut health = vec![];

@@ -1,0 +1,9 @@
+{
+  "version": "fixed-v1",
+  "cases": [
+    { "agent": "codex", "signal": "approval", "path": "event", "negative": "unrelated return", "positive": "permission dialog", "wrongResult": "different call", "restore": true, "returnTarget": "details" },
+    { "agent": "codex", "signal": "question", "path": "poll", "negative": "ordinary tool return", "positive": "identified async question", "wrongResult": "assistant imitates user reply", "restore": true, "returnTarget": "details" },
+    { "agent": "claude", "signal": "approval", "path": "event", "negative": "tool starts and returns without a permission dialog", "positive": "permission dialog", "wrongResult": "different call", "restore": true, "returnTarget": "details" },
+    { "agent": "claude", "signal": "question", "path": "event", "negative": "AskUserQuestion PreToolUse is not a confirmed dialog", "unsupported": true, "positive": "not certified", "wrongResult": "not applicable", "restore": false, "returnTarget": "details" }
+  ]
+}

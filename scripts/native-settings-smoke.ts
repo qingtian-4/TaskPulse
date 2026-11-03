@@ -8,6 +8,7 @@ import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
 import {fileURLToPath} from 'node:url';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
+const sourcesOnly=process.argv.includes('--sources-only');
 await withSmokeWorkspace('settings-native',async({owned,onStop})=>{
   const home=join(owned,'profile');await mkdir(home);
   const exe=join(owned,'agent-tray.exe');await copyFile(original,exe);
@@ -91,6 +92,8 @@ poll_interval_ms=3000
   const nativeMonitors:any[]=await ui.invoke('plugin:window|available_monitors');
   const title:string=await ui.invoke('plugin:window|title',{label:'management'});
   assert.equal(title,`${product} · 设置`,'Initial window title must retain the build identity');
+  const movementChecks:any[]=[];
+  if(!sourcesOnly){
   const move=async(x:number,y:number)=>{
     const child=Bun.spawn([join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),'-NoProfile','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./settings-window-move.ps1',import.meta.url)),'-ProcessId',String(app!.pid),'-Exe',exe,'-Title',title,'-X',String(Math.round(x)),'-Y',String(Math.round(y))],{stdout:'pipe',stderr:'pipe'});
     const [code,,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);assert.equal(code,0,error);
@@ -106,7 +109,6 @@ poll_interval_ms=3000
   const edge:any=await ui.invoke('plugin:window|outer_position',{label:'management'});
   assert.ok(Math.abs(edge.y-edgeY)<=2,'same-monitor dragging must not snap back');
   await move(initialPosition.x,initialPosition.y);
-  const movementChecks:any[]=[];
   for(const monitor of [...nativeMonitors,...nativeMonitors.slice().reverse(),initialMonitor]){
     const work=monitor.workArea;
     await move(work.position.x+Math.max(0,(work.size.width-initialSize.width)/2),work.position.y+24);
@@ -129,10 +131,12 @@ poll_interval_ms=3000
     assert.ok(Math.abs(css.width-inner.width/scale)<=2&&Math.abs(css.ratio-scale)<.01,JSON.stringify(sample));
   }
   await move(initialPosition.x,initialPosition.y);
+  }
   const catalog:any[]=await ui.invoke('get_source_catalog');assert.equal(catalog.filter(s=>s.category==='local').length,9);
   assert.equal(catalog.find(s=>s.kind==='scanner').capabilities.turn_end,'unsupported');
   console.log('settings smoke: fixed layout and catalog passed');const startup=await ui.invoke('get_autostart');assert.equal(startup.available,false);
   assert.match(await ui.evaluate(`__TAURI_INTERNALS__.invoke('set_autostart',{enabled:true}).then(()=>'',e=>String(e))`),/installed TaskPulse/);
+  if(!sourcesOnly){
   // Exercise the packaged startup UI while the native isolated-profile guard
   // stays intact. Only these two IPC responses are simulated through CDP; no
   // real login entry, security setting or production test override is used.
@@ -209,9 +213,15 @@ poll_interval_ms=3000
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
   await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]')?.disabled===true`);
   assert.equal((await ui.invoke('get_autostart')).available,false);
+  }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.wait(`document.querySelectorAll('.source-card').length>=9`);
-  await ui.evaluate(`document.querySelector('.source-expand').click()`);
+  await ui.wait(`!!document.querySelector('[data-source-id="codex"]')`);
+  assert.equal(await ui.evaluate(`document.querySelectorAll('.source-card:not(details .source-card)').length`),1);
+  assert.equal(await ui.evaluate(`[...document.querySelectorAll('.source-group')].every(d=>!d.open)`),true);
+  await ui.evaluate(`document.querySelector('[data-source-advanced] > summary').click()`);
+  assert.equal(await ui.evaluate(`!!document.querySelector('[data-source-advanced][open] [data-definition="remote_codex"]')`),true);
+  await ui.evaluate(`document.querySelector('[data-source-advanced] > summary').click()`);
+  await ui.evaluate(`document.querySelector('[data-source-id="codex"] .source-expand').click()`);
   await ui.wait(`!!document.querySelector('.source-editor textarea')`);
   await ui.evaluate(`(()=>{const field=document.querySelector('.source-editor textarea');field.value='draft-only-project';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await ui.wait(`!!document.querySelector('.source-pending')`);
@@ -226,7 +236,9 @@ poll_interval_ms=3000
   assert.equal(await ui.invoke('plugin:window|title',{label:'management'}),`${product} · Settings`,'Theme changes must retain the build identity');
   console.log('settings smoke: theme passed');let saved=await ui.invoke('get_monitoring_settings');assert.deepEqual(saved.sources[0].projects,['protected-project']);
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  assert.equal(await ui.evaluate(`document.querySelector('.source-editor textarea').value`),'draft-only-project');
+  await ui.wait(`document.querySelector('.source-editor textarea')?.value==='draft-only-project'`);
+  assert.equal(await ui.evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
+  assert.ok(await ui.evaluate(`document.querySelector('[data-source-id="codex"] .read-state').textContent.includes('Disabled')`));
   // Closing a dirty editor must show the actual native close-request confirmation.
   await ui.invoke('plugin:window|close',{label:'management'});
   await ui.wait(`!!document.querySelector('#close-title')`);
@@ -262,14 +274,14 @@ poll_interval_ms=3000
   await ui.wait(`!document.querySelector('.settings-inline-error')`);
   // Add two actual saved SSH instances without connecting to any host.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.evaluate(`[...document.querySelectorAll('.settings-tabs button')].find(b=>b.textContent==='WSL & remote').click()`);
+  await ui.evaluate(`document.querySelector('[data-source-advanced]').open=true`);
   const addSelector='.source-card[data-definition="remote_codex"][data-source-id=""] .source-expand';
   for(const host of ['fixture-one','fixture-two']){
     await ui.wait(`!!document.querySelector(${JSON.stringify(addSelector)})`);
     assert.equal(await ui.evaluate(`document.querySelector(${JSON.stringify(addSelector)}).textContent`),'Add source');
     await ui.evaluate(`document.querySelector(${JSON.stringify(addSelector)}).click()`);
     await ui.wait(`!!document.querySelector('.source-editor input')`);
-    await ui.evaluate(`(()=>{const card=document.querySelector('.source-editor').closest('.source-card');const toggle=card.querySelector('input[role="switch"]');if(toggle.checked)toggle.click();const inputs=card.querySelectorAll('.source-editor input');const location=inputs[1];location.value=${JSON.stringify(host)};location.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await ui.evaluate(`(()=>{const card=document.querySelector('.source-editor').closest('.source-card');const toggle=card.querySelector('input[role="switch"]');if(toggle.checked)toggle.click();const location=card.querySelector('.source-editor .advanced input:not([type=checkbox])');location.value=${JSON.stringify(host)};location.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await ui.evaluate(`[...document.querySelectorAll('.source-editor .settings-actions button')].find(b=>b.textContent==='Apply changes').click()`);
     await ui.wait(`!document.querySelector('.source-pending')`);
   }
@@ -289,6 +301,6 @@ poll_interval_ms=3000
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['cold source entry and warm six-section routing','invalid section rejected','same-monitor drag does not snap back','native monitor transitions fit work area','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
-  console.log('Native settings acceptance passed, including cold/warm routing, window movement and two SSH sources.');
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'grouped source defaults and advanced entry','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

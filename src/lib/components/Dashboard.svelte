@@ -181,6 +181,7 @@
     try {
       const outcome=await invoke<string>('open_task',{id:task.id});
       if(outcome==='window_focused')note='已聚焦运行窗口；请在查看结果后标记已查看';
+      else if(outcome==='terminal_target_requested')note='已请求返回终端，未确认窗口或会话';
       else if(outcome==='focus_unavailable')note='无法聚焦原窗口，已打开任务详情';
       else note='已定位任务详情；此来源暂不支持精确会话跳转';
     }
@@ -319,7 +320,7 @@
       <details class="evidence tp-fold"><summary>{$t("状态依据与采集时间")}</summary><p>{$t("状态依据：")}{$t(CONFIDENCE_LABEL[selectedTask.confidence])}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} {$t("· 最后活动")} {$t(formatAgo(selectedTask.updated_at,now))}</p></details>
       <div class="command glass-scroll"><span>{selectedTask.stale?$t('上次观测活动（非实时）'):selectedTask.status==='running'?$t('当前活动'):$t('最近消息')}</span><pre>{taskActivity(selectedTask)}</pre></div>
       <div class="detail-actions">
-        {#if selectedTask.can_focus}<button class="tp-btn" title={$t("只聚焦宿主窗口，不标记已查看")} onclick={()=>open(selectedTask!)}>{selectedTask.source==='claude_code'?$t('聚焦项目窗口'):$t('聚焦运行窗口')}</button>{/if}
+        {#if selectedTask.can_focus}<button class="tp-btn" title={$t("只聚焦宿主窗口，不标记已查看")} onclick={()=>open(selectedTask!)}>{selectedTask.terminal?.kind==='windows_native'?$t('聚焦运行窗口'):$t('请求返回终端')}</button>{/if}
         <button class="tp-btn" data-variant="ghost" onclick={()=>copy(selectedTask!)}>{$t("复制任务信息")}</button>
         {#if selectedTask.unread}<button class="tp-btn" data-variant="primary" title={$t("更新本轮已查看标记，不代表批准或项目完成")} onclick={()=>action(selectedTask!,'viewed')}>{$t("已查看")}</button>{/if}
         {#if showArchive}<button class="tp-btn" onclick={()=>action(selectedTask!,'follow')}>{$t("重新加入")}</button>{/if}

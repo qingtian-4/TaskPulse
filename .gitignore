@@ -106,6 +106,7 @@ skills-lock.json
 !/docs/INSTALL.md
 !/docs/LOCAL_AGENTS.md
 !/docs/PRODUCT_DASHBOARD.md
+!/docs/REQUEST_EVALUATION.md
 !/docs/REMOTE_TMUX.md
 !/docs/WSL_CODEX.md
 !/docs/README.md

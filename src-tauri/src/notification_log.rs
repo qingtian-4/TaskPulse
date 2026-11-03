@@ -17,6 +17,8 @@ pub struct DeliveryRecord {
     pub notice_id: Option<u64>,
     pub task_id: Option<String>,
     pub request_id: Option<String>,
+    #[serde(default)]
+    pub waiting_reason: Option<crate::domain::WaitingReason>,
     pub title: String,
     pub test: bool,
 }
@@ -98,6 +100,7 @@ pub fn record(
             request_id: task
                 .filter(|_| !test)
                 .and_then(|t| t.input_request_id.clone()),
+            waiting_reason: task.filter(|_| !test).and_then(|t| t.waiting_reason),
             title: title.into(),
             test,
         });
@@ -128,6 +131,7 @@ mod tests {
                 notice_id: Some(n as u64),
                 task_id: None,
                 request_id: None,
+                waiting_reason: None,
                 title: "Test".into(),
                 test: true,
             });

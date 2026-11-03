@@ -96,7 +96,7 @@ export interface DashboardSettings {
 }
 export interface TaskNotice {
   id: number; title: string; body: string; created_at: number; task_id: string | null; test: boolean;
-  context?: { task_name: string; source: Source; agent_name?:string; project: string | null; host: string | null } | null;
+  context?: { task_name: string; can_focus_host?: boolean; source: Source; agent_name?:string; project: string | null; host: string | null } | null;
   auto_dismiss_ms?: number | null;
 }
 export interface NoticeState { current: TaskNotice | null; pending: number }

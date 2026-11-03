@@ -1,6 +1,6 @@
 import {test,expect} from 'bun:test';
-import {sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summarizeSources,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
-import type {MonitorSource,ProviderHealth,SourceSnapshot} from '../src/lib/types';
+import {sourceSections,sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summarizeSources,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
+import type {DashboardSettings,MonitorSource,ProviderHealth,SourceSnapshot} from '../src/lib/types';
 
 const s:MonitorSource={id:'one',kind:'remote_codex',name:'test',enabled:true,location:'public-test',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
 const empty:SourceSnapshot={id:s.id,kind:s.kind,location:s.location,enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0};
@@ -32,4 +32,26 @@ test('manual test waits for a new matching success, never borrows stale success'
   expect(readTestResult(s.id,[{...h,last_success:110}],100)).toBe('passed');
   expect(readTestResult(s.id,[{...h,provider:'other'}],100)).toBe('pending');
   expect(sourceCapability('generic_event')).not.toMatch(/自动全面支持|无需配置/);
+});
+
+test('default sources keep configured connections visible and defer dormant catalog entries',()=>{
+  const active={...s,id:'claude_code',kind:'claude_code' as const,location:'',name:'Claude'};
+  const seed={...s,id:'codex',kind:'codex' as const,location:'',name:'Codex',enabled:false};
+  const off={...s,id:'ssh-off',enabled:false};
+  const make=(s:MonitorSource,category:string):SourceDefinition=>({id:s.id,kind:s.kind,name:s.name,category,platforms:['windows'],location_kind:'none'});
+  const windowsOnly={...make(s,'remote'),id:'codex_wsl',kind:'codex_wsl' as const,multiple_instances:true,location_kind:'distro'};
+  const catalog=[make(active,'local'),{...make(seed,'local'),default_source:seed},make(off,'remote'),windowsOnly];
+  const settings:DashboardSettings={version:2,onboarding_complete:true,sources:[active,seed,off],notifications:true,sound:false,default_view:'tasks'};
+  const candidates=['PublicA','PublicB'].map(location=>{
+    const candidate={...s,id:'wsl:'+location,kind:'codex_wsl' as const,location,name:location};
+    return {id:candidate.id,location,candidate,data_location_detected:true,detail:''};
+  });
+  const sections=sourceSections(catalog,settings,candidates,'windows',[],'');
+  expect(sections.primary.map(r=>r.source?.id)).toEqual([active.id,off.id]);
+  expect(sections.supported.map(r=>r.source?.id)).toEqual([seed.id]);
+  expect(sections.advanced.filter(r=>r.candidate).map(r=>r.candidate?.location)).toEqual(['PublicA','PublicB']);
+  const detected=sourceSections(catalog,settings,[{id:seed.id,location:'',data_location_detected:true,detail:''}],'windows',[],'');
+  expect(detected.primary.some(r=>r.source?.id===seed.id)).toBe(true);
+  const offAfterRestart=sourceSections(catalog,{...settings,auto_discovery_seen:[seed.id]},[],'windows',[],'');
+  expect(offAfterRestart.primary.some(r=>r.source?.id===seed.id&&r.source.enabled===false)).toBe(true);
 });

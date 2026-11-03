@@ -282,7 +282,6 @@ accept_since_ms=${now}`:''}`).join('\n')}
     assert.equal(selected.unread,true,'Falling back to details must preserve unread state');
     checks.push('expired native window reports failed focus and opens task details without marking it read');
   }
-  await ui.evaluate(`[...document.querySelectorAll('.settings-tabs button')].find(b=>b.textContent==='Custom integrations').click()`);
   await ui.wait(`document.querySelector('[data-source-id="scanner"]')?.textContent.includes('No data detected')`);
   checks.push('healthy generic source without an event reports no data, sessions or current tasks');
   const stampNow=Date.now();
