@@ -23,6 +23,10 @@ try {
     Write-EvidenceStage 'read-process-path'
     $actualPath=$owned.MainModule.FileName
     if (-not $actualPath -or -not $Exe) { throw 'Native evidence process ownership mismatch' }
+    Write-EvidenceStage 'resolve-add-type'
+    $addTypeCommand=$ExecutionContext.InvokeCommand.GetCommand('Add-Type',[Management.Automation.CommandTypes]::Cmdlet)
+    if ($null -eq $addTypeCommand) { throw 'Native evidence compiler command unavailable' }
+    Write-EvidenceStage 'resolved-add-type'
     Write-EvidenceStage 'compile-installer-paths'
     Initialize-InstallerPaths
     Write-EvidenceStage 'compare-final-paths'
