@@ -5,6 +5,7 @@ import {resolve,join,dirname,sep} from 'node:path';
 import {createServer} from 'node:net';
 import {spawn,spawnSync,type ChildProcess} from 'node:child_process';
 import {fileURLToPath} from 'node:url';
+import {windowsTestProcess} from './windows-test-process';
 import {withSmokeWorkspace,stopOwnedChild,removeWithRetry} from './smoke-workspace';
 const at=process.argv.indexOf('--exe');if(at<0)throw Error('--exe required');
 const original=resolve(process.argv[at+1]);
@@ -62,15 +63,18 @@ await withSmokeWorkspace('development-native',async({owned,onStop})=>{
     const powershell=join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe');
     const script=fileURLToPath(new URL('./native-process-evidence.ps1',import.meta.url));
     const args=['-NoProfile','-NonInteractive','-ExecutionPolicy','Bypass','-File',script,'-ProcessId',String(app.pid),'-Exe',exe];
-    function collect(extra:string[],timeout:number){
-      const probe=spawnSync(powershell,[...args,...extra],{encoding:'utf8',windowsHide:true,timeout,maxBuffer:65536});
-      try{return probe.status===0?JSON.parse(probe.stdout):{error:probe.error?.message??probe.stderr.slice(-1500),exit_code:probe.status};}
-      catch{return {error:'Invalid native process evidence'};}
+    async function collect(extra:string[],timeout:number){
+      try{
+        const probe=await windowsTestProcess(powershell,[...args,...extra],timeout);
+        if(probe.exitCode!==0)return {error:probe.stderr.slice(-1500),exit_code:probe.exitCode,timings:probe.timings};
+        try{return {...JSON.parse(probe.stdout),timings:probe.timings};}
+        catch{return {error:'Invalid native process evidence',timings:probe.timings};}
+      }catch(error){return {error:String(error)};}
     }
-    nativeProcess=collect([],20000);
+    nativeProcess=await collect([],20000);
     // CIM is only useful for diagnosing a missing browser target. Run it in
     // its own bounded process so it cannot suppress the identity evidence.
-    if(!target)childDiagnostics=collect(['-ChildrenOnly','-DebugPort',String(port)],5000);
+    if(!target)childDiagnostics=await collect(['-ChildrenOnly','-DebugPort',String(port)],5000);
   }
   let browser:any;
   try{const value:any=await fetch(`http://127.0.0.1:${port}/json/version`,{signal:AbortSignal.timeout(1000)}).then(r=>r.json());browser={browser:value.Browser,protocol:value['Protocol-Version']};}catch{/* The absence of this endpoint is retained in startup evidence. */}
