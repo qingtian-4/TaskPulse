@@ -35,6 +35,7 @@ pub fn refresh_native(app: &AppHandle) {
             "显示任务面板",
             "固定任务面板",
             "隐藏任务面板",
+            "设置",
             "发送测试提醒",
             "退出 TaskPulse",
         ]) {

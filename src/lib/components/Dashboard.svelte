@@ -42,8 +42,6 @@
   let note = $state('');
   let refreshing = $state(false);
   let pinned = $state(false);
-  let overPopup = $state(false);
-  let openingManagement = false;
   let newSources = $state(0);
   let pendingPrompts = $state<TaskSnapshot[]>([]);
   let showPrompts = $state(false);
@@ -141,8 +139,7 @@
   function manageUpdates(){return openManagement("updates");}
   async function openManagement(section:string) {
     if (!isTauri()) { note='浏览器演示：真实设置请在托盘应用中打开'; return; }
-    openingManagement=true;
-    try { await invoke('open_management',{section}); } catch(e) { error=String(e);openingManagement=false; }
+    try { await invoke('open_management',{section}); } catch(e) { error=String(e); }
   }
   async function action(task: TaskSnapshot, name: string, value?: boolean) {
     if (!isTauri()) return;
@@ -232,17 +229,15 @@
         await subscribe(listen('popup-opened',()=>{if(!pinned)sessionHeight=400;}));
         await subscribe(listen<{phase:string;version:string|null}>('application-update',e=>availableUpdate=e.payload.phase==='available' ? e.payload.version ?? '' : ''));
         void invoke<{phase:string;version:string|null}>('get_update_status').then(s=>availableUpdate=s.phase==='available'?s.version ?? '':'');
-        await subscribe(listen('management-closed',()=>openingManagement=false));
         await snapshots(); view=settings?.default_view ?? 'tasks';
         void discover();
         error=await invoke<string | null>('get_monitoring_error') ?? '';
         const selection=await invoke<TaskSnapshot | null>('get_selected_task');
         if(selection)selectTask(selection);
         pinned=await invoke<boolean>('get_pinned');
-        const win=getCurrentWindow(); let showTime=Date.now();
+        const win=getCurrentWindow();
         await subscribe(win.onFocusChanged(({payload:focused})=>{
-          if(focused) {showTime=Date.now();showArchive=false;resetFilters();void snapshots().catch(e=>error=String(e));}
-          else if(!pinned && !overPopup && !openingManagement && Date.now()-showTime>300) void invoke('close_popup');
+          if(focused) {showArchive=false;resetFilters();void snapshots().catch(e=>error=String(e));}
         }));
       } catch(e) { error='无法读取监控数据：'+String(e); }
       finally { layoutReady=true; await tick(); await resizeQueue; await emit('popup-ready',null).catch(()=>{}); }
@@ -251,7 +246,7 @@
   });
 </script>
 
-<div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(candidates,filtered))} onpointerenter={()=>overPopup=true} onpointerleave={()=>overPopup=false}>
+<div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(candidates,filtered))}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><BrandMark />TaskPulse</span>
     <div class="header-actions">

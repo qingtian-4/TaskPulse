@@ -15,6 +15,7 @@ mod message_center;
 mod monitoring;
 mod notification_log;
 mod notifier;
+mod popup_interaction;
 mod preferences;
 mod privacy;
 mod process;
@@ -27,13 +28,15 @@ mod store;
 mod task_notice;
 mod transition;
 mod tray;
+#[cfg(windows)]
+mod tray_windows;
 mod updates;
 mod watcher;
 #[cfg(windows)]
 mod windows_startup;
 
 use tauri::menu::{Menu, MenuItem, PredefinedMenuItem};
-use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
+use tauri::tray::TrayIconBuilder;
 use tauri::Manager;
 use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut, ShortcutState};
 
@@ -134,6 +137,7 @@ fn main() {
             let show_item = MenuItem::with_id(app, "show", "显示任务面板", true, None::<&str>)?;
             let pin_item = MenuItem::with_id(app, "pin", "固定任务面板", true, None::<&str>)?;
             let hide_item = MenuItem::with_id(app, "hide", "隐藏任务面板", true, None::<&str>)?;
+            let settings_item = MenuItem::with_id(app, "settings", "设置", true, None::<&str>)?;
             let test_notification_item =
                 MenuItem::with_id(app, "test-notification", "发送测试提醒", true, None::<&str>)?;
             let separator = PredefinedMenuItem::separator(app)?;
@@ -142,6 +146,7 @@ fn main() {
                 show_item.clone(),
                 pin_item.clone(),
                 hide_item.clone(),
+                settings_item.clone(),
                 test_notification_item.clone(),
                 quit_item.clone(),
             ]));
@@ -152,13 +157,14 @@ fn main() {
                     &show_item,
                     &pin_item,
                     &hide_item,
+                    &settings_item,
                     &test_notification_item,
                     &separator,
                     &quit_item,
                 ],
             )?;
 
-            TrayIconBuilder::with_id("main")
+            let tray_icon = TrayIconBuilder::with_id("main")
                 .icon(tauri::image::Image::from_bytes(include_bytes!(
                     "../icons/tray-offline.png"
                 ))?)
@@ -168,9 +174,17 @@ fn main() {
                 .on_menu_event({
                     let h_pin = handle.clone();
                     move |app, event| match event.id.as_ref() {
-                        "show" => tray::toggle_popup(&h_show),
+                        "show" => tray::show_popup(&h_show),
                         "pin" => tray::pin_popup(&h_pin),
                         "hide" => tray::hide_popup(&h_hide),
+                        "settings" => {
+                            let handle = app.clone();
+                            tauri::async_runtime::spawn(async move {
+                                if let Err(error) = tray::open_management(handle, None).await {
+                                    log::error!("Cannot open settings: {error}");
+                                }
+                            });
+                        }
                         "test-notification" => {
                             let handle = app.clone();
                             tauri::async_runtime::spawn(async move {
@@ -184,18 +198,13 @@ fn main() {
                         _ => {}
                     }
                 })
-                .on_tray_icon_event(move |_tray, event| {
-                    // Works on KDE/Windows/macOS — left-click toggles popup directly
-                    if let TrayIconEvent::Click {
-                        button: MouseButton::Left,
-                        button_state: MouseButtonState::Up,
-                        ..
-                    } = event
-                    {
-                        tray::toggle_popup(&handle);
-                    }
-                })
+                .on_tray_icon_event(move |_tray, event| tray::handle_tray_event(&handle, event))
                 .build(app)?;
+            #[cfg(windows)]
+            crate::tray_windows::observe_menu(app.handle(), &tray_icon)
+                .map_err(std::io::Error::other)?;
+            #[cfg(not(windows))]
+            let _ = tray_icon;
             watcher::emit_latest(app.handle());
 
             // Global shortcut: Ctrl+Shift+A toggles the popup
@@ -204,8 +213,8 @@ fn main() {
             app.handle().plugin(
                 tauri_plugin_global_shortcut::Builder::new()
                     .with_handler(move |_app, sc, event| {
-                        if sc == &shortcut && event.state() == ShortcutState::Pressed {
-                            tray::toggle_popup(&h_shortcut);
+                        if sc == &shortcut {
+                            tray::shortcut(&h_shortcut, event.state() == ShortcutState::Pressed);
                         }
                     })
                     .build(),
