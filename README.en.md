@@ -128,6 +128,16 @@ bun run dev:desktop
 
 This starts the native tray app with an isolated development profile. See [CONTRIBUTING.md](CONTRIBUTING.md) for daily development, portable builds, and on-demand installer acceptance.
 
+## Build from source
+
+After cloning the repository and installing dependencies as shown above, run this from the repository root:
+
+```sh
+bun run tauri build
+```
+
+By default, installers are written to `src-tauri/target/release/bundle/`.
+
 ## Contributing and license
 
 [Report an issue](https://github.com/qingtian-4/TaskPulse/issues), improve the docs or contribute an Agent adapter. [Contributing guide](CONTRIBUTING.md) · [Security](SECURITY.md) · [Code of conduct](CODE_OF_CONDUCT.md)
