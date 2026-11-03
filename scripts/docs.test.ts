@@ -43,7 +43,7 @@ test('both READMEs separate installer builds from isolated development',()=>{
     ['README.md','本地开发','从源码构建','贡献与许可'],
     ['README.en.md','Develop locally','Build from source','Contributing and license'],
   ]){
-    const body=read(file);
+    const body=read(file).replaceAll('\r\n','\n');
     const devAt=body.indexOf('## '+dev+'\n');
     const buildAt=body.indexOf('## '+build+'\n');
     const contributeAt=body.indexOf('## '+contribute+'\n');
