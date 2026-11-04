@@ -20,6 +20,13 @@ fn main() {
     println!("cargo:rerun-if-changed=../.git/index");
     println!("cargo:rerun-if-changed=src");
     println!("cargo:rerun-if-changed=../src");
+    // Cargo-only native verification embeds the already verified Bun output.
+    // Invalidate the embed when only generated assets or their build config change.
+    println!("cargo:rerun-if-changed=../svelte.config.js");
+    println!("cargo:rerun-if-changed=../package.json");
+    if std::env::var_os("CARGO_FEATURE_CUSTOM_PROTOCOL").is_some() {
+        println!("cargo:rerun-if-changed=../build");
+    }
     // The checked-in application permissions make unlisted commands fail closed.
     tauri_build::build();
 }
