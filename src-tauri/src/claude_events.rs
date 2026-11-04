@@ -4,8 +4,9 @@
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Seek, SeekFrom, Write};
+use std::io::{self, Read, Seek, SeekFrom, Write};
 use std::path::Path;
+use std::time::Duration;
 
 pub fn default_dir() -> std::path::PathBuf {
     crate::runtime::state_root().join("claude-events")
@@ -14,62 +15,206 @@ pub fn default_dir() -> std::path::PathBuf {
 const MAX_ENVELOPE_BYTES: usize = 60 * 1024;
 const MAX_JOURNAL_BYTES: u64 = 8 * 1024 * 1024;
 
-pub fn record(dir: &Path, input: &Value, at: u64, root: &Path) -> std::io::Result<Value> {
+const MAX_DIRECTORY_BYTES: u64 = 128 * 1024 * 1024;
+const MAX_SESSIONS: usize = 512;
+const STAGING_PREFIX: &str = ".taskpulse-claude-write-";
+pub(crate) const MAX_DIRECTORY_ENTRIES: usize = 4096;
+pub(crate) const DEGRADED_MARKER: &str = ".admission-degraded";
+
+pub fn record(dir: &Path, input: &Value, at: u64, root: &Path) -> io::Result<Value> {
+    record_bounded(dir, input, at, root, MAX_DIRECTORY_BYTES, MAX_SESSIONS)
+}
+
+fn record_bounded(
+    dir: &Path,
+    input: &Value,
+    at: u64,
+    root: &Path,
+    byte_limit: u64,
+    session_limit: usize,
+) -> io::Result<Value> {
+    let result = record_inner(dir, input, at, root, byte_limit, session_limit);
+    if result.is_err() {
+        // The bridge is fail open. A durable local flag prevents a dropped
+        // event from looking like a healthy source after the GUI restarts.
+        let _ = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(dir.join(DEGRADED_MARKER))
+            .and_then(|file| file.sync_all());
+    }
+    result
+}
+
+#[derive(Default)]
+struct Footprint {
+    journal: u64,
+    checkpoint: u64,
+}
+
+impl Footprint {
+    fn reserved_bytes(&self) -> u64 {
+        // Keep space for an atomic replacement of one full event and its
+        // compatibility checkpoint even when the shared quota is full.
+        self.journal
+            .max(MAX_ENVELOPE_BYTES as u64)
+            .saturating_add(self.checkpoint.max(MAX_ENVELOPE_BYTES as u64))
+    }
+}
+
+fn inventory(dir: &Path) -> io::Result<BTreeMap<String, Footprint>> {
+    let mut sessions: BTreeMap<String, Footprint> = BTreeMap::new();
+    for (i, entry) in std::fs::read_dir(dir)?.enumerate() {
+        if i == MAX_DIRECTORY_ENTRIES {
+            return Err(io::Error::other(
+                "Claude event directory entry budget exhausted",
+            ));
+        }
+        let path = entry?.path();
+        if path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| name.starts_with(STAGING_PREFIX))
+        {
+            // Only this writer uses this reserved prefix, and no other
+            // writer can have an active staging file under the global lock.
+            if std::fs::symlink_metadata(&path)?.is_file() {
+                std::fs::remove_file(&path)?;
+            }
+            continue;
+        }
+        let Some(ext @ ("jsonl" | "json" | "lock")) = path.extension().and_then(|s| s.to_str())
+        else {
+            continue;
+        };
+        let Some(id) = path
+            .file_stem()
+            .and_then(|s| s.to_str())
+            .filter(|id| valid_id(id))
+        else {
+            continue;
+        };
+        let meta = std::fs::symlink_metadata(&path)?;
+        if !meta.is_file() {
+            return Err(io::Error::other("Claude event path is not a regular file"));
+        }
+        let session = sessions.entry(session_key(id)).or_default();
+        match ext {
+            "jsonl" => session.journal = session.journal.saturating_add(meta.len()),
+            "json" => session.checkpoint = session.checkpoint.saturating_add(meta.len()),
+            _ => {}
+        }
+    }
+    Ok(sessions)
+}
+
+fn session_key(id: &str) -> String {
+    if cfg!(windows) {
+        id.to_ascii_lowercase()
+    } else {
+        id.to_owned()
+    }
+}
+
+fn valid_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 160
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
+}
+
+fn lock(path: &Path) -> io::Result<std::fs::File> {
+    crate::integrations::journal::lock(path, Duration::from_secs(1)).map_err(io::Error::other)
+}
+
+fn record_inner(
+    dir: &Path,
+    input: &Value,
+    at: u64,
+    root: &Path,
+    byte_limit: u64,
+    session_limit: usize,
+) -> io::Result<Value> {
     let id = input
         .get("session_id")
         .and_then(Value::as_str)
-        .filter(|id| {
-            !id.is_empty()
-                && id.len() <= 160
-                && id
-                    .chars()
-                    .all(|c| c.is_ascii_alphanumeric() || "-_".contains(c))
-        })
+        .filter(|id| valid_id(id))
         .ok_or_else(|| std::io::Error::other("invalid session ID"))?;
     let event = input
         .get("hook_event_name")
         .and_then(Value::as_str)
         .filter(|name| crate::claude_integration::EVENTS.contains(name))
         .ok_or_else(|| std::io::Error::other("unknown hook event"))?;
-    std::fs::create_dir_all(dir)?;
-    let lock = std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(dir.join(format!("{id}.lock")))?;
-    lock.lock()?;
-    let path = dir.join(format!("{id}.jsonl"));
-    let mut journal = std::fs::File::options()
-        .create(true)
-        .truncate(false)
-        .read(true)
-        .write(true)
-        .open(&path)?;
-    // Recover an interrupted final append before admitting another writer.
-    let length = journal.metadata()?.len();
-    journal.seek(SeekFrom::Start(length.saturating_sub(64 * 1024)))?;
-    let mut tail = Vec::new();
-    journal.read_to_end(&mut tail)?;
-    let boundary = tail
-        .iter()
-        .rposition(|byte| *byte == b'\n')
-        .map(|i| i + 1)
-        .unwrap_or(0);
-    if boundary < tail.len() {
-        journal.set_len(length - tail.len() as u64 + boundary as u64)?;
+    // Non-permission notifications have no reducer effect and cannot serve
+    // as the sole record of a compacted execution.
+    if event == "Notification" && input["notification_type"].as_str() != Some("permission_prompt") {
+        return Ok(Value::Null);
     }
-    let last = tail[..boundary]
-        .split(|b| *b == b'\n')
-        .rev()
-        .find_map(|line| serde_json::from_slice::<Value>(line).ok());
-    let previous = last
-        .or_else(|| {
-            std::fs::read(dir.join(format!("{id}.json")))
-                .ok()
-                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-        })
-        .unwrap_or_default();
+    std::fs::create_dir_all(dir)?;
+    let dir = dir.canonicalize()?;
+    let dir = dir.as_path();
+    // Serialize the inventory and admission across all hook processes. Keep
+    // the old per-session lock for compatibility with existing executables.
+    let _capacity_guard = lock(&dir.join(".admission.lock"))?;
+    let sessions = inventory(dir)?;
+    let key = session_key(id);
+    let admitted = sessions.get(&key);
+    let total = sessions.values().fold(0u64, |sum, entry| {
+        sum.saturating_add(entry.reserved_bytes())
+    });
+    let default_reservation = Footprint::default().reserved_bytes();
+    if admitted.is_none()
+        && (sessions.len() >= session_limit
+            || total.saturating_add(default_reservation) > byte_limit)
+    {
+        return Err(io::Error::other(
+            "Claude journal capacity exhausted; existing sessions retained",
+        ));
+    }
+    let _session_guard = lock(&dir.join(format!("{id}.lock")))?;
+    let path = dir.join(format!("{id}.jsonl"));
+    let mut journal = match std::fs::File::options().read(true).write(true).open(&path) {
+        Ok(file) => Some(file),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error),
+    };
+    let (last, valid_length) = match journal.as_mut() {
+        Some(file) => last_record(file, id)?,
+        None => (None, 0),
+    };
+    let checkpoint = read_checkpoint(&dir.join(format!("{id}.json")));
+    let previous = if let Some(event) = last {
+        if let Ok(checkpoint) = &checkpoint {
+            let journal_seq = event["sequence"].as_u64();
+            let checkpoint_seq = checkpoint["sequence"].as_u64();
+            if checkpoint["session_id"].as_str() == Some(id)
+                && (checkpoint_seq > journal_seq
+                    || checkpoint_seq == journal_seq && checkpoint != &event)
+            {
+                return Err(io::Error::other(
+                    "Claude journal rewound or diverged from its checkpoint",
+                ));
+            }
+        }
+        event
+    } else {
+        match checkpoint {
+            Ok(event) => {
+                if !event.is_object()
+                    || event.get("session_id").is_some() && event["session_id"].as_str() != Some(id)
+                {
+                    return Err(io::Error::other("Claude checkpoint identity mismatch"));
+                }
+                event
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Value::Null,
+            Err(error) => return Err(error),
+        }
+    };
+    if !valid_checkpoint(&previous) {
+        return Err(io::Error::other("Claude reducer checkpoint is damaged"));
+    }
     let sequence = previous
         .get("sequence")
         .and_then(Value::as_u64)
@@ -183,28 +328,137 @@ pub fn record(dir: &Path, input: &Value, at: u64, root: &Path) -> std::io::Resul
             "Claude event checkpoint exceeds capacity",
         ));
     }
-    journal.seek(SeekFrom::End(0))?;
-    journal.write_all(&bytes)?;
-    journal.sync_all()?;
-    // A checkpoint failure cannot lose the already durable journal event.
-    let mut temporary = tempfile::NamedTempFile::new_in(dir)?;
-    temporary.write_all(&bytes)?;
-    temporary.as_file().sync_all()?;
-    temporary
-        .persist(dir.join(format!("{id}.json")))
-        .map_err(|e| e.error)?;
-    if journal.metadata()?.len() > MAX_JOURNAL_BYTES {
-        // Every v3 envelope is a complete reducer checkpoint: pending calls,
-        // approvals, turn start, sequence and correlation fingerprints survive.
-        // Persist the checkpoint before atomically replacing the old journal;
-        // a failed replacement keeps the full journal, never a truncated file.
-        drop(journal);
-        let mut compact = tempfile::NamedTempFile::new_in(dir)?;
-        compact.write_all(&bytes)?;
-        compact.as_file().sync_all()?;
-        compact.persist(path).map_err(|e| e.error)?;
+    let current = admitted.map_or(0, Footprint::reserved_bytes);
+    let other = total.saturating_sub(current);
+    let appended_length = valid_length.saturating_add(bytes.len() as u64);
+    let projected = |length| {
+        other.saturating_add(
+            Footprint {
+                journal: length,
+                checkpoint: bytes.len() as u64,
+            }
+            .reserved_bytes(),
+        )
+    };
+    let compact = appended_length > MAX_JOURNAL_BYTES || projected(appended_length) > byte_limit;
+    let final_length = if compact {
+        bytes.len() as u64
+    } else {
+        appended_length
+    };
+    // Legacy directories can already be over quota. An admitted session can
+    // still publish a complete checkpoint that does not increase its charge.
+    if projected(final_length) > byte_limit
+        && (admitted.is_none() || projected(final_length) > total)
+    {
+        return Err(io::Error::other(
+            "Claude journal capacity exhausted; existing sessions retained",
+        ));
     }
+    if compact {
+        // The replacement is itself a complete replay checkpoint. Never
+        // truncate a journal to make room, or evict another session.
+        drop(journal);
+        persist(&path, &bytes)?;
+    } else {
+        let mut journal = match journal {
+            Some(file) => file,
+            None => std::fs::File::options()
+                .write(true)
+                .create_new(true)
+                .open(&path)?,
+        };
+        if journal.metadata()?.len() != valid_length {
+            journal.set_len(valid_length)?;
+        }
+        journal.seek(SeekFrom::Start(valid_length))?;
+        journal.write_all(&bytes)?;
+        journal.sync_all()?;
+    }
+    // A compatibility checkpoint failure cannot lose the durable journal.
+    persist(&dir.join(format!("{id}.json")), &bytes)?;
     Ok(payload)
+}
+
+pub(crate) fn valid_checkpoint(event: &Value) -> bool {
+    if event["v"].as_u64().is_none_or(|v| v < 3) {
+        return true; // Legacy checkpoints have no complete reducer state.
+    }
+    let Some(calls) = event["open_calls"].as_object() else {
+        return false;
+    };
+    let Some(requests) = event["pending_requests"].as_array() else {
+        return false;
+    };
+    let Some(ids) = event["pending_request_ids"].as_array() else {
+        return false;
+    };
+    event["sequence"].as_u64().is_some_and(|seq| seq > 0)
+        && calls.values().all(Value::is_string)
+        && ids.len() == requests.len()
+        && requests.iter().zip(ids).all(|(request, id)| {
+            id.is_string()
+                && request["id"] == *id
+                && (request["call_id"].is_string() || request["call_id"].is_null())
+        })
+        && ids.first().unwrap_or(&Value::Null) == &event["pending_request_id"]
+}
+
+fn persist(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    let mut temporary = tempfile::Builder::new()
+        .prefix(STAGING_PREFIX)
+        .tempfile_in(path.parent().expect("journal parent"))?;
+    temporary.write_all(bytes)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path).map_err(|error| error.error)?;
+    Ok(())
+}
+
+pub(crate) fn read_checkpoint(path: &Path) -> io::Result<Value> {
+    let meta = std::fs::symlink_metadata(path)?;
+    if !meta.is_file() || meta.len() > MAX_ENVELOPE_BYTES as u64 {
+        return Err(io::Error::other(
+            "Claude checkpoint exceeds read budget or is not a regular file",
+        ));
+    }
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_ENVELOPE_BYTES as u64 + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() > MAX_ENVELOPE_BYTES {
+        return Err(io::Error::other("Claude checkpoint exceeds read budget"));
+    }
+    serde_json::from_slice(&bytes).map_err(io::Error::other)
+}
+
+fn last_record(file: &mut std::fs::File, id: &str) -> io::Result<(Option<Value>, u64)> {
+    let length = file.metadata()?.len();
+    // One full previous line plus the possible interrupted append.
+    let start = length.saturating_sub(2 * MAX_ENVELOPE_BYTES as u64);
+    file.seek(SeekFrom::Start(start))?;
+    let mut tail = Vec::new();
+    file.take(length - start).read_to_end(&mut tail)?;
+    if tail.len() as u64 != length - start {
+        return Err(io::Error::other("Claude journal changed during recovery"));
+    }
+    let Some(newline) = tail.iter().rposition(|b| *b == b'\n') else {
+        return if length < MAX_ENVELOPE_BYTES as u64 {
+            Ok((None, 0))
+        } else {
+            Err(io::Error::other("Claude journal tail is corrupt"))
+        };
+    };
+    let last_start = tail[..newline]
+        .iter()
+        .rposition(|b| *b == b'\n')
+        .map_or(0, |i| i + 1);
+    let event: Value = serde_json::from_slice(&tail[last_start..newline])?;
+    if event["session_id"].as_str() != Some(id) || event["sequence"].as_u64().is_none() {
+        return Err(io::Error::other(
+            "Claude journal tail identity or sequence is invalid",
+        ));
+    }
+    Ok((Some(event), start + newline as u64 + 1))
 }
 
 // Persist only a fingerprint for correlation, not arbitrary tool inputs.
@@ -264,6 +518,88 @@ mod tests {
         assert_eq!(restarted["sequence"], 3);
         assert_eq!(restarted["pending_request_ids"], json!([]));
     }
+    #[test]
+    fn shared_byte_capacity_compacts_existing_sessions_and_recovers_after_torn_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let send = |id: &str, event: &str, call: Option<&str>, at| {
+            record_bounded(
+                dir.path(),
+                &json!({"session_id":id,"hook_event_name":event,"tool_name":"Bash","tool_use_id":call}),
+                at,
+                dir.path(),
+                4 * MAX_ENVELOPE_BYTES as u64,
+                10,
+            )
+        };
+        send("a", "PreToolUse", Some("call"), 1).unwrap();
+        let pending = send("a", "PermissionRequest", None, 2).unwrap();
+        let other = send("b", "PermissionRequest", None, 3).unwrap();
+        let other_path = dir.path().join("b.jsonl");
+        let other_before = std::fs::read(&other_path).unwrap();
+        assert!(send("c", "PermissionRequest", None, 4).is_err());
+        assert!(!dir.path().join("c.lock").exists());
+        assert!(dir.path().join(DEGRADED_MARKER).is_file());
+        let path = dir.path().join("a.jsonl");
+        // Fill the session's entire reservation with valid records, then
+        // interrupt the next append and leave a lagging compatibility file.
+        let mut line = serde_json::to_vec(&pending).unwrap();
+        line.resize(MAX_ENVELOPE_BYTES - 1, b' ');
+        line.push(b'\n');
+        std::fs::write(&path, [&line[..], b"{\"torn"].concat()).unwrap();
+        std::fs::remove_file(dir.path().join("a.json")).unwrap();
+        let next = send("a", "PreToolUse", Some("unrelated"), 5).unwrap();
+        assert_eq!(next["sequence"], 3);
+        assert_eq!(next["pending_request_ids"], pending["pending_request_ids"]);
+        assert_eq!(std::fs::read_to_string(path).unwrap().lines().count(), 1);
+        for i in 6..46 {
+            let next = send("a", "PreToolUse", Some("unrelated"), i).unwrap();
+            assert_eq!(next["pending_request_ids"], pending["pending_request_ids"]);
+        }
+        let resolved = send("a", "PostToolUse", Some("call"), 47).unwrap();
+        assert_eq!(resolved["resolved_request_id"], pending["request_id"]);
+        assert_eq!(resolved["pending_request_ids"], json!([]));
+        assert_eq!(std::fs::read(other_path).unwrap(), other_before);
+        assert_eq!(read_checkpoint(&dir.path().join("b.json")).unwrap(), other);
+    }
+
+    #[test]
+    fn concurrent_new_sessions_cannot_exceed_admission_and_corruption_is_not_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let send = |id: &str| {
+            record_bounded(
+                dir.path(),
+                &json!({"session_id":id,"hook_event_name":"PermissionRequest"}),
+                1,
+                dir.path(),
+                MAX_DIRECTORY_BYTES,
+                2,
+            )
+        };
+        let admitted: Vec<_> = std::thread::scope(|scope| {
+            (0..8)
+                .map(|i| {
+                    let send = &send;
+                    scope.spawn(move || {
+                        let id = format!("s{i}");
+                        send(&id).ok().map(|_| id)
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_iter()
+                .filter_map(|thread| thread.join().unwrap())
+                .collect()
+        });
+        assert_eq!(admitted.len(), 2);
+        assert_eq!(inventory(dir.path()).unwrap().len(), 2);
+        let id = &admitted[0];
+        let path = dir.path().join(format!("{id}.jsonl"));
+        let mut bytes = std::fs::read(&path).unwrap();
+        bytes.extend(b"{invalid complete record}\n");
+        std::fs::write(&path, &bytes).unwrap();
+        assert!(send(id).is_err());
+        assert_eq!(std::fs::read(path).unwrap(), bytes);
+    }
+
     #[test]
     fn r04_untrusted_tool_payloads_never_enter_new_journal_or_checkpoint_activity() {
         let dir = tempfile::tempdir().unwrap();

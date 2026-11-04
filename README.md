@@ -18,11 +18,6 @@
 
 </div>
 
-<p align="center">
-  <img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse 四任务面板：进行中、待输入、待批准和待查看，显示模型与耗时">
-  <br><sub>Windows 界面 · 示例任务</sub>
-</p>
-
 ## 功能
 
 - **打开即关注**：自动发现本机 Agent，首次确认后跟踪新任务；也可接入 WSL 和 SSH 服务器。
@@ -36,20 +31,7 @@
 
 需要补充信息或授权时持续提醒，本轮结束后提醒查看结果。
 
-<p align="center">
-  <img src="assets/screenshots/notice-input.png" width="320" alt="待输入弹窗：确认导出文件格式">
-  <br><sub>待输入：等待你补充信息</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/notice-approval.png" width="320" alt="待批准弹窗：运行项目测试需要授权">
-  <br><sub>待批准：等待你确认执行请求</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/notice-completed.png" width="320" alt="任务完成弹窗：快速入门指南本轮结束">
-  <br><sub>任务完成：回来查看本轮结果</sub>
-</p>
+当前版本的面板截图、提醒截图和演示待补。
 
 ## 安装
 
@@ -103,6 +85,8 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | 其他 Agent / 命令行任务 | 标准事件、MCP、兼容 Hook、`tp-run` 和远程 tmux |
 
 自动发现适用于已适配的本机数据格式；WSL、SSH 和事件接入按需配置。不同 Agent 提供的状态不同，未提供的模型或审批信息不会猜测。[兼容说明](docs/AGENT_COMPATIBILITY.md) · [接入指南](docs/AGENT_INTEGRATION_GUIDE.md)
+
+Codex 原生提问与审批使用不同的证据通道。Claude Code 可通过可选 Hook 提供明确审批，暂不支持原生提问。返回宿主窗口不会自动标记已读。来源损坏、超出容量或暂时不可读时，TaskPulse 将上次观测标为待更新。详见[平台与能力说明](docs/AGENT_COMPATIBILITY.md)。
 
 ## 路线图
 

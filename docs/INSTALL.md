@@ -1,5 +1,7 @@
 # 安装与快速入门
 
+[English](INSTALL.en.md)
+
 ## 下载安装包
 
 打开 [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases)，按系统选择：
@@ -63,6 +65,12 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 先清除面板筛选，确认来源已启用且项目在监控范围内。Windows、WSL 和 SSH 是独立来源；WSL Codex 需要运行中的发行版和 Python 3。SSH 使用你配置的别名和系统凭据。
 
 “状态待更新”表示来源暂时不可读，不表示任务已结束。模型、审批或完成信息取决于 Agent 提供的记录，见[兼容说明](AGENT_COMPATIBILITY.md)。
+
+### 来源异常或日志达到容量
+
+在**设置 → 来源**分别查看检测、启用和读取状态。兼容 `.status` 文件每个最多 256 KiB；两个兼容目录合计每轮最多读取 4 MiB、检查 4,096 个目录项。请让写入方通过同目录临时文件原子替换状态文件，并将详细输出放在日志中。文件过大、损坏或不可读时，请修复写入方；不要用空文件代替。
+
+Claude 精确事件目录使用最多 512 个会话、128 MiB 的预留配额，单个日志最多 8 MiB。TaskPulse 会压缩当前会话的检查点，保留所有未解决请求；拒绝新会话时不会删除旧日志，也不会阻止 Claude 工作。拒收或写入失败可能留下 `claude-events/.admission-degraded`，用于跨重启提示可能漏收。若需要释放容量，先停用对应观察器并备份事件目录；只把已确认结束、没有待处理请求且不再写入的会话整组移至备份（同名 `.jsonl`、`.json`、`.lock`）。核对容量与来源恢复后，可移走该标记。标记移除不会补回漏收事件。保留 `attention.json`、`recent.json` 和通知状态；不要上传整个目录。
 
 ## 数据与隐私
 

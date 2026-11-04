@@ -217,6 +217,13 @@ impl AttentionTracker {
                     record.task.merge_integration_health(&task);
                     continue;
                 }
+                // An incomplete read can carry an earlier pending subset
+                // after a restart. It cannot replace a durable unresolved request.
+                if task.stale && record.task.requires_action() {
+                    record.task.stale = true;
+                    record.task.new_execution = false;
+                    continue;
+                }
                 let changed_turn = turn_key.is_some()
                     && turn_key != record.last_turn_key
                     && (task.status == TaskStatus::Running
@@ -880,6 +887,33 @@ mod tests {
         );
         assert_eq!(restored.display()[0].id, "a");
         assert!(!restored.display()[0].new_execution);
+    }
+
+    #[test]
+    fn stale_subset_after_restart_cannot_replace_unread_pinned_pending_requests() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut tracker = AttentionTracker::open(path.clone());
+        let mut pending = task("claude:s", TaskStatus::WaitingInput, Some("turn"));
+        pending.source = TaskSource::ClaudeCode;
+        pending.waiting_reason = Some(crate::domain::WaitingReason::Approval);
+        pending.input_request_id = Some("a".into());
+        pending.input_request_ids = vec!["a".into(), "b".into()];
+        pending.native_unread = Some(true);
+        assert_eq!(tracker.reconcile(vec![pending.clone()]).len(), 1);
+        tracker.set_pinned(&pending.id, true).unwrap();
+        let mut prefix = pending.clone();
+        prefix.input_request_ids.pop();
+        prefix.stale = true;
+        let mut restarted = AttentionTracker::open(path.clone());
+        let out = restarted.reconcile(vec![prefix]);
+        assert_eq!(out.len(), 1);
+        assert!(out[0].unread && out[0].pinned && out[0].stale);
+        assert_eq!(out[0].input_request_ids, pending.input_request_ids);
+        assert_eq!(
+            AttentionTracker::open(path).known()[0].input_request_ids,
+            pending.input_request_ids
+        );
     }
 
     #[test]

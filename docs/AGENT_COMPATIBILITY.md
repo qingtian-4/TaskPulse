@@ -1,5 +1,7 @@
 # 支持的 Agent 与接入方式
 
+[English](#english)
+
 TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原生接入只读本机数据；不会导入整个空闲历史，也不会因日志静默或工具返回而宣告任务完成。
 
 ## 本机自动发现
@@ -8,8 +10,8 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 
 | Agent | 读取来源 | 任务状态与边界 |
 | --- | --- | --- |
-| Codex | `CODEX_HOME` 或 `~/.codex` 中的元数据与会话日志 | 原生任务、项目、模型和执行阶段；明确结束事件触发提醒 |
-| Claude Code | `CLAUDE_CONFIG_DIR` 或 `~/.claude` | 原生会话观测；需要精确生命周期与授权事件时，可选择安装官方 Hook |
+| Codex | `CODEX_HOME` 或 `~/.codex` 中的元数据与会话日志 | 原生任务、项目、模型和执行阶段；读取宿主留下的明确提问，审批需有明确事件，见[审批观察器](CODEX_APPROVAL_OBSERVER.md) |
+| Claude Code | `CLAUDE_CONFIG_DIR` 或 `~/.claude` | 原生会话观测；精确生命周期及审批可用可选官方 Hook，原生提问未支持 |
 | Hermes | 原生 SQLite 数据库与运行租约 | 标题、项目、模型及运行状态；缺少结束证据时保留待更新状态 |
 | DeepSeek Harness | `DSH_HOME` 或 `~/.dsh`，可用 `TASKPULSE_DSH_HOME` 覆盖 | Desktop / CLI 原生会话，支持旧日志与 v4 日志 |
 | OpenCode | `~/.local/share/opencode/opencode.db`，支持 `XDG_DATA_HOME` | 读取运行阶段、模型与明确结束记录；支持 v2 和旧版会话表；不提供独立提问或审批提醒 |
@@ -20,6 +22,12 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 原生数据格式可能随 Agent 版本改变。读取失败会显示来源异常或状态待更新，不伪造任务结束。来源没有提供模型时不猜测模型；代理所报告的模型名不保证揭示代理背后的实际模型。
 
 OpenCode 2.2.2 和 WorkBuddy 5.9.3 的 Windows 本机记录已做只读核对；这不代表所有旧版、国际版或 macOS 版本均已实机验收。接入操作见[本机 Agent](LOCAL_AGENTS.md#opencode-与-workbuddy)。
+
+## 平台与返回任务
+
+Windows 10/11 x64 是主要验收平台。macOS 13.3+ 提供 Intel 与 Apple Silicon 包；编译和打包通过不代表每个 Agent、每种宿主都已实测。Linux 桌面当前没有同等交付验收。Windows 的 WSL 是独立来源，不等同于 Linux 桌面支持。
+
+只有能核验所属进程和窗口时，TaskPulse 才会把宿主聚焦当作成功。聚焦窗口不代表已跳转到精确会话。无法可靠返回时，请打开任务详情并复制路径或会话 ID。关闭通知、返回宿主都不会自动标为已读或批准。
 
 ## 按需连接
 
@@ -43,3 +51,20 @@ OpenCode 2.2.2 和 WorkBuddy 5.9.3 的 Windows 本机记录已做只读核对；
 - 工具完成只清除匹配的工具活动，不结束整轮任务。
 - 同一任务重命名不改变身份，不重新计时或重复提醒。
 - 关闭提醒不等于查看结果。未读结果、固定任务和未解决请求仍可回查。
+
+
+## English
+
+TaskPulse tracks active turns, explicit requests and unread results. Local discovery reads supported native data after the initial confirmation. The Sources page lists detected and configured agents; use Advanced to manage WSL, SSH, events or custom directories.
+
+| Agent or connection | Evidence |
+| --- | --- |
+| Codex | Native metadata and logs can report sessions, models, turn outcomes and explicit questions. Permission requests require an existing explicit event channel; see the [approval observer guide](CODEX_APPROVAL_OBSERVER.md). WSL and SSH are configured separately. |
+| Claude Code | Native logs provide session evidence. The optional official hook provides explicit approval and lifecycle events. Native questions are unsupported. |
+| Hermes, DeepSeek Harness, OpenCode, WorkBuddy, ZCode, Doubao | Native tasks and models where the Agent supplies evidence. A running lease or completed tool call alone cannot establish a turn outcome. OpenCode and WorkBuddy native records do not expose independent approvals or questions. |
+| Gemini CLI, Kimi Code, TRAE and other agents | Process discovery or configured Standard Events, MCP and compatibility files, as available. A host must actually emit the event to support a precise reminder. |
+| Shell / tmux | `tp-run` can report the foreground child's exit code. An ordinary tmux shell return is inferred and does not establish an Agent turn outcome. |
+
+Windows 10/11 x64 is the primary validation platform. macOS 13.3+ packages target both Apple Silicon and Intel. Compile and packaging checks do not establish runtime support for every Agent or host. Linux desktop has no equivalent delivery gate; a Windows WSL source is separate.
+
+A verified host window can be focused when TaskPulse can validate its live owner. Host focus does not establish an exact session jump. Use task details or copy the session ID or path when return is unavailable. Dismissing a reminder or focusing a window does not mark a task as read or approve a request. See [installation and troubleshooting](INSTALL.en.md).
