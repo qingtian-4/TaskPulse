@@ -162,7 +162,7 @@ test.skipIf(process.platform!=='win32')('actual Windows profile handle releases 
 test.skipIf(!process.env.TASKPULSE_SMOKE_EXE)('real CLI early failures retain reports without leaked executable/profile directories',async()=>{
   const exe=resolve(process.env.TASKPULSE_SMOKE_EXE!);
   const run=async(script:string,args:string[],message:RegExp)=>{
-    const child=Bun.spawn([process.execPath,resolve('scripts',script),...args],{stdout:'pipe',stderr:'pipe',env:process.env});
+    const child=Bun.spawn([process.execPath,resolve('tests','native',script),...args],{stdout:'pipe',stderr:'pipe',env:process.env});
     const timer=setTimeout(()=>child.kill(),30000);
     let code:number,stdout:string,stderr:string;
     try{[code,stdout,stderr]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);}

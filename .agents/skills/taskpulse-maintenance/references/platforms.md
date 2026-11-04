@@ -38,3 +38,19 @@ Reminder delivery defaults to the independent TaskPulse popup (`dashboard.notifi
 - Windows integration checkpoint replacement and backup must give tempfile canonical parent paths for both temporary and destination files; raw Win32 persistence otherwise fails in deep worktree profiles even when event append succeeds.
 - Native startup failures retain bounded CDP and actual owned-process token/browser evidence before cleanup. Requested integrity is not proof of TokenElevation; never export full command lines, configuration bytes or task content into this evidence.
 - Windows quality runs default-profile native verification as a disposable standard account, asserting the actual app has the same user, medium integrity and TokenElevation=0. Passwords stay off argv/env/artifacts; stop that account's processes before restoring desktop/file ACLs and deleting the account. No installer/UAC policy or production driver override is used.
+
+## Conditional live-source entrypoints
+
+Run the opt-in real SSH smoke test only when the configured servers are expected to be reachable:
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_remote_snapshot -- --ignored --nocapture
+```
+
+Opt-in WSL read-only smoke (Python 3 and a running distro required, default Ubuntu):
+
+```powershell
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_wsl_codex_snapshot -- --ignored --nocapture
+```
+
+Set `TASKPULSE_WSL_DISTRO` for another distro. `tests/native/native-wsl-codex-smoke.ts` validates actual source discovery, save, native session titles and isolated scopes with temporary WebView2 CDP, restoring settings by default.
