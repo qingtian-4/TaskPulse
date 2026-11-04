@@ -26,7 +26,9 @@ export function stageUpdates(bundle:string,out:string,version:string,commit:stri
   const pairs:Array<[string,string,string]>=platform==='windows' ? [
     ['windows-x86_64-nsis',only(join(bundle,'nsis'),'.exe'),installerNames(version)[0]],
     ['windows-x86_64-msi',only(join(bundle,'msi'),'.msi'),installerNames(version)[1]],
-  ] : platform==='macos-arm64' || platform==='macos-x64' ? [[
+  ] : platform==='windows-arm64' ? [[
+    'windows-aarch64-nsis',only(join(bundle,'nsis'),'.exe'),installerNames(version,'arm64')[0],
+  ]] : platform==='macos-arm64' || platform==='macos-x64' ? [[
     platform==='macos-arm64'?'darwin-aarch64':'darwin-x86_64',only(join(bundle,'macos'),'.app.tar.gz'),`TaskPulse_${version}_${platform.replace('-','_')}.app.tar.gz`,
   ]] : (()=>{throw Error('Unsupported update platform');})();
   mkdirSync(out,{recursive:true});
@@ -41,16 +43,17 @@ export function stageUpdates(bundle:string,out:string,version:string,commit:stri
     manifest.platforms[target]={url:`https://github.com/qingtian-4/TaskPulse/releases/download/v${version}/${name}`,signature:sig,sha256:hash(destination)};
   }
   if(platform==='windows')manifest.platforms['windows-x86_64']=manifest.platforms['windows-x86_64-nsis'];
+  if(platform==='windows-arm64')manifest.platforms['windows-aarch64']=manifest.platforms['windows-aarch64-nsis'];
   const path=join(out,`updater-${platform}.json`);if(existsSync(path))throw Error('Refusing stale update manifest');
   writeFileSync(path,JSON.stringify(manifest,null,2)+'\n');return manifest;
 }
-export function assembleFeed(directory:string,version:string,commit:string,notes:string):void {
+export function assembleFeed(directory:string,version:string,commit:string,notes:string,arm64=false):void {
   validateRelease(`v${version}`,Array(4).fill(version));
   const platforms:Record<string,Entry>={};
-  for(const platform of ['windows','macos-arm64','macos-x64']){
+  for(const platform of ['windows','macos-arm64','macos-x64',...(arm64?['windows-arm64']:[])]){
     const manifest=JSON.parse(readFileSync(join(directory,`updater-${platform}.json`),'utf8')) as Manifest;
     if(manifest.version!==version || manifest.commit!==commit)throw Error('Platform build identity mismatch');
-    const expected=platform==='windows'?['windows-x86_64','windows-x86_64-nsis','windows-x86_64-msi']:[platform==='macos-arm64'?'darwin-aarch64':'darwin-x86_64'];
+    const expected=platform==='windows'?['windows-x86_64','windows-x86_64-nsis','windows-x86_64-msi']:platform==='windows-arm64'?['windows-aarch64','windows-aarch64-nsis']:[platform==='macos-arm64'?'darwin-aarch64':'darwin-x86_64'];
     if(Object.keys(manifest.platforms).sort().join(',')!==expected.sort().join(','))throw Error('Incomplete platform coverage');
     for(const [target,entry] of Object.entries(manifest.platforms)){
       const url=new URL(entry.url),name=basename(url.pathname);
@@ -65,6 +68,6 @@ export function assembleFeed(directory:string,version:string,commit:string,notes
 if(import.meta.main){
   const [command,...args]=process.argv.slice(2);const arg=(name:string)=>{const i=args.indexOf(name);if(i<0 || !args[i+1])throw Error(`Missing ${name}`);return args[i+1];};
   if(command==='stage')stageUpdates(resolve(arg('--bundle-root')),resolve(arg('--out')),arg('--version'),arg('--commit'),arg('--platform'));
-  else if(command==='feed')assembleFeed(resolve(arg('--out')),arg('--version'),arg('--commit'),readFileSync(resolve(arg('--notes')),'utf8'));
+  else if(command==='feed')assembleFeed(resolve(arg('--out')),arg('--version'),arg('--commit'),readFileSync(resolve(arg('--notes')),'utf8'),args.includes('--arm64'));
   else throw Error('Usage: stage or feed with exact version, commit and paths');
 }

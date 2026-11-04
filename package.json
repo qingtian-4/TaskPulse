@@ -13,7 +13,7 @@
     "test:docs": "bun test ./scripts/docs.test.ts",
     "test:repo": "bun test ./scripts/repository.test.ts",
     "test:installation-preview": "bun test ./scripts/installation-preview.test.ts",
-    "test:release": "bun test ./scripts/release.test.ts ./scripts/updater-assets.test.ts ./scripts/dependency-notices.test.ts",
+    "test:release": "bun test ./scripts/release.test.ts ./scripts/updater-assets.test.ts ./scripts/dependency-notices.test.ts ./scripts/release-package.test.ts",
     "audit:frontend": "bun audit --audit-level=moderate",
     "audit:rust": "bun scripts/security.ts rust",
     "audit:secrets": "bun scripts/security.ts secrets",

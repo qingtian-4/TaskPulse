@@ -29,7 +29,7 @@ test('release signing is isolated from PR builds and all native packages gate th
   const release=Bun.YAML.parse(readFileSync(join(import.meta.dir,'../.github/workflows/release.yml'),'utf8')) as any;
   expect(release.jobs.draft.needs).toContain('macos');expect(release.jobs.draft.needs).toContain('installer-smoke');
   const publish=release.jobs.draft.steps.find((s:any)=>s.uses?.startsWith('softprops/')).with;
-  expect(publish.draft).toBe(true);expect(publish.files).toContain('latest.json');expect(publish.files).toContain('*.sig');
+  expect(publish.draft).toBe(true);expect(publish.files).toBe('dist/publish/*');
   for(const job of ['windows','macos'])expect(release.jobs[job].steps.some((s:any)=>s.run?.includes('signed_release_artifacts_match_embedded_key'))).toBe(true);
   const preview=readFileSync(join(import.meta.dir,'../.github/workflows/installation-preview.yml'),'utf8');
   expect(preview).not.toContain('secrets.');expect(preview).not.toContain('tauri.updater.conf.json');
@@ -38,4 +38,23 @@ test('release signing is isolated from PR builds and all native packages gate th
   expect(config.plugins.updater.dangerousInsecureTransportProtocol).not.toBe(true);
   expect(config.plugins.updater.allowDowngrades).not.toBe(true);
   expect(config.plugins.updater.requireSignedVersion).toBe(true);
+});
+
+test('ARM64 feed requires its signed native payload and preserves the existing MSI target',()=>{
+  const dir=mkdtempSync(join(tmpdir(),'tp-arm-updates-'));
+  try{
+    const bundle=join(dir,'bundle'),out=join(dir,'assets');
+    for(const [sub,name] of [['nsis','app.exe'],['msi','app.msi'],['macos','app.app.tar.gz']]){
+      mkdirSync(join(bundle,sub),{recursive:true});
+      writeFileSync(join(bundle,sub,name),'fixture payload');writeFileSync(join(bundle,sub,name+'.sig'),fixtureSig);
+    }
+    for(const platform of ['windows','macos-arm64','macos-x64'])stageUpdates(bundle,out,version,commit,platform);
+    expect(()=>assembleFeed(out,version,commit,'Notes',true)).toThrow();
+    stageUpdates(bundle,out,version,commit,'windows-arm64');
+    assembleFeed(out,version,commit,'Notes',true);
+    const feed=JSON.parse(readFileSync(join(out,'latest.json'),'utf8'));
+    expect(feed.platforms['windows-aarch64-nsis'].url).toEndWith('_windows_arm64_setup.exe');
+    expect(feed.platforms['windows-aarch64']).toEqual(feed.platforms['windows-aarch64-nsis']);
+    expect(feed.platforms['windows-x86_64-msi'].url).toEndWith('.msi');
+  }finally{rmSync(dir,{recursive:true,force:true});}
 });

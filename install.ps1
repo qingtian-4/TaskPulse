@@ -1,6 +1,6 @@
 <#
 .SYNOPSIS
-Download, verify and open the official TaskPulse Windows x64 installer.
+Download, verify and open the official TaskPulse Windows x64/ARM64 installer.
 .DESCRIPTION
 Stable releases by default. Use -Prerelease to include public alpha releases,
 or -Version for an explicit published tag. Drafts are never installed.
@@ -19,6 +19,15 @@ param(
     [ValidateSet('en','zh-CN')][string]$Language = $(if ((Get-UICulture).Name -like 'zh*') { 'zh-CN' } else { 'en' })
 )
 
+function Get-TaskPulseArchitecture {
+    $native = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
+    switch ($native) {
+        'AMD64' { return 'x64' }
+        'ARM64' { return 'arm64' }
+        default { throw 'This installer requires Windows x64 or ARM64.' }
+    }
+}
+
 function Get-TaskPulsePublicPageRelease {
     param([string]$Tag)
     $page = if ($Tag) { "https://github.com/qingtian-4/TaskPulse/releases/tag/$Tag" } else { 'https://github.com/qingtian-4/TaskPulse/releases/latest' }
@@ -34,7 +43,7 @@ function Get-TaskPulsePublicPageRelease {
     }
     $resolved = $final.AbsolutePath.Substring($prefix.Length)
     if ($resolved -cnotmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$' -or ($Tag -and $resolved -cne $Tag)) { throw 'Public release tag mismatch.' }
-    $names = @("TaskPulse_$($resolved.Substring(1))_windows_x64_setup.exe", 'SHA256SUMS.txt', 'release-manifest.json')
+    $names = @("TaskPulse_$($resolved.Substring(1))_windows_x64_setup.exe", "TaskPulse_$($resolved.Substring(1))_windows_arm64_setup.exe", 'SHA256SUMS.txt', 'release-manifest.json')
     # An anonymous successful public page plus verified public assets replaces
     # API metadata only when the API explicitly reports a rate limit. Drafts
     # have neither an anonymous public page nor public download URLs.
@@ -111,22 +120,33 @@ function Get-TaskPulseAssetUrl {
 }
 
 function Test-TaskPulseDownload {
-    param([string]$Directory, [string]$Tag)
+    param([string]$Directory, [string]$Tag, [ValidateSet('x64','arm64')][string]$Architecture='x64')
     if ($Tag -cnotmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid release tag.' }
     $version = $Tag.Substring(1)
-    $name = "TaskPulse_${version}_windows_x64_setup.exe"
+    $name = "TaskPulse_${version}_windows_${Architecture}_setup.exe"
     $manifest = Get-Content -LiteralPath (Join-Path $Directory 'release-manifest.json') -Raw | ConvertFrom-Json
+    $unified = $null
+    if ($manifest.format) {
+        if ($manifest.format -cne 'taskpulse-release-v2' -or $manifest.version -cne $version -or
+            $manifest.tag -cne $Tag -or $manifest.build_kind -cne 'release' -or $manifest.commit -cnotmatch '^[0-9a-f]{40}$') {
+            throw 'Unified release identity mismatch.'
+        }
+        $unified = $manifest
+        $manifest = $unified.platforms.windows.$Architecture
+        if ($manifest.commit -cne $unified.commit) { throw 'Platform source SHA mismatch.' }
+    }
     if ($manifest.version -cne $version -or $manifest.tag -cne $Tag -or
         ($manifest.build_kind -and $manifest.build_kind -cne 'release') -or
-        $manifest.platform -cne 'windows' -or $manifest.architecture -cne 'x64' -or
+        $manifest.platform -cne 'windows' -or $manifest.architecture -cne $Architecture -or
         $manifest.commit -cnotmatch '^[0-9a-f]{40}$' -or @($manifest.assets) -cnotcontains $name) {
-        throw 'Release manifest does not match the requested Windows x64 version.'
+        throw 'Release manifest does not match the requested Windows architecture/version.'
     }
     $checksums = @(Get-Content -LiteralPath (Join-Path $Directory 'SHA256SUMS.txt') | Where-Object {
         $_ -cmatch ('^([0-9a-fA-F]{64})\s+\*?' + [regex]::Escape($name) + '$')
     })
     if ($checksums.Count -ne 1) { throw 'Missing, malformed or duplicate installer checksum.' }
     $expected = ($checksums[0] -split '\s+', 2)[0]
+    if ($unified -and $unified.assets.$name -cne $expected.ToLowerInvariant()) { throw 'Unified installer digest mismatch.' }
     $path = Join-Path $Directory $name
     $stream = [IO.File]::OpenRead($path)
     try {
@@ -152,13 +172,13 @@ function Invoke-TaskPulseInstall {
         else { @{ download='Downloading TaskPulse'; verified='SHA-256 verified'; unsigned='The installer is not code signed. Windows may show an unknown publisher.'; open='Opening the standard setup wizard'; saved='Verified installer saved'; failed='Installation did not complete. Check your network and the GitHub Releases page.' } }
     $temp = $null
     try {
-        $arch = if ($env:PROCESSOR_ARCHITEW6432) { $env:PROCESSOR_ARCHITEW6432 } else { $env:PROCESSOR_ARCHITECTURE }
-        if ($env:OS -ne 'Windows_NT' -or $arch -ne 'AMD64' -or [Environment]::OSVersion.Version.Major -lt 10) { throw 'This installer supports Windows 10/11 x64 only.' }
+        $arch = Get-TaskPulseArchitecture
+        if ($env:OS -ne 'Windows_NT' -or [Environment]::OSVersion.Version.Major -lt 10) { throw 'This installer requires Windows 10/11.' }
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
         $release = Get-TaskPulseRelease $Version $Prerelease
         $tag = [string]$release.tag_name
         if ($tag -cnotmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid release tag.' }
-        $name = 'TaskPulse_' + $tag.Substring(1) + '_windows_x64_setup.exe'
+        $name = 'TaskPulse_' + $tag.Substring(1) + '_windows_' + $arch + '_setup.exe'
         $names = @($name, 'SHA256SUMS.txt', 'release-manifest.json')
         # Validate all asset locations before creating files or downloading.
         $urls = @($names | ForEach-Object { Get-TaskPulseAssetUrl $release $_ })
@@ -181,7 +201,7 @@ function Invoke-TaskPulseInstall {
             Write-Host "  [$($i+1)/$($names.Count)] $($names[$i])"
             Save-TaskPulseAsset -Uri $urls[$i] -OutFile (Join-Path $temp $names[$i]) -Name $names[$i]
         }
-        $installer = Test-TaskPulseDownload $temp $tag
+        $installer = Test-TaskPulseDownload $temp $tag $arch
         Write-Host $messages.verified
         Write-Host $messages.unsigned
         if ($DownloadOnly) {

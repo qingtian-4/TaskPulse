@@ -136,7 +136,8 @@ test('untagged candidate pins the exact main SHA and cannot enter the Release jo
     expect(()=>validateCandidateCommit(...args as [string,string,string])).toThrow('full SHA');
   const workflow=Bun.YAML.parse(readFileSync(join(import.meta.dir,'../.github/workflows/release.yml'),'utf8')) as any;
   expect(workflow.on.workflow_dispatch.inputs.commit.required).toBe(false);
-  expect(workflow.jobs.draft.if).toBe("${{ needs.preflight.outputs.tag != '' }}");
+  expect(workflow.jobs.draft.if).toContain("needs.preflight.outputs.tag != ''");
+  expect(workflow.jobs.draft.if).toContain("needs.windows.result == 'success'");
   expect(workflow.jobs.preflight.steps.find((s:any)=>s.id==='version').run).toContain('candidate --commit "$CANDIDATE_COMMIT"');
   expect(workflow.jobs.windows.needs).toContain('security');
   expect(workflow.jobs['installer-smoke'].strategy.matrix.installer).toEqual(['nsis','msi']);

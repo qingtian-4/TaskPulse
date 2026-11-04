@@ -2,7 +2,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Assets,
     [Parameter(Mandatory=$true)][string]$Version,
     [Parameter(Mandatory=$true)][string]$Gsudo,
-    [Parameter(Mandatory=$true)][ValidateSet('nsis','msi')][string]$InstallerKind
+    [Parameter(Mandatory=$true)][ValidateSet('nsis','msi')][string]$InstallerKind,
+    [ValidateSet('x64','arm64')][string]$Architecture='x64'
 )
 $ErrorActionPreference = 'Stop'
 # This installs/uninstalls software. Never run it against a developer's real profile.
@@ -31,7 +32,15 @@ function Invoke-Installer([string]$File, [string]$Arguments) {
 
 try {
     $manifest = Get-Content -Raw -Encoding UTF8 (Join-Path $assetRoot 'release-manifest.json') | ConvertFrom-Json
+    if ($manifest.format) {
+        if ($manifest.format -ne 'taskpulse-release-v2' -or $manifest.version -ne $Version -or $manifest.tag -ne "v$Version" -or $manifest.build_kind -ne 'release') { throw 'Unified release identity mismatch' }
+        $rootCommit=$manifest.commit
+        $manifest=$manifest.platforms.windows.$Architecture
+        if ($manifest.commit -ne $rootCommit) { throw 'Platform source SHA mismatch' }
+    }
     if ($manifest.version -ne $Version -or $manifest.commit -notmatch '^[a-f0-9]{40}$') { throw 'Release metadata mismatch' }
+    if ($manifest.platform -ne 'windows' -or $manifest.architecture -ne $Architecture -or ($Architecture -eq 'arm64' -and $InstallerKind -ne 'nsis')) { throw 'Installer architecture/format mismatch' }
+    if ($Architecture -eq 'x64') {
     $msiFile=Join-Path $assetRoot "TaskPulse_${Version}_windows_x64.msi"
     $windowsInstaller=New-Object -ComObject WindowsInstaller.Installer
     $database=$windowsInstaller.OpenDatabase($msiFile,0)
@@ -43,10 +52,18 @@ try {
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($view)
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($database)
     [void][Runtime.InteropServices.Marshal]::FinalReleaseComObject($windowsInstaller)
+    }
+    $expectedNames=@("TaskPulse_${Version}_windows_${Architecture}_setup.exe")
+    if ($Architecture -eq 'x64') { $expectedNames+= "TaskPulse_${Version}_windows_x64.msi" }
+    $seen=@{}
     foreach ($line in Get-Content -Encoding UTF8 (Join-Path $assetRoot 'SHA256SUMS.txt')) {
         if ($line -notmatch '^([a-f0-9]{64})  ([A-Za-z0-9_.-]+)$') { throw 'Invalid checksum path' }
+        if ($Matches[2] -notin $expectedNames) { continue }
+        if ($seen.ContainsKey($Matches[2])) { throw 'Duplicate installer checksum' }
+        $seen[$Matches[2]]=$true
         if ((Get-FileHash -LiteralPath (Join-Path $assetRoot $Matches[2]) -Algorithm SHA256).Hash.ToLowerInvariant() -ne $Matches[1]) { throw 'Installer checksum mismatch' }
     }
+    if ($seen.Count -ne $expectedNames.Count) { throw 'Missing installer checksum' }
     # One format per fresh runner: installer directory preferences survive uninstall.
     # Testing NSIS then MSI in one profile is a migration test, not a fresh install.
     foreach ($kind in @($InstallerKind)) {
@@ -55,11 +72,22 @@ try {
         $installDir = Join-Path $workspace $kind
         New-Item -ItemType Directory -Path $installDir | Out-Null
         $exe = Join-Path $installDir 'agent-tray.exe'
-        $package = if ($kind -eq 'nsis') { Join-Path $assetRoot "TaskPulse_${Version}_windows_x64_setup.exe" } else { Join-Path $assetRoot "TaskPulse_${Version}_windows_x64.msi" }
+        $package = if ($kind -eq 'nsis') { Join-Path $assetRoot "TaskPulse_${Version}_windows_${Architecture}_setup.exe" } else { Join-Path $assetRoot "TaskPulse_${Version}_windows_x64.msi" }
         $arguments = if ($kind -eq 'nsis') { "/S /D=$installDir" } else { "/i `"$package`" /qn /norestart INSTALLDIR=`"$installDir`" /L*v `"$(Join-Path $evidence 'msi-install.log')`"" }
         $installer = if ($kind -eq 'nsis') { $package } else { Join-Path $env:SystemRoot 'System32\msiexec.exe' }
         Invoke-Installer $installer $arguments
         if (-not (Test-Path -LiteralPath $exe)) { throw "Missing installed executable: $exe" }
+        $stream=[IO.File]::OpenRead($exe)
+        $reader=[IO.BinaryReader]::new($stream)
+        try {
+            if ($reader.ReadUInt16() -ne 0x5a4d) { throw 'Invalid installed PE header' }
+            $stream.Position=0x3c
+            $peOffset=$reader.ReadUInt32()
+            $stream.Position=$peOffset
+            if ($reader.ReadUInt32() -ne 0x4550) { throw 'Invalid installed PE signature' }
+            $machine=$reader.ReadUInt16()
+            if (($Architecture -eq 'arm64' -and $machine -ne 0xaa64) -or ($Architecture -eq 'x64' -and $machine -ne 0x8664)) { throw 'Installed executable architecture mismatch' }
+        } finally { $reader.Dispose(); $stream.Dispose() }
         foreach ($resource in @('agent-tray-hook.ps1','install-hooks.ps1')) {
             if (-not (Test-Path -LiteralPath (Join-Path $installDir "scripts\hooks\$resource"))) { throw "Missing packaged Hook resource: $resource" }
         }
@@ -100,7 +128,7 @@ try {
         for($n=0;$n -lt 50 -and (Test-Path -LiteralPath $exe);$n++){Start-Sleep -Milliseconds 200}
         if (Test-Path -LiteralPath $exe) { throw 'Uninstall left the application executable installed' }
         if (-not (Test-Path -LiteralPath $marker)) { throw 'Uninstall removed user state without permission' }
-        $results += @{kind=$kind;version=$Version;source_commit=$manifest.commit;os=[Environment]::OSVersion.VersionString;architecture='x64';installation_method=$kind;script_sha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();package_sha256=$packageHash;application_sha256=$applicationHash;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';format_migration='not_verified';focus='not_verified'}
+        $results += @{kind=$kind;version=$Version;source_commit=$manifest.commit;os=[Environment]::OSVersion.VersionString;architecture=$Architecture;installation_method=$kind;script_sha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();package_sha256=$packageHash;application_sha256=$applicationHash;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';format_migration='not_verified';focus='not_verified'}
     }
     $phase = 'passed'
 } catch {

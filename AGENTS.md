@@ -141,7 +141,7 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
 
 - Versions in package.json, Cargo.toml, Cargo.lock and tauri.conf.json must match
   the explicit SemVer tag. Run `bun run release:check` and `bun run test:release`.
-- release.yml builds Windows x64 MSVC, validates actual installers on a separate
+- release.yml builds Windows x64 MSVC (plus native ARM64 NSIS after 1.1.0), validates actual installers on separate
   runner, builds both macOS architectures, and creates a **draft only**. Stable
   and pre-release versions require exact explicit tags; never override versions
   or publish automatically. Local maintainer release notes are not public docs.
@@ -174,7 +174,7 @@ While `src-tauri/target/debug/agent-tray.exe` is running, use `scripts/verify.ps
   `contents: read`, and upload SHA-named test artifacts. Keep `build_kind=pr-preview`
   and `tag=null`; public bootstraps reject previews. Do not relax release.yml's
   existing tag/exact-main checks or publish a release through the preview path.
-- macOS CLI downloads reuse the architecture-specific DMG, manifest and checksums.
+- macOS CLI downloads reuse the architecture-specific DMG. Read legacy manifests/checksums and the unified v2 release metadata; preserve full attachments through 1.1.0 and keep the MSI updater lane in later compact releases.
   Preserve/add and verify quarantine; never remove security attributes or disable
   Gatekeeper. Signature integrity is separate from Developer ID/notarization.
 - Directory replacement/rollback must verify device/inode ownership. BSD mv can

@@ -2,6 +2,14 @@
 
 [简体中文](INSTALL.md)
 
+Release notes put installation downloads at the top. The current version keeps
+all attachments. Later versions consolidate metadata into a release manifest,
+`SHA256SUMS.txt` and a dependency/license ZIP. Updater signatures stay embedded
+in `latest.json`, with sidecars and per-platform license material retained in
+the ZIP. Existing MSI installations keep their MSI update package. Windows
+ARM64 is selectable only when that release actually provides its installer.
+The bootstrap selects the native system architecture.
+
 Choose a package from [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases). On Windows 10/11 x64, use the EXE setup wizard or the MSI for managed deployment. Choose one format and uninstall it before switching. Setup can download WebView2 if the runtime is missing. On macOS 13.3 or later, pick the Apple Silicon or Intel DMG and drag TaskPulse into Applications. The [command-line installer](CLI_INSTALL.md) verifies SHA-256 and defaults to `~/Applications` on Mac.
 
 Compare the download with its published SHA-256. If Windows reports an unknown publisher or macOS cannot verify the developer, verify the download source and follow the system prompt or contact your administrator. TaskPulse does not remove quarantine or disable system security checks. If the Mac installer reports that installation succeeded but launch failed, open the installed application from Finder. Keep any `.taskpulse-recovery/TaskPulse.app` backup until the new app starts and its state is intact.

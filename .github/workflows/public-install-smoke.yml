@@ -14,18 +14,36 @@ permissions:
   contents: read
 
 jobs:
+  platforms:
+    if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - id: plan
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re
+          tag = os.environ['RELEASE_TAG']
+          if not re.fullmatch(r'v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)', tag):
+              raise ValueError('An explicit stable tag is required')
+          rows = [dict(os='windows-latest', name='windows-x64'), dict(os='macos-15', name='macos-arm64'), dict(os='macos-15-intel', name='macos-x64')]
+          if tuple(map(int, tag[1:].split('.'))) > (1, 1, 0):
+              rows.append(dict(os='windows-11-arm', name='windows-arm64'))
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix=' + json.dumps(dict(include=rows)) + '\n')
+          PY
   install:
     if: github.event_name == 'workflow_dispatch' || github.event.release.prerelease == false
+    needs: platforms
     name: Public install on ${{ matrix.name }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
-      matrix:
-        include:
-          - {os: windows-latest, name: windows-x64}
-          - {os: macos-15, name: macos-arm64}
-          - {os: macos-15-intel, name: macos-x64}
+      matrix: ${{ fromJSON(needs.platforms.outputs.matrix) }}
     env:
       RELEASE_TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
