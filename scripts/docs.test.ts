@@ -1,6 +1,7 @@
 import {test,expect} from 'bun:test';
 import {readFileSync,existsSync} from 'node:fs';
 import {resolve} from 'node:path';
+import {createHash} from 'node:crypto';
 import {documentationErrors,gitFiles} from './repository-audit';
 const root=resolve(import.meta.dir,'..');
 const read=(name:string)=>readFileSync(resolve(root,name),'utf8');
@@ -56,18 +57,43 @@ test('both READMEs separate installer builds from isolated development',()=>{
   }
 });
 
-test('archived native figures retain their dimensions and are not presented as current screenshots',()=>{
-  const figures=[['dashboard',368,840],['notice-input',320,132],['notice-approval',320,132],['notice-completed',320,132]] as const;
-  for(const [name,width,height] of figures){
-    const path=`assets/screenshots/${name}.png`;
-    const bytes=readFileSync(resolve(root,path));
-    expect(bytes.subarray(0,8).toString('hex'),path).toBe('89504e470d0a1a0a');
-    expect(bytes.readUInt32BE(16),path).toBe(width*2);
-    expect(bytes.readUInt32BE(20),path).toBe(height*2);
-    for(const file of ['README.md','README.en.md'])expect(read(file),file).not.toContain(`src="${path}"`);
+test('versioned native media has intact provenance and three reminders share one responsive row',()=>{
+  const manifest=JSON.parse(read('assets/screenshots/manifest.json'));
+  expect(manifest.capture_commit).toMatch(/^[a-f0-9]{40}$/);
+  expect(manifest.executable_sha256).toMatch(/^[a-f0-9]{64}$/);
+  expect(manifest.modified).toBe(false);
+  expect(manifest.data).toContain('Public synthetic');
+  expect(manifest.assets).toHaveLength(10);
+  for(const asset of manifest.assets){
+    const bytes=readFileSync(resolve(root,'assets/screenshots',asset.file));
+    expect(createHash('sha256').update(bytes).digest('hex'),asset.file).toBe(asset.sha256);
+    expect(bytes.length,asset.file).toBe(asset.bytes);
+    if(asset.kind==='demo'){
+      expect(bytes.subarray(0,6).toString(),asset.file).toMatch(/^GIF8[79]a$/);
+      expect(bytes.readUInt16LE(6),asset.file).toBe(asset.width);
+      expect(bytes.readUInt16LE(8),asset.file).toBe(asset.height);
+      expect(bytes.length,asset.file).toBeLessThanOrEqual(5*1024*1024);
+    }else{
+      expect(bytes.subarray(0,8).toString('hex'),asset.file).toBe('89504e470d0a1a0a');
+      expect(bytes.readUInt32BE(16),asset.file).toBe(asset.logical_width*2);
+      expect(bytes.readUInt32BE(20),asset.file).toBe(asset.logical_height*2);
+    }
   }
-  expect(read('README.md')).toContain('提醒截图和演示待补');
-  expect(read('README.en.md')).toContain('screenshots and a demo are pending');
+  for(const [file,suffix] of [['README.md',''],['README.en.md','-en']]){
+    const body=read(file);
+    expect(body,file).toContain(`v${manifest.version}`);
+    expect(body,file).toContain(`src="assets/screenshots/dashboard${suffix}.png"`);
+    expect(body,file).toContain(`src="assets/screenshots/demo${suffix}.gif"`);
+    const rows=[...body.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/g)].map(m=>m[0]);
+    const row=rows.find(r=>r.includes(`src="assets/screenshots/notice-input${suffix}.png"`));
+    expect(row,file).toBeDefined();
+    const images=[...row!.matchAll(/<img\b[^>]*>/g)].map(m=>m[0]);
+    expect(images,file).toHaveLength(3);
+    for(const kind of ['input','approval','completed'])expect(row,file).toContain(`src="assets/screenshots/notice-${kind}${suffix}.png"`);
+    const widths=images.map(img=>Number(img.match(/width="(\d+)%"/)?.[1]));
+    expect(widths.every(n=>n>0),file).toBe(true);
+    expect(widths.reduce((a,b)=>a+b,0),file).toBeLessThanOrEqual(100);
+  }
 });
 
 test('repository tests use exact root paths rather than collecting nested worktrees',()=>{

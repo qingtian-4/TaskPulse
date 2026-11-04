@@ -33,11 +33,36 @@ Let several agents work in the background while you focus on what you are doing.
 
 TaskPulse watches your agents so you can focus on your work.
 
+## Task dashboard
+
+<p align="center">
+  <a href="assets/screenshots/dashboard-en.png"><img src="assets/screenshots/dashboard-en.png" width="368" alt="TaskPulse v1.1.0 dashboard with public sample tasks showing running work, input and approval requests, and unread results"></a>
+</p>
+
+Windows · v1.1.0 · Public sample data in an isolated profile. Click a screenshot to view it at full size.
+
 ## Task notifications
 
 Requests for input or approval stay visible until handled. A completed turn prompts you to review its results.
 
-Current dashboard and notification screenshots and a demo are pending.
+<p align="center">
+  <a href="assets/screenshots/notice-input-en.png"><img src="assets/screenshots/notice-input-en.png" width="32%" alt="Input request notification"></a>
+  <a href="assets/screenshots/notice-approval-en.png"><img src="assets/screenshots/notice-approval-en.png" width="32%" alt="Approval request notification"></a>
+  <a href="assets/screenshots/notice-completed-en.png"><img src="assets/screenshots/notice-completed-en.png" width="32%" alt="Turn-ended notification"></a>
+</p>
+
+From left to right: input requested, approval required, and turn ended. Click to enlarge.
+
+## Demo
+
+<details>
+<summary>Watch the demo (18 seconds)</summary>
+
+<p align="center"><img src="assets/screenshots/demo-en.gif" width="368" alt="Native TaskPulse interaction showing attention filtering, task details, source-resolved requests and retained unread results"></p>
+
+The demo uses public sample tasks. Requests are resolved by the sample source. TaskPulse never approves them for you, and opening details or dismissing a notification does not mark a task as read.
+
+</details>
 
 ## Install
 
