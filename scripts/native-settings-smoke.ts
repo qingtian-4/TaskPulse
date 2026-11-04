@@ -122,11 +122,27 @@ poll_interval_ms=3000
   const title:string=await ui.invoke('plugin:window|title',{label:'management'});
   assert.equal(title,`${product} · 设置`,'Initial window title must retain the build identity');
   const movementChecks:any[]=[];
+  let maximizeCheck:unknown=null;
   if(!sourcesOnly){
-  const move=async(x:number,y:number)=>{
-    const child=Bun.spawn([join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),'-NoProfile','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./settings-window-move.ps1',import.meta.url)),'-ProcessId',String(app!.pid),'-Exe',exe,'-Title',title,'-X',String(Math.round(x)),'-Y',String(Math.round(y))],{stdout:'pipe',stderr:'pipe'});
+  const windowAction=async(x:number,y:number,action='move')=>{
+    const child=Bun.spawn([join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),'-NoProfile','-ExecutionPolicy','Bypass','-File',fileURLToPath(new URL('./settings-window-move.ps1',import.meta.url)),'-ProcessId',String(app!.pid),'-Exe',exe,'-Title',title,'-X',String(Math.round(x)),'-Y',String(Math.round(y)),'-Action',action],{stdout:'pipe',stderr:'pipe'});
     const [code,,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);assert.equal(code,0,error);
   };
+  const move=(x:number,y:number)=>windowAction(x,y);
+  const normalSize=await ui.invoke('plugin:window|inner_size',{label:'management'});
+  await windowAction(0,0,'maximize');
+  await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'management'})`);
+  const maximized:any=await ui.invoke('plugin:window|inner_size',{label:'management'});
+  assert.ok(maximized.width>=normalSize.width&&maximized.height>=normalSize.height);
+  await root.invoke('open_management',{section:'sources'});
+  await ui.wait(`document.querySelector('.settings-heading h1').textContent==='监控来源'`);
+  assert.equal(await ui.invoke('plugin:window|is_maximized',{label:'management'}),true,'Reopening settings must preserve maximization');
+  assert.deepEqual(await ui.invoke('plugin:window|inner_size',{label:'management'}),maximized);
+  await windowAction(0,0,'restore');
+  await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'management'}).then(value=>!value)`);
+  const restored=await ui.invoke('plugin:window|inner_size',{label:'management'});
+  assert.deepEqual(restored,normalSize);
+  maximizeCheck={normalSize,maximized,restored};
   const initialMonitor:any=await ui.invoke('plugin:window|current_monitor',{label:'management'});
   const initialPosition:any=await ui.invoke('plugin:window|outer_position',{label:'management'});
   const initialSize:any=await ui.invoke('plugin:window|outer_size',{label:'management'});
@@ -163,7 +179,7 @@ poll_interval_ms=3000
   }
   const catalog:any[]=await ui.invoke('get_source_catalog');assert.equal(catalog.filter(s=>s.category==='local').length,9);
   assert.equal(catalog.find(s=>s.kind==='scanner').capabilities.turn_end,'unsupported');
-  console.log('settings smoke: fixed layout and catalog passed');const startup=await ui.invoke('get_autostart');assert.equal(startup.available,false);
+  console.log('settings smoke: six-section layout and catalog passed');const startup=await ui.invoke('get_autostart');assert.equal(startup.available,false);
   assert.match(await ui.evaluate(`__TAURI_INTERNALS__.invoke('set_autostart',{enabled:true}).then(()=>'',e=>String(e))`),/installed TaskPulse/);
   if(!sourcesOnly){
   // Exercise the packaged startup UI while the native isolated-profile guard
@@ -247,9 +263,28 @@ poll_interval_ms=3000
   await ui.wait(`!!document.querySelector('[data-source-id="codex"]')`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('.source-card:not(details .source-card)').length`),1);
   assert.equal(await ui.evaluate(`[...document.querySelectorAll('.source-group')].every(d=>!d.open)`),true);
-  await ui.evaluate(`document.querySelector('[data-source-advanced] > summary').click()`);
+  const sourceInsets=[];
+  await ui.evaluate(`document.querySelectorAll('.source-group').forEach(d=>d.open=true)`);
+  assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
+  for(const [width,height] of [[960,704],[600,520],[380,520]]){
+    await ui.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
+    const insets=await ui.evaluate(`[...document.querySelectorAll('.source-group')].map(group=>{
+      const bounds=group.getBoundingClientRect();
+      const row=group.querySelector('.source-row'), text=row.querySelector('.source-identity'), button=row.querySelector('.source-expand');
+      return {left:text.getBoundingClientRect().left-bounds.left,right:bounds.right-button.getBoundingClientRect().right};
+    })`);
+    assert.equal(insets.length,2);
+    assert.ok(insets.every((inset:any)=>inset.left>=12&&inset.right>=12),JSON.stringify({width,insets}));
+    assert.equal(await ui.evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
+    sourceInsets.push({width,height,insets});
+  }
+  await ui.send('Emulation.clearDeviceMetricsOverride');
+  if(captureScreenshots){
+    await ui.evaluate(`document.querySelector('[data-source-advanced]').scrollIntoView({block:'start'})`);
+    await Bun.write(join(owned,'sources-fold-spacing.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
   assert.equal(await ui.evaluate(`!!document.querySelector('[data-source-advanced][open] [data-definition="remote_codex"]')`),true);
-  await ui.evaluate(`document.querySelector('[data-source-advanced] > summary').click()`);
+  await ui.evaluate(`document.querySelectorAll('.source-group').forEach(d=>d.open=false)`);
   await ui.evaluate(`document.querySelector('[data-source-id="codex"] .source-expand').click()`);
   await ui.wait(`!!document.querySelector('.source-editor textarea')`);
   await ui.evaluate(`(()=>{const field=document.querySelector('.source-editor textarea');field.value='draft-only-project';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
@@ -332,6 +367,6 @@ poll_interval_ms=3000
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'grouped source defaults and advanced entry','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area','native maximize, warm open and restore']:[]),'grouped source defaults and advanced entry','two saved SSH source instances','duplicate source rejected','same native size across six settings sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,sourceInsets,maximizeCheck,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

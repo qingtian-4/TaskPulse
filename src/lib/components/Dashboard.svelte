@@ -1,7 +1,7 @@
 <script lang="ts">
   import {t} from '$lib/i18n';
   import {preferences} from '$lib/preferences';
-  import { onMount, tick } from 'svelte';
+  import { onMount, tick, untrack } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
@@ -53,6 +53,9 @@
   let messagesEpoch=0;
   let settingsEpoch=0;
   let panel = $state<HTMLDivElement | null>(null);
+  let controls = $state<HTMLDivElement>();
+  let taskContent = $state<HTMLDivElement>();
+  let footer = $state<HTMLElement>();
   let demo = $state(false);
   let lastHidden = $state<{task:TaskSnapshot;action:'restore'|'unignore'} | null>(null);
   let refreshSince = $state(0);
@@ -187,13 +190,24 @@
     }
     catch(e) { error=String(e); }
   }
-  // Grow within one opening, using attention cards rather than hidden process
-  // observations. Shrink only when the popup is opened again.
+  const expanded=$derived(showPrompts || !!selectedTask || showFilters || showArchive || !!error || !!note);
+  function measureHeight() {
+    const content=(controls?.getBoundingClientRect().height??0)+(taskContent?.getBoundingClientRect().height??0)+(footer?.getBoundingClientRect().height??0);
+    const border=panel ? panel.offsetHeight-panel.clientHeight : 0;
+    return preferredDashboardHeight(content+border,expanded);
+  }
+  // Observe intrinsic content, never the popup or the flexible scroll viewport.
+  // Work-area clamping can shrink that viewport but must not change our request.
   $effect(()=>{
-    if(!layoutReady)return;
-    const expanded=showPrompts || !!selectedTask || showFilters || showArchive || !!error || !!note;
-    const needed=preferredDashboardHeight(attentionTasks.length,expanded);
-    if(needed>sessionHeight)sessionHeight=needed;
+    if(!layoutReady || !isTauri() || !controls || !taskContent || !footer)return;
+    if(expanded){sessionHeight=preferredDashboardHeight(0,true);return;}
+    const grow=()=>{sessionHeight=Math.max(sessionHeight,measureHeight());};
+    const observer=new ResizeObserver(grow);
+    observer.observe(controls);
+    observer.observe(taskContent);
+    observer.observe(footer);
+    untrack(grow);
+    return ()=>observer.disconnect();
   });
   $effect(()=>{
     if(!layoutReady || !isTauri())return;
@@ -240,7 +254,7 @@
         await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settingsEpoch++;settings=e.payload;view=e.payload.default_view;void discover();}));
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selectTask(e.payload)));
         await subscribe(listen<boolean>('pinned-changed',e=>pinned=e.payload));
-        await subscribe(listen('popup-opened',()=>{if(!pinned)sessionHeight=400;}));
+        await subscribe(listen('popup-opened',()=>{if(!pinned)sessionHeight=measureHeight();}));
         await subscribe(listen<{phase:string;version:string|null}>('application-update',e=>availableUpdate=e.payload.phase==='available' ? e.payload.version ?? '' : ''));
         void invoke<{phase:string;version:string|null}>('get_update_status').then(s=>availableUpdate=s.phase==='available'?s.version ?? '':'');
         await snapshots(); view=settings?.default_view ?? 'tasks';
@@ -261,6 +275,7 @@
 </script>
 
 <div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(candidates,filtered))}>
+  <div class="dashboard-controls" bind:this={controls}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><BrandMark />TaskPulse</span>
     <div class="header-actions">
@@ -306,11 +321,14 @@
   </div>
   {/if}
   {#if outsideRunning.length}<p class="notice outside-running" role="status">{outsideRunning.length} {$t("个运行任务在当前视图之外")}<button class="link" onclick={showRunning}>{$t("查看全部运行任务")}</button></p>{/if}
+  </div>
   <main class="glass-scroll task-scroll" aria-label={$t("关注任务")}>
+    <div class="task-content" bind:this={taskContent}>
     {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manage}>{$t("查看来源与已发现会话")}</button>{/if}</div>
     {:else if view==='tasks'}
       {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
     {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/each}{/if}
+    </div>
   </main>
   {#if selectedTask}
     <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label={$t("任务详情")}>
@@ -329,7 +347,7 @@
       </div>
     </aside>
   {/if}
-  <footer>
+  <footer bind:this={footer}>
     <button class:degraded={sourceIssues>0} onclick={manage} title={$t("管理来源；任务详情可查看采集时间")}>
       {#if !demo&&dashboardRevision===0}{$t('正在读取来源状态')}
       {:else if sourceSummary.enabled===0}{$t('无启用来源')}
@@ -345,6 +363,7 @@
 <style>
   .model-detail{overflow-wrap:anywhere}
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
+  .dashboard-controls{display:flow-root;flex:none}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}
   .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;color:var(--tp-text)}
   .header-actions{display:flex;gap:4px}.header-actions button{border:0;position:relative}.header-actions span{position:absolute;right:0;top:0;font-size:10px;min-width:14px;line-height:14px;text-align:center;border-radius:4px;background:var(--tp-card);color:var(--tp-action)}
@@ -357,7 +376,8 @@
   .search-bar{display:flex;padding:0 12px 8px;flex:none}.search{display:flex;gap:8px;align-items:center;min-height:36px;border:1px solid var(--tp-border-strong);background:var(--tp-input);border-radius:8px;padding:6px 8px;min-width:0;flex:1;color:var(--tp-muted)}
   .search:focus-within{border-color:var(--tp-accent-line)}.search input{width:100%;min-width:0;border:0;outline:none;background:transparent;color:var(--tp-text);font-size:12px;line-height:1.5;padding:0;border-radius:0}.search input:focus-visible{outline:none}.search input::placeholder{color:var(--tp-quiet)}.search>button{font-size:16px;width:24px;line-height:24px}
   .unread-filter{font-size:11px;white-space:nowrap;padding:4px 8px}.unread-filter.active{border-color:var(--tone-line);background:var(--tone-soft);color:var(--tone)}
-  .task-scroll{min-height:80px;overflow-y:auto;flex:1;padding:0 12px 8px;overscroll-behavior:contain}
+  .task-scroll{min-height:80px;overflow-y:auto;flex:1;padding:0 12px;overscroll-behavior:contain}
+  .task-content{display:flow-root;min-height:80px;padding-bottom:8px}
   h2{font-size:11px;font-weight:550;color:var(--tp-muted);padding:8px 0 0;margin:0;display:flex;gap:8px;min-width:0;overflow-wrap:anywhere}h2 span{font-size:11px;color:var(--tp-quiet);font-variant-numeric:tabular-nums}
   .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px 12px;color:var(--tp-text)}.empty-icon{display:none}
   .empty strong{font-size:14px;font-weight:550}.empty p{font-size:12px;line-height:1.6;color:var(--tp-muted);margin:8px 0 12px}.empty button,.onboarding button{border:1px solid var(--tp-accent-line);padding:6px 12px;border-radius:8px;color:var(--tp-accent);background:var(--tp-accent-soft);font-size:12px}

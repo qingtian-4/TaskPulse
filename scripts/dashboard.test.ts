@@ -317,10 +317,10 @@ test('reported models are searchable without changing Agent identity or task ord
   expect(compareTasks(task,{...task,model:'another-model'})).toBe(0);
 });
 
-test('panel grows for four tasks while empty and single-task views remain compact',()=>{
-  expect([0,1,2,3,4,27].map(count=>preferredDashboardHeight(count,false))).toEqual([400,400,560,680,840,840]);
+test('panel rounds up measured content and bounds compact and expanded heights',()=>{
+  expect([0,389,601.25,746.5,840,1300].map(height=>preferredDashboardHeight(height,false))).toEqual([400,400,602,747,840,840]);
   expect(preferredDashboardHeight(0,true)).toBe(840);
-  expect(preferredDashboardHeight(1,true)).toBe(840);
+  expect(preferredDashboardHeight(612,true)).toBe(840);
 });
 
 test('a viewed pinned turn end does not increase uncertainty',()=>{

@@ -1,6 +1,6 @@
 <script lang="ts">
   import {onMount,tick} from 'svelte';
-  import {SlidersHorizontal,PanelsTopLeft,RadioTower,Bell,RefreshCw,Info,ShieldCheck} from '@lucide/svelte';
+  import {SlidersHorizontal,PanelsTopLeft,RadioTower,Bell,RefreshCw,Info} from '@lucide/svelte';
   import {listen} from '@tauri-apps/api/event';
   import {isTauri,invoke} from '@tauri-apps/api/core';
   import BrandMark from '$lib/components/BrandMark.svelte';
@@ -39,7 +39,6 @@
 <div class="settings-shell tp-theme">
   <aside class="settings-side"><div class="settings-brand"><BrandMark size={34}/><div><strong>TaskPulse</strong><small>{$t('偏好设置')}</small></div></div>
     <nav class="settings-nav" aria-label={$t('设置分类')}>{#each sections as [id,label,,Icon]}<a href={'#'+id} aria-current={section===id?'page':undefined} onclick={e=>{e.preventDefault();void navigate(id);}}><Icon size={17} aria-hidden="true"/><span>{$t(label)}</span></a>{/each}</nav>
-    <div class="settings-footnote"><span><ShieldCheck size={14} aria-hidden="true"/> {$t('任务数据保存在本机')}</span><span>TaskPulse</span></div>
   </aside>
   <main class="settings-main"><header class="settings-heading"><div><h1>{$t(current[1])}</h1><p>{$t(current[2])}</p></div></header>
     <div class="settings-content glass-scroll" bind:this={scroll}>
