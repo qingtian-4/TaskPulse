@@ -10,6 +10,7 @@
 //! never observes a half-written JSON blob; see `scripts/wrap.ps1` and
 //! `scripts/hooks/`.
 
+use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
@@ -21,6 +22,10 @@ use crate::providers::{Provider, ProviderOutput};
 const STALE_TTL: Duration = Duration::from_secs(10 * 60);
 /// Same rule for v2 files that never reported a finish.
 const V2_STALE_TTL: Duration = Duration::from_secs(30 * 60);
+
+const STATUS_FILE_BYTES: u64 = 256 * 1024;
+const STATUS_ROUND_BYTES: u64 = 4 * 1024 * 1024;
+const STATUS_ROUND_ENTRIES: usize = 4096;
 
 pub struct LocalFileProvider {
     dirs: Vec<PathBuf>,
@@ -66,39 +71,151 @@ impl Provider for LocalFileProvider {
     }
 
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
-        let mut tasks = Vec::new();
-        let mut errors = Vec::new();
+        let mut round = StatusRound::default();
+        let mut enumeration_incomplete = false;
         for dir in &self.dirs {
-            match read_dir_tasks(dir, now) {
-                Ok(found) => tasks.extend(found),
-                Err(error) => errors.push(format!("{}: {error}", dir.display())),
+            if let Err(error) = round.collect(dir, now) {
+                enumeration_incomplete = true;
+                round.problem.get_or_insert(error);
             }
         }
-        if errors.is_empty() {
-            self.last_tasks = tasks.clone();
-            return ProviderOutput::tasks(tasks);
+        if enumeration_incomplete {
+            // We may have missed a higher-priority same-ID file. Do not let
+            // a partial directory listing advance any lifecycle.
+            round.tasks.clear();
         }
-
-        let mut fallback = self
-            .last_tasks
-            .iter()
-            .cloned()
-            .map(|mut task| {
-                task.stale = true;
-                task
-            })
-            .collect::<Vec<_>>();
-        for task in tasks {
-            fallback.retain(|previous| previous.id != task.id);
-            fallback.push(task);
+        // A damaged copy cannot be replaced by a same-ID observation from
+        // the other compatibility directory in this incomplete round.
+        round
+            .tasks
+            .retain(|task| !round.failed_ids.contains(&task.id));
+        // The last configured directory has precedence for a shared legacy ID.
+        let mut seen = std::collections::HashSet::new();
+        round.tasks.reverse();
+        round.tasks.retain(|task| seen.insert(task.id.clone()));
+        round.tasks.reverse();
+        if let Some(error) = round.problem {
+            // The store independently retains missing tasks on partial
+            // rounds. Cache only a bounded working set here.
+            let current: std::collections::HashSet<_> =
+                round.tasks.iter().map(|task| task.id.as_str()).collect();
+            round.tasks.extend(
+                self.last_tasks
+                    .iter()
+                    .filter(|task| !current.contains(task.id.as_str()))
+                    .cloned()
+                    .take(STATUS_ROUND_ENTRIES)
+                    .map(|mut task| {
+                        task.stale = true;
+                        task
+                    })
+                    .collect::<Vec<_>>(),
+            );
+            self.last_tasks = round
+                .tasks
+                .iter()
+                .take(STATUS_ROUND_ENTRIES)
+                .cloned()
+                .collect();
+            ProviderOutput::degraded(round.tasks, error.to_string())
+        } else {
+            self.last_tasks = round.tasks.clone();
+            ProviderOutput::tasks(round.tasks)
         }
-        ProviderOutput::degraded(fallback, errors.join("; "))
     }
 }
 
-/// Parse one status file into a `TaskSnapshot`.
-pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
-    let content = std::fs::read_to_string(path).ok()?;
+struct StatusRound {
+    remaining_bytes: u64,
+    remaining_entries: usize,
+    tasks: Vec<TaskSnapshot>,
+    failed_ids: std::collections::HashSet<String>,
+    problem: Option<io::Error>,
+}
+
+impl Default for StatusRound {
+    fn default() -> Self {
+        Self {
+            remaining_bytes: STATUS_ROUND_BYTES,
+            remaining_entries: STATUS_ROUND_ENTRIES,
+            tasks: Vec::new(),
+            failed_ids: Default::default(),
+            problem: None,
+        }
+    }
+}
+
+fn invalid_status() -> io::Error {
+    io::Error::new(
+        io::ErrorKind::InvalidData,
+        "Invalid compatibility status record",
+    )
+}
+
+fn status_id(path: &Path) -> io::Result<String> {
+    Ok(format!(
+        "file:{}",
+        path.file_stem()
+            .and_then(|s| s.to_str())
+            .ok_or_else(invalid_status)?
+    ))
+}
+
+fn read_status(path: &Path, remaining: &mut u64) -> io::Result<(TaskSnapshot, SystemTime)> {
+    if !std::fs::symlink_metadata(path)?.is_file() {
+        return Err(invalid_status());
+    }
+    let mut options = std::fs::OpenOptions::new();
+    options.read(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK);
+    }
+    let file = options.open(path)?;
+    let before = file.metadata()?;
+    if !before.is_file() || before.len() > STATUS_FILE_BYTES {
+        return Err(io::Error::other(
+            "Compatibility status file exceeds 256 KiB or is not a regular file",
+        ));
+    }
+    if before.len() >= *remaining {
+        return Err(io::Error::other(
+            "Compatibility status read budget exhausted",
+        ));
+    }
+    let mut reader = file.take((STATUS_FILE_BYTES + 1).min(*remaining));
+    let mut bytes = Vec::new();
+    let read = reader.read_to_end(&mut bytes);
+    *remaining -= bytes.len() as u64;
+    read?;
+    let after = reader.get_ref().metadata()?;
+    let mtime = before.modified()?;
+    if bytes.len() as u64 > STATUS_FILE_BYTES
+        || bytes.len() as u64 != before.len()
+        || after.len() != before.len()
+        || after.modified()? != mtime
+    {
+        return Err(io::Error::other(
+            "Compatibility status file changed during read or exceeds 256 KiB",
+        ));
+    }
+    parse_status(
+        path,
+        std::str::from_utf8(&bytes).map_err(|_| invalid_status())?,
+        mtime,
+    )
+    .map(|task| (task, mtime))
+    .ok_or_else(invalid_status)
+}
+
+#[cfg(test)]
+fn parse_status_file(path: &Path, _now: SystemTime) -> Option<TaskSnapshot> {
+    let mut budget = STATUS_ROUND_BYTES;
+    read_status(path, &mut budget).ok().map(|(task, _)| task)
+}
+
+fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSnapshot> {
     let trimmed = content.trim();
     if trimmed.is_empty() {
         return None;
@@ -108,13 +225,13 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
 
     if let Ok(val) = serde_json::from_str::<serde_json::Value>(trimmed) {
         // Version gate: v1 (AgentTray) or v2 (TaskPulse); anything else skips.
-        let version = val.get("v").and_then(|v| v.as_u64()).unwrap_or(1);
+        let version = val.get("v").map_or(Some(1), |v| v.as_u64())?;
         if version != 1 && version != 2 {
             return None;
         }
 
         let status_str = val.get("status")?.as_str()?;
-        let status = status_from_legacy(status_str);
+        let status = checked_status(status_str)?;
         let message = val
             .get("message")
             .and_then(|m| m.as_str())
@@ -133,10 +250,9 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             .unwrap_or(false);
 
         // v2-only fields
-        let started_at =
-            parse_epoch_ms(val.get("started_at")).or_else(|| parse_rfc3339(val.get("started_at")));
-        let finished_at = parse_epoch_ms(val.get("finished_at"))
-            .or_else(|| parse_rfc3339(val.get("finished_at")));
+        let started_at = status_time(val.get("started_at"))?;
+        let finished_at = status_time(val.get("finished_at"))?;
+        let activity_at = status_time(val.get("execution_activity_at"))?;
         let exit_code = val
             .get("exit_code")
             .and_then(|v| v.as_i64())
@@ -203,10 +319,8 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
             phase: None,
-            started_at: started_at.or_else(|| file_mtime(path)),
-            updated_at: parse_epoch_ms(val.get("execution_activity_at"))
-                .or(finished_at)
-                .unwrap_or_else(|| file_mtime(path).unwrap_or(now)),
+            started_at: started_at.or(Some(mtime)),
+            updated_at: activity_at.or(finished_at).unwrap_or(mtime),
             finished_at,
             pid: val
                 .get("pid")
@@ -268,8 +382,8 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
     } else {
         // Legacy pipe format: "status|message"
         let (status, message) = match trimmed.split_once('|') {
-            Some((s, m)) => (status_from_legacy(s), Some(m.to_string())),
-            None => (status_from_legacy(trimmed), None),
+            Some((s, m)) => (checked_status(s)?, Some(m.to_string())),
+            None => (checked_status(trimmed)?, None),
         };
         Some(TaskSnapshot {
             integration_epoch: None,
@@ -300,8 +414,8 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
             message,
             activity: None,
             phase: None,
-            started_at: file_mtime(path),
-            updated_at: file_mtime(path).unwrap_or(now),
+            started_at: Some(mtime),
+            updated_at: mtime,
             finished_at: None,
             pid: None,
             exit_code: None,
@@ -328,8 +442,17 @@ pub fn parse_status_file(path: &Path, now: SystemTime) -> Option<TaskSnapshot> {
     }
 }
 
-fn file_mtime(path: &Path) -> Option<SystemTime> {
-    std::fs::metadata(path).ok().and_then(|m| m.modified().ok())
+fn status_time(v: Option<&serde_json::Value>) -> Option<Option<SystemTime>> {
+    let Some(v) = v.filter(|v| !v.is_null()) else {
+        return Some(None);
+    };
+    // Older wrappers can emit zero for an unset timestamp.
+    if v.as_i64() == Some(0) {
+        return Some(None);
+    }
+    parse_epoch_ms(Some(v))
+        .or_else(|| parse_rfc3339(Some(v)))
+        .map(Some)
 }
 
 fn parse_epoch_ms(v: Option<&serde_json::Value>) -> Option<SystemTime> {
@@ -337,7 +460,7 @@ fn parse_epoch_ms(v: Option<&serde_json::Value>) -> Option<SystemTime> {
     if ms <= 0 {
         return None;
     }
-    Some(std::time::UNIX_EPOCH + Duration::from_millis(ms as u64))
+    std::time::UNIX_EPOCH.checked_add(Duration::from_millis(ms as u64))
 }
 
 fn parse_rfc3339(v: Option<&serde_json::Value>) -> Option<SystemTime> {
@@ -354,18 +477,33 @@ fn parse_rfc3339(v: Option<&serde_json::Value>) -> Option<SystemTime> {
     if hms.len() != 3 {
         return None;
     }
+    if date[0].len() != 4 || !date[0].bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
     let year: i64 = date[0].parse().ok()?;
     let month: u32 = date[1].parse().ok()?;
     let day: u32 = date[2].parse().ok()?;
     let hour: u32 = hms[0].parse().ok()?;
     let min: u32 = hms[1].parse().ok()?;
     let sec: u32 = hms[2].parse().ok()?;
-    if !(1..=12).contains(&month) || !(1..=31).contains(&day) {
+    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
+    let days_in_month = match month {
+        2 if leap => 29,
+        2 => 28,
+        4 | 6 | 9 | 11 => 30,
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        _ => return None,
+    };
+    if !(1..=days_in_month).contains(&day) || hour > 23 || min > 59 || sec > 59 {
         return None;
     }
     let days = days_from_civil(year, month, day)?;
     let secs = days * 86_400 + hour as i64 * 3_600 + min as i64 * 60 + sec as i64;
-    Some(std::time::UNIX_EPOCH + Duration::from_secs(secs as u64))
+    if secs < 0 {
+        std::time::UNIX_EPOCH.checked_sub(Duration::from_secs(secs.unsigned_abs()))
+    } else {
+        std::time::UNIX_EPOCH.checked_add(Duration::from_secs(secs as u64))
+    }
 }
 
 /// Days since 1970-01-01 (Howard Hinnant's algorithm).
@@ -381,47 +519,70 @@ fn days_from_civil(y: i64, m: u32, d: u32) -> Option<i64> {
 
 /// Read status files without deleting producer-owned records. A missing
 /// heartbeat is uncertainty, never an exit or permission event.
-fn read_dir_tasks(dir: &Path, now: SystemTime) -> std::io::Result<Vec<TaskSnapshot>> {
-    if !dir.exists() {
-        return Ok(Vec::new());
-    }
-    let entries = std::fs::read_dir(dir)?;
-
-    let mut tasks = Vec::new();
-    for entry in entries {
-        let entry = entry?;
-        let path = entry.path();
-        if path.extension().and_then(|e| e.to_str()) != Some("status") {
-            continue;
-        }
-        let Some(mut task) = parse_status_file(&path, now) else {
-            continue;
+impl StatusRound {
+    fn collect(&mut self, dir: &Path, now: SystemTime) -> io::Result<()> {
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
         };
-
-        // Stale-file cleanup.
-        // Legacy dir: AgentTray semantics — hide (and delete) untouched files.
-        // v2 dir: only delete files that never reported a finish.
-        let is_v2 = task.confidence == DetectionConfidence::Exact
-            || task.finished_at.is_some()
-            || path
-                .parent()
-                .map(|p| p.ends_with(".taskpulse"))
-                .unwrap_or(false);
-        let ttl = if is_v2 { V2_STALE_TTL } else { STALE_TTL };
-        let mtime = file_mtime(&path).unwrap_or(task.updated_at);
-        if now.duration_since(mtime).unwrap_or_default() > ttl {
-            if task.status.is_terminal() || task.finished_at.is_some() {
-                continue; // Retention applies only to completed results.
+        for entry in entries {
+            if self.remaining_entries == 0 {
+                return Err(io::Error::other(
+                    "Compatibility status directory entry budget exhausted",
+                ));
             }
-            task.stale = true; // Keep long/silent running and pending tasks.
+            self.remaining_entries -= 1;
+            let path = entry?.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("status") {
+                continue;
+            }
+            let (mut task, mtime) = match read_status(&path, &mut self.remaining_bytes) {
+                Ok(task) => task,
+                Err(error) => {
+                    if let Ok(id) = status_id(&path) {
+                        self.failed_ids.insert(id);
+                    }
+                    self.problem.get_or_insert(error);
+                    continue;
+                }
+            };
+            // Retention hides only old completed results. An old or missing
+            // heartbeat never proves the end of a running or waiting task.
+            let ttl = if task.confidence == DetectionConfidence::Exact
+                || task.finished_at.is_some()
+                || dir.ends_with(".taskpulse")
+            {
+                V2_STALE_TTL
+            } else {
+                STALE_TTL
+            };
+            // TTL uses the modification time of the exact handle we read.
+            if now.duration_since(mtime).unwrap_or_default() > ttl {
+                if task.status.is_terminal() || task.finished_at.is_some() {
+                    continue;
+                }
+                task.stale = true;
+            }
+            if task.status.is_terminal() || task.finished_at.is_some() {
+                task.recent = true;
+            }
+            self.tasks.push(task);
         }
-
-        if task.status.is_terminal() || task.finished_at.is_some() {
-            task.recent = true;
-        }
-        tasks.push(task);
+        Ok(())
     }
-    Ok(tasks)
+}
+
+#[cfg(test)]
+fn read_dir_tasks(dir: &Path, now: SystemTime) -> io::Result<Vec<TaskSnapshot>> {
+    let mut round = StatusRound::default();
+    round.collect(dir, now)?;
+    round.problem.map_or(Ok(round.tasks), Err)
+}
+
+fn checked_status(s: &str) -> Option<TaskStatus> {
+    let status = status_from_legacy(s);
+    (status != TaskStatus::Unknown || matches!(s, "offline" | "unknown")).then_some(status)
 }
 
 /// Map a legacy (or v2) status string to the unified enum.
@@ -446,6 +607,161 @@ pub fn status_from_legacy(s: &str) -> TaskStatus {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn oversized_torn_and_unreadable_status_preserve_last_pending_until_repaired() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("approval.status");
+        let peer = root.path().join("healthy.status");
+        let mut provider = LocalFileProvider {
+            dirs: vec![root.path().into()],
+            last_tasks: vec![],
+        };
+        let pending = br#"{"v":2,"status":"waiting_input","waiting_reason":"approval","input_request_id":"req-1"}"#;
+        std::fs::write(&path, pending).unwrap();
+        assert!(provider.poll(now()).authoritative);
+        std::fs::write(&peer, "working|healthy").unwrap();
+        for (n, contents) in [
+            vec![b'x'; STATUS_FILE_BYTES as usize + 1],
+            b"{\"status\":\"failed\"".to_vec(),
+            vec![255],
+            br#"{"status":"failed","finished_at":"999999999999999999-01-01T00:00:00Z"}"#.to_vec(),
+        ]
+        .iter()
+        .enumerate()
+        {
+            std::fs::write(&path, contents).unwrap();
+            let out = provider.poll(now());
+            assert!(!out.authoritative, "round {n}");
+            let cached = out.tasks.iter().find(|t| t.id == "file:approval").unwrap();
+            assert_eq!(cached.status, TaskStatus::WaitingInput);
+            assert_eq!(cached.input_request_id.as_deref(), Some("req-1"));
+            assert!(cached.stale && cached.finished_at.is_none());
+            assert!(out.tasks.iter().any(|t| t.id == "file:healthy" && !t.stale));
+        }
+        std::fs::remove_file(&path).unwrap();
+        std::fs::create_dir(&path).unwrap();
+        assert!(!provider.poll(now()).authoritative);
+        std::fs::remove_dir(&path).unwrap();
+        std::fs::write(&path, pending).unwrap();
+        let recovered = provider.poll(now());
+        assert!(recovered.authoritative);
+        assert!(recovered.tasks.iter().all(|task| !task.stale));
+    }
+
+    #[test]
+    fn concurrent_atomic_replacements_never_mix_status_and_request() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("active.status");
+        let active = br#"{"status":"working","message":"running"}"#;
+        let pending = br#"{"status":"needs-input","message":"pending","waiting_reason":"approval","input_request_id":"req"}"#;
+        std::fs::write(&path, active).unwrap();
+        let start = std::sync::Barrier::new(2);
+        std::thread::scope(|scope| {
+            let writer = scope.spawn(|| {
+                start.wait();
+                for n in 0..32 {
+                    let mut next = tempfile::NamedTempFile::new_in(root.path()).unwrap();
+                    next.write_all(if n % 2 == 0 { pending } else { active })
+                        .unwrap();
+                    // Win32 replacement can lose a race with an open
+                    // reader even when the handle shares deletion.
+                    let deadline = std::time::Instant::now() + Duration::from_secs(1);
+                    loop {
+                        match next.persist(&path) {
+                            Ok(_) => break,
+                            Err(error)
+                                if cfg!(windows)
+                                    && error.error.kind() == io::ErrorKind::PermissionDenied
+                                    && std::time::Instant::now() < deadline =>
+                            {
+                                next = error.file;
+                                std::thread::sleep(Duration::from_millis(2));
+                            }
+                            Err(error) => panic!("status replacement failed: {error}"),
+                        }
+                    }
+                }
+            });
+            let mut provider = LocalFileProvider {
+                dirs: vec![root.path().into()],
+                last_tasks: vec![],
+            };
+            start.wait();
+            for _ in 0..64 {
+                for task in provider.poll(now()).tasks {
+                    match task.status {
+                        TaskStatus::Running => {
+                            assert_eq!(task.message.as_deref(), Some("running"));
+                            assert!(task.input_request_id.is_none());
+                        }
+                        TaskStatus::WaitingInput => {
+                            assert_eq!(task.message.as_deref(), Some("pending"));
+                            assert_eq!(task.input_request_id.as_deref(), Some("req"));
+                        }
+                        other => panic!("unexpected status: {other:?}"),
+                    }
+                }
+            }
+            writer.join().unwrap();
+            assert!(provider.poll(now()).authoritative);
+        });
+    }
+
+    #[test]
+    fn incomplete_listing_cannot_use_earlier_duplicate_to_clear_pending() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let lower = a.path().join("approval.status");
+        let higher = b.path().join("newer");
+        std::fs::create_dir(&higher).unwrap();
+        std::fs::write(&lower, "idle").unwrap();
+        std::fs::write(
+            higher.join("approval.status"),
+            br#"{"status":"needs-input","waiting_reason":"approval","input_request_id":"keep"}"#,
+        )
+        .unwrap();
+        let mut provider = LocalFileProvider {
+            dirs: vec![a.path().into(), higher.clone()],
+            last_tasks: vec![],
+        };
+        assert!(provider.poll(now()).authoritative);
+        std::fs::remove_dir_all(&higher).unwrap();
+        std::fs::write(higher, "not a directory").unwrap();
+        let out = provider.poll(now());
+        assert!(!out.authoritative);
+        assert!(out.tasks.iter().all(|task| task.stale));
+        assert!(out
+            .tasks
+            .iter()
+            .any(|task| task.input_request_id.as_deref() == Some("keep")));
+    }
+
+    #[test]
+    fn status_byte_budget_is_shared_between_directories_and_never_truncates_records() {
+        let a = tempfile::tempdir().unwrap();
+        let b = tempfile::tempdir().unwrap();
+        let mut body = b"working|".to_vec();
+        body.resize(STATUS_FILE_BYTES as usize, b'a');
+        for dir in [&a, &b] {
+            for i in 0..10 {
+                std::fs::write(dir.path().join(format!("{i}.status")), &body).unwrap();
+            }
+        }
+        let mut round = StatusRound::default();
+        round.collect(a.path(), now()).unwrap();
+        round.collect(b.path(), now()).unwrap();
+        assert!(round.problem.is_some());
+        assert!(round.tasks.len() < 20 && round.tasks.len() >= 10);
+        assert!(round
+            .tasks
+            .iter()
+            .all(|task| task.message.as_ref().unwrap().len() == body.len() - 8));
+        assert_eq!(
+            STATUS_ROUND_BYTES - round.remaining_bytes,
+            round.tasks.len() as u64 * STATUS_FILE_BYTES
+        );
+    }
 
     #[test]
     fn old_running_and_pending_files_survive_ttl_without_becoming_finished() {

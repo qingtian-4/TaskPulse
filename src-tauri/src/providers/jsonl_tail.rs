@@ -20,6 +20,7 @@ pub struct LinuxFileStamp {
 
 #[derive(Default)]
 pub struct JsonlTail {
+    require_newline: bool,
     ignored_envelopes: &'static [&'static str],
     oversized: Option<EnvelopeProbe>,
     offset: u64,
@@ -49,6 +50,12 @@ pub struct TailBatch {
 }
 
 impl JsonlTail {
+    pub fn newline_committed() -> Self {
+        Self {
+            require_newline: true,
+            ..Self::default()
+        }
+    }
     pub fn set_linux_stamp(&mut self, stamp: LinuxFileStamp) {
         self.external_stamp = Some(stamp);
     }
@@ -272,7 +279,8 @@ impl JsonlTail {
         }
         self.offset = offset + bytes_read as u64;
         // Some versions write a complete final JSON object without a newline.
-        if self.offset == signature.1
+        if !self.require_newline
+            && self.offset == signature.1
             && !self.pending.is_empty()
             && serde_json::from_slice::<serde::de::IgnoredAny>(&self.pending).is_ok()
         {

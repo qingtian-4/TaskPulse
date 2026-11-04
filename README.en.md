@@ -18,11 +18,6 @@ See AI task status, model and elapsed time from your system tray.<br>Get notifie
 
 </div>
 
-<p align="center">
-  <img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse showing four tasks: running, input needed, approval needed and unviewed results, with models and elapsed time">
-  <br><sub>Windows interface with sample tasks.</sub>
-</p>
-
 ## Features
 
 - **Find your agents automatically**: confirm detected local sources once, then follow new tasks. Connect WSL and SSH sources when needed.
@@ -36,20 +31,7 @@ See AI task status, model and elapsed time from your system tray.<br>Get notifie
 
 Requests for input or approval stay visible until handled. A completed turn prompts you to review its results.
 
-<p align="center">
-  <img src="assets/screenshots/notice-input.png" width="320" alt="Input notification asking to confirm the export format">
-  <br><sub>Input needed: provide the missing information.</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/notice-approval.png" width="320" alt="Approval notification for running project tests">
-  <br><sub>Approval needed: review the execution request.</sub>
-</p>
-
-<p align="center">
-  <img src="assets/screenshots/notice-completed.png" width="320" alt="Completion notification for the quick-start guide task">
-  <br><sub>Task completed: review the turn's results.</sub>
-</p>
+Current dashboard and notification screenshots and a demo are pending.
 
 ## Install
 
@@ -77,7 +59,7 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-The scripts select your architecture, verify SHA-256 and install the package. No Bun, Rust or repository checkout is needed. On Mac, the default destination is `~/Applications`. See [installation details](docs/INSTALL.md) for system security prompts and version options.
+The scripts select your architecture, verify SHA-256 and install the package. No Bun, Rust or repository checkout is needed. On Mac, the default destination is `~/Applications`. See [installation details](docs/INSTALL.en.md) for system security prompts and version options.
 
 On first launch, confirm the detected local agents and click **Start monitoring**. Open the tray panel to see tasks; Windows also supports `Ctrl+Shift+A`.
 
@@ -103,6 +85,8 @@ TaskPulse automatically checks for new versions. In **Settings → Application u
 | Other agents / command-line tasks | Standard Events, MCP, compatible hooks, `tp-run` and remote tmux |
 
 Automatic discovery covers supported native data formats. WSL, SSH and event integrations need configuration. Available states vary by agent; missing models and permission requests are never guessed. [Compatibility](docs/AGENT_COMPATIBILITY.md) · [Integration guide](docs/AGENT_INTEGRATION_GUIDE.md)
+
+For Codex, native questions and approval events use different evidence paths. Claude Code supports explicit approvals through its optional hook; native questions are not supported. Returning to a host window does not mark a task as read. When a source is damaged, over capacity or temporarily unreadable, TaskPulse shows the last known state as uncertain. See [platform and capability notes](docs/AGENT_COMPATIBILITY.md#english).
 
 ## Roadmap
 

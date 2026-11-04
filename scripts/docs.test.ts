@@ -56,7 +56,7 @@ test('both READMEs separate installer builds from isolated development',()=>{
   }
 });
 
-test('both READMEs show four native figures at half their actual PNG resolution',()=>{
+test('archived native figures retain their dimensions and are not presented as current screenshots',()=>{
   const figures=[['dashboard',368,840],['notice-input',320,132],['notice-approval',320,132],['notice-completed',320,132]] as const;
   for(const [name,width,height] of figures){
     const path=`assets/screenshots/${name}.png`;
@@ -64,10 +64,10 @@ test('both READMEs show four native figures at half their actual PNG resolution'
     expect(bytes.subarray(0,8).toString('hex'),path).toBe('89504e470d0a1a0a');
     expect(bytes.readUInt32BE(16),path).toBe(width*2);
     expect(bytes.readUInt32BE(20),path).toBe(height*2);
-    for(const file of ['README.md','README.en.md'])expect(read(file),file).toContain(`src="${path}" width="${width}"`);
+    for(const file of ['README.md','README.en.md'])expect(read(file),file).not.toContain(`src="${path}"`);
   }
-  expect(read('README.md')).toContain('Windows 界面 · 示例任务');
-  expect(read('README.en.md')).toContain('Windows interface with sample tasks.');
+  expect(read('README.md')).toContain('提醒截图和演示待补');
+  expect(read('README.en.md')).toContain('screenshots and a demo are pending');
 });
 
 test('repository tests use exact root paths rather than collecting nested worktrees',()=>{

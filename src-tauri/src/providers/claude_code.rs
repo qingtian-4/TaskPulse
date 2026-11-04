@@ -27,13 +27,27 @@ struct Transcript {
     explicit_end: bool,
 }
 
-#[derive(Default)]
 struct HookLog {
     tail: JsonlTail,
     task: Option<TaskSnapshot>,
     latest: Value,
     sequence: u64,
+    minimum_sequence: u64,
+    checkpoint_gap: bool,
     trusted: bool,
+}
+impl Default for HookLog {
+    fn default() -> Self {
+        Self {
+            tail: JsonlTail::newline_committed(),
+            task: None,
+            latest: Value::Null,
+            sequence: 0,
+            minimum_sequence: 0,
+            checkpoint_gap: false,
+            trusted: false,
+        }
+    }
 }
 impl HookLog {
     fn fold(&mut self, event: Value, id: &str, root: &Path, now: SystemTime) {
@@ -64,6 +78,8 @@ impl HookLog {
     }
 }
 
+type HookStates = HashMap<String, (TaskSnapshot, Value)>;
+
 pub struct ClaudeCodeProvider {
     root: PathBuf,
     events: PathBuf,
@@ -89,10 +105,11 @@ impl ClaudeCodeProvider {
         }
     }
     fn sample(&mut self, now: SystemTime) -> std::io::Result<ProviderOutput> {
-        let hooks = self.read_hook_states(now)?;
+        let (hooks, uncertain_hooks, mut failed) = self.read_hook_states(now)?;
         let mut live = HashMap::new();
         for path in json_files(&self.root.join("sessions"))? {
-            let Ok(value) = read_json(&path) else {
+            let Ok(value) = crate::claude_events::read_checkpoint(&path) else {
+                failed = true;
                 continue;
             };
             let Some(id) = text(&value, "sessionId") else {
@@ -111,7 +128,7 @@ impl ClaudeCodeProvider {
         }
         let mut logs = vec![];
         let projects = self.root.join("projects");
-        if projects.exists() {
+        if projects.try_exists()? {
             for entry in std::fs::read_dir(projects)? {
                 let entry = entry?;
                 if !entry.file_type()?.is_dir() {
@@ -152,13 +169,15 @@ impl ClaudeCodeProvider {
             }
         }
         let mut tasks = vec![];
-        let mut failed = self.hook_logs.values().any(|c| !c.trusted);
         for path in &logs {
             let id = path
                 .file_stem()
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
+            if uncertain_hooks.contains(&id) {
+                continue; // Native state cannot replace uncertain hook evidence.
+            }
             let transcript = self.transcripts.entry(path.clone()).or_default();
             let mut tail = std::mem::take(&mut transcript.tail);
             let drained = tail.drain(path, |batch| {
@@ -179,7 +198,9 @@ impl ClaudeCodeProvider {
                 }
             });
             transcript.tail = tail;
-            if drained.is_err() || transcript.task.is_none() && path.metadata()?.len() > 0 {
+            if drained.is_err()
+                || transcript.task.is_none() && path.metadata().is_ok_and(|m| m.len() > 0)
+            {
                 failed = true;
             }
             if !transcript.tail.trusted() {
@@ -325,7 +346,16 @@ impl ClaudeCodeProvider {
             if tasks.iter().any(|t| t.session_id.as_deref() == Some(&id)) {
                 continue;
             }
-            if task.status == TaskStatus::Running && !live.contains_key(&id) {
+            if uncertain_hooks.contains(&id) {
+                if self
+                    .last_tasks
+                    .iter()
+                    .any(|previous| previous.id == task.id)
+                {
+                    continue; // The last trusted merged task wins over a prefix.
+                }
+                task.stale = true;
+            } else if task.status == TaskStatus::Running && !live.contains_key(&id) {
                 task.stale = now.duration_since(task.updated_at).unwrap_or_default()
                     > Duration::from_secs(30);
                 if task.stale
@@ -383,7 +413,7 @@ impl ClaudeCodeProvider {
             tasks,
             catalog,
             authoritative: !failed,
-            error: failed.then(|| "Claude 会话暂不可读；保留上次观测".into()),
+            error: failed.then(|| "Claude source incomplete: event capacity, damage, or read failure; retaining last observations".into()),
             ..Default::default()
         })
     }
@@ -391,28 +421,41 @@ impl ClaudeCodeProvider {
     fn read_hook_states(
         &mut self,
         now: SystemTime,
-    ) -> std::io::Result<HashMap<String, (TaskSnapshot, Value)>> {
+    ) -> std::io::Result<(HookStates, HashSet<String>, bool)> {
         let mut output = HashMap::new();
-        if !self.events.exists() {
-            return Ok(output);
-        }
-        for entry in std::fs::read_dir(&self.events)? {
+        let mut uncertain = HashSet::new();
+        let mut failed = self
+            .events
+            .join(crate::claude_events::DEGRADED_MARKER)
+            .try_exists()?;
+        let entries = match std::fs::read_dir(&self.events) {
+            Ok(entries) => Some(entries),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => None,
+            Err(error) => return Err(error),
+        };
+        for (index, entry) in entries.into_iter().flatten().enumerate() {
+            if index == crate::claude_events::MAX_DIRECTORY_ENTRIES {
+                failed = true;
+                break;
+            }
             let path = entry?.path();
             let extension = path.extension().and_then(|s| s.to_str());
             if extension != Some("jsonl") && extension != Some("json") {
                 continue;
             }
-            if extension == Some("json") && path.with_extension("jsonl").exists() {
+            if extension == Some("json") && path.with_extension("jsonl").try_exists()? {
                 continue;
             }
+            let cache_key = path.with_extension("jsonl");
             let protected = self
                 .hook_logs
-                .get(&path)
+                .get(&cache_key)
                 .is_some_and(|c| !c.trusted || c.task.as_ref().is_some_and(parser_protected));
-            if !self
-                .hook_policy
-                .eligible(&path, protected, self.hook_logs.contains_key(&path))
-            {
+            if !self.hook_policy.eligible(
+                &cache_key,
+                protected,
+                self.hook_logs.contains_key(&cache_key),
+            ) {
                 continue;
             }
             let id = path
@@ -420,31 +463,127 @@ impl ClaudeCodeProvider {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            let cache = self.hook_logs.entry(path.clone()).or_default();
+            let cache = self.hook_logs.entry(cache_key).or_default();
             if extension == Some("jsonl") {
-                let mut tail = std::mem::take(&mut cache.tail);
-                let result = tail.drain(&path, |batch| {
-                    self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
-                    if batch.reset {
-                        cache.task = None;
-                        cache.sequence = 0;
+                let mut tail = std::mem::replace(&mut cache.tail, JsonlTail::newline_committed());
+                let mut reset = false;
+                let result = std::fs::symlink_metadata(&path).and_then(|meta| {
+                    if !meta.is_file() {
+                        return Err(std::io::Error::other(
+                            "Claude journal is not a regular file",
+                        ));
                     }
-                    for line in batch.body.lines() {
-                        if let Ok(event) = serde_json::from_str(line) {
-                            cache.fold(event, &id, &self.root, now);
+                    tail.drain(&path, |batch| {
+                        self.read_bytes = self.read_bytes.saturating_add(batch.bytes_read as u64);
+                        if batch.reset {
+                            reset = true;
+                            cache.checkpoint_gap = false;
+                            cache.task = None;
+                            cache.latest = Value::Null;
+                            cache.sequence = 0;
                         }
-                    }
+                        for line in batch.body.lines() {
+                            if let Ok(event) = serde_json::from_str::<Value>(line) {
+                                if text(&event, "session_id") != Some(&id)
+                                    || !crate::claude_events::valid_checkpoint(&event)
+                                {
+                                    cache.checkpoint_gap = true;
+                                } else {
+                                    cache.fold(event, &id, &self.root, now);
+                                }
+                            } else {
+                                cache.checkpoint_gap = true;
+                            }
+                        }
+                    })
                 });
                 cache.tail = tail;
-                cache.trusted = result?;
-            } else {
-                cache.trusted = true;
-                cache.fold(read_json(&path)?, &id, &self.root, now);
-            }
-            if let Some(task) = cache.task.as_ref() {
+                if reset {
+                    // A crash can leave a lagging JSON checkpoint, but a
+                    // checkpoint ahead of the journal proves lost history.
+                    if let Ok(event) =
+                        crate::claude_events::read_checkpoint(&path.with_extension("json"))
+                    {
+                        if text(&event, "session_id") == Some(&id)
+                            && event_belongs_to_root(&event, &self.root)
+                        {
+                            let checkpoint_sequence = event["sequence"].as_u64().unwrap_or(0);
+                            cache.minimum_sequence =
+                                cache.minimum_sequence.max(checkpoint_sequence);
+                            if checkpoint_sequence > 0
+                                && checkpoint_sequence == cache.sequence
+                                && event != cache.latest
+                            {
+                                cache.checkpoint_gap = true;
+                            }
+                        }
+                    }
+                }
+                cache.trusted = result.unwrap_or(false)
+                    && !cache.checkpoint_gap
+                    && cache.sequence >= cache.minimum_sequence;
                 if cache.trusted {
+                    cache.minimum_sequence = cache.sequence;
+                }
+            } else {
+                cache.trusted = match crate::claude_events::read_checkpoint(&path) {
+                    Ok(event)
+                        if crate::claude_events::valid_checkpoint(&event)
+                            && text(&event, "session_id") == Some(&id) =>
+                    {
+                        let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+                        if sequence < cache.minimum_sequence
+                            || sequence > 0 && sequence == cache.sequence && event != cache.latest
+                        {
+                            false
+                        } else {
+                            cache.fold(event, &id, &self.root, now);
+                            cache.minimum_sequence = cache.sequence;
+                            true
+                        }
+                    }
+                    _ => false,
+                };
+            }
+            if !cache.trusted {
+                failed = true;
+                uncertain.insert(id.clone());
+                // On a cold start the compatibility checkpoint may retain
+                // pending IDs beyond a damaged journal's readable prefix.
+                // Use it only as stale recovery, never as fresh evidence.
+                let mut recovery = HookLog::default();
+                if let Ok(event) =
+                    crate::claude_events::read_checkpoint(&path.with_extension("json"))
+                {
+                    if crate::claude_events::valid_checkpoint(&event) {
+                        recovery.fold(event, &id, &self.root, now);
+                    }
+                }
+                let from_journal = cache.task.as_ref().filter(|task| task.requires_action());
+                let from_checkpoint = recovery.task.filter(TaskSnapshot::requires_action);
+                if let Some(task) = from_checkpoint
+                    .filter(|_| from_journal.is_none() || recovery.sequence >= cache.sequence)
+                {
+                    output.insert(id, (task, recovery.latest));
+                } else if let Some(task) = from_journal {
                     output.insert(id, (task.clone(), cache.latest.clone()));
                 }
+            } else if let Some(task) = cache.task.as_ref() {
+                output.insert(id, (task.clone(), cache.latest.clone()));
+            }
+        }
+        // An absent file is not a matching resolution. This also covers
+        // cached sessions skipped by an exhausted directory scan.
+        for cache in self.hook_logs.values() {
+            if let Some(id) = cache
+                .task
+                .as_ref()
+                .filter(|task| parser_protected(task))
+                .and_then(|task| task.session_id.as_ref())
+                .filter(|id| !output.contains_key(*id))
+            {
+                uncertain.insert(id.clone());
+                failed = true;
             }
         }
         let keep = self.hook_policy.keep(
@@ -462,7 +601,7 @@ impl ClaudeCodeProvider {
             now,
         );
         self.hook_logs.retain(|p, _| keep.contains(p));
-        Ok(output)
+        Ok((output, uncertain, failed))
     }
 }
 
@@ -854,13 +993,10 @@ fn event_belongs_to_root(event: &Value, root: &Path) -> bool {
 fn millis(value: Option<&Value>) -> Option<SystemTime> {
     value?
         .as_u64()
-        .map(|ms| UNIX_EPOCH + Duration::from_millis(ms))
-}
-fn read_json(path: &Path) -> std::io::Result<Value> {
-    serde_json::from_slice(&std::fs::read(path)?).map_err(std::io::Error::other)
+        .and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms)))
 }
 fn json_files(root: &Path) -> std::io::Result<Vec<PathBuf>> {
-    if !root.exists() {
+    if !root.try_exists()? {
         return Ok(vec![]);
     }
     let mut files = vec![];
@@ -893,7 +1029,7 @@ fn ide_terminal(root: &Path, cwd: Option<&str>) -> Option<crate::watcher::Termin
         if entry.path().extension().and_then(|x| x.to_str()) != Some("lock") {
             continue;
         }
-        let Ok(value) = read_json(&entry.path()) else {
+        let Ok(value) = crate::claude_events::read_checkpoint(&entry.path()) else {
             continue;
         };
         let Some(pid) = value
@@ -981,6 +1117,63 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn damaged_hook_journal_cannot_turn_pending_into_native_running_after_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("claude");
+        let events = dir.path().join("events");
+        let at = super::super::resources::epoch_ms(SystemTime::now());
+        let send = |name: &str| {
+            crate::claude_events::record(
+            &events, &serde_json::json!({"session_id":"s","hook_event_name":name,"cwd":"/project","tool_name":"Bash"}),
+            at, &root).unwrap()
+        };
+        send("UserPromptSubmit");
+        let journal = events.join("s.jsonl");
+        let initial = std::fs::read(&journal).unwrap();
+        let request = send("PermissionRequest");
+        let complete = std::fs::read(&journal).unwrap();
+        let provider = || {
+            let mut p = ClaudeCodeProvider::new(root.clone());
+            p.events = events.clone();
+            p
+        };
+        let mut first = provider();
+        let healthy = first.poll(SystemTime::now());
+        assert!(healthy.authoritative && healthy.tasks[0].requires_action());
+        for damaged in [initial, [complete.as_slice(), b"{broken}\n"].concat()] {
+            std::fs::write(&journal, &damaged).unwrap();
+            let checkpoint = std::fs::read(events.join("s.json")).unwrap();
+            assert!(crate::claude_events::record(
+                &events,
+                &serde_json::json!({
+                    "session_id":"s", "hook_event_name":"PreToolUse", "tool_use_id":"unrelated"
+                }),
+                at,
+                &root
+            )
+            .is_err());
+            assert_eq!(std::fs::read(&journal).unwrap(), damaged);
+            assert_eq!(std::fs::read(events.join("s.json")).unwrap(), checkpoint);
+            for out in [
+                first.poll(SystemTime::now()),
+                provider().poll(SystemTime::now()),
+            ] {
+                assert!(!out.authoritative);
+                assert_eq!(out.tasks.len(), 1);
+                assert!(out.tasks[0].stale);
+                assert_eq!(
+                    out.tasks[0].input_request_id.as_deref(),
+                    request["request_id"].as_str()
+                );
+            }
+        }
+        std::fs::write(&journal, complete).unwrap();
+        std::fs::remove_file(events.join(crate::claude_events::DEGRADED_MARKER)).unwrap();
+        let recovered = first.poll(SystemTime::now());
+        assert!(recovered.authoritative && recovered.tasks[0].requires_action());
+    }
+
     #[test]
     #[cfg(debug_assertions)]
     fn default_hook_journal_uses_the_development_profile() {
