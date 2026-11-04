@@ -121,6 +121,13 @@ skills-lock.json
 !/assets/screenshots/notice-input.png
 !/assets/screenshots/notice-approval.png
 !/assets/screenshots/notice-completed.png
+!/assets/screenshots/dashboard-en.png
+!/assets/screenshots/notice-input-en.png
+!/assets/screenshots/notice-approval-en.png
+!/assets/screenshots/notice-completed-en.png
+!/assets/screenshots/demo.gif
+!/assets/screenshots/demo-en.gif
+!/assets/screenshots/manifest.json
 
 /*.md
 !/README.md

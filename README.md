@@ -33,11 +33,36 @@ TaskPulse 是一款轻量级桌面工具，统一关注 Codex、Claude Code 等 
 
 TaskPulse 替你关注 Agent，你只需要专注自己的工作。
 
+## 任务面板
+
+<p align="center">
+  <a href="assets/screenshots/dashboard.png"><img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse v1.1.0 任务面板，展示进行中、待输入、待批准和结果待查看的公开示例任务"></a>
+</p>
+
+Windows · v1.1.0 · 隔离环境中的公开示例数据。点击截图可查看原图。
+
 ## 任务提醒
 
 需要补充信息或授权时持续提醒，本轮结束后提醒查看结果。
 
-当前版本的面板截图、提醒截图和演示待补。
+<p align="center">
+  <a href="assets/screenshots/notice-input.png"><img src="assets/screenshots/notice-input.png" width="32%" alt="等待输入提醒"></a>
+  <a href="assets/screenshots/notice-approval.png"><img src="assets/screenshots/notice-approval.png" width="32%" alt="请求批准提醒"></a>
+  <a href="assets/screenshots/notice-completed.png"><img src="assets/screenshots/notice-completed.png" width="32%" alt="本轮结束提醒"></a>
+</p>
+
+从左到右：等待输入、请求批准、本轮结束。点击截图可查看原图。
+
+## 操作演示
+
+<details>
+<summary>查看演示（18 秒）</summary>
+
+<p align="center"><img src="assets/screenshots/demo.gif" width="368" alt="TaskPulse 原生界面演示，筛选待处理任务、打开详情，并在示例来源解除请求后保留未读结果"></p>
+
+演示使用公开示例任务。请求由示例来源解除，TaskPulse 不会代批准；打开详情和关闭提醒不会自动标记已读。
+
+</details>
 
 ## 安装
 
