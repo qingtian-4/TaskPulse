@@ -19,12 +19,12 @@ flowchart LR
 | Owner | Responsibility and boundary |
 | --- | --- |
 | `src-tauri/src/providers/`, `integrations/` | Read native/remote evidence and validate Manifest/Standard Events/MCP input. Produce observations/health without inventing completion or approval. |
-| `watcher.rs` | Bounded collection, generation guards, normalization/dedup, source health and consistent dashboard publication. Adapters own product formats. |
+| `watcher.rs`, `watcher/dedup.rs` | Coordinator owns bounded collection, generation guards, source health and consistent publication. The child module owns pure observation dedup, without scheduling or persistence. |
 | `store/`, `attention.rs`, `history.rs` | Reconcile authoritative observations, retain durable unread/pin/request state and archive old attention. Partial/missing data is not a terminal event. |
 | `transition.rs`, `notifier.rs`, `task_notice.rs` | Deduplicate lifecycle notifications and manage presentation. Dismissal/focus is not user-read. |
-| `monitoring.rs`, `source_catalog.rs` | Source IDs, migration/CAS, discovery/catalog and capabilities. Support, detection, health and current tasks stay separate. |
+| `monitoring.rs`, `monitoring/discovery.rs`, `source_catalog.rs` | Registry owns source IDs, migration/CAS and catalog state. Discovery is read-only. The catalog owns shared capability metadata. Support, detection, health and current tasks stay separate. |
 | `popup_interaction.rs`, `tray.rs`, native window/startup/focus modules | Backend visibility/focus and OS resources. Validate live identity and release locks before native setters. |
-| `src/lib/`, `src/routes/` | Typed presentation and IPC clients. Shared stores own preferences/drafts. SourceSettings owns source editing and management close protection. |
+| `src/lib/`, `src/routes/` | Typed presentation and IPC clients. Shared stores own preferences/drafts. SourceSettings owns editing and management close protection. SourceCapabilities only renders catalog metadata. |
 | `locales/` | One pair of app-owned catalogs for Svelte and native Rust, with key-consistency tests. Native task/source text stays data. |
 | `scripts/`, package scripts, `.github/workflows/` | Build/development/audit/delivery entrypoints, with stable shipped runtime resources. |
 | `tests/`, `tests/native/`, `tests/install/`, `tests/support/`, `tests/fixtures/` | Automated contracts, opt-in native/installation acceptance, shared lifecycle helpers and sanitized inputs. |
