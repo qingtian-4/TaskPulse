@@ -1,4 +1,4 @@
-param([int]$ProcessId,[string]$Exe,[string]$Title,[int]$X,[int]$Y)
+param([int]$ProcessId,[string]$Exe,[string]$Title,[int]$X,[int]$Y,[ValidateSet("move","maximize","restore")][string]$Action="move")
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot 'installer-process.ps1')
 $process=Get-Process -Id $ProcessId
@@ -17,12 +17,19 @@ public static class TaskPulseSettingsMove {
     [DllImport("user32.dll",CharSet=CharSet.Unicode)] static extern int GetWindowText(IntPtr hwnd,StringBuilder text,int size);
     [DllImport("user32.dll",SetLastError=true)] static extern bool SetWindowPos(IntPtr hwnd,IntPtr after,int x,int y,int cx,int cy,uint flags);
     [DllImport("user32.dll")] static extern IntPtr SetThreadDpiAwarenessContext(IntPtr context);
-    public static void Move(uint pid,string title,int x,int y) {
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr hwnd,int index);
+    [DllImport("user32.dll",SetLastError=true)] static extern bool PostMessage(IntPtr hwnd,uint message,IntPtr wParam,IntPtr lParam);
+    public static void Act(uint pid,string title,int x,int y,string action) {
         var matches=new List<IntPtr>();
         EnumWindows((hwnd,unused)=>{uint owner;GetWindowThreadProcessId(hwnd,out owner);var text=new StringBuilder(1024);GetWindowText(hwnd,text,text.Capacity);if(owner==pid&&text.ToString()==title)matches.Add(hwnd);return true;},IntPtr.Zero);
         if(matches.Count!=1)throw new Exception("Expected one owned settings window");
         uint currentOwner;GetWindowThreadProcessId(matches[0],out currentOwner);
         if(currentOwner!=pid)throw new Exception("Window ownership changed");
+        if(action!="move"){
+            if((GetWindowLong(matches[0],-16)&0x10000)==0)throw new Exception("Settings caption has no maximize button");
+            if(!PostMessage(matches[0],0x0112,new IntPtr(action=="maximize"?0xF030:0xF120),IntPtr.Zero))throw new System.ComponentModel.Win32Exception();
+            return;
+        }
         var previous=SetThreadDpiAwarenessContext(new IntPtr(-4));
         try {if(!SetWindowPos(matches[0],IntPtr.Zero,x,y,0,0,0x0001|0x0004|0x0010))throw new System.ComponentModel.Win32Exception();}
         finally {if(previous!=IntPtr.Zero)SetThreadDpiAwarenessContext(previous);}
@@ -30,5 +37,5 @@ public static class TaskPulseSettingsMove {
 }
 '@
     if($process.HasExited){throw 'Owned app exited before movement'}
-    [TaskPulseSettingsMove]::Move($ProcessId,$Title,$X,$Y)
+    [TaskPulseSettingsMove]::Act($ProcessId,$Title,$X,$Y,$Action)
 } finally {$process.Dispose()}

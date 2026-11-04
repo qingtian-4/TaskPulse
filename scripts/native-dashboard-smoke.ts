@@ -54,7 +54,7 @@ await withSmokeWorkspace('dashboard-polish',async({owned,onStop})=>{
     {id:'file:running',name:'验收：运行中的任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'run-1',confidence:'hook',remote:false,updated_at:now,started_at:now-60000,unread:true,pinned:false},
     {id:'file:done',name:'验收：未查看的结果',source:'local_file',source_instance:'local_file',status:'succeeded',turn_key:'done-1',confidence:'exact',remote:false,updated_at:now,finished_at:now,exit_code:0,unread:true,pinned:false},
     {id:'file:offline',name:'验收：离线任务',source:'local_file',source_instance:'local_file',status:'running',turn_key:'offline-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:false},
-    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:true,can_focus:!!focusTarget,terminal:focusTarget?{kind:'windows_native',focus_id:String(focusTarget.pid),outer_id:focusTarget.identity,label:'Test-owned focus window'}:undefined},
+    {id:'file:pinned',name:'验收：手动固定',source:'local_file',source_instance:'local_file',status:'unknown',turn_key:'pinned-1',confidence:'hook',remote:false,updated_at:now,unread:true,pinned:false,can_focus:!!focusTarget,terminal:focusTarget?{kind:'windows_native',focus_id:String(focusTarget.pid),outer_id:focusTarget.identity,label:'Test-owned focus window'}:undefined},
     {id:'scan:codex:anonymous',name:'unknown',source:'codex',source_instance:'scanner',status:'running',confidence:'inferred',remote:false,updated_at:now,unread:true,pinned:false},
   ];
   const records=Object.fromEntries(tasks.map(task=>[task.id,{task,unread:task.unread,pinned:task.pinned,pin_override:task.pinned?true:null,last_execution_at:now,last_turn_key:task.turn_key??null,last_status:task.status,hidden:false,ignored:false}]));
@@ -124,8 +124,31 @@ accept_since_ms=${now}`:''}`).join('\n')}
   if(expected!==null)verifyDevelopmentBuild(build,expected,version);
 
   await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.tasks.length>=5 && s.tasks.some(t=>t.id==='file:running'&&!t.stale) && s.providers.some(p=>p.provider==='local_file' && p.status==='connected'))`);
-  await root.wait(`document.querySelectorAll('.task-item').length>=3`);
   await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.view?.sources.some(row=>row.id==='scanner'&&row.read_state==='healthy'))`);
+  const panelMonitor=await root.invoke('plugin:window|current_monitor',{label:'popup'});
+  const heightLimit=Math.min(840,panelMonitor.workArea.size.height/panelMonitor.scaleFactor*.92);
+  const panelSizes=[];
+  for(const count of [2,3]){
+    if(count===3)await root.invoke('update_task_attention',{id:'file:pinned',action:'pin',pinned:true});
+    await root.wait(`document.querySelectorAll('.task-item').length===${count}`);
+    const measure=`(()=>{const list=document.querySelector('.task-scroll');
+      const cards=[...list.querySelectorAll('.task-item')],card=cards.at(-1).getBoundingClientRect(),viewport=list.getBoundingClientRect();
+      const content=list.querySelector('.task-content').getBoundingClientRect();
+      return {height:innerHeight,needed:innerHeight-viewport.height+content.height,lastBottom:card.bottom,viewportBottom:viewport.bottom,overflow:list.scrollHeight-list.clientHeight};})()`;
+    // Wait for the actual native resize, rather than accepting the larger
+    // bootstrap window. On a short screen the last card remains scrollable.
+    await root.wait(`(()=>{const m=${measure};return Math.abs(m.height-Math.min(${heightLimit},Math.max(400,m.needed)))<=2;})()`);
+    const size=await root.evaluate(measure);
+    if(size.overflow<=1)assert.ok(size.lastBottom<=size.viewportBottom+1,JSON.stringify(size));
+    else {
+      await root.evaluate(`document.querySelector('.task-scroll').scrollTop=1e6`);
+      const end=await root.evaluate(measure);
+      assert.ok(end.lastBottom<=end.viewportBottom+1,JSON.stringify(end));
+      await root.evaluate(`document.querySelector('.task-scroll').scrollTop=0`);
+    }
+    panelSizes.push({count,...size,heightLimit});
+    await Bun.write(join(owned,`dashboard-${count}-cards.png`),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
   const before=await root.invoke('get_dashboard_snapshot');
   assert.equal(before.view.counts.ongoing,1);
   assert.equal(before.view.counts.action,0);
@@ -137,7 +160,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   console.log('default cards:',JSON.stringify(initial));
   assert.deepEqual([...initial].sort(),['验收：运行中的任务','验收：未查看的结果','验收：手动固定'].sort());
   assert.equal(await root.evaluate(`!!document.querySelector('.pending-running,.filter-note,.quota')`),false,'Red-box content must be removed');
-  const checks=['default task set excludes stale unpinned and anonymous scanner rows','removed red-box content'];
+  const checks=['default task set excludes stale unpinned and anonymous scanner rows','removed red-box content','two and three cards fit the native popup or scroll at the work-area limit'];
   const focusEvidence=[];
   if(focusWindow&&focusTarget){
     for(const minimized of [false,true]){
@@ -210,8 +233,15 @@ accept_since_ms=${now}`:''}`).join('\n')}
     assert.equal(await root.evaluate(`document.documentElement.scrollWidth>innerWidth || document.documentElement.scrollHeight>innerHeight`),false);
     const box=await root.evaluate(`(()=>{const r=document.querySelector('footer').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewport:innerHeight};})()`);
     assert.ok(box.bottom<=height+1);
+    if(width===320){
+      assert.equal(await root.evaluate(`(()=>{const list=document.querySelector('.task-scroll');
+        if(list.scrollHeight<=list.clientHeight)return false;
+        list.scrollTop=list.scrollHeight;
+        return [...list.querySelectorAll('.task-item')].at(-1).getBoundingClientRect().bottom<=list.getBoundingClientRect().bottom+1;})()`),true);
+    }
   }
-  checks.push('compact and standard dashboard layouts');
+  checks.push('compact dashboard keeps the last card reachable; standard dashboard keeps its footer visible');
+  await root.send('Emulation.clearDeviceMetricsOverride');
   // A valid current session must survive an unrelated parser gap. This uses
   // the real Rust collector/IPC/renderer, never a mocked dashboard response.
   const rollout=join(codex,'sessions/rollout-public-good.jsonl');
@@ -311,6 +341,31 @@ accept_since_ms=${now}`:''}`).join('\n')}
   const pending=await root.invoke('get_pending_task_prompts');
   assert.equal(pending.find((task:any)=>task.id==='file:blocker').stale,true);
   checks.push('a vanished CLI-tagged request becomes uncertain in the dashboard and inbox while its actual file reader stays healthy');
+  // Exercise a genuine grouped project list beyond the screen's capacity.
+  const beforeGrouping=await ui.invoke('get_monitoring_settings');
+  await ui.invoke('save_monitoring_settings',{expected:beforeGrouping,settings:{...beforeGrouping,default_view:'projects'}});
+  await root.evaluate(`document.querySelector('.all-tasks').click();document.querySelector('.detail-heading>button')?.click()`);
+  const projectCount=12;
+  for(let i=0;i<projectCount;i++){
+    const record='layout-project-'+i;
+    await Bun.write(join(home,record+'.pending'),JSON.stringify({
+      v:2,name:'Project capacity fixture '+i,cwd:'D:/Public Fixture/Project-'+i,
+      status:'running',turn_key:record,execution_activity_at:Date.now(),confidence:'hook'
+    }));
+    await rename(join(home,record+'.pending'),join(home,record+'.status'));
+  }
+  await root.wait(`new Set([...document.querySelectorAll('[data-task-id^="file:layout-project-"]')].map(row=>row.closest('section'))).size===${projectCount}`);
+  await root.wait(`Math.abs(innerHeight-${heightLimit})<=2`);
+  const manyProjects=await root.evaluate(`(()=>{
+    const list=document.querySelector('.task-scroll'),viewport=list.getBoundingClientRect(),footer=document.querySelector('.dashboard footer').getBoundingClientRect();
+    list.scrollTop=list.scrollHeight;
+    const last=[...list.querySelectorAll('.task-item')].at(-1).getBoundingClientRect();
+    return {height:innerHeight,overflow:list.scrollHeight-list.clientHeight,scrolled:list.scrollTop,
+      lastFullyVisible:last.top>=viewport.top-1&&last.bottom<=viewport.bottom+1,footerVisible:footer.bottom<=innerHeight+1};
+  })()`);
+  assert.ok(manyProjects.overflow>0&&manyProjects.scrolled>0&&manyProjects.lastFullyVisible&&manyProjects.footerVisible,JSON.stringify(manyProjects));
+  await Bun.write(join(owned,'dashboard-many-projects.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  checks.push('12 real fixture project groups stay within the native height limit and scroll to the full last card');
   const currentSettings=await ui.invoke('get_monitoring_settings');
   await ui.invoke('save_monitoring_settings',{expected:currentSettings,settings:{...currentSettings,sources:[]}});
   await root.wait(`document.querySelector('.dashboard footer')?.textContent.includes('No enabled sources')`);
@@ -319,6 +374,6 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.deepEqual(errors,[]);
   assert.equal(await fileSha256(exe),executableSha256);
   assert.equal(await fileSha256(original),executableSha256);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,mode:sourceStatusOnly?'source-status':'full',build,executableSha256,checks,contrasts,focus:focusEvidence,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,mode:sourceStatusOnly?'source-status':'full',build,executableSha256,checks,panelSizes,manyProjects:{projectCount,heightLimit,...manyProjects},contrasts,focus:focusEvidence,partialCodex:{collections:new Set(attempts).size,ongoingCounts:[...new Set(ongoingSamples)],sourceReadStates:[...new Set(sourceReadSamples)]},errors},null,2));
   console.log('Dashboard polish acceptance passed:',checks.length,'checks');
 });

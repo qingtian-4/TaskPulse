@@ -1,10 +1,9 @@
 import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
-// Keep a compact single task; allow four task cards before scrolling.
-export function preferredDashboardHeight(taskCount:number, expanded:boolean):number {
-  if(expanded || taskCount>=4)return 840;
-  if(taskCount===3)return 680;
-  return taskCount>1 ? 560 : 400;
+// Measure the rendered content in logical pixels; native fitting applies the
+// monitor work-area limit. Expanded controls still reserve the full panel.
+export function preferredDashboardHeight(contentHeight:number, expanded:boolean):number {
+  return expanded ? 840 : Math.min(840,Math.max(400,Math.ceil(contentHeight)));
 }
 
 export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
