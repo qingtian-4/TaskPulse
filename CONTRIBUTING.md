@@ -35,7 +35,7 @@ bun run test:ui-model
 bun run test:workflow
 ```
 
-Before submitting, run the frontend build, Rust fmt/Clippy and the complete Rust test target listed in [AGENTS.md](AGENTS.md). On Windows the shared entry point is:
+Before submitting, run the frontend build, Rust fmt/Clippy and the complete Rust test target listed in [AGENTS.md](AGENTS.md). Run `bun run build` before embedding assets with Cargo; it rejects a mismatch between the entry pages and their SvelteKit startup scripts. On Windows the shared entry point is:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
