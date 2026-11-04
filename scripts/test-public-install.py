@@ -4,6 +4,11 @@ from pathlib import Path
 import unittest
 import tempfile
 import subprocess
+import json
+import os
+import re
+import sys
+import textwrap
 
 spec = importlib.util.spec_from_file_location('public_install', Path(__file__).with_name('public-install-smoke.py'))
 public = importlib.util.module_from_spec(spec)
@@ -11,6 +16,22 @@ spec.loader.exec_module(public)
 
 
 class ManifestTests(unittest.TestCase):
+    def test_actual_workflow_platform_plan_keeps_legacy_and_adds_arm64_only_later(self):
+        workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/public-install-smoke.yml').read_text(encoding='utf-8')
+        program = textwrap.dedent(re.search(r"python3 - <<'PY'\n(.*?)\n          PY", workflow, re.S).group(1))
+        for tag, count in [('v1.0.1', 3), ('v1.1.0', 3), ('v1.1.1', 4), ('v2.0.0', 4), ('bad', None), ('v1.1.1-rc.1', None)]:
+            with self.subTest(tag=tag), tempfile.TemporaryDirectory(prefix='tp-public-plan-') as temp:
+                output = Path(temp) / 'output'
+                result = subprocess.run([sys.executable, '-c', program], env=dict(os.environ, RELEASE_TAG=tag, GITHUB_OUTPUT=str(output)), capture_output=True, timeout=10)
+                if count is None:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertFalse(output.exists())
+                else:
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    rows = json.loads(output.read_text().removeprefix('matrix='))['include']
+                    self.assertEqual(len(rows), count)
+                    self.assertEqual(any(row['os'] == 'windows-11-arm' for row in rows), count == 4)
+
     def test_unified_root_and_platform_identity_are_both_required(self):
         record = dict(version='1.1.1', tag='v1.1.1', commit='a' * 40, platform='windows', architecture='arm64', assets=['setup.exe'])
         metadata = dict(format='taskpulse-release-v2', version='1.1.1', tag='v1.1.1', commit='a' * 40, build_kind='release', platforms={'windows': {'arm64': record}})

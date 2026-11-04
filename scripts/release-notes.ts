@@ -4,6 +4,7 @@ import {validateRelease} from './release';
 
 export function releaseNotes(body:string,version:string,assets:string[]):string {
   validateRelease(`v${version}`,Array(4).fill(version));
+  if(!body.replaceAll('\r\n','\n').startsWith(`# TaskPulse v${version}\n`))throw Error('Release note title must match the version');
   const packages=[
     ['Windows · x64',`TaskPulse_${version}_windows_x64_setup.exe`],
     ['Windows · ARM64',`TaskPulse_${version}_windows_arm64_setup.exe`],

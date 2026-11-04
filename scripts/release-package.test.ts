@@ -32,6 +32,7 @@ test('release notes show actual installation links first and never invent an ARM
   expect(legacy).not.toContain('/windows_arm64');
   expect(legacy).toContain('not yet available');
   expect(()=>releaseNotes(body,version,[])).toThrow('actual');
+  expect(()=>releaseNotes(body,'2.0.0',assets)).toThrow('title');
 });
 
 test('draft publication requires native acceptance on every included architecture',()=>{

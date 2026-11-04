@@ -75,7 +75,9 @@ test('preview builds every package and keeps fresh installer runner and security
   const macArtifact=workflow.jobs.macos.steps.find((s:any)=>s.uses?.startsWith('actions/upload-artifact'));
   expect(macArtifact.if).toBe("always() && steps.stage.outcome == 'success'");
   const original=Bun.YAML.parse(read('.github/workflows/release.yml')) as any;
-  expect(original.jobs.draft.if).toBe("${{ needs.preflight.outputs.tag != '' }}");
+  expect(original.jobs.draft.if).toContain("needs.preflight.outputs.tag != ''");
+  for(const job of ['preflight','windows','installer-smoke','macos','windows-arm64','installer-smoke-arm64'])
+    expect(original.jobs.draft.if).toContain(`needs.${job}.result == 'success'`);
   expect(original.jobs.preflight.steps.find((s:any)=>s.id==='version').run).toContain('candidate --commit "$CANDIDATE_COMMIT"');
   expect(original.jobs['installer-smoke'].strategy.matrix).toEqual({installer:['nsis','msi'],round:[1,2]});
 });
@@ -99,7 +101,9 @@ test('public installation acceptance is read-only, stable-only and tests anonymo
   expect(publicFlow.permissions).toEqual({contents:'read'});
   expect(publicFlow.on.release.types).toEqual(['published']);
   expect(publicFlow.on).not.toHaveProperty('pull_request_target');
-  expect(publicFlow.jobs.install.strategy.matrix.include).toHaveLength(3);
+  expect(publicFlow.jobs.install.needs).toBe('platforms');
+  expect(publicFlow.jobs.install.strategy.matrix).toBe('${{ fromJSON(needs.platforms.outputs.matrix) }}');
+  expect(publicFlow.jobs.platforms.outputs.matrix).toBe('${{ steps.plan.outputs.matrix }}');
   expect(publicFlow.jobs.install.env.RELEASE_TAG).toContain('inputs.tag');
   expect(text).not.toMatch(/secrets\.|contents: write|gh release|git push|git tag/);
   for(const step of publicFlow.jobs.install.steps){
