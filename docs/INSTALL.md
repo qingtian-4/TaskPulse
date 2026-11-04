@@ -2,6 +2,12 @@
 
 [English](INSTALL.en.md)
 
+发布说明顶部提供对应系统的安装下载链接。当前版本保留完整附件。
+后续版本会合并为统一发布清单、`SHA256SUMS.txt` 和一个依赖许可 ZIP，
+更新签名仍包含在 `latest.json` 中，完整签名及分平台许可资料保存在 ZIP。
+已有 MSI 用户继续使用 MSI 更新包。Windows ARM64 安装包仅在相应版本实际
+提供时可选，脚本按真实系统架构选择，不会以 x64 包冒充 ARM64 包。
+
 ## 下载安装包
 
 打开 [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases)，按系统选择：

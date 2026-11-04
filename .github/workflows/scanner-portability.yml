@@ -12,6 +12,10 @@ on:
       - 'src-tauri/Cargo.toml'
       - 'src-tauri/Cargo.lock'
       - '.github/workflows/scanner-portability.yml'
+      - 'install.sh'
+      - 'scripts/*install*'
+      - 'scripts/*release*'
+      - '.github/workflows/release.yml'
   push:
     branches: [main, 'codex/**']
     paths:
@@ -24,6 +28,10 @@ on:
       - 'src-tauri/Cargo.toml'
       - 'src-tauri/Cargo.lock'
       - '.github/workflows/scanner-portability.yml'
+      - 'install.sh'
+      - 'scripts/*install*'
+      - 'scripts/*release*'
+      - '.github/workflows/release.yml'
 
 permissions:
   contents: read
@@ -49,4 +57,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --tests
+      - run: python3 scripts/test-cli-install.py
+      - run: python3 scripts/test-release-package.py
+      - run: python3 scripts/test-public-install.py
       # No bundles, signing, application launch, or macOS support claim.

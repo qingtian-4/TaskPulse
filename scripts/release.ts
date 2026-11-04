@@ -8,6 +8,14 @@ export const ALPHA_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|b
 
 export const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
+// The current 1.1.0 release keeps its complete legacy asset set. Later
+// versions consolidate metadata without removing the installed MSI update lane.
+export function releaseLayout(version:string):'legacy'|'compact' {
+  if(!STABLE_VERSION.test(version) && !ALPHA_VERSION.test(version))throw Error('Invalid release version');
+  const [major,minor,patch]=version.split('-')[0].split('.').map(Number);
+  return major>1 || (major===1 && (minor>1 || (minor===1 && patch>0))) ? 'compact' : 'legacy';
+}
+
 export function validateRelease(tag: string, versions: string[]) {
   const version = tag.startsWith('v') ? tag.slice(1) : '';
   if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Use an explicit SemVer tag, e.g. v1.0.0 or v1.1.0-rc.1.');
@@ -68,15 +76,15 @@ export function validateMsiVersion(root:string,version:string):void {
   if(config.bundle?.windows?.wix?.version!==msiVersionFor(version))throw new Error('Wix numeric product version must match the application version mapping');
 }
 
-export function installerNames(version: string) {
+export function installerNames(version: string, architecture:'x64'|'arm64'='x64') {
   if (!ALPHA_VERSION.test(version) && !STABLE_VERSION.test(version)) throw new Error('Invalid release version');
-  return [`TaskPulse_${version}_windows_x64_setup.exe`, `TaskPulse_${version}_windows_x64.msi`];
+  return architecture==='arm64' ? [`TaskPulse_${version}_windows_arm64_setup.exe`] : [`TaskPulse_${version}_windows_x64_setup.exe`, `TaskPulse_${version}_windows_x64.msi`];
 }
 
 export function sha256(data: Uint8Array) { return createHash('sha256').update(data).digest('hex'); }
 
-export function verifyChecksums(directory: string, version: string): void {
-  const expected = installerNames(version).sort();
+export function verifyChecksums(directory: string, version: string, architecture:'x64'|'arm64'='x64'): void {
+  const expected = installerNames(version,architecture).sort();
   const actual = readdirSync(directory).filter(n => /\.(exe|msi)$/i.test(n)).sort();
   if (JSON.stringify(actual) !== JSON.stringify(expected)) throw new Error('Missing, unexpected or mismatched installer assets');
   const lines = readFileSync(join(directory, 'SHA256SUMS.txt'), 'utf8').trim().split('\n');
@@ -90,12 +98,13 @@ export function verifyChecksums(directory: string, version: string): void {
   }
 }
 
-export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string, options:{tagged?:boolean;buildKind?:'pr-preview'}={}): void {
+export function stageInstallers(bundleRoot: string, out: string, version: string, commit: string, options:{tagged?:boolean;buildKind?:'pr-preview';architecture?:'x64'|'arm64'}={}): void {
   if (!/^[a-f0-9]{40}$/.test(commit)) throw new Error('A full source commit SHA is required');
   if(options.buildKind && options.tagged!==false)throw new Error('PR preview must be untagged');
   if (existsSync(out) && readdirSync(out).length) throw new Error('Output directory must be empty; refusing stale assets');
-  const names = installerNames(version);
-  const sources = [['nsis', '.exe'], ['msi', '.msi']].map(([subdir, extension]) => {
+  const architecture=options.architecture??'x64';
+  const names = installerNames(version,architecture);
+  const sources = (architecture==='arm64'?[['nsis','.exe']]:[['nsis', '.exe'], ['msi', '.msi']]).map(([subdir, extension]) => {
     const directory = join(bundleRoot, subdir);
     const files = readdirSync(directory).filter(n => n.endsWith(extension));
     if (files.length !== 1) throw new Error(`Expected exactly one ${extension} in ${directory}`);
@@ -108,8 +117,8 @@ export function stageInstallers(bundleRoot: string, out: string, version: string
   mkdirSync(out, {recursive:true});
   sources.forEach((file, index) => copyFileSync(file, join(out, names[index])));
   writeFileSync(join(out, 'SHA256SUMS.txt'), names.map(name => `${sha256(readFileSync(join(out, name)))}  ${name}\n`).join(''));
-  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:options.tagged===false?null:`v${version}`, ...(options.tagged===false?{build_kind:options.buildKind??'commit-candidate'}:{}), msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture:'x64', assets:names}, null, 2)+'\n');
-  verifyChecksums(out, version);
+  writeFileSync(join(out, 'release-manifest.json'), JSON.stringify({version, tag:options.tagged===false?null:`v${version}`, ...(options.tagged===false?{build_kind:options.buildKind??'commit-candidate'}:{}), msi_product_version:msiVersionFor(version), commit, platform:'windows', architecture, assets:names}, null, 2)+'\n');
+  verifyChecksums(out, version,architecture);
 }
 
 function git(root: string, args: string[]) {
@@ -158,10 +167,11 @@ if (import.meta.main) {
       if (commit !== tagged) throw new Error('Checkout must be the existing release tag, not a branch or another commit');
       git(root,['merge-base','--is-ancestor',commit,'refs/remotes/origin/main']);
       // No shell interpolation of user-supplied refs; validated outputs are safe.
-      if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\ncommit=${commit}\n`);
+      if (process.env.GITHUB_OUTPUT) appendFileSync(process.env.GITHUB_OUTPUT, `version=${version}\ntag=${tag}\ncommit=${commit}\nlayout=${releaseLayout(version)}\n`);
       console.log(`Validated ${tag} at ${commit}`);
     } else if (command === 'stage') {
-      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'),{tagged:!args.includes('--untagged'),...(args.includes('--pr-preview')?{buildKind:'pr-preview' as const}:{})});
+      const architecture=args.includes('--arm64')?'arm64':'x64';
+      stageInstallers(resolve(argument('--bundle-root')), resolve(argument('--out')), argument('--version'), argument('--commit'),{tagged:!args.includes('--untagged'),architecture,...(args.includes('--pr-preview')?{buildKind:'pr-preview' as const}:{})});
     } else if (command === 'verify') {
       verifyChecksums(resolve(argument('--out')), argument('--version'));
     } else {

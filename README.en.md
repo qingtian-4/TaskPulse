@@ -8,9 +8,9 @@
 
 # TaskPulse
 
-**Several agents running. Know which one needs you.**
+**Stop watching your agents. Come back when they need you.**
 
-See AI task status, model and elapsed time from your system tray.<br>Get notified when work finishes, fails or needs your attention.
+TaskPulse keeps track of your coding agents and notifies you when they need approval, input, or attention.<br>Stay focused on your work instead of constantly checking their progress.
 
 [简体中文](README.md)
 
@@ -18,14 +18,20 @@ See AI task status, model and elapsed time from your system tray.<br>Get notifie
 
 </div>
 
+TaskPulse is a lightweight desktop tool that follows tasks across Codex, Claude Code, and other coding agents. It notifies you when an agent requests approval, needs input, completes a task, or encounters an error.
+
+Let several agents work in the background while you focus on what you are doing. Return when a notification calls for your attention. Available notifications depend on the source capabilities listed below.
+
 ## Features
 
-- **Find your agents automatically**: confirm detected local sources once, then follow new tasks. Connect WSL and SSH sources when needed.
-- **Status, model and time together**: see task titles, projects, reported models and turn duration, with search and grouping.
-- **Know when to return**: separate notifications for completion, failure, questions and permission requests.
-- **Keep results in view**: unread results remain available; pins and unread state survive restarts.
-- **Make it yours**: choose light, dark or system appearance, switch between English and Simplified Chinese, and customize login startup, task details and notifications.
-- **Keep your data local**: no TaskPulse cloud account or conversation uploads. TaskPulse never approves Agent requests for you.
+- **Stay focused without standing by**: run several coding agents at once without watching terminals or repeatedly checking progress.
+- **Get notified when it matters**: receive desktop notifications for input requests, approval requests, completed tasks, and errors.
+- **See what needs your attention**: find tasks that need you in a lightweight tray panel, with status, model, and elapsed time available when useful.
+- **Keep important results in view**: unviewed results remain available, and pending requests and unread state survive restarts.
+- **Discover automatically, connect as needed**: find supported local coding agents automatically and configure WSL, SSH, or other task sources when needed.
+- **Run locally and respect privacy**: no TaskPulse cloud account or agent conversation uploads. Operations that need your confirmation stay under your control.
+
+TaskPulse watches your agents so you can focus on your work.
 
 ## Task notifications
 

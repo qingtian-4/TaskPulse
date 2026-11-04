@@ -36,6 +36,7 @@ jobs:
       tag: ${{ steps.version.outputs.tag }}
       commit: ${{ steps.version.outputs.commit }}
       probe_commit: ${{ steps.version.outputs.probe_commit }}
+      layout: ${{ steps.version.outputs.layout }}
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
         with:
@@ -177,6 +178,105 @@ jobs:
           path: dist/release/*
           if-no-files-found: error
 
+  windows-arm64:
+    name: Build Windows ARM64 NSIS installer
+    if: needs.preflight.outputs.layout == 'compact'
+    needs: [preflight, security]
+    runs-on: windows-11-arm
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.commit }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
+          targets: aarch64-pc-windows-msvc
+          components: rustfmt, clippy
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+          cache-on-failure: true
+      - name: Install locked frontend dependencies
+        run: bun install --frozen-lockfile
+      - name: Audit frontend dependencies (moderate and above)
+        run: bun run audit:frontend
+      # Each native command has its own step; a later success cannot hide failure.
+      - name: Check frontend
+        run: bun run check
+      - name: Test documentation links and candidate source instructions
+        run: bun run test:docs
+      - name: Audit tracked documentation, media and ignored outputs
+        run: bun run test:repo
+      - name: Test read-only WSL source detection (offline fixtures)
+        run: python scripts/test-wsl-discovery.py
+      - name: Test remote Codex metadata schemas (offline fixtures)
+        run: python scripts/test-codex-metadata.py
+      - name: Test opt-in Codex approval observer and reversible installation
+        run: python scripts/test-codex-observer.py
+      - name: Test WSL metadata freshness and read failures (offline fixtures)
+        run: python scripts/wsl-metadata.test.py
+      - name: Test frontend models
+        run: bun run test:ui-model
+      - name: Test integration contracts
+        run: bun run test:integration-contract
+      - name: Test smoke evidence and bounded owned-directory cleanup
+        run: bun run test:smoke-cleanup
+      - name: Check Rust formatting
+        run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+      - name: Lint Rust
+        run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+      - name: Test Rust
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
+      - name: Require updater signing key for tagged builds
+        if: needs.preflight.outputs.tag != ''
+        shell: pwsh
+        env:
+          SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+        run: if ([string]::IsNullOrWhiteSpace($env:SIGNING_KEY)) { throw 'Configure TAURI_SIGNING_PRIVATE_KEY before building a release' }
+      - name: Build ARM64 NSIS installer
+        uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ needs.preflight.outputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY || '' }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.preflight.outputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
+        with:
+          tauriScript: bun run tauri
+          args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target aarch64-pc-windows-msvc --features custom-protocol --bundles nsis -- --profile ci-release --locked
+      - name: Test the actual GUI-subsystem release bridge with redirected stdin
+        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
+      - name: Test MCP in the GUI-subsystem executable
+        run: python scripts/mcp-smoke.py --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe
+      - name: Normalize asset names and generate flat checksums
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          RELEASE_COMMIT: ${{ needs.preflight.outputs.commit }}
+        run: bun scripts/release.ts stage --arm64 --bundle-root src-tauri/target/aarch64-pc-windows-msvc/ci-release/bundle --out dist/release --version "$env:RELEASE_VERSION" --commit "$env:RELEASE_COMMIT" ${{ needs.preflight.outputs.tag == '' && '--untagged' || '' }}
+      - name: Stage signed Windows update installers
+        if: needs.preflight.outputs.tag != ''
+        run: bun scripts/updater-assets.ts stage --bundle-root src-tauri/target/aarch64-pc-windows-msvc/ci-release/bundle --out dist/release --platform windows-arm64 --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}'
+      - name: Verify signatures against the embedded application key
+        if: needs.preflight.outputs.tag != ''
+        env:
+          TASKPULSE_VERIFY_UPDATE_DIR: ${{ github.workspace }}/dist/release
+        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray signed_release_artifacts_match_embedded_key -- --ignored --nocapture
+      - name: Export dependency inventory and license texts
+        run: bun scripts/dependency-notices.ts dist/release aarch64-pc-windows-msvc
+      - name: Keep ARM64 metadata separate while gathering builds
+        shell: pwsh
+        run: |
+          foreach ($file in @('release-manifest.json','SHA256SUMS.txt','DEPENDENCIES.json','SBOM.cdx.json','THIRD_PARTY_NOTICES.txt')) {
+            Move-Item -LiteralPath "dist/release/$file" -Destination "dist/release/windows-arm64-$file"
+          }
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-arm64-installers
+          path: dist/release/*
+          if-no-files-found: error
+
   installer-smoke:
     name: Verify ${{ matrix.installer }} on a fresh Windows runner (round ${{ matrix.round }})
     needs: [preflight, windows]
@@ -220,6 +320,59 @@ jobs:
         if: always()
         with:
           name: windows-installer-evidence-${{ matrix.installer }}-${{ matrix.round }}
+          path: dist/installer-smoke/
+          if-no-files-found: warn
+
+  installer-smoke-arm64:
+    name: Verify ARM64 NSIS on a fresh runner (round ${{ matrix.round }})
+    if: needs.preflight.outputs.layout == 'compact'
+    needs: [preflight, windows-arm64]
+    runs-on: windows-11-arm
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        installer: [nsis]
+        round: [1, 2]
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: windows-arm64-installers
+          path: dist/release
+      - name: Restore isolated ARM64 metadata names for native acceptance
+        shell: pwsh
+        run: |
+          foreach ($file in @('release-manifest.json','SHA256SUMS.txt','DEPENDENCIES.json','SBOM.cdx.json','THIRD_PARTY_NOTICES.txt')) {
+            Move-Item -LiteralPath "dist/release/windows-arm64-$file" -Destination "dist/release/$file"
+          }
+      - name: Prepare ordinary-user WebView2 acceptance on the disposable runner
+        shell: pwsh
+        run: |
+          $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
+          if ($gsudo) { $gsudoPath = $gsudo.Source } else {
+            winget install --id gerardog.gsudo --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install CI de-elevation helper' }
+            $gsudoPath = Join-Path $env:ProgramFiles 'gsudo\Current\gsudo.exe'
+          }
+          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing CI de-elevation helper' }
+          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
+          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not grant the runner account access to acceptance evidence' }
+      - name: Exercise the real installer (not the build-tree executable)
+        env:
+          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
+          INSTALLER_KIND: ${{ matrix.installer }}
+          TASKPULSE_PROBE_COMMIT: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND" -Architecture arm64
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: windows-arm64-installer-evidence-${{ matrix.installer }}-${{ matrix.round }}
           path: dist/installer-smoke/
           if-no-files-found: warn
 
@@ -297,8 +450,8 @@ jobs:
 
   draft:
     name: Create a release draft
-    if: ${{ needs.preflight.outputs.tag != '' }}
-    needs: [preflight, windows, installer-smoke, macos]
+    if: ${{ !cancelled() && needs.preflight.result == 'success' && needs.preflight.outputs.tag != '' && needs.windows.result == 'success' && needs.installer-smoke.result == 'success' && needs.macos.result == 'success' && (needs.preflight.outputs.layout != 'compact' || (needs.windows-arm64.result == 'success' && needs.installer-smoke-arm64.result == 'success')) }}
+    needs: [preflight, windows, installer-smoke, macos, windows-arm64, installer-smoke-arm64]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -319,12 +472,17 @@ jobs:
           pattern: release-package-macos-*
           merge-multiple: true
           path: dist/release
-      - name: Verify final uploaded assets
-        env:
-          RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
-        run: bun scripts/release.ts verify --out dist/release --version "$RELEASE_VERSION"
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        if: needs.preflight.outputs.layout == 'compact'
+        with:
+          name: windows-arm64-installers
+          path: dist/release
       - name: Assemble complete update feed from verified platform builds
-        run: bun scripts/updater-assets.ts feed --out dist/release --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}' --notes 'docs/releases/${{ needs.preflight.outputs.version }}.md'
+        run: bun scripts/updater-assets.ts feed --out dist/release --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}' --notes 'docs/releases/${{ needs.preflight.outputs.version }}.md' ${{ needs.preflight.outputs.layout == 'compact' && '--arm64' || '' }}
+      - name: Verify identities and consolidate public assets without dropping legacy compatibility
+        run: python3 scripts/release-package.py --source dist/release --out dist/publish --version '${{ needs.preflight.outputs.version }}' --commit '${{ needs.preflight.outputs.commit }}'
+      - name: Put actual installation downloads first in the bilingual release notes
+        run: bun scripts/release-notes.ts '${{ needs.preflight.outputs.version }}' dist/publish 'docs/releases/${{ needs.preflight.outputs.version }}.md' dist/release-notes.md
       - name: Recheck that release assets are still unpublished
         env:
           GH_TOKEN: ${{ github.token }}
@@ -339,22 +497,6 @@ jobs:
           draft: true
           prerelease: false
           make_latest: true
-          body_path: docs/releases/${{ needs.preflight.outputs.version }}.md
+          body_path: dist/release-notes.md
           fail_on_unmatched_files: true
-          files: |
-            dist/release/*.exe
-            dist/release/*.msi
-            dist/release/*.dmg
-            dist/release/*.app.tar.gz
-            dist/release/*.sig
-            dist/release/latest.json
-            dist/release/macos-*-SHA256SUMS.txt
-            dist/release/macos-*-manifest.json
-            dist/release/macos-*-DEPENDENCIES.json
-            dist/release/macos-*-SBOM.cdx.json
-            dist/release/macos-*-THIRD_PARTY_NOTICES.txt
-            dist/release/SHA256SUMS.txt
-            dist/release/release-manifest.json
-            dist/release/DEPENDENCIES.json
-            dist/release/SBOM.cdx.json
-            dist/release/THIRD_PARTY_NOTICES.txt
+          files: dist/publish/*

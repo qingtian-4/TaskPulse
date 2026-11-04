@@ -78,6 +78,29 @@ A formal Release is for an accepted **stable** version, not an iteration/testing
 
 ### Same-commit release evidence
 
+Write `docs/releases/<version>.md` in Chinese and English with Added, Changed,
+Fixed, Security/compatibility, Installation/upgrade and Known limitations sections
+as applicable. Describe user-visible changes since the previous public version.
+The draft pipeline puts actual installation links above these sections. Missing
+architectures do not receive download links.
+
+Versions through 1.1.0 retain all legacy attachments. Later versions use four
+primary installers (Windows x64/ARM64 NSIS and macOS Apple Silicon/Intel DMG),
+two Mac updater archives, `latest.json`, a unified `release-manifest.json`,
+`SHA256SUMS.txt` and one dependency/license ZIP. Retain the additional Windows
+x64 MSI because installed MSI clients select their own updater target. This
+gives 11 uploads, plus GitHub's two generated source archives. The 10-upload
+target requires a separately verified MSI migration.
+
+The ZIP keeps architecture-specific inventories, SBOMs, license notices,
+original manifests/checksums and signature sidecars. Updater signatures also
+remain embedded in `latest.json`. Unified checksums cover every other public
+attachment. Each platform verifies signatures against the compiled key before
+aggregation. Both Windows x64 formats and ARM64 NSIS native acceptance must
+pass before a compact draft can be assembled. Published assets stay immutable.
+Windows ARM64 must not be advertised as verified before its build, installation
+and physical-machine evidence exists.
+
 Choose one clean, full candidate SHA and record the version beside it. For each
 applicable check, record its status, run or report link, and tested SHA. Retain
 artifact manifests and SHA-256 checksums before Actions artifacts expire. A

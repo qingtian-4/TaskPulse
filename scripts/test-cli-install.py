@@ -143,6 +143,24 @@ class InstallerTests(unittest.TestCase):
         sums.write_text(sums.read_text() * 2)
         self.run_script('--prerelease', '--download-only', success=False)
 
+    def test_unified_manifest_install_and_identity_failures(self):
+        original = json.loads((self.assets / 'macos-arm64-manifest.json').read_text())
+        original['tag'] = 'v' + VERSION
+        manifest = dict(format='taskpulse-release-v2', version=VERSION, tag='v' + VERSION,
+                        commit='a' * 40, build_kind='release', platforms={'macos': {'arm64': original}})
+        name = 'release-manifest.json'
+        sums = 'SHA256SUMS.txt'
+        (self.assets / sums).write_text((self.assets / 'macos-arm64-SHA256SUMS.txt').read_text() + 'f' * 64 + '  other.exe\n')
+        self.release['assets'] = [self.release['assets'][0]] + [dict(name=n, browser_download_url=f'https://github.com/qingtian-4/TaskPulse/releases/download/v{VERSION}/{n}') for n in (sums, name)]
+        (self.assets / name).write_text(json.dumps(manifest))
+        self.run_script('--prerelease', '--no-launch')
+        for field, value in [('format', 'unknown'), ('commit', 'b' * 40), ('tag', 'v0.0.0'), ('build_kind', 'pr-preview')]:
+            (self.assets / name).write_text(json.dumps(dict(manifest, **{field: value})))
+            self.run_script('--prerelease', '--download-only', success=False)
+        (self.assets / name).write_text(json.dumps(manifest))
+        (self.assets / sums).write_text((self.assets / sums).read_text() * 2)
+        self.run_script('--prerelease', '--download-only', success=False)
+
     def test_interruption_and_corruption(self):
         self.options['interrupt'] = True
         self.run_script('--prerelease', success=False)

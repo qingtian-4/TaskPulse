@@ -113,6 +113,8 @@ test('shared Rust changes get exact-head macOS compilation without packaging',()
   for(const trigger of ['pull_request','push']){
     expect(w.on[trigger].paths).toContain('src-tauri/**/*.rs');
     expect(w.on[trigger].paths).toContain('src-tauri/Cargo.lock');
+    expect(w.on[trigger].paths).toContain('install.sh');
+    expect(w.on[trigger].paths).toContain('scripts/*release*');
   }
   expect(w.on.push.branches).toContain('main');
   expect(w.concurrency.group).toContain('github.ref');
@@ -123,6 +125,9 @@ test('shared Rust changes get exact-head macOS compilation without packaging',()
     ref:'${{ github.event.pull_request.head.sha || github.sha }}','persist-credentials':false
   });
   expect(steps.filter((s:any)=>s.run).map((s:any)=>s.run)).toEqual([
-    'cargo check --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --tests'
+    'cargo check --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --tests',
+    'python3 scripts/test-cli-install.py',
+    'python3 scripts/test-release-package.py',
+    'python3 scripts/test-public-install.py',
   ]);
 });

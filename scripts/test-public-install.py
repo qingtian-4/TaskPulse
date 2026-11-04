@@ -11,6 +11,14 @@ spec.loader.exec_module(public)
 
 
 class ManifestTests(unittest.TestCase):
+    def test_unified_root_and_platform_identity_are_both_required(self):
+        record = dict(version='1.1.1', tag='v1.1.1', commit='a' * 40, platform='windows', architecture='arm64', assets=['setup.exe'])
+        metadata = dict(format='taskpulse-release-v2', version='1.1.1', tag='v1.1.1', commit='a' * 40, build_kind='release', platforms={'windows': {'arm64': record}})
+        public.validate_manifest(metadata, 'v1.1.1', 'a' * 40, 'windows', 'arm64', 'setup.exe')
+        for change in [dict(commit='b' * 40), dict(format='unknown'), dict(build_kind='pr-preview'), dict(platforms={})]:
+            with self.assertRaisesRegex(RuntimeError, 'does not match'):
+                public.validate_manifest(dict(metadata, **change), 'v1.1.1', 'a' * 40, 'windows', 'arm64', 'setup.exe')
+
     def test_released_bootstrap_uses_git_blob_bytes_with_a_crlf_checkout(self):
         with tempfile.TemporaryDirectory(prefix='tp-public-blob-') as temp:
             root = Path(temp)

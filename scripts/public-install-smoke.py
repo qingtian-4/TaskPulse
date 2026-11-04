@@ -45,6 +45,11 @@ def canonical_bootstrap(root, commit, name):
 
 
 def validate_manifest(manifest, tag, commit, platform_name, architecture, package_name):
+    if manifest.get('format'):
+        if (manifest.get('format') != 'taskpulse-release-v2' or manifest.get('version') != tag[1:]
+                or manifest.get('tag') != tag or manifest.get('commit') != commit or manifest.get('build_kind') != 'release'):
+            raise RuntimeError('Public package manifest does not match the checked release source/platform')
+        manifest = manifest.get('platforms', {}).get(platform_name, {}).get(architecture, {})
     if (manifest.get('version') != tag[1:] or manifest.get('commit') != commit
             or manifest.get('platform') != platform_name or manifest.get('architecture') != architecture
             or manifest.get('tag', tag) != tag or manifest.get('build_kind') not in (None, 'release')
@@ -103,24 +108,31 @@ def main():
                      '-DownloadOnly', '-OutputDirectory', str(destination), '-Language', 'en'], out / 'bootstrap.txt', timeout=600)
                 assets = destination / ('TaskPulse-' + options.tag)
                 manifest = json.loads((assets / 'release-manifest.json').read_text(encoding='utf-8-sig'))
-                validate_manifest(manifest, options.tag, commit, 'windows', 'x64', f'TaskPulse_{version}_windows_x64_setup.exe')
+                architecture = 'arm64' if os.environ.get('PROCESSOR_ARCHITEW6432', platform.machine()).lower() in ('arm64', 'aarch64') else 'x64'
+                validate_manifest(manifest, options.tag, commit, 'windows', architecture, f'TaskPulse_{version}_windows_{architecture}_setup.exe')
                 msi = f'TaskPulse_{version}_windows_x64.msi'
-                asset(msi, assets / msi)
+                if architecture == 'x64':
+                    asset(msi, assets / msi)
                 # The existing native acceptance validates BOTH checksums and MSI
                 # metadata before installing the exact downloaded NSIS package.
                 env = dict(os.environ, TASKPULSE_PROBE_COMMIT=commit)
                 run(['powershell.exe', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                      str(ROOT / 'scripts/installer-smoke.ps1'), '-Assets', str(assets), '-Version', version,
-                     '-Gsudo', options.gsudo, '-InstallerKind', 'nsis'], out / 'native-installer.txt', env, timeout=840)
-                result['package_sha256'] = digest(assets / f'TaskPulse_{version}_windows_x64_setup.exe')
+                     '-Gsudo', options.gsudo, '-InstallerKind', 'nsis', '-Architecture', architecture], out / 'native-installer.txt', env, timeout=840)
+                result['package_sha256'] = digest(assets / f'TaskPulse_{version}_windows_{architecture}_setup.exe')
                 result['checks'].append('public bootstrap download, actual NSIS install, native IPC, restart and uninstall')
             else:
                 architecture = 'arm64' if platform.machine() == 'arm64' else 'x64'
                 package_name = f'TaskPulse_{version}_macos_{architecture}.dmg'
-                manifest_file = temporary / f'macos-{architecture}-manifest.json'
+                manifest_name = f'macos-{architecture}-manifest.json'
+                if not any(a.get('name') == manifest_name for a in release['assets']):
+                    manifest_name = 'release-manifest.json'
+                manifest_file = temporary / manifest_name
                 asset(manifest_file.name, manifest_file)
                 manifest = json.loads(manifest_file.read_bytes())
                 validate_manifest(manifest, options.tag, commit, 'macos', architecture, package_name)
+                if manifest.get('format') == 'taskpulse-release-v2':
+                    manifest = manifest['platforms']['macos'][architecture]
                 image = temporary / package_name
                 asset(package_name, image)
                 if digest(image) != manifest.get('sha256'):

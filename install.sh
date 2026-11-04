@@ -161,6 +161,21 @@ version=${tag#v}
 name="TaskPulse_${version}_macos_${arch}.dmg"
 sums="macos-${arch}-SHA256SUMS.txt"
 manifest="macos-${arch}-manifest.json"
+# New releases share metadata. Old public releases keep their original paths.
+for ((i=0; i<1000; i++)); do
+  candidate=$(field "$release" "assets.$i.name") || break
+  if [ "$candidate" = release-manifest.json ]; then
+    # Windows legacy releases also have this name. Select unified metadata only
+    # when the architecture-specific Mac manifest is absent.
+    legacy=0
+    for ((j=0; j<1000; j++)); do
+      other=$(field "$release" "assets.$j.name") || break
+      [ "$other" != "$manifest" ] || legacy=1
+    done
+    if [ "$legacy" = 0 ]; then manifest=release-manifest.json; sums=SHA256SUMS.txt; fi
+    break
+  fi
+done
 # Check every location before transferring any asset. Duplicate names fail closed.
 urls=()
 for wanted in "$name" "$sums" "$manifest"; do
@@ -200,16 +215,32 @@ quarantine "$stage/$name"
 fetch "${urls[1]}" "$stage/$sums" 45
 fetch "${urls[2]}" "$stage/$manifest" 45
 metadata="$stage/$manifest"
-[ "$(required "$metadata" version)" = "$version" ] && [ "$(required "$metadata" platform)" = macos ] && [ "$(required "$metadata" architecture)" = "$arch" ] || fail 'Manifest version/platform/architecture mismatch.' 'manifest 版本、平台或架构不匹配。'
-[[ "$(required "$metadata" commit)" =~ $commit_pattern ]] || fail 'Invalid source SHA.' '源码 SHA 无效。'
-[ "$(required "$metadata" assets.0)" = "$name" ] && ! field "$metadata" assets.1 >/dev/null || fail 'Unexpected manifest assets.' 'manifest 资产列表不符。'
+meta_prefix=
+if [ "$manifest" = release-manifest.json ]; then
+  [ "$(required "$metadata" format)" = taskpulse-release-v2 ] && [ "$(required "$metadata" version)" = "$version" ] && [ "$(required "$metadata" tag)" = "$tag" ] && [ "$(required "$metadata" build_kind)" = release ] || fail 'Unified release identity mismatch.' '统一发布身份不匹配。'
+  meta_prefix="platforms.macos.$arch."
+  [ "$(required "$metadata" commit)" = "$(required "$metadata" "${meta_prefix}commit")" ] || fail 'Platform source SHA mismatch.' '平台源码 SHA 不匹配。'
+fi
+platform_required() { required "$metadata" "${meta_prefix}$1"; }
+[ "$(platform_required version)" = "$version" ] && [ "$(platform_required platform)" = macos ] && [ "$(platform_required architecture)" = "$arch" ] || fail 'Manifest version/platform/architecture mismatch.' 'manifest 版本、平台或架构不匹配。'
+[[ "$(platform_required commit)" =~ $commit_pattern ]] || fail 'Invalid source SHA.' '源码 SHA 无效。'
+[ "$(platform_required assets.0)" = "$name" ] && ! field "$metadata" "${meta_prefix}assets.1" >/dev/null || fail 'Unexpected manifest assets.' 'manifest 资产列表不符。'
 # Older public experimental manifests have no tag/build_kind; explicit preview/candidate markers are rejected.
-kind=$(field "$metadata" build_kind || true)
+kind=$(field "$metadata" "${meta_prefix}build_kind" || true)
 [ -z "$kind" ] || [ "$kind" = release ] || fail 'Preview/candidate assets are not public releases.' '预览或候选附件不是公开 Release。'
-if field "$metadata" tag >/dev/null; then [ "$(field "$metadata" tag)" = "$tag" ] || fail 'Manifest tag mismatch.' 'manifest 标签不匹配。'; fi
-expected=$(required "$metadata" sha256)
+if field "$metadata" "${meta_prefix}tag" >/dev/null; then [ "$(field "$metadata" "${meta_prefix}tag")" = "$tag" ] || fail 'Manifest tag mismatch.' 'manifest 标签不匹配。'; fi
+expected=$(platform_required sha256)
 [[ "$expected" =~ $digest_pattern ]] || fail 'Invalid SHA-256.' 'SHA-256 无效。'
-[ "$(cat "$stage/$sums")" = "$expected  $name" ] || fail 'Checksum manifest mismatch.' '校验文件不匹配。'
+checksum_pattern='^([a-f0-9]{64})  ([A-Za-z0-9_.-]+)$'
+matches=0
+while IFS= read -r line || [ -n "$line" ]; do
+  [[ "$line" =~ $checksum_pattern ]] || fail 'Invalid checksum entry.' '校验项无效。'
+  if [ "${BASH_REMATCH[2]}" = "$name" ]; then
+    matches=$((matches+1))
+    [ "${BASH_REMATCH[1]}" = "$expected" ] || fail 'Checksum manifest mismatch.' '校验文件不匹配。'
+  fi
+done < "$stage/$sums"
+[ "$matches" = 1 ] || fail 'Missing or duplicate package checksum.' '安装包校验缺失或重复。'
 actual=$(shasum -a 256 "$stage/$name"); actual=${actual%% *}
 [ "$actual" = "$expected" ] || fail 'SHA-256 mismatch.' 'SHA-256 不匹配。'
 say 'SHA-256 verified.' 'SHA-256 校验通过。'
