@@ -82,7 +82,7 @@ def smoke(dmg, version, arch, evidence):
         with tempfile.TemporaryDirectory(prefix="taskpulse-macos-") as temporary:
             root = Path(temporary)
             probe = root / "window-probe"
-            run("xcrun", "swiftc", str(Path(__file__).with_name("macos-window-probe.swift")), "-o", str(probe))
+            run("xcrun", "swiftc", str((Path(__file__).resolve().parent / '../tests/install/macos-window-probe.swift')), "-o", str(probe))
             mount = root / "volume"
             mount.mkdir()
             attached = False
@@ -133,7 +133,7 @@ def smoke(dmg, version, arch, evidence):
                 raise RuntimeError(f"Version mismatch: {found}")
             result["checks"].extend(["strict ad-hoc signature", "bundle identity and native architecture",
                                      "packaged hook resources", "actual installed executable version"])
-            run(sys.executable, str(Path(__file__).with_name("mcp-smoke.py")), "--exe", str(exe),
+            run(sys.executable, str((Path(__file__).resolve().parent / '../tests/native/mcp-smoke.py')), "--exe", str(exe),
                 "--out", str(evidence / "mcp.json"), env=env)
             result["checks"].append("installed app MCP stdio source binding and lifecycle smoke")
             for cycle in ("first-launch", "restart"):

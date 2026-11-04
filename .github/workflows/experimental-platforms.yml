@@ -93,8 +93,8 @@ jobs:
       - run: bun run check
       - run: bun run test:ui-model
       - run: bun run test:release
-      - run: python3 scripts/test-macos-package.py
-      - run: python3 scripts/test-codex-observer.py
+      - run: python3 tests/test-macos-package.py
+      - run: python3 tests/test-codex-observer.py
       - run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
       - run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray

@@ -64,17 +64,17 @@ jobs:
       - name: Test smoke evidence and bounded owned-directory cleanup
         run: bun run test:smoke-cleanup
       - name: Test read-only WSL source detection (offline fixtures)
-        run: python scripts/test-wsl-discovery.py
+        run: python tests/test-wsl-discovery.py
       - name: Test remote Codex metadata schemas (offline fixtures)
-        run: python scripts/test-codex-metadata.py
+        run: python tests/test-codex-metadata.py
       - name: Test SSH source capability detection (offline fixtures)
         run: python scripts/test-ssh-sources.py
       - name: Test WSL metadata freshness and read failures (offline fixtures)
-        run: python scripts/wsl-metadata.test.py
+        run: python tests/wsl-metadata.test.py
       - name: Test opt-in Codex approval observer and reversible installation
-        run: python scripts/test-codex-observer.py
+        run: python tests/test-codex-observer.py
       - name: Test public installation manifest/source validation
-        run: python scripts/test-public-install.py
+        run: python tests/test-public-install.py
       - name: Build frontend
         run: bun run build
       - name: Check Rust format
@@ -86,16 +86,16 @@ jobs:
       - name: Build executable
         run: cargo build --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --features custom-protocol
       - name: Test integration bridge in an isolated home
-        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/debug/agent-tray.exe
+        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/debug/agent-tray.exe
       - name: Test source-bound MCP with the native executable
-        run: python scripts/mcp-smoke.py --exe src-tauri/target/debug/agent-tray.exe
+        run: python tests/native/mcp-smoke.py --exe src-tauri/target/debug/agent-tray.exe
       # Opt-in live Agent/SSH/WSL and GUI acceptance tests are not unattended CI.
       # No tags, installers, release publication or write-capable token here.
       - name: Verify default development isolation as a real standard Windows account
         shell: powershell
         run: |
           $bun = (Get-Command bun.exe).Source
-          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/native-standard-user.ps1 -Bun $bun -Exe src-tauri/target/debug/agent-tray.exe
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File tests/native/native-standard-user.ps1 -Bun $bun -Exe src-tauri/target/debug/agent-tray.exe
           if ($LASTEXITCODE -ne 0) { throw 'Native standard-account verification failed' }
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()

@@ -5,7 +5,7 @@ param(
     [string[]]$Caches = @('debug-incremental','debug-build','check-incremental'),
     [switch]$Delete
 )
-. (Join-Path $PSScriptRoot 'cache-common.ps1')
+. (Join-Path $PSScriptRoot '.\cache-common.ps1')
 if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 $workspace = Resolve-CacheWorkspace $Root
 $allowed = @{

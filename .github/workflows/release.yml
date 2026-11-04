@@ -78,7 +78,7 @@ jobs:
       - name: Test release validation and asset handling
         run: bun run test:release
       - name: Test public installation manifest/source validation
-        run: python3 scripts/test-public-install.py
+        run: python3 tests/test-public-install.py
 
   security:
     needs: preflight
@@ -120,13 +120,13 @@ jobs:
       - name: Audit tracked documentation, media and ignored outputs
         run: bun run test:repo
       - name: Test read-only WSL source detection (offline fixtures)
-        run: python scripts/test-wsl-discovery.py
+        run: python tests/test-wsl-discovery.py
       - name: Test remote Codex metadata schemas (offline fixtures)
-        run: python scripts/test-codex-metadata.py
+        run: python tests/test-codex-metadata.py
       - name: Test opt-in Codex approval observer and reversible installation
-        run: python scripts/test-codex-observer.py
+        run: python tests/test-codex-observer.py
       - name: Test WSL metadata freshness and read failures (offline fixtures)
-        run: python scripts/wsl-metadata.test.py
+        run: python tests/wsl-metadata.test.py
       - name: Test frontend models
         run: bun run test:ui-model
       - name: Test integration contracts
@@ -154,9 +154,9 @@ jobs:
           tauriScript: bun run tauri
           args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
-        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
+        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
       - name: Test MCP in the GUI-subsystem executable
-        run: python scripts/mcp-smoke.py --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe
+        run: python tests/native/mcp-smoke.py --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe
       - name: Normalize asset names and generate flat checksums
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
@@ -213,13 +213,13 @@ jobs:
       - name: Audit tracked documentation, media and ignored outputs
         run: bun run test:repo
       - name: Test read-only WSL source detection (offline fixtures)
-        run: python scripts/test-wsl-discovery.py
+        run: python tests/test-wsl-discovery.py
       - name: Test remote Codex metadata schemas (offline fixtures)
-        run: python scripts/test-codex-metadata.py
+        run: python tests/test-codex-metadata.py
       - name: Test opt-in Codex approval observer and reversible installation
-        run: python scripts/test-codex-observer.py
+        run: python tests/test-codex-observer.py
       - name: Test WSL metadata freshness and read failures (offline fixtures)
-        run: python scripts/wsl-metadata.test.py
+        run: python tests/wsl-metadata.test.py
       - name: Test frontend models
         run: bun run test:ui-model
       - name: Test integration contracts
@@ -247,9 +247,9 @@ jobs:
           tauriScript: bun run tauri
           args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target aarch64-pc-windows-msvc --features custom-protocol --bundles nsis -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
-        run: bun scripts/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
+        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
       - name: Test MCP in the GUI-subsystem executable
-        run: python scripts/mcp-smoke.py --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe
+        run: python tests/native/mcp-smoke.py --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe
       - name: Normalize asset names and generate flat checksums
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
@@ -315,7 +315,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           INSTALLER_KIND: ${{ matrix.installer }}
           TASKPULSE_PROBE_COMMIT: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND"
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:
@@ -368,7 +368,7 @@ jobs:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
           INSTALLER_KIND: ${{ matrix.installer }}
           TASKPULSE_PROBE_COMMIT: ${{ needs.preflight.outputs.probe_commit || needs.preflight.outputs.commit }}
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File scripts/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND" -Architecture arm64
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND" -Architecture arm64
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()
         with:

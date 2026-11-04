@@ -1,17 +1,19 @@
-# TaskPulse scripts
+# TaskPulse repository tools
 
-## Install and connect
+- `develop.ts`, `verify.ps1`, `verify-frontend-assets.ts`: native development and build verification. Package scripts and [CONTRIBUTING](../CONTRIBUTING.md) are the command entrypoints.
+- `release.ts`, `release.sh`, `updater-assets.ts`, `release-package.py`, `release-notes.ts`, `macos-package.py`: version validation, package staging and draft-release preparation.
+- `dependency-notices.ts`, `security.ts`, `repository-audit.ts`: dependency/license provenance, pinned audits and tracked-file/navigation checks.
+- `request-evaluation.ts`, `request-delivery-evidence.ts`: score/join independently labelled request evidence. Real-source acceptance remains distinct from replay.
+- `disk-report.ps1`, `cache-common.ps1`, `clean-build-cache.ps1`: bounded disk accounting and explicit owned-cache cleanup, with dry-run defaults.
+- `probe-codex.ps1`: retained manual diagnostic. Review its local-metadata output before use.
 
-- Repository-root `install.ps1` and `install.sh`: install released Windows or macOS packages. See [installation](../docs/INSTALL.md).
-- `tp-run`: report the lifecycle of a foreground command. See [remote tasks](../docs/REMOTE_TMUX.md).
-- `hooks/`: optional Agent event bridges. Configure these through the application or the [integration guide](../docs/AGENT_INTEGRATION_GUIDE.md).
+## Stable runtime and installation paths
 
-## Repository checks
+Repository-root `install.ps1` and `install.sh` are public installer entrypoints.
+`tp-run`, `wrap.sh`, `wrap.ps1`, `codex-observer.py`, `install-codex-observer.py`
+and `hooks/` retain their paths. The Hook directory is a production Tauri bundle
+resource, not test scaffolding. None is automatically installed by repository tests.
+See [installation](../docs/INSTALL.md) and [integration](../docs/AGENT_INTEGRATION_GUIDE.md).
 
-`package.json` lists the supported check, build, test and audit commands. `verify.ps1` uses a separate Windows Cargo target directory to avoid overwriting the running tray executable. See [contributing](../CONTRIBUTING.md).
-
-Native smoke scripts use isolated profiles and preserve evidence under ignored output directories. They do not replace your own TaskPulse state. Release scripts validate exact versions and stage artifacts; the GitHub workflow creates a draft and never publishes automatically.
-
-### Settings acceptance
-
-`bun scripts/native-settings-smoke.ts --exe <unused-built-exe>` runs the settings UI through real Windows WebView2 and IPC. It checks fixed dimensions across all six sections, source drafts, preference synchronization, native close confirmation and restart persistence. It uses a disposable profile; login-start registration and real Agent hooks are excluded.
+Verification code and sanitized fixtures live under [tests](../tests/README.md).
+Do not put task reports, captured profiles or build products in either directory.

@@ -30,7 +30,7 @@ WebView2 策略和用户配置路径保持原样。生成时 Windows 字体枚�
 品牌母版没有文本/字体依赖。macOS 彩色应用 ICNS 同步更新；菜单栏单色模板另行设计。
 
 `manifest.json` 记录 TP-03 的路径、描边、交付 ZIP SHA256，以及所有顶层桌面二进制
-资源和 Social Preview 的 SHA256。更新时同步清单，`scripts/brand.test.ts` 检查混用、
+资源和 Social Preview 的 SHA256。更新时同步清单，`tests/brand.test.ts` 检查混用、
 ICO 目录及 ICNS 的原生/Retina 表示。原始验收截图保存在本地；公开截图从当前原生应用捕获，不后期替换图标。
 
 托盘使用交付包原始 32px RGBA PNG，映射为 `tray-working`、`tray-needs-input`、

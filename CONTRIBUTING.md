@@ -70,7 +70,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
 
 It reuses the repository's audit, documentation, release-contract, unit and native bridge checks, and builds into the separate `codex-check` target. Run the relevant `scripts/native-*-smoke.ts --exe <unused-built-exe>` for UI/window changes; on Windows, `native-development-smoke.ts` verifies automatic development isolation without a `TASKPULSE_HOME` override. Provider changes also need real-source validation when available. The opt-in live SSH/WSL tests must use an already available, explicitly selected source.
 
-Windows tray acceptance requires a clean binary for an explicit full commit SHA. Run `bun scripts/native-tray-smoke.ts --exe <unused-built-exe> --expected-commit <full-SHA> --callbacks-only`, then repeat with `--physical-only` during a quiet desktop interval. Reports retain the compiled commit, dirty flag, executable SHA-256 and separate cleanup evidence.
+Windows tray acceptance requires a clean binary for an explicit full commit SHA. Run `bun tests/native/native-tray-smoke.ts --exe <unused-built-exe> --expected-commit <full-SHA> --callbacks-only`, then repeat with `--physical-only` during a quiet desktop interval. Reports retain the compiled commit, dirty flag, executable SHA-256 and separate cleanup evidence.
 
 ## Share a temporary test build
 
@@ -158,7 +158,7 @@ For a clean Windows development executable, run the isolated settings and
 process-tree sample with no screenshot capture:
 
 ```powershell
-bun scripts/native-settings-smoke.ts --exe <exe> --commit <full-sha> --sample-resources --no-screenshots
+bun tests/native/native-settings-smoke.ts --exe <exe> --commit <full-sha> --sample-resources --no-screenshots
 ```
 
 The report counts the root process and validated live descendants, including

@@ -25,7 +25,7 @@ try {
     # Build frontend before Rust embeds it; compiling Rust first can validate an
     # old UI while the subsequent frontend step succeeds on different assets.
     if ($Frontend) {
-        & powershell -NoProfile -ExecutionPolicy Bypass -File scripts/cache-tools.test.ps1
+        & powershell -NoProfile -ExecutionPolicy Bypass -File tests/cache-tools.test.ps1
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         $nativeBun = Get-Command bun.exe -ErrorAction SilentlyContinue
         $bun = if ($nativeBun) { $nativeBun.Source } else { Join-Path $env:LOCALAPPDATA 'hermes\node\bun.cmd' }
@@ -43,7 +43,7 @@ try {
         # sqlite3 context managers commit/rollback but do not close handles;
         # these offline helpers must also pass on Windows file locking.
         $taskPulsePython = if (Get-Command python3.11.exe -ErrorAction SilentlyContinue) { 'python3.11.exe' } else { 'python' }
-        foreach ($fixture in @('scripts/test-wsl-discovery.py', 'scripts/test-codex-metadata.py', 'scripts/test-ssh-sources.py', 'scripts/wsl-metadata.test.py', 'scripts/test-codex-observer.py')) {
+        foreach ($fixture in @('tests/test-wsl-discovery.py', 'tests/test-codex-metadata.py', 'scripts/test-ssh-sources.py', 'tests/wsl-metadata.test.py', 'tests/test-codex-observer.py')) {
             & $taskPulsePython $fixture
             if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         }
@@ -75,9 +75,9 @@ try {
     if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
     if ($Frontend) {
-        & $bun scripts/integration-bridge-smoke.ts --exe $taskPulseVerifyExe
+        & $bun tests/native/integration-bridge-smoke.ts --exe $taskPulseVerifyExe
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-        & $taskPulsePython scripts/mcp-smoke.py --exe $taskPulseVerifyExe --out (Join-Path $taskPulseVerifyTarget 'mcp-smoke.json')
+        & $taskPulsePython tests/native/mcp-smoke.py --exe $taskPulseVerifyExe --out (Join-Path $taskPulseVerifyTarget 'mcp-smoke.json')
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
     }
 

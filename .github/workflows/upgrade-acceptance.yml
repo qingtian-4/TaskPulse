@@ -52,19 +52,19 @@ jobs:
           workspaces: src-tauri
           cache-on-failure: true
       - run: bun install --frozen-lockfile
-      - run: ${{ matrix.python }} scripts/test-upgrade-smoke.py
+      - run: ${{ matrix.python }} tests/test-upgrade-smoke.py
       - name: Build two real versions with an ephemeral signing identity
         env:
           UPGRADE_KIND: ${{ matrix.kind }}
           UPGRADE_TARGET: ${{ matrix.target }}
         shell: bash
-        run: ${{ matrix.python }} scripts/upgrade-smoke.py build --kind "$UPGRADE_KIND" --target "$UPGRADE_TARGET"
+        run: ${{ matrix.python }} tests/install/upgrade-smoke.py build --kind "$UPGRADE_KIND" --target "$UPGRADE_TARGET"
       - name: Install old package and exercise native update, rejection and restart
         # Both Windows formats use a disposable standard account. MSI is an
         # administrator-advertised managed deployment; interactive UAC remains
         # a distinct manual gate. No installer or UAC policy is weakened.
         shell: bash
-        run: ${{ matrix.python }} scripts/upgrade-smoke.py test --plan "$TASKPULSE_UPGRADE_PLAN"
+        run: ${{ matrix.python }} tests/install/upgrade-smoke.py test --plan "$TASKPULSE_UPGRADE_PLAN"
       # Evidence only: no generated executables, source overlay tree or signing keys.
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         if: always()

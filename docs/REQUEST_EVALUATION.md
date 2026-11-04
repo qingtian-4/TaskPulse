@@ -7,10 +7,10 @@ Claude 的可选 Hook 观察显式审批。原生提问暂不计为支持：MCP 
 ## 固定回放
 
 ```sh
-bun scripts/native-request-replay.ts --exe <clean-development-exe> --expected-commit <full-sha>
+bun tests/native/native-request-replay.ts --exe <clean-development-exe> --expected-commit <full-sha>
 ```
 
-Windows 上使用隔离应用、实际 Provider、观察脚本和 WebView2。固定真值在 `scripts/fixtures/request-replay.json`，不从 Provider 输出推导。检查普通工具事件、真实形状的明确请求、错误结果、匹配解除、重启恢复、不重复投递、详情回退和未读不变。输入全部为标注的合成样本。脚本不会打开真实 Agent、注册 Hook 或写真实配置。
+Windows 上使用隔离应用、实际 Provider、观察脚本和 WebView2。固定真值在 `tests/fixtures/request-replay.json`，不从 Provider 输出推导。检查普通工具事件、真实形状的明确请求、错误结果、匹配解除、重启恢复、不重复投递、详情回退和未读不变。输入全部为标注的合成样本。脚本不会打开真实 Agent、注册 Hook 或写真实配置。
 
 每条请求从写入合成输入前计时，因此回放延迟包含了输入写入开销，是事件可观测到渲染的上界。结束点是实际提醒 WebView 的帧确认和原生可见性校验，不使用后端“已入队”作为渲染时间。支持的固定场景必须零误报、零漏报，全部预期恢复及返回行为通过。Claude 提问只验证不会由预调用产生假提醒，不计入漏报率。样本数、编译提交、可执行文件哈希和清理结果随运行保留。
 
@@ -19,7 +19,7 @@ Windows 上使用隔离应用、实际 Provider、观察脚本和 WebView2。固
 1. 按 Agent、宿主版本、平台、请求种类分别建组。用宿主 UI 或独立宿主事件记录标记每个观测窗口的预期请求和可观测时间。记录没有请求的对照窗口，不能从 TaskPulse 解析器或通知历史反推真值。未经支持的通道标为 `unsupported`。
 2. 启用弹窗提醒时，用 TaskPulse 原生投递记录的 `queued` 与同一 `notice_id` 的 `rendered` 建立观测记录。窗口必须完整覆盖；遇到记录截断、程序退出或无法确认渲染时间时标为缺测。重新打开不是新的自动提醒。每次重启以相同请求 ID 验证恢复，每次聚焦用真实前台窗口确认，单纯调用返回成功不足以证明跳转。
 3. 保留本地去敏后的独立真值和观测文件。不要记录提问内容、答案、命令、凭据、目录或未脱敏的宿主日志。记录资源采样的工作集、CPU 时间差和采样间隔；原生压力测试可提供峰值负载下的附加证据。
-4. 运行 `bun scripts/request-evaluation.ts truth.json observations.json`。类型定义和最小样本见 [评测脚本](../scripts/request-evaluation.ts) 和 [评分测试](../scripts/request-evaluation.test.ts)。
+4. 运行 `bun scripts/request-evaluation.ts truth.json observations.json`。类型定义和最小样本见 [评测脚本](../scripts/request-evaluation.ts) 和 [评分测试](../tests/request-evaluation.test.ts)。
 
 报告分别列出未入队、未实际渲染、重复/误报和缺测。漏报分母是有支持的真实请求数，误报分母是无请求对照窗口数，未绑定和重复提醒计入误报数。两者目标各 ≤1%，每组至少 100 个请求和 100 个对照窗口才作门禁判断。分别报告事件路径 P95 ≤2 秒和轮询路径 P95 ≤两次轮询间隔 +2 秒。不支持、无样本或样本不足的组不报告通过，不算作零漏报。返回成功按目标分别计数，详情回退不计作窗口聚焦或会话跳转。
 

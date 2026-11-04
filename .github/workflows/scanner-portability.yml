@@ -15,6 +15,12 @@ on:
       - 'install.sh'
       - 'scripts/*install*'
       - 'scripts/*release*'
+      - 'tests/*release*'
+      - 'tests/test-cli-install.py'
+      - 'tests/test-public-install.py'
+      - 'tests/install/**'
+      - 'tests/fixtures/cli-install/**'
+      - 'scripts/macos-package.py'
       - '.github/workflows/release.yml'
   push:
     branches: [main, 'codex/**']
@@ -31,6 +37,12 @@ on:
       - 'install.sh'
       - 'scripts/*install*'
       - 'scripts/*release*'
+      - 'tests/*release*'
+      - 'tests/test-cli-install.py'
+      - 'tests/test-public-install.py'
+      - 'tests/install/**'
+      - 'tests/fixtures/cli-install/**'
+      - 'scripts/macos-package.py'
       - '.github/workflows/release.yml'
 
 permissions:
@@ -57,7 +69,7 @@ jobs:
         with:
           workspaces: src-tauri
       - run: cargo check --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray --tests
-      - run: python3 scripts/test-cli-install.py
-      - run: python3 scripts/test-release-package.py
-      - run: python3 scripts/test-public-install.py
+      - run: python3 tests/test-cli-install.py
+      - run: python3 tests/test-release-package.py
+      - run: python3 tests/test-public-install.py
       # No bundles, signing, application launch, or macOS support claim.

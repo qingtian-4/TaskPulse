@@ -26,7 +26,8 @@ flowchart LR
 | `popup_interaction.rs`, `tray.rs`, native window/startup/focus modules | Backend visibility/focus and OS resources. Validate live identity and release locks before native setters. |
 | `src/lib/`, `src/routes/` | Typed presentation and IPC clients. Shared stores own preferences/drafts. SourceSettings owns source editing and management close protection. |
 | `locales/` | One pair of app-owned catalogs for Svelte and native Rust, with key-consistency tests. Native task/source text stays data. |
-| `scripts/`, package scripts, `.github/workflows/` | Build/development/audit/delivery entrypoints, distinguished from verification helpers and shipped runtime resources. |
+| `scripts/`, package scripts, `.github/workflows/` | Build/development/audit/delivery entrypoints, with stable shipped runtime resources. |
+| `tests/`, `tests/native/`, `tests/install/`, `tests/support/`, `tests/fixtures/` | Automated contracts, opt-in native/installation acceptance, shared lifecycle helpers and sanitized inputs. |
 
 Protocols stay in [integration protocol](AGENT_INTEGRATION_PROTOCOL.md),
 `src-tauri/src/integrations/schema.rs` and the integration manifests. Adapter
