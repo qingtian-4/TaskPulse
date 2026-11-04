@@ -463,6 +463,18 @@ impl ClaudeCodeProvider {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
+            let checkpoint = if extension == Some("json") {
+                crate::claude_events::read_checkpoint(&path).ok()
+            } else {
+                None
+            };
+            if checkpoint.as_ref().is_some_and(|event| {
+                crate::claude_events::is_journal_checkpoint(event)
+                    && text(event, "session_id") == Some(&id)
+                    && !event_belongs_to_root(event, &self.root)
+            }) {
+                continue;
+            }
             let cache = self.hook_logs.entry(cache_key).or_default();
             if extension == Some("jsonl") {
                 let mut tail = std::mem::replace(&mut cache.tail, JsonlTail::newline_committed());
@@ -526,18 +538,20 @@ impl ClaudeCodeProvider {
                     cache.minimum_sequence = cache.sequence;
                 }
             } else {
-                cache.trusted = match crate::claude_events::read_checkpoint(&path) {
-                    Ok(event)
-                        if crate::claude_events::valid_checkpoint(&event)
-                            && text(&event, "session_id") == Some(&id) =>
+                // A journal-era checkpoint can lag a durable append.
+                // Legacy JSON-only hooks remain readable as before.
+                cache.trusted = match checkpoint.as_ref() {
+                    Some(event)
+                        if !crate::claude_events::is_journal_checkpoint(event)
+                            && text(event, "session_id") == Some(&id) =>
                     {
-                        let sequence = event.get("sequence").and_then(Value::as_u64).unwrap_or(0);
+                        let sequence = event["sequence"].as_u64().unwrap_or(0);
                         if sequence < cache.minimum_sequence
-                            || sequence > 0 && sequence == cache.sequence && event != cache.latest
+                            || sequence > 0 && sequence == cache.sequence && event != &cache.latest
                         {
                             false
                         } else {
-                            cache.fold(event, &id, &self.root, now);
+                            cache.fold(event.clone(), &id, &self.root, now);
                             cache.minimum_sequence = cache.sequence;
                             true
                         }
@@ -552,9 +566,12 @@ impl ClaudeCodeProvider {
                 // pending IDs beyond a damaged journal's readable prefix.
                 // Use it only as stale recovery, never as fresh evidence.
                 let mut recovery = HookLog::default();
-                if let Ok(event) =
-                    crate::claude_events::read_checkpoint(&path.with_extension("json"))
-                {
+                let checkpoint = if extension == Some("json") {
+                    checkpoint
+                } else {
+                    crate::claude_events::read_checkpoint(&path.with_extension("json")).ok()
+                };
+                if let Some(event) = checkpoint {
                     if crate::claude_events::valid_checkpoint(&event) {
                         recovery.fold(event, &id, &self.root, now);
                     }
@@ -1172,6 +1189,175 @@ mod tests {
         std::fs::remove_file(events.join(crate::claude_events::DEGRADED_MARKER)).unwrap();
         let recovered = first.poll(SystemTime::now());
         assert!(recovered.authoritative && recovered.tasks[0].requires_action());
+    }
+
+    #[test]
+    fn missing_journal_recovery_preserves_pending_with_recent_checkpoint() {
+        assert_missing_journal_recovery(false);
+    }
+
+    #[test]
+    fn missing_journal_recovery_preserves_pending_with_busy_lease_and_transcript() {
+        assert_missing_journal_recovery(true);
+    }
+
+    #[test]
+    fn legacy_checkpoint_only_approval_remains_readable_for_its_root() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("claude");
+        let events = dir.path().join("events");
+        let now = SystemTime::now();
+        let at = super::super::resources::epoch_ms(now);
+
+        let other_root = dir.path().join("other");
+        crate::claude_events::record(
+            &events,
+            &serde_json::json!({"session_id":"other","hook_event_name":"UserPromptSubmit"}),
+            at,
+            &other_root,
+        )
+        .unwrap();
+        std::fs::remove_file(events.join("other.jsonl")).unwrap();
+        std::fs::write(
+            events.join("legacy.json"),
+            serde_json::json!({"v":2,"session_id":"legacy","hook_event_name":"PermissionRequest",
+                "request_id":"legacy-approval","observed_at":at,"config_dir":root})
+            .to_string(),
+        )
+        .unwrap();
+
+        let mut provider = ClaudeCodeProvider::new(root);
+        provider.events = events;
+        let result = provider.poll(now);
+        assert!(result.authoritative);
+        assert_eq!(provider.hook_logs.len(), 1);
+        assert_eq!(result.tasks.len(), 1);
+        assert_eq!(
+            result.tasks[0].input_request_id.as_deref(),
+            Some("legacy-approval")
+        );
+        assert!(result.tasks[0].requires_action() && !result.tasks[0].stale);
+    }
+
+    fn assert_missing_journal_recovery(with_lease: bool) {
+        use crate::{attention::AttentionTracker, transition::TransitionEngine};
+        use serde_json::json;
+
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("claude");
+        std::fs::create_dir_all(&root).unwrap();
+        let events = dir.path().join("events");
+        let attention_path = dir.path().join("attention.json");
+        let notifications_path = dir.path().join("notifications.json");
+        let now = SystemTime::now();
+        let at = super::super::resources::epoch_ms(now);
+        let send = |event, call, offset| {
+            crate::claude_events::record(
+                &events,
+                &json!({"session_id":"s","hook_event_name":event,"tool_use_id":call,
+                    "tool_name":"Bash","cwd":"/project"}),
+                at + offset,
+                &root,
+            )
+            .unwrap()
+        };
+        let provider = || {
+            let mut provider = ClaudeCodeProvider::new(root.clone());
+            provider.events = events.clone();
+            provider
+        };
+        let checkpoint = events.join("s.json");
+        let journal = events.join("s.jsonl");
+
+        let mut collector = provider();
+        let mut attention = AttentionTracker::open(attention_path.clone());
+        let mut notifications = TransitionEngine::open(notifications_path.clone());
+        send("UserPromptSubmit", None, 0);
+        send("PreToolUse", Some("a"), 1);
+        let running = attention.reconcile(collector.poll(now).tasks);
+        assert_eq!(running[0].status, TaskStatus::Running);
+        assert!(notifications.apply(&running, &[], now).is_empty());
+        let lagging = std::fs::read(&checkpoint).unwrap();
+
+        let request = send("PermissionRequest", None, 2);
+        let request_id = request["request_id"].as_str().unwrap();
+        let pending = attention.reconcile(collector.poll(now).tasks);
+        assert_eq!(pending[0].input_request_id.as_deref(), Some(request_id));
+        assert!(pending[0].unread);
+        assert_eq!(notifications.apply(&pending, &[], now).len(), 1);
+        attention.set_pinned("claude:s", true).unwrap();
+        let intact = std::fs::read(&journal).unwrap();
+        drop((collector, attention, notifications));
+
+        std::fs::remove_file(&journal).unwrap();
+        std::fs::write(&checkpoint, lagging).unwrap();
+        if with_lease {
+            let pid = std::process::id();
+            assert!(process_alive(pid));
+            let sessions = root.join("sessions");
+            std::fs::create_dir_all(&sessions).unwrap();
+            std::fs::write(
+                sessions.join("lease.json"),
+                json!({"sessionId":"s","pid":pid,"status":"busy","updatedAt":at + 3}).to_string(),
+            )
+            .unwrap();
+            let projects = root.join("projects/project");
+            std::fs::create_dir_all(&projects).unwrap();
+            std::fs::write(
+                projects.join("s.jsonl"),
+                format!(
+                    "{}\n",
+                    json!({"type":"user","uuid":running[0].turn_key,"message":{"content":"synthetic work"}}),
+                ),
+            )
+            .unwrap();
+        }
+
+        let mut collector = provider();
+        let mut attention = AttentionTracker::open(attention_path);
+        let mut notifications = TransitionEngine::open(notifications_path);
+        let recovery_at = now + Duration::from_secs(1);
+        let uncertain = collector.poll(recovery_at);
+        let recovered = attention.reconcile(uncertain.tasks);
+        assert_eq!(recovered[0].input_request_id.as_deref(), Some(request_id));
+        assert_eq!(recovered[0].input_request_ids, [request_id]);
+        assert!(recovered[0].requires_action());
+        assert!(recovered[0].stale && recovered[0].pinned && recovered[0].unread);
+        assert!(!uncertain.authoritative);
+        assert!(notifications.apply(&recovered, &[], recovery_at).is_empty());
+
+        if with_lease {
+            let before = std::fs::read(&checkpoint).unwrap();
+            let result = crate::claude_events::record(
+                &events,
+                &json!({"session_id":"s","hook_event_name":"PostToolUse","tool_use_id":"unrelated"}),
+                at + 3,
+                &root,
+            );
+            assert!(result.is_err());
+            assert!(!journal.exists());
+            assert_eq!(std::fs::read(&checkpoint).unwrap(), before);
+            assert!(events.join(crate::claude_events::DEGRADED_MARKER).is_file());
+        }
+
+        std::fs::write(&journal, intact).unwrap();
+        send("PostToolUse", Some("unrelated"), 4);
+        let restored = collector.poll(recovery_at);
+        // A rejected write leaves the existing durable source warning.
+        assert_eq!(restored.authoritative, !with_lease);
+        let pending = attention.reconcile(restored.tasks);
+        assert_eq!(pending[0].input_request_id.as_deref(), Some(request_id));
+        assert!(pending[0].pinned && pending[0].unread && !pending[0].stale);
+        assert!(notifications.apply(&pending, &[], recovery_at).is_empty());
+
+        let matching = send("PostToolUse", Some("a"), 5);
+        assert_eq!(matching["resolved_request_ids"], json!([request_id]));
+        let resolved = attention.reconcile(collector.poll(recovery_at).tasks);
+        assert_eq!(resolved[0].status, TaskStatus::Running);
+        assert!(resolved[0].input_request_ids.is_empty());
+        assert!(resolved[0].input_request_id.is_none());
+        assert!(resolved[0].pinned && resolved[0].unread && !resolved[0].stale);
+        assert!(notifications.apply(&resolved, &[], recovery_at).is_empty());
     }
 
     #[test]

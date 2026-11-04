@@ -209,6 +209,13 @@ fn record_inner(
                 {
                     return Err(io::Error::other("Claude checkpoint identity mismatch"));
                 }
+                if is_journal_checkpoint(&event) {
+                    // A v3 checkpoint can lag a durable append. Rebuilding
+                    // from it would reuse a sequence and drop newer requests.
+                    return Err(io::Error::other(
+                        "Claude journal missing its durable history",
+                    ));
+                }
                 event
             }
             Err(error) if error.kind() == io::ErrorKind::NotFound => Value::Null,
@@ -383,8 +390,12 @@ fn record_inner(
     Ok(payload)
 }
 
+pub(crate) fn is_journal_checkpoint(event: &Value) -> bool {
+    event["v"].as_u64().is_some_and(|version| version >= 3)
+}
+
 pub(crate) fn valid_checkpoint(event: &Value) -> bool {
-    if event["v"].as_u64().is_none_or(|v| v < 3) {
+    if !is_journal_checkpoint(event) {
         return true; // Legacy checkpoints have no complete reducer state.
     }
     let Some(calls) = event["open_calls"].as_object() else {
