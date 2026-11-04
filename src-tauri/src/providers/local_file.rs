@@ -103,8 +103,8 @@ impl Provider for LocalFileProvider {
                 self.last_tasks
                     .iter()
                     .filter(|task| !current.contains(task.id.as_str()))
-                    .cloned()
                     .take(STATUS_ROUND_ENTRIES)
+                    .cloned()
                     .map(|mut task| {
                         task.stale = true;
                         task
