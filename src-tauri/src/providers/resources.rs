@@ -189,47 +189,9 @@ fn quota_pressure(root: &Path) -> Value {
     json!({"sources":sources,"complete":complete})
 }
 #[cfg(windows)]
-pub fn process_memory() -> Value {
-    #[repr(C)]
-    struct Counters {
-        cb: u32,
-        faults: u32,
-        peak_working: usize,
-        working: usize,
-        peak_paged: usize,
-        paged: usize,
-        peak_nonpaged: usize,
-        nonpaged: usize,
-        pagefile: usize,
-        peak_pagefile: usize,
-        private: usize,
-    }
-    #[link(name = "psapi")]
-    extern "system" {
-        fn GetProcessMemoryInfo(
-            process: *mut std::ffi::c_void,
-            counters: *mut Counters,
-            size: u32,
-        ) -> i32;
-    }
-    #[link(name = "kernel32")]
-    extern "system" {
-        fn GetCurrentProcess() -> *mut std::ffi::c_void;
-    }
-    let mut counters: Counters = unsafe { std::mem::zeroed() };
-    counters.cb = std::mem::size_of::<Counters>() as u32;
-    if unsafe {
-        GetProcessMemoryInfo(
-            GetCurrentProcess(),
-            &mut counters,
-            std::mem::size_of::<Counters>() as u32,
-        )
-    } == 0
-    {
-        return json!({"available":false});
-    }
-    json!({"available":true,"private_bytes":counters.private,"working_set_bytes":counters.working,"peak_working_set_bytes":counters.peak_working,"includes_webview_children":false})
-}
+mod windows;
+#[cfg(windows)]
+use windows::process_memory;
 #[cfg(not(windows))]
 pub fn process_memory() -> Value {
     json!({"available":false,"reason":"use OS process sampler on this platform"})
@@ -244,7 +206,7 @@ pub fn snapshot() -> Value {
     let usage = directory_usage(&crate::integrations::home());
     json!({"parser_instances":parsers,"collection_continuity":continuity_snapshot(),"checkpoint_writes":writes,"checkpoint_bytes":bytes,"integration_disk":usage,
         "source_journal_budget_bytes":crate::integrations::journal::SOURCE_DISK_LIMIT,"session_journal_budget_bytes":crate::integrations::journal::SESSION_DISK_LIMIT,
-        "quota_pressure":quota_pressure(&crate::integrations::home()),"process_memory":process_memory(),"note":"Current process counters only. Buffer estimates are not process RSS. Disk scan is bounded; source-level receive/gap diagnoses remain in integration_diagnose."})
+        "quota_pressure":quota_pressure(&crate::integrations::home()),"process_memory":process_memory(),"note":"Root counters are separate from the optional Windows process-tree sample. Summed working sets can count shared pages more than once. Buffer estimates are not process RSS. Disk scan is bounded; source-level receive/gap diagnoses remain in integration_diagnose."})
 }
 #[tauri::command]
 pub async fn get_resource_diagnostics() -> Value {

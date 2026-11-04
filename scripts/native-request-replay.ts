@@ -176,14 +176,17 @@ poll_interval_ms=1000
       {id:'request',expected:'request',observableAt:requestAt,observeUntil,path:spec.path,pollIntervalMs:1000,restart:spec.restore,returnTarget:spec.returnTarget}
     ]};
     const resources=await root.invoke('get_resource_diagnostics');
-    const resourceSamples=[beforeResources,resources].flatMap(r=>Number.isSafeInteger(r.process_memory?.working_set_bytes)
-      ? [{workingSetBytes:r.process_memory.working_set_bytes,intervalMs:Math.max(1,end-noiseAt)}] : []);
+    const resourceSamples=[beforeResources,resources].flatMap(r=>{
+      const tree=r.process_memory?.process_tree;
+      return tree?.complete&&tree.includes_webview_children&&Number.isSafeInteger(tree.working_set_bytes)
+        ? [{workingSetBytes:tree.working_set_bytes,intervalMs:Math.max(1,end-noiseAt)}] : [];
+    });
     const report=scoreRequests(truth,{resourceSamples,cases:[
       {id:'noise',observedUntil:noiseEnd,alerts:noiseAlerts},
       {id:'request',observedUntil:observeUntil,alerts:notices.map((n:any)=>({renderedAt:n.notice_id===notice.id&&n.task_id===taskId&&n.request_id===request.input_request_id?rendered.at:undefined})),
         restored:true,returned:{target:'details',verified:true}}
     ]});
-    const evidence={...report,fixture:spec,requestLatencyOrigin:'before fixture write (upper bound)',resources,buildCommit:expectedCommit,modified:false,executableSha256:hash};
+    const evidence={...report,fixture:spec,requestLatencyOrigin:'before fixture write (upper bound)',resourceSampleScope:'Available complete Windows process-tree snapshots with WebView2; fixed replay only',resources,buildCommit:expectedCommit,modified:false,executableSha256:hash};
     await Bun.write(join(owned,'result.json'),JSON.stringify(evidence,null,2));
     assert.ok(report.passed,JSON.stringify(report));
     assert.equal(await sha(exe),hash);

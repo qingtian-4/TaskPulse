@@ -1,6 +1,9 @@
 /** Native WebView2 settings acceptance with an isolated profile. Never registers login startup or installs Agent hooks. */
 import assert from 'node:assert/strict';
 import {mkdir,copyFile,chmod} from 'node:fs/promises';
+import {createReadStream} from 'node:fs';
+import {createHash} from 'node:crypto';
+import {release as osRelease,arch} from 'node:os';
 import {resolve,join,dirname} from 'node:path';
 import {spawn,type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
@@ -9,6 +12,11 @@ import {fileURLToPath} from 'node:url';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
 const sourcesOnly=process.argv.includes('--sources-only');
+const captureScreenshots=!process.argv.includes('--no-screenshots');
+const sampleResources=process.argv.includes('--sample-resources');
+const commitAt=process.argv.indexOf('--commit');
+const expectedCommit=commitAt<0?undefined:process.argv[commitAt+1];
+if(commitAt>=0 || sampleResources)assert.match(expectedCommit??'',/^[a-f0-9]{40}$/,'Resource evidence requires the full expected commit');
 await withSmokeWorkspace('settings-native',async({owned,onStop})=>{
   const home=join(owned,'profile');await mkdir(home);
   const exe=join(owned,'agent-tray.exe');await copyFile(original,exe);
@@ -68,6 +76,9 @@ poll_interval_ms=3000
   const start=()=>{app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});app.stderr?.on('data',chunk=>stderr+=String(chunk));app.once('error',e=>stderr+=String(e));};
   console.log('settings smoke: native startup');start();let root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const build=await root.invoke('get_build_info');
+  if(expectedCommit){assert.equal(build.commit,expectedCommit);assert.equal(build.modified,false);assert.equal(build.process_id,app!.pid);}
+  const hasher=createHash('sha256');for await(const chunk of createReadStream(exe))hasher.update(chunk);
+  const buildEvidence={commit:build.commit,modified:build.modified,executableSha256:hasher.digest('hex')};
   const product=build.channel==='development'?'TaskPulse Dev':'TaskPulse';
   console.log('settings smoke: build',JSON.stringify(build));
   await root.invoke('open_management',{section:'sources'});
@@ -81,6 +92,24 @@ poll_interval_ms=3000
   }
   await root.invoke('open_management',{section:'invalid?section=updates'});
   assert.equal(await ui.evaluate(`document.querySelector('.settings-nav [aria-current="page"]').getAttribute('href')`),'#about');
+  const resourceSamples=[];
+  let resourceSampling: {intervalMs:number;durationMs:number;attempts:number;omitted:number}|null=null;
+  if(sampleResources){
+    const started=performance.now(), attempts=10, intervalMs=500;
+    for(let n=0;n<attempts;n++){
+      const {process_memory:memory}=await ui.invoke('get_resource_diagnostics');
+      const tree=memory.process_tree;
+      if(tree?.complete&&tree.includes_webview_children){
+        assert.ok(tree.processes>1&&tree.webview_processes>0&&tree.webview_working_set_bytes>0);
+        assert.ok(tree.working_set_bytes>=memory.working_set_bytes+tree.webview_working_set_bytes);
+        resourceSamples.push({elapsedMs:performance.now()-started,rootWorkingSetBytes:memory.working_set_bytes,...tree});
+      }
+      if(n+1<attempts)await Bun.sleep(intervalMs);
+    }
+    resourceSampling={intervalMs,durationMs:performance.now()-started,attempts,omitted:attempts-resourceSamples.length};
+    assert.ok(resourceSamples.length>=8,'Too few complete samples with verified WebView2 children');
+  }
+  const browserProduct=(await root.send('Browser.getVersion').catch(()=>null))?.product??null;
   const windowSizes:any[]=[];
   for(const section of ['general','panel','sources','notifications','updates','about']){
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#${section}"]').click()`);
@@ -293,14 +322,16 @@ poll_interval_ms=3000
   assert.match(await ui.evaluate(`__TAURI_INTERNALS__.invoke('save_monitoring_settings',{settings:${JSON.stringify(duplicate)},expected:${JSON.stringify(multiple)}}).then(()=>'',e=>String(e))`),/同类来源/);
   // Restore the isolated source configuration, preserving current preferences.
   await ui.invoke('save_monitoring_settings',{settings:{...multiple,sources:multiple.sources.filter((s:any)=>s.kind!=='remote_codex')},expected:multiple});
-  await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
-  await Bun.write(join(owned,'settings-general-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await Bun.write(join(owned,'settings-sources-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  if(captureScreenshots){
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
+    await Bun.write(join(owned,'settings-general-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+    await Bun.write(join(owned,'settings-sources-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
   sockets.forEach(ws=>ws.close());await stopOwnedChild(app);start();
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'grouped source defaults and advanced entry','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'grouped source defaults and advanced entry','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

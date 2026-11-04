@@ -70,7 +70,8 @@ fn inventory(dir: &Path) -> io::Result<BTreeMap<String, Footprint>> {
                 "Claude event directory entry budget exhausted",
             ));
         }
-        let path = entry?.path();
+        let entry = entry?;
+        let path = entry.path();
         if path
             .file_name()
             .and_then(|name| name.to_str())
@@ -78,7 +79,7 @@ fn inventory(dir: &Path) -> io::Result<BTreeMap<String, Footprint>> {
         {
             // Only this writer uses this reserved prefix, and no other
             // writer can have an active staging file under the global lock.
-            if std::fs::symlink_metadata(&path)?.is_file() {
+            if entry.file_type()?.is_file() {
                 std::fs::remove_file(&path)?;
             }
             continue;
@@ -94,7 +95,9 @@ fn inventory(dir: &Path) -> io::Result<BTreeMap<String, Footprint>> {
         else {
             continue;
         };
-        let meta = std::fs::symlink_metadata(&path)?;
+        // Windows already returned these attributes during enumeration.
+        // DirEntry metadata, like symlink_metadata, does not follow links.
+        let meta = entry.metadata()?;
         if !meta.is_file() {
             return Err(io::Error::other("Claude event path is not a regular file"));
         }
