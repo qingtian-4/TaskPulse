@@ -64,7 +64,17 @@ __pycache__/
 *.db-wal
 .claude/
 CLAUDE.md
-.agents/
+**/.agents/*
+!/.agents/skills/
+/.agents/skills/*
+!/.agents/skills/taskpulse-maintenance/
+/.agents/skills/taskpulse-maintenance/*
+!/.agents/skills/taskpulse-maintenance/SKILL.md
+!/.agents/skills/taskpulse-maintenance/references/
+/.agents/skills/taskpulse-maintenance/references/*
+!/.agents/skills/taskpulse-maintenance/references/runtime.md
+!/.agents/skills/taskpulse-maintenance/references/platforms.md
+!/.agents/skills/taskpulse-maintenance/references/delivery.md
 skills-lock.json
 *.pem
 *.key
@@ -99,6 +109,7 @@ skills-lock.json
 *.dump
 /docs/*
 !/docs/AGENT_COMPATIBILITY.md
+!/docs/ARCHITECTURE.md
 !/docs/AGENT_INTEGRATION_GUIDE.md
 !/docs/AGENT_INTEGRATION_PROTOCOL.md
 !/docs/CLI_INSTALL.md

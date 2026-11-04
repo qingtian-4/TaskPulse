@@ -54,21 +54,26 @@ test('quality and release gate the inventory; development-target PRs get quality
 
 test('local reports, captures, credentials and build files cannot enter the public tree',()=>{
   const files=gitFiles(root);
-  const forbidden=files.filter(f=>/(?:^|\/)(?:\.claude|\.agents|\.codex|node_modules|target|dist|build|\.tmp)\//.test(f) ||
+  const sharedGuidance=new Set(['.agents/skills/taskpulse-maintenance/SKILL.md',
+    ...['runtime','platforms','delivery'].map(name=>`.agents/skills/taskpulse-maintenance/references/${name}.md`)]);
+  const forbidden=files.filter(f=>/(?:^|\/)(?:\.claude|\.codex|node_modules|target|dist|build|\.tmp)\//.test(f) ||
+    /(?:^|\/)\.agents\//.test(f)&&!sharedGuidance.has(f) ||
     /(?:^|\/)(?:CLAUDE\.md|skills-lock\.json)$/.test(f) ||
-    /^docs\/(?:internal|maintainers|proposals)\//.test(f) ||
+    /^docs\/(?:internal|proposals)\//.test(f) ||
+    /^docs\/(?:maintainers\/)?(?:review|session-notes)\.md$/.test(f) ||
     /^docs\/[^/]*(?:VALIDATION|_STATUS|_FIXES_|_FIX_|_PLAN|TODO|PROPOSAL)[^/]*\.md$/.test(f) ||
     /^assets\/legacy-agenttray\//.test(f) ||
     /\.(?:exe|dll|pdb|rlib|rmeta|o|obj|zip|tar|tgz|7z|pem|key|p12|pfx|sqlite|sqlite3|db|dump|tfstate)$/.test(f) ||
     /(?:^|\/)\.env(?:$|\.)/.test(f) && !/\.env\.(?:example|template)$/.test(f));
   expect(forbidden).toEqual([]);
   const candidates=['docs/session-notes.md','docs/maintainers/review.md','assets/screenshots/raw.png',
-    'assets/legacy-agenttray/demo.gif','NOTES.md','.agents/skills/tool/SKILL.md','skills-lock.json',
+    'assets/legacy-agenttray/demo.gif','NOTES.md','.agents/skills/tool/SKILL.md','.agents/settings.json','nested/.agents/settings.json',
+    '.agents/skills/taskpulse-maintenance/private.md','.agents/skills/taskpulse-maintenance/references/token.key','skills-lock.json',
     'CLAUDE.md','.claude/commands/private.md','dev.sh','scripts/build.sh','scripts/build.ps1','scripts/registry.sh','src-tauri/icons/android/generated.png','src-tauri/icons/ios/generated.png','output.tsbuildinfo','licenses/DEPENDENCIES.json','.env.local','session.sqlite','debug.exe','output.zip'];
   const ignored=spawnSync('git',['check-ignore','--no-index','--stdin'],{cwd:root,input:candidates.join('\n')+'\n',encoding:'utf8',windowsHide:true});
   expect(ignored.status).toBe(0);
   expect(ignored.stdout.trim().split(/\r?\n/).sort()).toEqual([...candidates].sort());
-  const publicFiles=['README.md','README.en.md','AGENTS.md','LICENSE','docs/INSTALL.md','docs/README.md',
+  const publicFiles=['README.md','README.en.md','AGENTS.md','LICENSE','docs/INSTALL.md','docs/README.md','docs/ARCHITECTURE.md',...sharedGuidance,
     'assets/brand/brand.svg','assets/screenshots/dashboard.png','assets/screenshots/notice-input.png',
     'assets/screenshots/notice-approval.png','assets/screenshots/notice-completed.png',
     'src-tauri/icons/icon.ico','package.json','bun.lock','src-tauri/Cargo.lock'];

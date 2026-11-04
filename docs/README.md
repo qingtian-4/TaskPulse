@@ -18,4 +18,6 @@
 
 </details>
 
+[开发与维护架构](ARCHITECTURE.md) · [贡献指南](../CONTRIBUTING.md)
+
 [返回首页](../README.md) · [English](../README.en.md)

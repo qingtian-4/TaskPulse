@@ -23,7 +23,34 @@ Debug builds select their development directory automatically, including direct 
 
 On macOS, development webviews use nonpersistent WebKit stores (including macOS 13.3); native configuration/task data still persists in the development profile. `dev:desktop` also provides a separate application identity. Windows/Linux development builds have separate browser storage and do not register login startup, install updates or claim the installed app's global shortcut. Fresh profiles require source confirmation. Native Agent data stays read-only; WSL and SSH remain opt-in. Configure real host hooks only from an installed build in a test account; development builds block real hook changes and use isolated event fixtures. Existing automated fixtures retain their explicit isolation, including disabled real-source discovery.
 
-On Windows, use `bun.cmd` if PowerShell blocks `bun.ps1`. If using a GNU Rust toolchain, configure its C/C++ compiler and linker as described in [AGENTS.md](AGENTS.md); do not install packages just to inspect a UI change.
+On Windows, use `bun.cmd` if PowerShell blocks `bun.ps1`. If using a GNU Rust toolchain, configure its C/C++ compiler and linker as described below; do not install packages just to inspect a UI change.
+
+## Windows compiler and verification commands
+
+Use Bun's executable directly if PowerShell blocks `bun.ps1`:
+
+```powershell
+$env:PATH = "C:\tools\mingw64\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
+$env:CC = 'gcc'
+$env:CXX = 'g++'
+$env:RUSTFLAGS = '-C link-self-contained=yes'
+& "$env:LOCALAPPDATA\hermes\node\bun.cmd" run check
+& "$env:LOCALAPPDATA\hermes\node\bun.cmd" run build
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray
+cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray --features custom-protocol
+```
+
+When the tray app is running, use the isolated verification target so Windows
+never has to replace the live executable:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
+```
+
+Machine-specific development wrappers such as `dev.sh` are local-only. Use the shared commands above and the [contributing guide](CONTRIBUTING.md) for reproducible setup.
+
 
 ## Check a change
 
@@ -35,7 +62,7 @@ bun run test:ui-model
 bun run test:workflow
 ```
 
-Before submitting, run the frontend build, Rust fmt/Clippy and the complete Rust test target listed in [AGENTS.md](AGENTS.md). Run `bun run build` before embedding assets with Cargo; it rejects a mismatch between the entry pages and their SvelteKit startup scripts. On Windows the shared entry point is:
+Before submitting, run the frontend build, Rust fmt/Clippy and the complete Rust test target listed above. Run `bun run build` before embedding assets with Cargo; it rejects a mismatch between the entry pages and their SvelteKit startup scripts. On Windows the shared entry point is:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
