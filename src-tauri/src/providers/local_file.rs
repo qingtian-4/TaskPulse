@@ -232,6 +232,14 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
 
         let status_str = val.get("status")?.as_str()?;
         let status = checked_status(status_str)?;
+        let waiting_reason = match val.get("waiting_reason") {
+            Some(value) => Some(serde_json::from_value(value.clone()).ok()?),
+            None => None,
+        };
+        let input_request_id = match val.get("input_request_id") {
+            Some(value) => Some(value.as_str()?.to_owned()),
+            None => None,
+        };
         let message = val
             .get("message")
             .and_then(|m| m.as_str())
@@ -369,14 +377,9 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
             _ => TaskSource::LocalFile,
         };
         if snapshot.status == TaskStatus::WaitingInput {
-            snapshot.waiting_reason = val
-                .get("waiting_reason")
-                .and_then(|v| serde_json::from_value(v.clone()).ok())
-                .or(Some(crate::domain::WaitingReason::Unknown));
-            snapshot.input_request_id = val
-                .get("input_request_id")
-                .and_then(|v| v.as_str())
-                .map(str::to_string);
+            snapshot.waiting_reason =
+                waiting_reason.or(Some(crate::domain::WaitingReason::Unknown));
+            snapshot.input_request_id = input_request_id;
         }
         Some(snapshot)
     } else {
@@ -607,6 +610,99 @@ pub fn status_from_legacy(s: &str) -> TaskStatus {
 mod tests {
     use super::*;
     use std::io::Write;
+
+    #[test]
+    fn invalid_request_fields_are_rejected_even_outside_waiting_status() {
+        for (field, values) in [
+            ("waiting_reason", vec!["\"future_reason\"", "3", "null"]),
+            ("input_request_id", vec!["42", "[]", "null"]),
+        ] {
+            for value in values {
+                for status in ["waiting_input", "running"] {
+                    let body = format!(r#"{{"v":2,"status":"{status}","{field}":{value}}}"#);
+                    assert!(
+                        parse_status(Path::new("x.status"), &body, now()).is_none(),
+                        "accepted {field}={value} with status {status}"
+                    );
+                }
+            }
+        }
+        let legacy = r#"{"v":1,"status":"needs-input"}"#;
+        let parsed = parse_status(Path::new("x.status"), legacy, now()).unwrap();
+        assert_eq!(parsed.status, TaskStatus::WaitingInput);
+        assert_eq!(
+            parsed.waiting_reason,
+            Some(crate::domain::WaitingReason::Unknown)
+        );
+        assert!(parsed.input_request_id.is_none());
+    }
+
+    #[test]
+    fn invalid_request_fields_recovery_preserves_pinned_unread_and_delivery() {
+        use crate::{attention::AttentionTracker, transition::TransitionEngine};
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("approval.status");
+        let attention_path = dir.path().join("attention.json");
+        let notifications_path = dir.path().join("notifications.json");
+        let provider = || LocalFileProvider {
+            dirs: vec![dir.path().into()],
+            last_tasks: vec![],
+        };
+        let now = now();
+        let running = r#"{"v":2,"status":"running","turn_key":"turn-a"}"#;
+        let pending = r#"{"v":2,"status":"waiting_input","turn_key":"turn-a","waiting_reason":"approval","input_request_id":"req-1"}"#;
+        let mut collector = provider();
+        let mut attention = AttentionTracker::open(attention_path.clone());
+        let mut notifications = TransitionEngine::open(notifications_path.clone());
+
+        std::fs::write(&path, running).unwrap();
+        assert!(notifications
+            .apply(&attention.reconcile(collector.poll(now).tasks), &[], now)
+            .is_empty());
+        std::fs::write(&path, pending).unwrap();
+        let active = attention.reconcile(collector.poll(now).tasks);
+        assert!(active[0].unread && active[0].requires_action());
+        assert_eq!(notifications.apply(&active, &[], now).len(), 1);
+        attention.set_pinned("file:approval", true).unwrap();
+        drop((attention, notifications));
+
+        let bad_reason = pending.replace("\"approval\"", "\"bad-enum\"");
+        let bad_request = pending.replace("\"req-1\"", "false");
+        for bad in [&bad_reason, &bad_request] {
+            std::fs::write(&path, bad).unwrap();
+            let warm = collector.poll(now);
+            let mut cold = provider();
+            let degraded = cold.poll(now);
+            let mut attention = AttentionTracker::open(attention_path.clone());
+            let mut notifications = TransitionEngine::open(notifications_path.clone());
+            let recovered = attention.reconcile(degraded.tasks);
+            assert_eq!(recovered[0].input_request_id.as_deref(), Some("req-1"));
+            assert!(recovered[0].requires_action());
+            assert!(recovered[0].stale && recovered[0].pinned && recovered[0].unread);
+            assert!(!degraded.authoritative && !warm.authoritative);
+            assert!(warm.tasks[0].stale);
+            assert!(notifications.apply(&recovered, &[], now).is_empty());
+
+            std::fs::write(&path, pending).unwrap();
+            let repaired = cold.poll(now);
+            assert!(repaired.authoritative);
+            let recovered = attention.reconcile(repaired.tasks);
+            assert_eq!(recovered[0].input_request_id.as_deref(), Some("req-1"));
+            assert!(recovered[0].pinned && recovered[0].unread && !recovered[0].stale);
+            assert!(notifications.apply(&recovered, &[], now).is_empty());
+        }
+
+        // Compatibility producers resolve by updating the same task snapshot.
+        std::fs::write(&path, running).unwrap();
+        let mut attention = AttentionTracker::open(attention_path);
+        let mut notifications = TransitionEngine::open(notifications_path);
+        let resolved = attention.reconcile(provider().poll(now).tasks);
+        assert_eq!(resolved[0].status, TaskStatus::Running);
+        assert!(resolved[0].input_request_id.is_none());
+        assert!(resolved[0].pinned && resolved[0].unread && !resolved[0].stale);
+        assert!(notifications.apply(&resolved, &[], now).is_empty());
+    }
 
     #[test]
     fn oversized_torn_and_unreadable_status_preserve_last_pending_until_repaired() {
