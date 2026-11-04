@@ -88,9 +88,13 @@ different commit, leave it open or mark it out of scope with a reason.
 | Evidence | What to record |
 | --- | --- |
 | Source and checks | Full candidate SHA on main, version checks, Windows quality and Security runs, and lightweight macOS compile when shared Rust or its build inputs changed. Record frontend/Rust/history audit results separately. |
-| Native behavior | Exact build commit, clean-build flag, executable SHA-256, platform, exercised behavior and cleanup. Record provider fixtures, live Agent checks and physical desktop tests separately. |
+| Native behavior | Full build commit, `modified=false`, executable SHA-256, OS/build, architecture, runtime, exercised behavior and cleanup. Record fixtures, real Agents and physical desktop tests separately. |
+| Resources | Same workload and host for baseline/candidate. Record interval, duration, process coverage, peak and steady working set, private bytes and CPU. On Windows include the verified WebView2 descendants. On macOS attribute WebKit content, GPU and networking services to the candidate; report missing attribution as incomplete. |
+| Display and sleep | On physical hardware record monitor arrangement and scales, tray/menu behavior and settings layout before/after scale change, external monitor disconnect and actual OS sleep. Check that fresh evidence resumes, the same unresolved request remains and duplicate alerts do not fire. |
+| OS trust | Record Windows Authenticode/publisher status, SmartScreen and ordinary interactive MSI UAC separately from CI. On Mac record the signing identity, hardened runtime, notary and stapling results if configured; test first launch from Finder with quarantine retained on both architectures. |
 | Fresh installation | Windows NSIS and MSI separately; macOS arm64 and x64 separately. Record package hashes, matching manifests, install/launch/cleanup and the trust path actually exercised. |
-| Installed upgrade | For affected upgrade paths, record old version, candidate SHA, package and platform, preserved state, signature checks and restart result. Identify controlled-feed evidence separately from public-feed evidence. |
+| Installed upgrade | Record old/new versions, package hashes, actual restarted executable SHA-256, version/commit from IPC, rollback on failure, state retention and signature checks. Distinguish CI controlled-feed verification from public HTTPS feed delivery. Keep Windows NSIS and MSI lanes separate. |
+| Real request evaluation | Keep per Agent, version, platform and signal cohorts from the [request evaluation guide](docs/REQUEST_EVALUATION.md). Fixture replay, renderer load and short pilots cannot certify real accuracy, render latency, recovery, host return or sustained resources. |
 | Draft assets | Verify the approved tag points at the candidate SHA, all packages and manifests match it, dependency notices and checksums are present, and the signed update feed matches the packages. Check the private vulnerability reporting setting and link. |
 
 Use the opt-in PR labels for installer and upgrade checks when the change needs
@@ -98,3 +102,32 @@ them. The macOS compile job only type-checks Rust (including test code). It does
 not build installers, launch the application, or replace either macOS release
 artifact and its native acceptance. Keep the filled checklist with the local
 release evidence or PR; the checklist itself does not publish anything.
+
+
+For a clean Windows development executable, run the isolated settings and
+process-tree sample with no screenshot capture:
+
+```powershell
+bun scripts/native-settings-smoke.ts --exe <exe> --commit <full-sha> --sample-resources --no-screenshots
+```
+
+The report counts the root process and validated live descendants, including
+WebView2. The sum of working sets can count shared pages more than once. CPU
+values are lifetime totals for the sampled processes, not utilization rates.
+Coverage is limited to descendants reachable in the snapshot. An exited or
+orphaned child and any service outside that process tree are outside the sample. Keep app-only
+counters separate from tree totals. Do not count absent or partial child
+coverage as zero overhead. On Mac a compile check cannot attribute WebKit
+services or validate a real display or sleep cycle.
+
+The current Windows packages have no publisher signature, and the current
+macOS build intentionally uses an ad-hoc signature and asserts that in its
+package check. A trusted-publisher lane needs a provisioned Windows signing
+identity or macOS Developer ID Application identity and notary credentials,
+plus matching packaging verification. If adding that lane, follow [Microsoft
+signature verification](https://learn.microsoft.com/en-us/windows/win32/seccrypto/using-signtool-to-verify-a-file-signature)
+or [Apple notarization](https://developer.apple.com/documentation/security/notarizing-macos-software-before-distribution).
+Record the hashes of final distributed bytes after any signing and stapling.
+The Tauri updater signature is separate; retain the embedded-key verification
+and do not turn a signature failure into an install attempt. Record unavailable
+certificates, hardware and host cohorts as open items in the local evidence.

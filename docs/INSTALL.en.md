@@ -12,6 +12,22 @@ Confirm the detected local agents and choose **Start monitoring**. Start a task 
 
 **Settings → Application updates** checks for a new version. Download and installation require your click; TaskPulse verifies the updater signature before running the installer. A network or signature failure leaves the installed version in place. You can disable automatic checks, or install a newer package manually if your old version has no update page. Updates retain the profile under `~/.taskpulse/`.
 
+## Displays, sleep and system prompts
+
+If the panel is obscured after moving between displays, reopen it from the
+tray or reopen Settings. Include the OS version, display arrangement and
+scales when reporting a layout issue. After wake, check that the Agent, WSL
+distro or SSH connection is available and refresh the panel. A stale request
+can be checked in its Agent; waking the computer does not resolve it.
+
+A download checksum verifies bytes. The updater verifies a separate signature
+against its embedded key. The current Windows packages do not have a publisher
+signature; the current macOS packages are ad-hoc signed and not notarized.
+Keep system trust checks enabled and contact your administrator if policy
+blocks an install. For an update failure, record the old and target versions,
+package format and error. Verify that the new process starts before removing
+a recovery copy, and retain your TaskPulse profile.
+
 ## A task is missing or its state needs an update
 
 Clear dashboard filters and check that the source is detected, enabled, healthy and in scope. Windows, WSL and SSH are distinct connections. WSL requires a running distro with Python 3. Some agents cannot supply approvals, questions or exact session navigation; see the [capability notes](AGENT_COMPATIBILITY.md#english).
