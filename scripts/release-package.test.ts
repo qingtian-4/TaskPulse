@@ -47,4 +47,9 @@ test('draft publication requires native acceptance on every included architectur
   const steps=draft.steps.map((s:any)=>s.run??'').join('\n');
   expect(steps).toContain('release-package.py');expect(steps).toContain('release-notes.ts');
   expect(draft.steps.find((s:any)=>s.uses?.startsWith('softprops/')).with.files).toBe('dist/publish/*');
+  const contracts=Bun.YAML.parse(readFileSync(join(import.meta.dir,'../.github/workflows/release-contract.yml'),'utf8')) as any;
+  expect(contracts.permissions).toEqual({contents:'read'});
+  expect(contracts.jobs['arm64-build'].if).toContain("'test:installers'");
+  expect(contracts.jobs['arm64-build'].if).toContain('head.repo.full_name == github.repository');
+  expect(contracts.on.pull_request.types).toContain('labeled');
 });
