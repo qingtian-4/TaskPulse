@@ -1,8 +1,9 @@
 import { expect, test } from 'bun:test';
 import { createHash } from 'node:crypto';
-import { readFileSync } from 'node:fs';
+import { readFileSync,mkdtempSync,writeFileSync,existsSync,rmSync,renameSync,mkdirSync } from 'node:fs';
 import { join } from 'node:path';
-import { assertDigest, summarizeRust, summarizeSecrets, tools } from './security';
+import {tmpdir} from 'node:os';
+import { withToolDirectory,assertDigest, summarizeRust, summarizeSecrets, tools } from './security';
 
 const cleanRust = { database: { 'last-commit': '1'.repeat(40), 'last-updated': '2026-10-19T00:00:00Z', 'advisory-count': 0 }, vulnerabilities: { found: false, count: 0, list: [] }, warnings: {} };
 test('tool bytes must match a pinned digest before execution', () => {
@@ -61,4 +62,22 @@ test('releases gate on reusable read-only security jobs and secrets require full
   expect(release.jobs.security.uses).toBe('./.github/workflows/security.yml');
   expect(release.jobs.security.with.ref).toContain('preflight.outputs.commit');
   expect(release.jobs.windows.needs).toContain('security');
+});
+
+
+test('security extraction is removed on success/failure without deleting siblings or replacements',async()=>{
+  const cache=mkdtempSync(join(tmpdir(),'taskpulse-tool-cache-'));
+  try{
+    const sibling=join(cache,'verified.zip');writeFileSync(sibling,'retained');
+    let owned='';
+    expect(await withToolDirectory(cache,folder=>{owned=folder;writeFileSync(join(folder,'tool.exe'),'fixture');return 7;})).toBe(7);
+    expect(existsSync(owned)).toBe(false);expect(existsSync(sibling)).toBe(true);
+    await expect(withToolDirectory(cache,folder=>{owned=folder;throw Error('probe failed');})).rejects.toThrow('probe failed');
+    expect(existsSync(owned)).toBe(false);
+    await expect(withToolDirectory(cache,folder=>{
+      renameSync(folder,folder+'-original');mkdirSync(folder);writeFileSync(join(folder,'foreign.txt'),'keep');
+      return 0;
+    })).rejects.toThrow('refusing cleanup');
+    expect(existsSync(sibling)).toBe(true);
+  }finally{rmSync(cache,{recursive:true,force:true});}
 });
