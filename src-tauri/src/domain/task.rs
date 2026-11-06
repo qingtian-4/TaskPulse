@@ -256,6 +256,9 @@ pub struct TaskSnapshot {
     /// Model reported by the agent/response, never part of session identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Explicit source-reported reasoning effort; presentation only.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     /// Provider-identified internal service work, not a user coding task.
     #[serde(default)]
     pub internal: bool,
@@ -462,6 +465,7 @@ impl TaskSnapshot {
             status,
             source_instance: None,
             model: None,
+            reasoning_effort: None,
             phase: None,
             internal: false,
             project_path: None,

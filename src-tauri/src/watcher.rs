@@ -97,6 +97,7 @@ impl From<AgentStatus> for TaskSnapshot {
             status,
             source_instance: None,
             model: None,
+            reasoning_effort: None,
             internal: false,
             project_path: None,
             tmux_session: None,

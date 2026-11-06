@@ -258,9 +258,14 @@ poll_interval_ms=3000
   assert.equal(await ui.evaluate(`document.querySelectorAll('.local-card .mini-tag').length`),catalog.filter(s=>s.category==='local').length);
   assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-card').textContent)&&/OpenCode/.test(document.querySelector('.local-card').textContent)`),true,'All catalog local Agents remain configurable');
   assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
-  await ui.evaluate(`document.querySelector('.local-card .ms-btn').click()`);
+  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
+  await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===9`);
+  assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false,'The Local tab opens the Agent list directly');
+  await ui.evaluate(`document.querySelector('[data-agent-kind="codex"] .agent-row button').click()`);
+  assert.equal(await ui.evaluate(`document.querySelector('[data-source-id="codex"]').closest('[data-agent-kind]').dataset.agentKind`),'codex');
   await ui.wait(`!!document.querySelector('[data-source-id="codex"] .project-scope')`);
   assert.equal(await ui.evaluate(`document.querySelector('.ms-advanced').open`),false,'Advanced settings start collapsed');
+  if(captureScreenshots)await Bun.write(join(owned,'settings-local-inline-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   const setProject=async(project:string)=>{
     await ui.evaluate(`(()=>{const scope=document.querySelector('[data-source-id="codex"] .project-scope');for(const field of scope.querySelectorAll('.project-options input:checked'))field.click();const field=scope.querySelector('.add-path input');field.value=${JSON.stringify(project)};field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
     await ui.evaluate(`document.querySelector('[data-source-id="codex"] .add-path button').click()`);
@@ -288,7 +293,7 @@ poll_interval_ms=3000
   await ui.evaluate(`document.querySelector('.confirm-modal button').click()`);
   await ui.evaluate(`[...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent==='Cancel changes').click()`);
   await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
-  assert.equal(await ui.evaluate(`document.querySelector('.ms-head h1').textContent`),'Local settings');
+  assert.equal(await ui.evaluate(`document.querySelector('.ms-head h1').textContent`),'Sources');
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
   await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').click()`);
   await ui.wait(`document.querySelector('[aria-label="Show task model"]').checked===false && document.querySelector('.settings-status').textContent===''`);
@@ -324,6 +329,10 @@ poll_interval_ms=3000
   await ui.evaluate(`[...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent==='Apply changes').click()`);
   await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
   const withHermes=await ui.invoke('get_monitoring_settings'),hermes=withHermes.sources.find((s:any)=>s.kind==='hermes');
+  assert.equal(await ui.evaluate(`document.querySelector('[data-source-id]').closest('[data-agent-kind]').dataset.agentKind`),'hermes');
+  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[0].click()`);
+  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
+  assert.equal(await ui.evaluate(`document.querySelector('[data-source-id]').closest('[data-agent-kind]').dataset.agentKind`),'hermes','Returning to Local retains the selected Agent and its own editor');
   assert.ok(hermes?.id);assert.deepEqual(hermes.projects,['/fixture/hermes']);assert.equal(hermes.enabled,false);
   await ui.invoke('save_monitoring_settings',{settings:{...withHermes,sources:withHermes.sources.filter((s:any)=>s.id!==hermes.id)},expected:withHermes});
   // The project URL is dispatched through the real OS browser, never a WebView popup.
@@ -339,10 +348,13 @@ poll_interval_ms=3000
     assert.equal(projectResponse.status,200);
     assert.equal(Object.entries(projectResponse.headers).find(([key])=>key.toLowerCase()==='tauri-response')?.[1],'ok');
   }finally{ui.onResponse(undefined);await ui.send('Network.disable');}
+  assert.equal(await ui.evaluate(`!!document.querySelector('.diagnostic')`),false);
   assert.equal(await ui.evaluate(`document.querySelector('.settings-actions a').href`),'https://github.com/qingtian-4/TaskPulse');
   // Return to the selected Codex editor for the SSH wizard flow.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   await ui.evaluate(`[...document.querySelectorAll('.agent-row')].find(row=>row.querySelector('strong')?.textContent==='Codex').querySelector('button').click()`);
+  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[2].click()`);
+  await ui.wait(`!!document.querySelector('.ms-head .ms-btn')`);
   // Native wizard with controlled read-only capability responses. Actual Rust
   // save/CAS/config persistence remains live; no production probe override exists.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);

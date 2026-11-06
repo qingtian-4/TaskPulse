@@ -6,6 +6,8 @@
 
 ### Added
 
+- Explicit source-reported reasoning effort, frozen end-to-end task duration, and measured four-card popup sizing.
+
 - SSH server management with a three-step setup wizard, separate connectivity/data checks and project scopes. Remote Claude remains explicitly unsupported.
 
 - Source capability/platform metadata, grouped settings and advanced connections.
@@ -21,6 +23,8 @@
 - Update attention-focused bilingual product copy and prepare consolidated future release assets, retaining current attachments and MSI updates.
 
 ### Fixed
+
+- Open local Agent settings directly and expand configuration inline; simplify settings and About copy.
 
 - Restore every supported local source from the backend catalog; open general settings from the panel gear and tray settings entry.
 - Remove the settings sidebar footer and open the project/license links in the system browser.

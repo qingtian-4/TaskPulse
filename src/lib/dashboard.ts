@@ -1,11 +1,4 @@
-import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
-
-// Keep a compact single task; allow four task cards before scrolling.
-export function preferredDashboardHeight(taskCount:number, expanded:boolean):number {
-  if(expanded || taskCount>=4)return 840;
-  if(taskCount===3)return 680;
-  return taskCount>1 ? 560 : 400;
-}
+import { SOURCE_LABEL, formatAgo, formatElapsed, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
 export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
 export type TaskSignal = 'approval' | 'question' | 'failed' | 'action';
@@ -193,4 +186,15 @@ export function isEndedResult(task: TaskSnapshot): boolean {
 
 export function isInferredCommandEnd(task:TaskSnapshot):boolean {
   return task.source==='remote_tmux' && task.session_id==null && task.confidence==='inferred' && task.status==='idle' && task.finished_at!==undefined && task.exit_code===undefined;
+}
+
+// Elapsed values freeze at the explicit end; never use refresh/observation time.
+export function taskElapsed(task:TaskSnapshot,now:number):string|null {
+  const start=task.started_at;
+  if(start==null||!Number.isFinite(start))return null;
+  const ended=isEndedResult(task);
+  if(!ended&&task.stale)return null;
+  const end=ended?task.finished_at:task.status==='running'?now:undefined;
+  if(end==null||!Number.isFinite(end)||end<start)return null;
+  return formatElapsed(start,end);
 }

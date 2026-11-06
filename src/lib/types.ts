@@ -36,6 +36,7 @@ export interface TaskSnapshot {
   agent_id?:string; agent_name?:string; evidence_channel?:string; outcome?:string; pending_confirmed_at?:number; integration_epoch?:string; integration_sequence?:number;
   source_instance?: string;
   model?: string;
+  reasoning_effort?: string;
   internal?: boolean;
   project_path?: string;
   tmux_session?: string;

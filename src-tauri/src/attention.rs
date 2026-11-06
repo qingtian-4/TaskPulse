@@ -1232,4 +1232,34 @@ mod tests {
         assert_eq!(restored.display().len(), 1);
         assert!(restored.display()[0].pinned);
     }
+    #[test]
+    fn completed_duration_and_effort_survive_restart_without_reading_the_result() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let now = std::time::UNIX_EPOCH + std::time::Duration::from_secs(1_794_000_000);
+        let mut tracker = AttentionTracker::open(path.clone());
+        let mut running = task("duration", TaskStatus::Running, Some("turn"));
+        running.started_at = Some(now - std::time::Duration::from_secs(61));
+        running.reasoning_effort = Some("xhigh".into());
+        tracker.reconcile(vec![running.clone()]);
+        running.status = TaskStatus::WaitingInput;
+        running.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        running.finished_at = Some(now);
+        tracker.reconcile(vec![running]);
+        drop(tracker);
+        let restored = AttentionTracker::open(path);
+        let tasks = restored.display();
+        assert_eq!(tasks.len(), 1);
+        assert!(tasks[0].unread);
+        assert_eq!(tasks[0].reasoning_effort.as_deref(), Some("xhigh"));
+        assert_eq!(tasks[0].finished_at, Some(now));
+        assert_eq!(
+            tasks[0]
+                .finished_at
+                .unwrap()
+                .duration_since(tasks[0].started_at.unwrap())
+                .unwrap(),
+            std::time::Duration::from_secs(61)
+        );
+    }
 }

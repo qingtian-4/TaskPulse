@@ -52,10 +52,9 @@ static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 // Logical size preference is independent of the monitor's Retina/DPI scale.
 const DASHBOARD_WIDTH: f64 = 368.0;
 const DASHBOARD_MIN_WIDTH: f64 = 320.0;
-const DASHBOARD_MIN_HEIGHT: u32 = 360;
-const DASHBOARD_MAX_HEIGHT: u32 = 840;
-static DASHBOARD_HEIGHT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(DASHBOARD_MAX_HEIGHT);
+const DASHBOARD_MIN_HEIGHT: u32 = 280;
+const DASHBOARD_MAX_HEIGHT: u32 = 1600;
+static DASHBOARD_HEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(400);
 
 /// Presentation only: consumes the same scoped, reconciled attention snapshot
 /// as the Dashboard. Never changes lifecycle, unread state or notifications.
@@ -406,7 +405,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title(crate::runtime::display_name())
-        .inner_size(DASHBOARD_WIDTH, f64::from(DASHBOARD_MAX_HEIGHT))
+        .inner_size(DASHBOARD_WIDTH, 400.0)
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
         // keeps its native shadow. The transparent dashboard draws its own edge.
@@ -428,7 +427,7 @@ fn create_popup(app: &AppHandle) {
                 }
                 _ => {}
             });
-            let _ = fit_popup(&win, DASHBOARD_MAX_HEIGHT, false);
+            let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), false);
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
@@ -738,10 +737,9 @@ fn popup_geometry(
     let margin = (8.0 * scale).round() as i32;
     let logical_width =
         (f64::from(available_width) / scale * 0.32).clamp(DASHBOARD_MIN_WIDTH, DASHBOARD_WIDTH);
-    // Expanded task lists can use more of the screen; keep the idle view compact.
-    let work_area_fraction = if height > 400 { 0.92 } else { 0.82 };
-    let logical_height = f64::from(height.clamp(DASHBOARD_MIN_HEIGHT, DASHBOARD_MAX_HEIGHT))
-        .min(f64::from(available_height) / scale * work_area_fraction);
+    // The renderer requests the measured content height. Only the actual work
+    // area/margins constrain it; a percentage cap can unnecessarily cut a card.
+    let logical_height = f64::from(height.clamp(DASHBOARD_MIN_HEIGHT, DASHBOARD_MAX_HEIGHT));
     let width = ((logical_width * scale).round() as u32)
         .min(available_width.saturating_sub((margin * 2) as u32).max(1));
     let height = ((logical_height * scale).round() as u32)
@@ -870,7 +868,8 @@ mod tests {
         assert_eq!((retina.0, retina.1), (736, 1680));
         let small = super::popup_geometry((0, 0, 1366, 728), 1.5, 840, None);
         assert_eq!(small.0, 480);
-        assert!(small.1 <= 671 && small.3 + small.1 as i32 <= 728);
+        assert_eq!((small.1, small.3), (704, 12));
+        assert!(small.3 + small.1 as i32 <= 728);
     }
 
     use super::*;
@@ -883,7 +882,11 @@ mod tests {
                 let (w, h, x, y) =
                     popup_geometry((-1920, 40, aw, ah), scale, 620, Some((-9999, 9999)));
                 assert!(f64::from(w) / scale <= DASHBOARD_WIDTH + 1.0);
-                assert!(f64::from(h) <= f64::from(ah) * 0.92 + 1.0);
+                let margin = (8.0_f64 * scale).round() as u32;
+                assert_eq!(
+                    h,
+                    ((620.0 * scale).round() as u32).min(ah.saturating_sub(2 * margin).max(1))
+                );
                 assert!(x >= -1920 && y >= 40);
                 assert!(x + w as i32 <= -1920 + aw as i32 && y + h as i32 <= 40 + ah as i32);
             }
@@ -892,7 +895,7 @@ mod tests {
         assert_eq!((large.0, large.1), (368, 620));
         let laptop = popup_geometry((0, 0, 1536, 824), 1.5, 620, None);
         assert_eq!(laptop.0, 492);
-        assert!(laptop.1 <= 759);
+        assert_eq!(laptop.1, 800);
         let (w, h, x, y) = popup_geometry((0, 0, 10, 10), 1.0, 0, None);
         assert!(x >= 0 && y >= 0 && x + w as i32 <= 10 && y + h as i32 <= 10);
     }

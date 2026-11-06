@@ -15,7 +15,7 @@ export function servers(settings:DashboardSettings):ServerGroup[]{
   });
 }
 export function createSource(kind:AgentKind|'remote_codex',location='',name?:string):MonitorSource {
-  return {id:`${kind}:${crypto.randomUUID()}`,kind,name:name??(kind==='remote_codex'?location:kind==='codex'?'Codex':kind==='claude_code'?'Claude Code':kind),location,enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
+  return {id:kind==='codex'?'codex':kind==='scanner'?'scanner':kind==='hooks'?'local_file':`${kind}:${crypto.randomUUID()}`,kind,name:name??(kind==='remote_codex'?location:kind==='codex'?'Codex':kind==='claude_code'?'Claude Code':kind),location,enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
 }
 export function pauseServer(settings:DashboardSettings,host:string,pause:boolean):DashboardSettings {
   const next=structuredClone(settings);const restore=new Set(next.ssh_paused_sources??[]);

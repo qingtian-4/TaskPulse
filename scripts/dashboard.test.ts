@@ -1,6 +1,8 @@
+import {taskElapsed} from '../src/lib/dashboard';
+import {dashboardHeightForRows} from '../src/lib/dashboard-layout';
 // Pure presentation regression tests. Run with `bun test scripts/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
-import {projectDashboardTasks,shouldApplyDashboardSnapshot,preferredDashboardHeight,dashboardCandidates,defaultDashboardTasks} from '../src/lib/dashboard';
+import {projectDashboardTasks,shouldApplyDashboardSnapshot,dashboardCandidates,defaultDashboardTasks} from '../src/lib/dashboard';
 import {acceptMessageState,unreadMessageIds,messageStatus} from '../src/lib/messages';
 import type {MessageCenterState} from '../src/lib/types';
 import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, projectKey, taskContext, taskSource, sourceFreshness, refreshProgress, isEndedResult, filterTasks, overviewFilters, runningOutsideView, filterDescription, EMPTY_FILTERS, compareTasks,taskSummary,taskAgent } from '../src/lib/dashboard';
@@ -317,10 +319,13 @@ test('reported models are searchable without changing Agent identity or task ord
   expect(compareTasks(task,{...task,model:'another-model'})).toBe(0);
 });
 
-test('panel grows for four tasks while empty and single-task views remain compact',()=>{
-  expect([0,1,2,3,4,27].map(count=>preferredDashboardHeight(count,false))).toEqual([400,400,560,680,840,840]);
-  expect(preferredDashboardHeight(0,true)).toBe(840);
-  expect(preferredDashboardHeight(1,true)).toBe(840);
+test('panel uses actual row heights, shrinks, and caps the viewport at four rows',()=>{
+  expect(dashboardHeightForRows(200,[112])).toBe(320);
+  expect(dashboardHeightForRows(200,[112,264])).toBe(472);
+  expect(dashboardHeightForRows(200,[112,264,380,488])).toBe(696);
+  expect(dashboardHeightForRows(200,[112,264,380,488,650])).toBe(696);
+  expect(dashboardHeightForRows(200,[112])).toBeLessThan(dashboardHeightForRows(200,[112,264]));
+  expect(dashboardHeightForRows(200,[],true)).toBe(840);
 });
 
 test('a viewed pinned turn end does not increase uncertainty',()=>{
@@ -328,4 +333,15 @@ test('a viewed pinned turn end does not increase uncertainty',()=>{
   expect(taskSection(ended)).toBe('pinned');
   expect(filterTasks([ended],overviewFilters('uncertain',null))).toEqual([]);
   expect(isEndedResult({...ended,unread:true})).toBe(true);
+});
+
+test('elapsed runs only for active execution and freezes at the source end across later refreshes',()=>{
+  const task={...base,status:'running' as const,started_at:1000,updated_at:2000};
+  expect(taskElapsed(task,62000)).toBe('1m 1s');
+  expect(taskElapsed({...task,status:'waiting_input',waiting_reason:'question'},62000)).toBeNull();
+  const ended={...task,status:'waiting_input' as const,waiting_reason:'turn_ended' as const,finished_at:62000};
+  expect(taskElapsed(ended,900000)).toBe('1m 1s');
+  expect(taskElapsed({...ended,updated_at:800000},1000000)).toBe('1m 1s');
+  expect(taskElapsed({...ended,finished_at:undefined},900000)).toBeNull();
+  expect(taskElapsed({...task,stale:true},900000)).toBeNull();
 });

@@ -292,9 +292,34 @@ fn live_codex_async_question_replay() {
         } else if accepted {
             // Confirm an actual structured user reply resolved the known
             // request, not a tool result, timeout, reasoning or completion.
-            let mut questions = before.unwrap().questions;
+            let before = before.unwrap();
+            let others: Vec<_> = before
+                .questions
+                .active_ids()
+                .into_iter()
+                .filter(|id| id != &request)
+                .collect();
+            let mut questions = before.questions;
             assert_eq!(questions.replied(&value["payload"]), Some(true));
-            assert_eq!(current.status, TaskStatus::Running);
+            assert_eq!(current.questions.active_ids(), others);
+            assert_eq!(
+                current.waiting_reason,
+                if others.is_empty() {
+                    current
+                        .turn_completed
+                        .then_some(crate::domain::WaitingReason::TurnEnded)
+                } else {
+                    Some(crate::domain::WaitingReason::Question)
+                }
+            );
+            assert_eq!(
+                current.status,
+                if others.is_empty() && !current.turn_completed {
+                    TaskStatus::Running
+                } else {
+                    TaskStatus::WaitingInput
+                }
+            );
             assert_eq!(current.turn_key, identity);
             assert_eq!(current.started_at, started);
             answered = true;
@@ -305,7 +330,7 @@ fn live_codex_async_question_replay() {
         accepted && answered && pending_observations > 1,
         "real accepted request plus matching reply required"
     );
-    println!("read_only_async_replay: pending_observations={pending_observations}; accepted ACK remains Question, matching user reply resumes RUNNING; no host/state writes");
+    println!("read_only_async_replay: pending_observations={pending_observations}; accepted ACK remains Question, matching reply clears exactly its request; parallel pending requests preserved; no host/state writes");
 }
 
 fn fork_meta(id: &str, source: serde_json::Value, cwd: &str) -> String {
@@ -2109,4 +2134,75 @@ fn remote_model_context_is_optional_and_preserves_task_identity() {
     assert_eq!(known[0].turn_key, unknown[0].turn_key);
     assert_eq!(known[0].started_at, unknown[0].started_at);
     assert_eq!(known[0].updated_at, unknown[0].updated_at);
+}
+
+#[test]
+fn reported_effort_and_explicit_end_are_metadata_not_lifecycle_guesses() {
+    let now = SystemTime::now();
+    let body = r#"{"timestamp":"2026-11-07T00:00:00Z","payload":{"type":"task_started","turn_id":"t"}}
+{"type":"turn_context","payload":{"turn_id":"t","model":"gpt-test","effort":"xhigh"}}
+{"timestamp":"2026-11-07T00:01:01Z","payload":{"type":"task_complete"}}"#;
+    let ended = parse_codex_rollout(body, now, "s").unwrap();
+    assert_eq!(ended.reasoning_effort.as_deref(), Some("xhigh"));
+    assert_eq!(
+        ended
+            .finished_at
+            .unwrap()
+            .duration_since(ended.started_at.unwrap())
+            .unwrap(),
+        Duration::from_secs(61)
+    );
+    let refreshed = apply_codex_rollout(
+        r#"{"type":"turn_context","payload":{"turn_id":"t","model":"gpt-test","effort":"low"}}"#,
+        now,
+        "s",
+        Some(ended.clone()),
+    )
+    .unwrap();
+    assert_eq!(refreshed.finished_at, ended.finished_at);
+    assert_eq!(refreshed.updated_at, ended.updated_at);
+    assert_eq!(refreshed.reasoning_effort.as_deref(), Some("low"));
+    let dir = tempfile::tempdir().unwrap();
+    let provider = CodexProvider::with_root(dir.path().to_owned());
+    let task = provider.session_to_task(&refreshed, None, now);
+    assert_eq!(task.finished_at, ended.finished_at);
+    assert_eq!(task.reasoning_effort, refreshed.reasoning_effort);
+    let stored: TaskSnapshot =
+        serde_json::from_str(&serde_json::to_string(&task).unwrap()).unwrap();
+    assert_eq!(stored.finished_at, task.finished_at);
+    assert_eq!(stored.reasoning_effort, task.reasoning_effort);
+    let next=apply_codex_rollout(r#"{"timestamp":"2026-11-07T00:02:00Z","payload":{"type":"task_started","turn_id":"next"}}"#,now,"s",Some(refreshed)).unwrap();
+    assert!(next.finished_at.is_none());
+}
+
+#[test]
+fn answering_one_of_parallel_native_questions_keeps_only_the_other_request() {
+    let now = SystemTime::now();
+    let body = [
+        r#"{"timestamp":"2026-11-07T00:00:00Z","payload":{"type":"task_started","turn_id":"t"}}"#
+            .to_string(),
+        question_call("request_user_input_async", "retirement", 1),
+        question_ack("retirement", true),
+        question_call("request_user_input_async", "claude", 1),
+        question_ack("claude", true),
+        question_reply("claude", 0, "user"),
+    ]
+    .join("\n");
+    let waiting = parse_codex_rollout(&body, now, "s").unwrap();
+    assert_eq!(waiting.questions.active_ids(), vec!["retirement"]);
+    assert_eq!(
+        waiting.waiting_reason,
+        Some(crate::domain::WaitingReason::Question)
+    );
+    let running = apply_codex_rollout(
+        &question_reply("retirement", 0, "user"),
+        now,
+        "s",
+        Some(waiting.clone()),
+    )
+    .unwrap();
+    assert_eq!(running.status, TaskStatus::Running);
+    assert!(running.input_request_id.is_none());
+    assert_eq!(running.started_at, waiting.started_at);
+    assert_eq!(running.turn_key, waiting.turn_key);
 }

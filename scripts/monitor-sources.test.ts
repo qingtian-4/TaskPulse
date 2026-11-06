@@ -33,3 +33,8 @@ test('project scopes and preference broadcasts preserve drafts and source identi
   expect(reconcileSourceDraft(draft,applied,incoming).settings.sources[1].projects).toEqual(['/manual/project']);
   expect(projectChoices(draft.sources[1],[],['/manual/project','/discovered'])).toEqual(['/manual/project','/discovered']);
 });
+
+test('new singleton source drafts keep backend-required fixed IDs',()=>{
+  expect(createSource('codex').id).toBe('codex');expect(createSource('scanner').id).toBe('scanner');expect(createSource('hooks').id).toBe('local_file');
+  expect(createSource('remote_codex','host').id).not.toBe(createSource('remote_codex','host').id);
+});

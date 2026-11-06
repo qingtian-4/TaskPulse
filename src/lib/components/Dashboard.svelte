@@ -6,10 +6,11 @@
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery, type DashboardView, type DashboardSnapshot } from '$lib/types';
-  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
+  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, taskElapsed, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import MessageCenter from './MessageCenter.svelte';
-  import {projectDashboardTasks,preferredDashboardHeight} from '$lib/dashboard';
+  import {projectDashboardTasks} from '$lib/dashboard';
+  import {measureDashboard} from '$lib/dashboard-layout';
   import {summarizeSources} from '$lib/source-setup';
   import {acceptMessageState} from '$lib/messages';
   import type {MessageCenterState} from '$lib/types';
@@ -59,6 +60,8 @@
   let layoutReady = $state(false);
   let sessionHeight = $state(400);
   let resizeQueue:Promise<unknown> = Promise.resolve();
+  let layoutQueue:Promise<void> = Promise.resolve();
+  let layoutEpoch=$state(0);let layoutTicket=0,lastWidth=0;
   const progress = $derived(refreshProgress(settings,providers,refreshSince));
   const confirmedTasks = $derived(projectDashboardTasks(tasks,snapshotView?.unconfirmed_task_ids??[]));
   const selectedTask = $derived([...confirmedTasks,...archived].find(t => t.id === selected?.id) ?? selected);
@@ -188,13 +191,12 @@
     }
     catch(e) { error=String(e); }
   }
-  // Grow within one opening, using attention cards rather than hidden process
-  // observations. Shrink only when the popup is opened again.
+  // Measure natural card content after rendering, including status/filter chrome.
   $effect(()=>{
     if(!layoutReady)return;
-    const expanded=showPrompts || !!selectedTask || showFilters || showArchive || !!error || !!note;
-    const needed=preferredDashboardHeight(attentionTasks.length,expanded);
-    if(needed>sessionHeight)sessionHeight=needed;
+    JSON.stringify([sorted,view,showPrompts,selectedTask,showFilters,showArchive,error,note,sourceIssues,$preferences,$t,layoutEpoch,now]);
+    const ticket=++layoutTicket;
+    layoutQueue=tick().then(()=>{if(ticket===layoutTicket&&panel)sessionHeight=measureDashboard(panel,showPrompts||!!selectedTask);}).then(()=>tick());
   });
   $effect(()=>{
     if(!layoutReady || !isTauri())return;
@@ -241,7 +243,7 @@
         await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settingsEpoch++;settings=e.payload;view=e.payload.default_view;void discover();}));
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selectTask(e.payload)));
         await subscribe(listen<boolean>('pinned-changed',e=>pinned=e.payload));
-        await subscribe(listen('popup-opened',()=>{if(!pinned)sessionHeight=400;}));
+        await subscribe(listen('popup-opened',()=>{layoutEpoch++;}));
         await subscribe(listen<{phase:string;version:string|null}>('application-update',e=>availableUpdate=e.payload.phase==='available' ? e.payload.version ?? '' : ''));
         void invoke<{phase:string;version:string|null}>('get_update_status').then(s=>availableUpdate=s.phase==='available'?s.version ?? '':'');
         await snapshots(); view=settings?.default_view ?? 'tasks';
@@ -251,11 +253,13 @@
         if(selection)selectTask(selection);
         pinned=await invoke<boolean>('get_pinned');
         const win=getCurrentWindow();
+        await subscribe(win.onResized(({payload})=>{if(payload.width!==lastWidth){lastWidth=payload.width;layoutEpoch++;}}));
+        void document.fonts.ready.then(()=>{if(mounted)layoutEpoch++;});
         await subscribe(win.onFocusChanged(({payload:focused})=>{
           if(focused) {showArchive=false;resetFilters();void snapshots().catch(e=>error=String(e));}
         }));
       } catch(e) { error='无法读取监控数据：'+String(e); }
-      finally { layoutReady=true; await tick(); await resizeQueue; await emit('popup-ready',null).catch(()=>{}); }
+      finally { layoutReady=true; await tick(); await layoutQueue; await resizeQueue; await emit('popup-ready',null).catch(()=>{}); }
     })();
     return ()=>{mounted=false;window.removeEventListener('keydown',searchShortcut);clearInterval(clock);clearInterval(discoveryTimer);cleanups.forEach(fn=>fn());};
   });
@@ -310,14 +314,15 @@
   <main class="glass-scroll task-scroll" aria-label={$t("关注任务")}>
     {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manageSources}>{$t("查看来源与已发现会话")}</button>{/if}</div>
     {:else if view==='tasks'}
-      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
-    {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/each}{/if}
+      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
+    {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/each}{/if}
   </main>
   {#if selectedTask}
     <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label={$t("任务详情")}>
       <div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span class="tp-chip">{$t(taskLabel(selectedTask))}</span><button class="tp-icon" onclick={()=>selected=null} aria-label={$t("关闭详情")}>×</button></div>
       <p>{taskContext(selectedTask,settings)}</p>
-      {#if $preferences.show_model}<p class="model-detail">{$t("上报模型：")}{selectedTask.model ?? $t('来源未提供')}</p>{/if}
+      {#if $preferences.show_model&&selectedTask.model}<p class="model-detail">{selectedTask.model}{#if selectedTask.reasoning_effort}<span class="detail-effort">{selectedTask.reasoning_effort}</span>{/if}</p>{/if}
+      {#if $preferences.show_elapsed&&taskElapsed(selectedTask,now)}<p>{$t(selectedTask.status==='running'?'运行时长':'总时长')} {taskElapsed(selectedTask,now)}</p>{/if}
       <details class="evidence tp-fold"><summary>{$t("状态依据与采集时间")}</summary><p>{$t("状态依据：")}{$t(CONFIDENCE_LABEL[selectedTask.confidence])}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} {$t("· 最后活动")} {$t(formatAgo(selectedTask.updated_at,now))}</p></details>
       <div class="command glass-scroll"><span>{selectedTask.stale?$t('上次观测活动（非实时）'):selectedTask.status==='running'?$t('当前活动'):$t('最近消息')}</span><pre>{taskActivity(selectedTask)}</pre></div>
       <div class="detail-actions">
@@ -344,7 +349,7 @@
   </footer>
 </div>
 <style>
-  .model-detail{overflow-wrap:anywhere}
+  .model-detail{overflow-wrap:anywhere}.detail-effort{margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--tp-accent-soft);color:var(--tp-accent);font-size:10px}
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}
   .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;color:var(--tp-text)}
@@ -358,7 +363,7 @@
   .search-bar{display:flex;padding:0 12px 8px;flex:none}.search{display:flex;gap:8px;align-items:center;min-height:36px;border:1px solid var(--tp-border-strong);background:var(--tp-input);border-radius:8px;padding:6px 8px;min-width:0;flex:1;color:var(--tp-muted)}
   .search:focus-within{border-color:var(--tp-accent-line)}.search input{width:100%;min-width:0;border:0;outline:none;background:transparent;color:var(--tp-text);font-size:12px;line-height:1.5;padding:0;border-radius:0}.search input:focus-visible{outline:none}.search input::placeholder{color:var(--tp-quiet)}.search>button{font-size:16px;width:24px;line-height:24px}
   .unread-filter{font-size:11px;white-space:nowrap;padding:4px 8px}.unread-filter.active{border-color:var(--tone-line);background:var(--tone-soft);color:var(--tone)}
-  .task-scroll{min-height:80px;overflow-y:auto;flex:1;padding:0 12px 8px;overscroll-behavior:contain}
+  .task-scroll{min-height:80px;overflow-y:auto;scrollbar-gutter:stable;flex:1;padding:0 12px 8px;overscroll-behavior:contain}
   h2{font-size:11px;font-weight:550;color:var(--tp-muted);padding:8px 0 0;margin:0;display:flex;gap:8px;min-width:0;overflow-wrap:anywhere}h2 span{font-size:11px;color:var(--tp-quiet);font-variant-numeric:tabular-nums}
   .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px 12px;color:var(--tp-text)}.empty-icon{display:none}
   .empty strong{font-size:14px;font-weight:550}.empty p{font-size:12px;line-height:1.6;color:var(--tp-muted);margin:8px 0 12px}.empty button,.onboarding button{border:1px solid var(--tp-accent-line);padding:6px 12px;border-radius:8px;color:var(--tp-accent);background:var(--tp-accent-soft);font-size:12px}
@@ -375,5 +380,6 @@
   .onboarding{padding:12px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:14px}.onboarding p{font-size:12px;color:var(--tp-muted);line-height:1.6;margin:8px 0}
   @media(max-width:380px){header{min-height:46px;padding:6px 10px 6px 12px}.counts{gap:6px;padding:8px 10px 6px}.overview{padding:6px 10px}.overview b{font-size:22px;margin-top:2px}.header-actions{gap:2px}footer{min-height:36px;padding-top:6px;padding-bottom:6px}}
   @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.search-bar{padding-left:8px;padding-right:8px}footer{padding:8px;font-size:10px}footer>button{font-size:10px}.detail-heading{flex-wrap:wrap}}
-  @media(max-height:500px){header{min-height:44px;padding-top:6px;padding-bottom:6px}.counts{padding-top:8px}.overview{padding-top:4px;padding-bottom:4px}.view-bar{padding-bottom:4px}.notice{max-height:44px}.detail{max-height:30dvh;min-height:80px;padding:8px}.task-scroll{min-height:40px}}
+
+  @media(max-height:500px){.dashboard:has(.detail) header{min-height:44px;padding-top:6px;padding-bottom:6px}.dashboard:has(.detail) .counts{padding-top:8px}.dashboard:has(.detail) .overview{padding-top:4px;padding-bottom:4px}.detail{max-height:30dvh;min-height:80px;padding:8px}.task-scroll{min-height:40px}}
 </style>
