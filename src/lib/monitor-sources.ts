@@ -1,10 +1,9 @@
-import type {DashboardSettings,MonitorSource,SourceSnapshot,TaskSnapshot} from './types';
+import type {DashboardSettings,MonitorSource,SourceSnapshot,TaskSnapshot,SourceKind} from './types';
 
-export type AgentKind='codex'|'claude_code';
+export type AgentKind=SourceKind;
 export interface AgentProbe {state:'readable'|'empty'|'missing'|'read_error'|'unsupported_format'|'not_checked'|'unsupported';data_detected:boolean;projects:string[]}
 export interface SshProbe {host:string;checked_at:number;connection:'connected'|'disconnected';codex:AgentProbe;claude_code:AgentProbe;message:string}
 export interface ServerGroup {host:string;name:string;sources:MonitorSource[];codex?:MonitorSource;paused:boolean}
-export const LOCAL_AGENTS=[{kind:'codex',name:'Codex'},{kind:'claude_code',name:'Claude Code'}] as const;
 export const remoteSource=(s:MonitorSource)=>s.kind==='remote_codex'||s.kind==='tmux';
 export const canRead=(p?:AgentProbe)=>p?.state==='readable'||p?.state==='empty';
 export function servers(settings:DashboardSettings):ServerGroup[]{
@@ -16,7 +15,7 @@ export function servers(settings:DashboardSettings):ServerGroup[]{
   });
 }
 export function createSource(kind:AgentKind|'remote_codex',location='',name?:string):MonitorSource {
-  return {id:`${kind}:${crypto.randomUUID()}`,kind,name:name??(kind==='remote_codex'?location:kind==='codex'?'Codex':'Claude Code'),location,enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
+  return {id:`${kind}:${crypto.randomUUID()}`,kind,name:name??(kind==='remote_codex'?location:kind==='codex'?'Codex':kind==='claude_code'?'Claude Code':kind),location,enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
 }
 export function pauseServer(settings:DashboardSettings,host:string,pause:boolean):DashboardSettings {
   const next=structuredClone(settings);const restore=new Set(next.ssh_paused_sources??[]);

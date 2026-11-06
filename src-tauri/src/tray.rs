@@ -569,7 +569,7 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
 }
 
 fn management_section(section: Option<&str>) -> Option<&str> {
-    section.filter(|s| {
+    Some(section.unwrap_or("general")).filter(|s| {
         matches!(
             *s,
             "general" | "panel" | "sources" | "notifications" | "updates" | "about"
@@ -813,7 +813,7 @@ mod tests {
         for section in ["", "unknown", "sources?section=updates", "../notice"] {
             assert_eq!(super::management_section(Some(section)), None);
         }
-        assert_eq!(super::management_section(None), None);
+        assert_eq!(super::management_section(None), Some("general"));
     }
 
     #[test]

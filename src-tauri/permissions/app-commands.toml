@@ -93,5 +93,6 @@ commands.allow = [
   "configure_claude_events",
   "discover_ssh_hosts",
   "probe_ssh_source",
+  "open_project_link",
   "test_notification",
 ]

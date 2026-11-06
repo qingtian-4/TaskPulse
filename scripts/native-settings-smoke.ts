@@ -66,12 +66,13 @@ poll_interval_ms=3000
     const ws=new WebSocket(target.webSocketDebuggerUrl);sockets.push(ws);await new Promise<void>((ok,fail)=>{ws.onopen=()=>ok();ws.onerror=()=>fail(Error('CDP failed'));});
     let id=0;const pending=new Map<number,{ok:(r:any)=>void;fail:(e:unknown)=>void;timer:ReturnType<typeof setTimeout>}>();
     let paused:((params:any)=>Promise<void>)|undefined;
-    ws.onmessage=e=>{const m=JSON.parse(String(e.data));if(m.method==='Fetch.requestPaused')void paused?.(m.params).catch(error=>errors.push(String(error)));if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description??m.params.exceptionDetails.text);const p=pending.get(m.id);if(!p)return;clearTimeout(p.timer);pending.delete(m.id);m.error?p.fail(Error(JSON.stringify(m.error))):p.ok(m.result);};
+    let response:((params:any)=>void)|undefined;
+    ws.onmessage=e=>{const m=JSON.parse(String(e.data));if(m.method==='Network.responseReceived')response?.(m.params);if(m.method==='Fetch.requestPaused')void paused?.(m.params).catch(error=>errors.push(String(error)));if(m.method==='Runtime.exceptionThrown')errors.push(m.params.exceptionDetails.exception?.description??m.params.exceptionDetails.text);const p=pending.get(m.id);if(!p)return;clearTimeout(p.timer);pending.delete(m.id);m.error?p.fail(Error(JSON.stringify(m.error))):p.ok(m.result);};
     const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((ok,fail)=>{const next=++id;const timer=setTimeout(()=>{pending.delete(next);fail(Error('CDP timeout: '+method+' '+String(params.expression??'').slice(0,180)));},20000);pending.set(next,{ok,fail,timer});ws.send(JSON.stringify({id:next,method,params}));});
     const evaluate=async(expression:string)=>{const r=await send('Runtime.evaluate',{expression,returnByValue:true,awaitPromise:true,userGesture:true});if(r.exceptionDetails)throw Error(r.exceptionDetails.exception?.description??r.exceptionDetails.exception?.value??r.exceptionDetails.text);return r.result.value;};
     const invoke=(cmd:string,args:Record<string,unknown>={})=>evaluate(`__TAURI_INTERNALS__.invoke(${JSON.stringify(cmd)},${JSON.stringify(args)})`);
     const wait=async(expression:string)=>{for(let n=0;n<150;n++){if(await evaluate(expression))return;await Bun.sleep(100);}throw Error('Native assertion timeout: '+expression+'; runtime errors: '+JSON.stringify(errors));};
-    await send('Runtime.enable');return {send,evaluate,invoke,wait,onRequestPaused:(handler:typeof paused)=>{paused=handler;}};
+    await send('Runtime.enable');return {send,evaluate,invoke,wait,onRequestPaused:(handler:typeof paused)=>{paused=handler;},onResponse:(handler:typeof response)=>{response=handler;}};
   }
   const start=()=>{app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});app.stderr?.on('data',chunk=>stderr+=String(chunk));app.once('error',e=>stderr+=String(e));};
   console.log('settings smoke: native startup');start();let root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
@@ -81,8 +82,12 @@ poll_interval_ms=3000
   const buildEvidence={commit:build.commit,modified:build.modified,executableSha256:hasher.digest('hex')};
   const product=build.channel==='development'?'TaskPulse Dev':'TaskPulse';
   console.log('settings smoke: build',JSON.stringify(build));
-  await root.invoke('open_management',{section:'sources'});
+  await root.evaluate(`document.querySelector('[aria-label="设置"]').click()`);
   let ui=await connect(await tab('/manage'));await ui.wait(`!!document.querySelector('.settings-main h1')`);
+  await ui.wait(`document.querySelector('.settings-nav a[href="#general"]')?.getAttribute('aria-current')==='page'`);
+  assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
+  await root.invoke('open_management',{section:'sources'});
+  await ui.wait(`!!document.querySelector('.ms-head')`);
   console.log('settings smoke: cold section',await ui.evaluate(`document.querySelector('.settings-main h1').textContent`));
   await ui.wait(`document.querySelector('.settings-nav a[href="#sources"]')?.getAttribute('aria-current')==='page'`);
   // Both cold creation and warm window reuse must honor every allowed section.
@@ -92,6 +97,8 @@ poll_interval_ms=3000
   }
   await root.invoke('open_management',{section:'invalid?section=updates'});
   assert.equal(await ui.evaluate(`document.querySelector('.settings-nav [aria-current="page"]').getAttribute('href')`),'#about');
+  await root.invoke('open_management');
+  await ui.wait(`document.querySelector('.settings-nav a[href="#general"]').getAttribute('aria-current')==='page'`);
   const resourceSamples=[];
   let resourceSampling: {intervalMs:number;durationMs:number;attempts:number;omitted:number}|null=null;
   if(sampleResources){
@@ -248,8 +255,9 @@ poll_interval_ms=3000
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   await ui.wait(`!!document.querySelector('.local-card')`);
-  assert.equal(await ui.evaluate(`document.querySelectorAll('.local-card .mini-tag').length`),2);
-  assert.equal(await ui.evaluate(`/Hermes|OpenCode|DeepSeek|WorkBuddy|tmux/.test(document.querySelector('.ms-scroll').textContent)`),false,'Only the two supported UI Agents are shown');
+  assert.equal(await ui.evaluate(`document.querySelectorAll('.local-card .mini-tag').length`),catalog.filter(s=>s.category==='local').length);
+  assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-card').textContent)&&/OpenCode/.test(document.querySelector('.local-card').textContent)`),true,'All catalog local Agents remain configurable');
+  assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
   await ui.evaluate(`document.querySelector('.local-card .ms-btn').click()`);
   await ui.wait(`!!document.querySelector('[data-source-id="codex"] .project-scope')`);
   assert.equal(await ui.evaluate(`document.querySelector('.ms-advanced').open`),false,'Advanced settings start collapsed');
@@ -307,6 +315,34 @@ poll_interval_ms=3000
   }finally{await chmod(join(home,'config.toml'),0o666);}
   await ui.evaluate(`document.querySelector('.settings-inline-error button').click()`);
   await ui.wait(`!document.querySelector('.settings-inline-error')`);
+  // Other catalog Agents remain editable, with their own stable source IDs.
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+  await ui.evaluate(`[...document.querySelectorAll('.agent-row')].find(row=>row.textContent.includes('Hermes')).querySelector('button').click()`);
+  await ui.evaluate(`document.querySelectorAll('[data-source-id] .scope-modes input')[1].click()`);
+  await ui.evaluate(`(()=>{const field=document.querySelector('[data-source-id] .add-path input');field.value='/fixture/hermes';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await ui.evaluate(`document.querySelector('[data-source-id] .add-path button').click()`);
+  await ui.evaluate(`[...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent==='Apply changes').click()`);
+  await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
+  const withHermes=await ui.invoke('get_monitoring_settings'),hermes=withHermes.sources.find((s:any)=>s.kind==='hermes');
+  assert.ok(hermes?.id);assert.deepEqual(hermes.projects,['/fixture/hermes']);assert.equal(hermes.enabled,false);
+  await ui.invoke('save_monitoring_settings',{settings:{...withHermes,sources:withHermes.sources.filter((s:any)=>s.id!==hermes.id)},expected:withHermes});
+  // The project URL is dispatched through the real OS browser, never a WebView popup.
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#about"]').click()`);
+  assert.match(await root.evaluate(`__TAURI_INTERNALS__.invoke('open_project_link',{target:'project'}).then(()=>'',e=>String(e))`),/not allowed|denied/i);
+  let projectResponse:any;
+  ui.onResponse(({response})=>{if(response.url==='http://ipc.localhost/open_project_link')projectResponse=response;});
+  try{
+    await ui.send('Network.enable');
+    await ui.evaluate(`document.querySelector('.settings-actions a').click()`);
+    for(let n=0;n<150&&!projectResponse;n++)await Bun.sleep(100);
+    assert.ok(projectResponse,'The About anchor must issue the native browser command');
+    assert.equal(projectResponse.status,200);
+    assert.equal(Object.entries(projectResponse.headers).find(([key])=>key.toLowerCase()==='tauri-response')?.[1],'ok');
+  }finally{ui.onResponse(undefined);await ui.send('Network.disable');}
+  assert.equal(await ui.evaluate(`document.querySelector('.settings-actions a').href`),'https://github.com/qingtian-4/TaskPulse');
+  // Return to the selected Codex editor for the SSH wizard flow.
+  await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+  await ui.evaluate(`[...document.querySelectorAll('.agent-row')].find(row=>row.querySelector('strong')?.textContent==='Codex').querySelector('button').click()`);
   // Native wizard with controlled read-only capability responses. Actual Rust
   // save/CAS/config persistence remains live; no production probe override exists.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
@@ -394,6 +430,6 @@ poll_interval_ms=3000
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'two-Agent local page and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

@@ -782,5 +782,8 @@
   "来源已移除": "Source removed",
   "来源未启用": "Source disabled",
   "正在关注": "Following",
-  "项目不在监控范围": "Project is outside the monitoring scope"
+  "项目不在监控范围": "Project is outside the monitoring scope",
+  "统一管理本机 Agent 与 SSH 服务器，重要任务一目了然。": "Manage local agents and SSH servers, and see which tasks need you.",
+  "无法打开系统浏览器，请复制项目链接后重试": "Could not open the system browser. Copy the project link and try again.",
+  "打开项目链接未完成": "The project link could not be opened."
 }
