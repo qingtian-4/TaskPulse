@@ -90,6 +90,7 @@ export interface DashboardSettings {
   preferences?: import('./preferences').Preferences;
   version: number; onboarding_complete: boolean; sources: MonitorSource[];
   auto_discover_local?: boolean; auto_discovery_seen?: string[]; auto_check_updates?: boolean;
+  ssh_paused_sources?: string[];
   notifications: boolean; sound: boolean; default_view: 'tasks' | 'projects';
   recent_days?: number; // 0 keeps all ages; legacy configs default to 7.
   notification_mode?: 'popup' | 'system' | 'both';

@@ -72,6 +72,9 @@ pub struct DashboardSettings {
     #[serde(default = "yes")]
     pub auto_check_updates: bool,
     pub sources: Vec<SourceConfig>,
+    /// IDs disabled by the server-wide pause control, for exact restart-safe resume.
+    #[serde(default)]
+    pub ssh_paused_sources: Vec<String>,
     #[serde(default = "yes")]
     pub notifications: bool,
     #[serde(default = "notification_mode_default")]
@@ -222,6 +225,7 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         auto_discovery_seen: vec![],
         auto_check_updates: true,
         sources,
+        ssh_paused_sources: vec![],
         notifications: true,
         notification_mode: notification_mode_default(),
         sound: false,
@@ -1673,8 +1677,14 @@ mod tests {
         let mut value = serde_json::to_value(&settings).unwrap();
         value.as_object_mut().unwrap().remove("recent_days");
         value.as_object_mut().unwrap().remove("notification_mode");
+        value.as_object_mut().unwrap().remove("ssh_paused_sources");
         let restored: DashboardSettings = serde_json::from_value(value).unwrap();
         assert_eq!(restored.recent_days, 7);
+        assert!(restored.ssh_paused_sources.is_empty());
+        settings.ssh_paused_sources = vec![settings.sources[0].id.clone()];
+        let roundtrip: DashboardSettings =
+            toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(roundtrip.ssh_paused_sources, settings.ssh_paused_sources);
         assert!(restored.popup_notifications());
         assert!(!restored.desktop_notifications());
         assert_eq!(restored.sources[0].projects, vec!["my-project"]);

@@ -82,8 +82,8 @@ poll_interval_ms=3000
   const product=build.channel==='development'?'TaskPulse Dev':'TaskPulse';
   console.log('settings smoke: build',JSON.stringify(build));
   await root.invoke('open_management',{section:'sources'});
-  let ui=await connect(await tab('/manage'));await ui.wait(`!!document.querySelector('.settings-heading')`);
-  console.log('settings smoke: cold section',await ui.evaluate(`document.querySelector('.settings-heading h1').textContent`));
+  let ui=await connect(await tab('/manage'));await ui.wait(`!!document.querySelector('.settings-main h1')`);
+  console.log('settings smoke: cold section',await ui.evaluate(`document.querySelector('.settings-main h1').textContent`));
   await ui.wait(`document.querySelector('.settings-nav a[href="#sources"]')?.getAttribute('aria-current')==='page'`);
   // Both cold creation and warm window reuse must honor every allowed section.
   for(const section of ['general','panel','sources','notifications','updates','about']){
@@ -163,6 +163,9 @@ poll_interval_ms=3000
   }
   const catalog:any[]=await ui.invoke('get_source_catalog');assert.equal(catalog.filter(s=>s.category==='local').length,9);
   assert.equal(catalog.find(s=>s.kind==='scanner').capabilities.turn_end,'unsupported');
+  assert.match(await root.evaluate(`__TAURI_INTERNALS__.invoke('probe_ssh_source',{host:'taskpulse-unreachable.invalid'}).then(()=>'',e=>String(e))`),/not allowed|denied/i,'SSH probing is restricted to management');
+  const unreachable=await ui.invoke('probe_ssh_source',{host:'taskpulse-unreachable.invalid'});
+  assert.equal(unreachable.connection,'disconnected');assert.equal(unreachable.codex.state,'not_checked');assert.equal(unreachable.claude_code.state,'unsupported');
   console.log('settings smoke: fixed layout and catalog passed');const startup=await ui.invoke('get_autostart');assert.equal(startup.available,false);
   assert.match(await ui.evaluate(`__TAURI_INTERNALS__.invoke('set_autostart',{enabled:true}).then(()=>'',e=>String(e))`),/installed TaskPulse/);
   if(!sourcesOnly){
@@ -195,7 +198,7 @@ poll_interval_ms=3000
     await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').click()`);
     await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]').disabled`);
     await ui.invoke('plugin:window|close',{label:'management'});
-    assert.equal(await ui.evaluate(`!!document.querySelector('[aria-label="登录时自动启动"]') && !document.querySelector('#close-title')`),true,'Pending startup verification must retain the settings window');
+    assert.equal(await ui.evaluate(`!!document.querySelector('[aria-label="登录时自动启动"]') && !document.querySelector('#source-confirm-title')`),true,'Pending startup verification must retain the settings window');
     await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]').checked && !document.querySelector('[aria-label="登录时自动启动"]').disabled`);
     assert.equal(await ui.evaluate(`!!document.querySelector('.startup-feedback')`),false,'Positive control: a retained enable must not show a failure');
     startupEnabled=false;
@@ -225,7 +228,7 @@ poll_interval_ms=3000
     await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/get_autostart'},{urlPattern:'http://ipc.localhost/set_autostart'},{urlPattern:'http://ipc.localhost/discover_sources'}]});
     await ui.evaluate(`window.__smokeReloadMarker=true`);
     await ui.send('Page.reload');
-    await ui.wait(`!window.__smokeReloadMarker && document.querySelector('.settings-inline-error')?.textContent.includes('Source discovery fixture failure')`);
+    await ui.wait(`!window.__smokeReloadMarker && document.querySelector('.ms-error')?.textContent.includes('Source discovery fixture failure')`);
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await ui.wait(`document.querySelector('[aria-label="登录时自动启动"]')?.disabled===false`);
     await ui.evaluate(`document.querySelector('[aria-label="登录时自动启动"]').click()`);
@@ -244,16 +247,19 @@ poll_interval_ms=3000
   assert.equal((await ui.invoke('get_autostart')).available,false);
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.wait(`!!document.querySelector('[data-source-id="codex"]')`);
-  assert.equal(await ui.evaluate(`document.querySelectorAll('.source-card:not(details .source-card)').length`),1);
-  assert.equal(await ui.evaluate(`[...document.querySelectorAll('.source-group')].every(d=>!d.open)`),true);
-  await ui.evaluate(`document.querySelector('[data-source-advanced] > summary').click()`);
-  assert.equal(await ui.evaluate(`!!document.querySelector('[data-source-advanced][open] [data-definition="remote_codex"]')`),true);
-  await ui.evaluate(`document.querySelector('[data-source-advanced] > summary').click()`);
-  await ui.evaluate(`document.querySelector('[data-source-id="codex"] .source-expand').click()`);
-  await ui.wait(`!!document.querySelector('.source-editor textarea')`);
-  await ui.evaluate(`(()=>{const field=document.querySelector('.source-editor textarea');field.value='draft-only-project';field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-  await ui.wait(`!!document.querySelector('.source-pending')`);
+  await ui.wait(`!!document.querySelector('.local-card')`);
+  assert.equal(await ui.evaluate(`document.querySelectorAll('.local-card .mini-tag').length`),2);
+  assert.equal(await ui.evaluate(`/Hermes|OpenCode|DeepSeek|WorkBuddy|tmux/.test(document.querySelector('.ms-scroll').textContent)`),false,'Only the two supported UI Agents are shown');
+  await ui.evaluate(`document.querySelector('.local-card .ms-btn').click()`);
+  await ui.wait(`!!document.querySelector('[data-source-id="codex"] .project-scope')`);
+  assert.equal(await ui.evaluate(`document.querySelector('.ms-advanced').open`),false,'Advanced settings start collapsed');
+  const setProject=async(project:string)=>{
+    await ui.evaluate(`(()=>{const scope=document.querySelector('[data-source-id="codex"] .project-scope');for(const field of scope.querySelectorAll('.project-options input:checked'))field.click();const field=scope.querySelector('.add-path input');field.value=${JSON.stringify(project)};field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+    await ui.evaluate(`document.querySelector('[data-source-id="codex"] .add-path button').click()`);
+    await ui.wait(`!!document.querySelector('[data-source-id="codex"] .project-options input:checked')`);
+  };
+  await setProject('draft-only-project');
+  await ui.wait(`!![...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent.includes('应用更改'))`);
   console.log('settings smoke: source draft, switching language');await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
   await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='en';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await ui.wait(`document.querySelector('.settings-heading h1').textContent==='General' && document.querySelector('.settings-status').textContent===''`);
@@ -265,16 +271,16 @@ poll_interval_ms=3000
   assert.equal(await ui.invoke('plugin:window|title',{label:'management'}),`${product} · Settings`,'Theme changes must retain the build identity');
   console.log('settings smoke: theme passed');let saved=await ui.invoke('get_monitoring_settings');assert.deepEqual(saved.sources[0].projects,['protected-project']);
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.wait(`document.querySelector('.source-editor textarea')?.value==='draft-only-project'`);
+  await ui.wait(`document.querySelector('[data-source-id="codex"] .project-options input:checked')?.closest('label').textContent.includes('draft-only-project')`);
   assert.equal(await ui.evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
-  assert.ok(await ui.evaluate(`document.querySelector('[data-source-id="codex"] .read-state').textContent.includes('Disabled')`));
+  assert.ok(await ui.evaluate(`document.querySelector('.agent-row small').textContent.includes('Disabled')`));
   // Closing a dirty editor must show the actual native close-request confirmation.
   await ui.invoke('plugin:window|close',{label:'management'});
-  await ui.wait(`!!document.querySelector('#close-title')`);
-  await ui.evaluate(`document.querySelector('.settings-modal button').click()`);
-  await ui.evaluate(`[...document.querySelectorAll('.source-editor .settings-actions button')].find(b=>b.textContent==='Cancel changes').click()`);
-  await ui.wait(`!document.querySelector('.source-pending')`);
-  assert.equal(await ui.evaluate(`document.querySelector('.settings-heading h1').textContent`),'Sources');
+  await ui.wait(`!!document.querySelector('#source-confirm-title')`);
+  await ui.evaluate(`document.querySelector('.confirm-modal button').click()`);
+  await ui.evaluate(`[...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent==='Cancel changes').click()`);
+  await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
+  assert.equal(await ui.evaluate(`document.querySelector('.ms-head h1').textContent`),'Local settings');
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
   await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').click()`);
   await ui.wait(`document.querySelector('[aria-label="Show task model"]').checked===false && document.querySelector('.settings-status').textContent===''`);
@@ -284,10 +290,10 @@ poll_interval_ms=3000
   // Exercise a real source commit, then restore the isolated scope.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   for(const project of ['applied-project','protected-project']){
-    await ui.evaluate(`(()=>{const field=document.querySelector('.source-editor textarea');field.value=${JSON.stringify(project)};field.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    await ui.evaluate(`[...document.querySelectorAll('.source-editor .settings-actions button')].find(b=>b.textContent==='Apply changes').click()`);
-    await ui.wait(`!document.querySelector('.source-pending')`);
-    assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.source-message')?.textContent??'')`),false,'Application save feedback must follow the selected language');
+    await setProject(project);
+    await ui.evaluate(`[...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent==='Apply changes').click()`);
+    await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
+    assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.ms-success')?.textContent??'')`),false,'Application save feedback must follow the selected language');
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
   // Windows read-only replacement fails through the real Rust persistence path.
@@ -301,18 +307,73 @@ poll_interval_ms=3000
   }finally{await chmod(join(home,'config.toml'),0o666);}
   await ui.evaluate(`document.querySelector('.settings-inline-error button').click()`);
   await ui.wait(`!document.querySelector('.settings-inline-error')`);
-  // Add two actual saved SSH instances without connecting to any host.
+  // Native wizard with controlled read-only capability responses. Actual Rust
+  // save/CAS/config persistence remains live; no production probe override exists.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.evaluate(`document.querySelector('[data-source-advanced]').open=true`);
-  const addSelector='.source-card[data-definition="remote_codex"][data-source-id=""] .source-expand';
-  for(const host of ['fixture-one','fixture-two']){
-    await ui.wait(`!!document.querySelector(${JSON.stringify(addSelector)})`);
-    assert.equal(await ui.evaluate(`document.querySelector(${JSON.stringify(addSelector)}).textContent`),'Add source');
-    await ui.evaluate(`document.querySelector(${JSON.stringify(addSelector)}).click()`);
-    await ui.wait(`!!document.querySelector('.source-editor input')`);
-    await ui.evaluate(`(()=>{const card=document.querySelector('.source-editor').closest('.source-card');const toggle=card.querySelector('input[role="switch"]');if(toggle.checked)toggle.click();const location=card.querySelector('.source-editor .advanced input:not([type=checkbox])');location.value=${JSON.stringify(host)};location.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-    await ui.evaluate(`[...document.querySelectorAll('.source-editor .settings-actions button')].find(b=>b.textContent==='Apply changes').click()`);
-    await ui.wait(`!document.querySelector('.source-pending')`);
+  let probeCase='empty';
+  ui.onRequestPaused(async({requestId,request})=>{
+    const command=new URL(request.url).pathname.slice(1);
+    const host=request.method==='POST'&&request.postData?JSON.parse(request.postData).host:'';
+    const body=command==='discover_ssh_hosts'?['fixture-one','fixture-two']:{host,checked_at:Date.now(),connection:'connected',codex:{state:probeCase,data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/alpha','/srv/public/beta']:[]},claude_code:{state:'unsupported',data_detected:false,projects:[]},message:'SSH 已连接；Agent 数据读取能力单独检测'};
+    await ui.send('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/json'},{name:'Tauri-Response',value:'ok'},{name:'Access-Control-Expose-Headers',value:'Tauri-Response'},{name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'},{name:'Access-Control-Allow-Methods',value:'POST, OPTIONS'},{name:'Access-Control-Allow-Headers',value:'Content-Type, Tauri-Callback, Tauri-Error, Tauri-Invoke-Key'}],body:Buffer.from(JSON.stringify(body)).toString('base64')});
+  });
+  try{
+    await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/discover_ssh_hosts'},{urlPattern:'http://ipc.localhost/probe_ssh_source'}]});
+    for(const host of ['fixture-one','fixture-two']){
+      probeCase=host==='fixture-one'?'readable':'read_error';
+      await ui.evaluate(`document.querySelector('.ms-head .ms-btn').click()`);
+      await ui.wait(`document.querySelectorAll('.alias-choice').length===2`);
+      if(captureScreenshots&&host==='fixture-one')await Bun.write(join(owned,'settings-wizard-host-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await ui.evaluate(`(()=>{const input=document.querySelector('.ssh-wizard [aria-label="SSH Host"]');input.value=${JSON.stringify(host)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+      await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
+      assert.equal(await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').disabled`),true,'Detection is required before project selection');
+      await ui.evaluate(`document.querySelector('.test-action button').click()`);
+      await ui.wait(`document.querySelector('.test-action button').textContent==='Detect again'`);
+      if(captureScreenshots&&host==='fixture-two')await Bun.write(join(owned,'settings-wizard-detection-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
+      await ui.wait(`!!document.querySelector('.wizard-agents')`);
+      if(captureScreenshots)await Bun.write(join(owned,`settings-wizard-${host==='fixture-one'?'projects':'read-error'}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      assert.equal(await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].disabled`),true,'Claude SSH cannot be enabled');
+      if(host==='fixture-one'){
+        assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked`),true);
+        await ui.evaluate(`document.querySelector('.wizard-agents input').click()`);
+        await ui.evaluate(`document.querySelectorAll('.ssh-wizard .scope-modes input')[1].click()`);
+        await ui.evaluate(`document.querySelector('.ssh-wizard .project-options input').click()`);
+      }else{
+        assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').disabled`),true,'SSH connectivity cannot enable unreadable Agent data');
+        assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked`),false);
+      }
+      await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
+      await ui.wait(`!document.querySelector('.ssh-wizard') && !!document.querySelector('.detail-content')`);
+    }
+  }finally{await ui.send('Fetch.disable');ui.onRequestPaused(undefined);}
+  if(captureScreenshots){
+    // Reset ephemeral fixture reports before capturing the home/detail page:
+    // persisted configuration alone must never paint a successful SSH badge.
+    await ui.send('Page.reload');
+    await ui.wait(`document.querySelectorAll('.server-card').length===2`);
+    assert.equal(await ui.evaluate(`document.querySelector('.server-controls .ms-pill').textContent.includes('not checked')`),true);
+    await Bun.write(join(owned,'settings-home-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
+    await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='zh-CN';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await ui.wait(`document.documentElement.lang==='zh-CN' && document.querySelector('.settings-status').textContent===''`);
+    await ui.evaluate(`document.querySelector('[data-preview="light"] input').click()`);
+    await ui.wait(`document.documentElement.dataset.theme==='light' && document.querySelector('.settings-status').textContent===''`);
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+    await Bun.write(join(owned,'settings-home-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await ui.evaluate(`document.querySelector('.server-card .ms-btn').click()`);
+    await ui.wait(`!!document.querySelector('.detail-content')`);
+    await Bun.write(join(owned,'settings-server-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await ui.evaluate(`document.querySelector('.ms-scroll').scrollTop=10000`);
+    await Bun.write(join(owned,'settings-projects-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    const bounds=await ui.evaluate(`({width:innerWidth,height:innerHeight,foot:document.querySelector('.ms-foot').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth})`);
+    assert.deepEqual(bounds,{width:960,height:704,foot:704,overflow:false});
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
+    await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='en';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+    await ui.wait(`document.documentElement.lang==='en' && document.querySelector('.settings-status').textContent===''`);
+    await ui.evaluate(`document.querySelector('[data-preview="dark"] input').click()`);
+    await ui.wait(`document.documentElement.dataset.theme==='dark' && document.querySelector('.settings-status').textContent===''`);
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   }
   const multiple=await ui.invoke('get_monitoring_settings');
   const hosts=multiple.sources.filter((s:any)=>s.kind==='remote_codex');
@@ -326,12 +387,13 @@ poll_interval_ms=3000
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await Bun.write(join(owned,'settings-general-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+    await ui.evaluate(`document.querySelector('.ms-back')?.click()`);
     await Bun.write(join(owned,'settings-sources-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }
   sockets.forEach(ws=>ws.close());await stopOwnedChild(app);start();
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'grouped source defaults and advanced entry','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['cold source entry and warm six-section routing','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'two-Agent local page and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

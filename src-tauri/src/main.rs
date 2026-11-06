@@ -24,6 +24,7 @@ mod providers;
 mod runtime;
 mod scanner;
 mod source_catalog;
+mod ssh_sources;
 mod state_file;
 mod store;
 mod task_notice;
@@ -270,6 +271,8 @@ fn main() {
             monitoring::get_monitoring_error,
             monitoring::save_monitoring_settings,
             monitoring::discover_sources,
+            ssh_sources::discover_ssh_hosts,
+            ssh_sources::probe_ssh_source,
             monitoring::list_discovered_sessions,
             claude_integration::configure_claude_events,
             notifier::test_notification,

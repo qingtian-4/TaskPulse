@@ -104,7 +104,7 @@ await withSmokeWorkspace('development-native',async({owned,onStop})=>{
       if(page){
         const view=await connect(page);
         for(let attempt=0;attempt<100;attempt++){
-          if(await view(`typeof __TAURI_INTERNALS__!=='undefined' && !!document.querySelector(${JSON.stringify(route==='/notice'?'.notice-window .message':'.settings-heading')})`))return view;
+          if(await view(`typeof __TAURI_INTERNALS__!=='undefined' && !!document.querySelector(${JSON.stringify(route==='/notice'?'.notice-window .message':'.settings-main h1')})`))return view;
           await Bun.sleep(100);
         }
         throw Error('Native route did not finish loading: '+route);

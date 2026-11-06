@@ -67,6 +67,8 @@ jobs:
         run: python scripts/test-wsl-discovery.py
       - name: Test remote Codex metadata schemas (offline fixtures)
         run: python scripts/test-codex-metadata.py
+      - name: Test SSH source capability detection (offline fixtures)
+        run: python scripts/test-ssh-sources.py
       - name: Test WSL metadata freshness and read failures (offline fixtures)
         run: python scripts/wsl-metadata.test.py
       - name: Test opt-in Codex approval observer and reversible installation
