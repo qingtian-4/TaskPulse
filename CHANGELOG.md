@@ -1,10 +1,12 @@
 # Changelog
 
-## Unreleased · 1.1.0
+## Unreleased · 0.0.1
 
-[Bilingual release notes](docs/releases/1.1.0.md)
+[Bilingual release notes](docs/releases/0.0.1.md)
 
 ### Added
+
+- SSH server management with a three-step setup wizard, separate connectivity/data checks and project scopes. Remote Claude remains explicitly unsupported.
 
 - Source capability/platform metadata, grouped settings and advanced connections.
 - Request replay/evaluation tools and same-commit release acceptance guidance.
@@ -19,6 +21,9 @@
 - Update attention-focused bilingual product copy and prepare consolidated future release assets, retaining current attachments and MSI updates.
 
 ### Fixed
+
+- Restore every supported local source from the backend catalog; open general settings from the panel gear and tray settings entry.
+- Remove the settings sidebar footer and open the project/license links in the system browser.
 
 - Windows tray click/focus races and late popup readiness stealing settings focus.
 - Scanner detection disappearing when all records are deduplicated.

@@ -25,7 +25,8 @@ def digest(path):
 def package_release(source, output, version, commit, license_file):
     if not re.fullmatch(r'\d+\.\d+\.\d+', version) or not re.fullmatch(r'[a-f0-9]{40}', commit):
         raise ValueError('Exact stable version and full SHA required')
-    compact = tuple(map(int, version.split('.'))) > (1, 1, 0)
+    number = tuple(map(int, version.split('.')))
+    compact = number[:2] == (0, 0) or number > (1, 1, 0)
     platforms = ['windows-x64', 'macos-arm64', 'macos-x64'] + (['windows-arm64'] if compact else [])
     metadata, payloads, material = {}, {}, {}
 

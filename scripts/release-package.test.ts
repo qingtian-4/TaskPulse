@@ -13,6 +13,9 @@ test('Windows bootstrap validates unified identities and native architecture wit
 },15000);
 
 test('current version keeps legacy attachments and future releases retain MSI compatibility',()=>{
+  expect(releaseLayout('0.0.1')).toBe('compact');
+  expect(releaseLayout('0.0.2')).toBe('compact');
+  expect(releaseLayout('1.0.1')).toBe('legacy');
   for(const version of ['1.0.1','1.1.0','1.1.0-rc.1'])expect(releaseLayout(version)).toBe('legacy');
   for(const version of ['1.1.1','1.2.0','2.0.0'])expect(releaseLayout(version)).toBe('compact');
   expect(()=>releaseLayout('invalid')).toThrow();

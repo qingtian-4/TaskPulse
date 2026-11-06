@@ -8,12 +8,12 @@ export const ALPHA_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|b
 
 export const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
-// The current 1.1.0 release keeps its complete legacy asset set. Later
-// versions consolidate metadata without removing the installed MSI update lane.
+// Historical releases through 1.1.0 retain their complete legacy assets.
+// The new 0.0.x series and later versions use compact assets, retaining MSI updates.
 export function releaseLayout(version:string):'legacy'|'compact' {
   if(!STABLE_VERSION.test(version) && !ALPHA_VERSION.test(version))throw Error('Invalid release version');
   const [major,minor,patch]=version.split('-')[0].split('.').map(Number);
-  return major>1 || (major===1 && (minor>1 || (minor===1 && patch>0))) ? 'compact' : 'legacy';
+  return (major===0&&minor===0) || major>1 || (major===1 && (minor>1 || (minor===1 && patch>0))) ? 'compact' : 'legacy';
 }
 
 export function validateRelease(tag: string, versions: string[]) {
