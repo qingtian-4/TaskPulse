@@ -10,6 +10,8 @@ import {spawn,spawnSync,type ChildProcess} from 'node:child_process';
 import {withSmokeWorkspace,stopOwnedChild} from '../support/smoke-workspace';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
+const captureOnly=process.argv.includes('--capture-only');
+if(captureOnly)assert.ok(process.argv.includes('--capture'),'--capture-only requires --capture');
 const commitAt=process.argv.indexOf('--commit'),expectedCommit=commitAt<0?undefined:process.argv[commitAt+1];
 if(commitAt>=0 || process.argv.includes('--capture'))assert.match(expectedCommit??'',/^[a-f0-9]{40}$/);
 await withSmokeWorkspace('product-native',async({owned,evidenceDir,onStop})=>{
@@ -151,6 +153,8 @@ try{
   buildEvidence={version:build.version,commit:build.commit,modified:build.modified,executableSha256:createHash('sha256').update(new Uint8Array(await Bun.file(exe).arrayBuffer())).digest('hex')};
   assert.equal((await root.invoke('integration_environment')).isolated,true);
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
+  let layout:unknown=null;
+  if(!captureOnly){
   const nativeLayout=await root.evaluate(`({width:innerWidth})`);
   await fittedCards(0);
   await Bun.write(join(owned,'empty-native.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -280,7 +284,7 @@ try{
   checks.push('unread intersection and explicit viewed action preserve other running tasks');
   for(let i=0;i<24;i++)event('scroll-'+i,'turn.started',{title:'示例长列表 '+i+'：标题不会隐藏其他任务，也不会截断实际采集结果',project:'Scroll Demo'});
   await root.wait(`document.querySelectorAll('.task-row').length===27`);
-  const layout=await root.evaluate(`(()=>{const e=document.querySelector('.task-scroll');return {scroll:e.scrollHeight>e.clientHeight,height:document.querySelector('.dashboard').getBoundingClientRect().height,horizontal:document.documentElement.scrollWidth>innerWidth};})()`);
+  layout=await root.evaluate(`(()=>{const e=document.querySelector('.task-scroll');return {scroll:e.scrollHeight>e.clientHeight,height:document.querySelector('.dashboard').getBoundingClientRect().height,horizontal:document.documentElement.scrollWidth>innerWidth};})()`);
   assert.equal(layout.scroll,true);assert.ok(layout.height<=560);assert.equal(layout.horizontal,false);
   for(const [width,height] of [[368,840],[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.clearDeviceMetricsOverride');
@@ -566,6 +570,10 @@ try{
     checks.push('DSH native zstd → provider/store/tray/UI/independent popup: high, explicit question, unrelated return preserved, matching answer resolves without ending or reading, and frozen 61-second total (public fixture; real read-only replay is separate)');
   }
   assert.equal(errors.length,0,JSON.stringify(errors));
+  }else{
+    await root.invoke('open_management',{section:'general'});management=await page('/manage');
+    await management.wait(`!!document.querySelector('.settings-shell')`);
+  }
   if(process.argv.includes('--capture')){
     // Curated public examples use the real event/store/UI pipeline. They are
     // deliberately custom-agent tasks, not fabricated native provider output.
@@ -627,7 +635,8 @@ try{
       if(kind==='completed')event(session,'turn.completed');
       else event(session,'input.requested',{request_kind:kind==='input'?'question':'approval'},{request_id:requestId});
       await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.task_id==='${id}')`);
-      await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(english?({input:'Awaiting input',approval:'Approval required',completed:'Turn ended'} as Record<string,string>)[kind]:label)})`);
+      notice??=await page('/notice');
+      await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(english?({input:'Input required',approval:'Approval required',completed:'Turn ended'} as Record<string,string>)[kind]:label)})`);
       const current=(await root.invoke('get_task_notice')).current;
       if(kind!=='completed')assert.equal(current.auto_dismiss_ms,null);
       const unreadBefore=(await root.invoke('get_agents')).find((t:any)=>t.id===id).unread;
@@ -645,7 +654,7 @@ try{
     await Bun.write(join(owned,'capture-media.json'),JSON.stringify({...buildEvidence,language:english?'en':'zh-CN',files:['dashboard','notice-input','notice-approval','notice-completed'].map(name=>name+suffix+'.png')},null,2));
     checks.push('public README native captures at DPR 2: four visible tasks across running/input/approval/unviewed states and input/approval/completed notices; no acknowledgement or fabricated native-agent identities');
   }
-  const report={passed:true,...buildEvidence,checks,layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
+  const report={passed:true,captureOnly,...buildEvidence,checks,layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){const ui=await management?.evaluate(`({read:document.querySelector('.ms-success')?.textContent,buttons:[...document.querySelectorAll('.ms-advanced button')].map(b=>({text:b.textContent,disabled:b.disabled})),errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)})`).catch(()=>null);const providers=await root?.invoke('get_providers').catch(()=>null);await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr,errors,ui,providers},null,2));console.error('Evidence: '+evidenceDir);throw error;}
 });
