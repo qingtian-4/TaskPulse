@@ -216,6 +216,9 @@ try{
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
   assert.deepEqual(fontSizes,{title:'14px',context:'14px',activity:'14px',number:nativeLayout.width<=350?'23px':'22px'});
+  const compactResult=await root.evaluate(`(()=>{const row=document.querySelector('[data-task-id="${done.id}"]'),chip=row.querySelector('.status-label').getBoundingClientRect(),button=row.closest('.task-item').querySelector('.viewed').getBoundingClientRect(),elapsed=row.querySelector('.elapsed'),model=row.querySelector('.model');return {chip:chip.height,button:button.height,extraFooter:!!row.querySelector('.result-space'),sharedTime:!!elapsed?.closest('.metadata,.context')};})()`);
+  assert.ok(Math.abs(compactResult.chip-compactResult.button)<=2,'Viewed action must match status-chip height');
+  assert.equal(compactResult.extraFooter,false);assert.equal(compactResult.sharedTime,true);
   for(const [width,height] of [[368,840],[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.setDeviceMetricsOverride',{width:368,height:560,deviceScaleFactor:1,mobile:false});
   checks.push('native window measures complete rows, grows and shrinks with four-card scrolling cap; long Chinese/English typography at DPR 1/1.25/1.5/2');
@@ -513,6 +516,43 @@ try{
       checks.push('OpenCode/WorkBuddy native SQLite+JSONL through settings/provider/store/UI: no history import, stable rename, models, tool return stays running, explicit end and unread-preserving reminders (public fixtures, not host certification)');
       settings.sources=settings.sources.filter((s:any)=>!s.id.startsWith('public-native-'));await management.invoke('save_monitoring_settings',{settings});
     }finally{oc.close();wb.close();}
+  }
+  // Native DSH bytes, not a generic event standing in for its parser.
+  {
+    const dshRoot=join(owned,'public-dsh'),logPath=join(dshRoot,'sessions','workspace','session-public','session.v4.jsonl.zstd');
+    await mkdir(dirname(logPath),{recursive:true});
+    const started=Date.now()-61000,title='DSH 原生提问与总时长回归';
+    const events:any[]=[{type:'session',version:4,id:'session-public',cwd:'C:/public/DSH',name:title},
+      {type:'turn/start',seq:1,time:started},{type:'request/header',seq:2,time:started+1,data:{header:{config:{provider:'deepseek-official',model:'deepseek-flash',reasoningEffort:'high'}}}}];
+    const write=()=>Bun.write(logPath,Bun.zstdCompressSync(Buffer.from(events.map(e=>JSON.stringify(e)+'\n').join(''))));
+    await write();
+    let settings=await root.invoke('get_monitoring_settings');
+    settings.sources.push({id:'public-dsh',kind:'deepseek_desktop',name:'DSH · 公开合成验收',location:dshRoot,enabled:true,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:500});
+    settings.notifications=true;await management.invoke('save_monitoring_settings',{settings});
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.source_instance==='public-dsh'&&t.status==='running'&&t.reasoning_effort==='high'))`);
+    const native=(await root.invoke('get_agents')).find((t:any)=>t.source_instance==='public-dsh');
+    await click(root,'.all-tasks');
+    events.push({type:'tool/call',seq:3,time:started+2000,data:{name:'ask_user_question',callId:'native-call',arguments:JSON.stringify({questions:[{id:'native-question'}]})}});await write();
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${native.id}'&&t.waiting_reason==='question'&&t.input_request_id==='question:native-call:native-question'&&!t.finished_at))`);
+    await root.wait(`document.querySelector('[data-task-id="${native.id}"] .status-label')?.textContent.includes('等待输入')`);
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.task_id==='${native.id}')`);
+    assert.equal((await root.invoke('get_task_notice')).current.auto_dismiss_ms,null);
+    await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}`);
+    await Bun.write(join(owned,'dsh-question-native.png'),Buffer.from((await notice.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    events.push({type:'tool/result',seq:4,time:started+3000,data:{message:{toolCallId:'unrelated-call',content:[{text:'{"answers":[{"id":"native-question","custom":"choice"}]}'}]}}});await write();
+    await root.invoke('request_refresh');await Bun.sleep(1100);
+    assert.equal((await root.invoke('get_agents')).find((t:any)=>t.id===native.id).waiting_reason,'question');
+    events.push({type:'tool/result',seq:5,time:started+4000,data:{message:{toolCallId:'native-call',content:[{text:'{"answers":[{"id":"native-question","custom":"choice"}]}'}]}}});await write();
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${native.id}'&&t.status==='running'&&!t.input_request_id&&!t.finished_at))`);
+    await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.task_id!=='${native.id}')`);
+    events.push({type:'turn/end',seq:6,time:started+61000,data:{reason:{kind:'completed'}}});await write();
+    await root.wait(`document.querySelector('[data-task-id="${native.id}"] .elapsed')?.textContent==='1m 1s'`);
+    const ended=(await root.invoke('get_agents')).find((t:any)=>t.id===native.id);
+    assert.equal(ended.finished_at-ended.started_at,61000);assert.equal(ended.reasoning_effort,'high');assert.equal(ended.unread,true);
+    await Bun.write(join(owned,'dsh-ended-duration-native.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    const current=(await root.invoke('get_task_notice')).current;if(current?.task_id===native.id)await notice.invoke('dismiss_task_notice',{id:current.id});
+    settings=await root.invoke('get_monitoring_settings');settings.sources=settings.sources.filter((s:any)=>s.id!=='public-dsh');await management.invoke('save_monitoring_settings',{settings});
+    checks.push('DSH native zstd → provider/store/tray/UI/independent popup: high, explicit question, unrelated return preserved, matching answer resolves without ending or reading, and frozen 61-second total (public fixture; real read-only replay is separate)');
   }
   assert.equal(errors.length,0,JSON.stringify(errors));
   if(process.argv.includes('--capture')){

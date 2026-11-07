@@ -118,13 +118,16 @@ poll_interval_ms=3000
   }
   const browserProduct=(await root.send('Browser.getVersion').catch(()=>null))?.product??null;
   const windowSizes:any[]=[];
+  const sidebarFonts:unknown[]=[];
   for(const section of ['general','panel','sources','notifications','updates','about']){
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#${section}"]').click()`);
     await ui.wait(`document.querySelector('.settings-nav a[href="#${section}"]').getAttribute('aria-current')==='page'`);
     windowSizes.push(await ui.invoke('plugin:window|inner_size',{label:'management'}));
+    sidebarFonts.push(await ui.evaluate(`({brand:getComputedStyle(document.querySelector('.settings-brand strong')).fontSize,nav:getComputedStyle(document.querySelector('.settings-nav a')).fontSize})`));
     assert.equal(await ui.evaluate('document.documentElement.scrollHeight<=innerHeight && document.documentElement.scrollWidth<=innerWidth'),true);
   }
   assert.ok(windowSizes.every(size=>JSON.stringify(size)===JSON.stringify(windowSizes[0])));
+  assert.ok(sidebarFonts.every(font=>JSON.stringify(font)===JSON.stringify(sidebarFonts[0])),'Switching Sources must not shrink sidebar typography');
   const nativeMonitors:any[]=await ui.invoke('plugin:window|available_monitors');
   const title:string=await ui.invoke('plugin:window|title',{label:'management'});
   assert.equal(title,`${product} · 设置`,'Initial window title must retain the build identity');
@@ -466,6 +469,23 @@ poll_interval_ms=3000
     await ui.evaluate(`document.querySelector('.ms-back')?.click()`);
     await Bun.write(join(owned,'settings-sources-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   }
+  await root.invoke('open_management',{section:'sources'});
+  await ui.wait(`!!document.querySelector('.ms-tabs button')`);
+  await ui.evaluate(`document.querySelector('.ms-back')?.click();document.querySelector('.ms-tabs button').click()`);
+  await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"]')`);
+  assert.ok(await ui.evaluate(`!!document.querySelector('[data-event-adapter="trae-cn-ide"]')&&document.querySelector('.event-sources').textContent.includes('Qoder')`));
+  const beforeEvent=await ui.invoke('get_monitoring_settings');
+  await ui.evaluate(`document.querySelector('[data-event-adapter="kimi-code-cli"] .ms-btn').click()`);
+  await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"] [data-integration-editor]')`);
+  assert.deepEqual((await ui.invoke('get_monitoring_settings')).sources,beforeEvent.sources,'Opening an event draft must not write configuration or Hooks');
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  const eventSaved=await ui.invoke('get_monitoring_settings');
+  const eventSource=eventSaved.sources.find((s:any)=>s.integration?.adapter_id==='kimi-code-cli');
+  assert.equal(eventSource.enabled,false);assert.equal(eventSource.integration.agent_id,'kimi-code-cli');
+  assert.ok(eventSource.id.startsWith('generic_event:'));
+  if(captureScreenshots)await Bun.write(join(owned,'settings-event-agents-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await ui.invoke('save_monitoring_settings',{settings:{...eventSaved,sources:beforeEvent.sources},expected:eventSaved});
   sockets.forEach(ws=>ws.close());await stopOwnedChild(app);start();
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.equal(restored.preferences.task_font_size,14);assert.deepEqual(restored.sources[0].projects,['protected-project']);

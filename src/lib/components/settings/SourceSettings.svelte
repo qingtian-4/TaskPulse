@@ -17,6 +17,7 @@
   import SshSourceWizard from './SshSourceWizard.svelte';
   import ProjectScope from './ProjectScope.svelte';
   import SourceSessions from './SourceSessions.svelte';
+  import EventSources from './EventSources.svelte';
   import './monitor-sources.css';
   let {onDirtyChange,onAttention}:{onDirtyChange:(value:boolean)=>void;onAttention:()=>void}=$props();
   let settings=$state<DashboardSettings|null>(null),applied=$state<DashboardSettings|null>(null);
@@ -30,6 +31,7 @@
   let activeLocal=$state<AgentKind>('codex'),activeLocalSource=$state('');
   let expandedLocal=$state<AgentKind|null>(null);
   let localAgents=$state<SourceDefinition[]>([]);
+  let eventAgents=$state<SourceDefinition[]>([]);
   let active=true,revision=0;
   let sessionSource=$state<MonitorSource|null>(null);
   const groups=$derived(settings?servers(settings):[]);
@@ -116,7 +118,9 @@
         const close=await getCurrentWindow().onCloseRequested(e=>{if(get(autostart).pending||get(preferencePending)){e.preventDefault();return;}if((dirty||saving||wizard)&&!closing){e.preventDefault();onAttention();closePrompt=true;}});if(active)cleanup.push(close);else close();
         settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));error=await invoke<string|null>('get_monitoring_error')??'';
         const environment=await invoke<{platform:string}>('integration_environment');platform=environment.platform==='windows'?'Windows':environment.platform==='macos'?'macOS':'Linux';
-        localAgents=(await invoke<SourceDefinition[]>('get_source_catalog')).filter(agent=>agent.category==='local'&&(!agent.platforms.length||agent.platforms.includes(environment.platform)));
+        const catalog=await invoke<SourceDefinition[]>('get_source_catalog');
+        localAgents=catalog.filter(agent=>agent.category==='local'&&(!agent.platforms.length||agent.platforms.includes(environment.platform)));
+        eventAgents=catalog.filter(agent=>agent.kind==='generic_event'&&(!agent.platforms.length||agent.platforms.includes(environment.platform)||settings?.sources.some(s=>s.integration?.adapter_id===agent.adapter_id)));
         const stop=await listen<DashboardSnapshot>('dashboard-snapshot-updated',e=>updateSnapshot(e.payload));if(active)cleanup.push(stop);else stop();
         updateSnapshot(await invoke<DashboardSnapshot>('get_dashboard_snapshot'));
         try{discovery=await invoke<SourceDiscovery[]>('discover_sources');if(settings&&!settings.onboarding_complete&&!dirty){for(const s of settings.sources)if(localAgents.some(agent=>agent.kind===s.kind))s.enabled=discovery.some(d=>d.id===s.id&&d.data_location_detected===true);dirty=true;}}catch(e){fail(e);}finally{detectionSettled=true;}
@@ -146,6 +150,7 @@
           <div class="agent-entry" data-agent-kind={agent.kind}>
 <div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(rowStatus(source))} · {taskCount(source)} {$t('任务')}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t('启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
             {#if expandedLocal===agent.kind}
+              {#if agent.kind==='scanner'}<p class="ms-muted">{$t('仅发现正在运行的进程；不识别审批、提问或任务结束。')}</p>{/if}
       <section class="agent-config" data-source-id={localEditor?.id??''}><h3>{$t('项目范围')}</h3>{#if localRows.filter(s=>s.kind===activeLocal).length>1}<label class="ms-field">{$t('数据来源实例')}<select value={localEditor?.id} onchange={e=>{activeLocalSource=e.currentTarget.value;void loadProjects(localRows.find(s=>s.id===activeLocalSource));}}>{#each localRows.filter(s=>s.kind===activeLocal) as s}<option value={s.id}>{s.name} · {s.location||$t('默认位置')}</option>{/each}</select></label>{/if}{#key localEditor?.id??activeLocal}<ProjectScope projects={localEditor?.projects??['*']} choices={localEditor?projectChoices(localEditor,snapshot?.tasks??[],projects[localEditor.id]??[]):[]} aliases={localEditor?projectAliases[localEditor.id]??[]:[]} onchange={changeProjects}/>{/key}
         <details class="ms-advanced"><summary><Settings2 size={13}/>{$t('高级设置：路径、排除规则与诊断')}</summary><div class="advanced-inner">{#if localEditor}<label class="ms-field">{$t('数据路径')}<input value={localEditor.kind==='codex'?'CODEX_HOME / ~/.codex':localEditor.location} placeholder={localEditor.kind==='claude_code'?'CLAUDE_CONFIG_DIR / ~/.claude':$t('默认位置')} readonly={localAgents.find(agent=>agent.kind===activeLocal)?.location_kind==='none'} oninput={e=>{if(localEditor){localEditor.location=e.currentTarget.value;touch();}}}/></label><label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="3" value={localEditor.excluded_projects.join('\n')} oninput={e=>{if(localEditor){localEditor.excluded_projects=list(e.currentTarget.value);touch();}}}></textarea></label><button class="ms-btn" onclick={()=>sessionSource=localEditor??null}>{$t('已发现会话')}</button><button class="ms-btn" disabled={!!reading||dirty||!localEditor.enabled} onclick={()=>localEditor&&readLocal(localEditor)}><RefreshCw size={13}/>{$t(reading?'读取中…':'检测数据读取')}</button>{#if activeLocal==='claude_code'}<p class="ms-warning">{$t('本机会话采用只读观测；明确审批需单独确认官方 Hook。原生提问尚未支持。')}</p><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:true}:null}>{$t('配置 Claude 精确事件')}</button><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:false}:null}>{$t('移除 Claude 精确事件')}</button>{/if}<p class="ms-diagnostic">{$t(discovery.find(d=>d.id===localEditor?.id)?.detail??'尚未检测')}</p>{:else}<p class="ms-muted">{$t('启用后可配置数据读取。')}</p>{/if}</div></details>
       </section>
@@ -154,6 +159,7 @@
         {/each}
 <div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>void savePreference({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
       </section>
+      <EventSources {settings} catalog={eventAgents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch}/>
     {:else if selected}
       {@const source=selected.codex}
       <div class="detail-heading"><div><h2>{selected.name}</h2><p>SSH · {selected.host}</p></div><span class="ms-pill" class:neutral={connection(selected)==='unknown'} class:warning={connection(selected)==='disconnected'}>{$t(sshLabel(selected))}</span></div>

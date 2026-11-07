@@ -345,3 +345,14 @@ test('elapsed runs only for active execution and freezes at the source end acros
   expect(taskElapsed({...ended,finished_at:undefined},900000)).toBeNull();
   expect(taskElapsed({...task,stale:true},900000)).toBeNull();
 });
+
+test('all Agent cards retain explicit total duration with no fabricated time or input state',()=>{
+  for(const source of ['codex','claude_code','deepseek_harness','hermes','native_agent','doubao','generic_event','local_file'] as const){
+    const task={...base,source,started_at:1000,status:'waiting_input' as const,waiting_reason:'turn_ended' as const,finished_at:91000};
+    expect(taskElapsed(task,200000)).toBe('1m 30s');
+    expect(taskElapsed({...task,updated_at:900000},1000000)).toBe('1m 30s');
+    expect(taskElapsed({...task,finished_at:undefined},1000000)).toBeNull();
+    expect(isEndedResult({...task,waiting_reason:'question',input_request_id:'q1',finished_at:undefined})).toBe(false);
+    expect(matchesSignal({...task,waiting_reason:'turn_ended'},'question')).toBe(false);
+  }
+});
