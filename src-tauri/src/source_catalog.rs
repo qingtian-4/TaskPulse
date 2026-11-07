@@ -93,7 +93,7 @@ fn native_capabilities(kind: SourceKind) -> Capabilities {
             Explicit,
             Inferred,
             Explicit,
-            Unsupported,
+            Explicit,
             Explicit,
             ReturnTarget::Details,
         ),
