@@ -803,5 +803,10 @@
   "移除会停止采集，不会修改 Agent 配置。": "Removing stops collection without changing Agent configuration.",
   "原生读取与匹配解除尚未适配": "Native reading and correlated resolution are not supported yet",
   "Qoder IDE 与 CLI 的 Hook 不同；当前不提供自动采集。可使用“其他 Agent（标准事件）”手动接入，任务与请求关联由生产者负责。": "Qoder IDE and CLI have different Hooks. Automatic collection is not supported. Use Other agents (standard events) for manual integration; the producer must correlate turns and requests.",
-  "仅发现正在运行的进程；不识别审批、提问或任务结束。": "Discovers running processes only; cannot detect approvals, questions or turn completion."
+  "仅发现正在运行的进程；不识别审批、提问或任务结束。": "Discovers running processes only; cannot detect approvals, questions or turn completion.",
+  "当前存储格式受限": "Current storage format is unsupported",
+  "仅会话发现": "Session metadata only",
+  "只读 Kimi 原生 wire 日志；能力随日志版本而异。": "Reads native Kimi wire journals. Capabilities depend on the journal version.",
+  "只读 Qoder Desktop 轮次投影及 IDE/CLI 转录；原生审批和提问尚未提供。": "Reads Qoder Desktop turn projections and IDE/CLI transcripts. Native approval and question reminders are not supported.",
+  "公开会话发现；当前非标准会话库的任务状态读取受限。": "Public session discovery only. Task state cannot currently be read from the nonstandard session store."
 }

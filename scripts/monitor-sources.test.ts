@@ -36,6 +36,7 @@ test('project scopes and preference broadcasts preserve drafts and source identi
 });
 
 test('new singleton source drafts keep backend-required fixed IDs',()=>{
+  for(const kind of ['kimi_code','qoder','trae'] as const){expect(createSource(kind).id).toBe(kind);expect(createSource(kind).enabled).toBe(false);}
   expect(createSource('codex').id).toBe('codex');expect(createSource('scanner').id).toBe('scanner');expect(createSource('hooks').id).toBe('local_file');
   expect(createSource('remote_codex','host').id).not.toBe(createSource('remote_codex','host').id);
 });

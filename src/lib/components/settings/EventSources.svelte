@@ -7,7 +7,7 @@
   import IntegrationEditor from '../IntegrationEditor.svelte';
   import ProjectScope from './ProjectScope.svelte';
   let {settings,catalog,observations,dirty,disabled,changed}:{settings:DashboardSettings;catalog:SourceDefinition[];observations:SourceSnapshot[];dirty:boolean;disabled:boolean;changed:()=>void}=$props();
-  let expanded=$state(''),removing=$state(''),qoder=$state(false);
+  let expanded=$state(''),removing=$state('');
   function agentName(definition:SourceDefinition){return ['standard-events','kimi-code-cli','trae-cn-ide','zcode-desktop','workbuddy-candidate'].includes(definition.adapter_id??'')?$t(definition.name):definition.name;}
   const rows=$derived(catalog.flatMap<{definition:SourceDefinition;source?:MonitorSource}>(definition=>{
     const saved=settings.sources.filter(s=>s.kind==='generic_event'&&s.integration?.adapter_id===definition.adapter_id);
@@ -39,5 +39,4 @@
       {/if}
     </div>
   {/each}
-  <div class="agent-entry"><div class="agent-row"><div class="source-grow"><strong>Qoder</strong><small>{$t('原生读取与匹配解除尚未适配')}</small></div><span class="cap-tag planned">{$t('待适配')}</span><button class="ms-btn small" aria-expanded={qoder} onclick={()=>qoder=!qoder}>{$t(qoder?'收起':'支持边界')}</button></div>{#if qoder}<p class="ms-muted">{$t('Qoder IDE 与 CLI 的 Hook 不同；当前不提供自动采集。可使用“其他 Agent（标准事件）”手动接入，任务与请求关联由生产者负责。')}</p>{/if}</div>
 </section>

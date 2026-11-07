@@ -100,6 +100,16 @@ impl JsonlTail {
     pub fn retained_bytes(&self) -> usize {
         self.pending.capacity() + self.anchor.capacity() + self.head.capacity()
     }
+    /// Release a completed line's allocation without losing offset, identity,
+    /// partial-line state, or the permanent gap marker.
+    pub fn trim_read_buffer(&mut self) {
+        if self.pending.is_empty() {
+            self.pending.shrink_to_fit();
+        }
+    }
+    pub fn has_partial_line(&self) -> bool {
+        !self.pending.is_empty()
+    }
     pub fn diagnostics(&self) -> serde_json::Value {
         serde_json::json!({"length":self.signature.map(|(_,len)|len),"offset":self.offset,
             "reset_count":self.resets,"last_reset_reason":self.last_reset,"error_code":self.last_error,

@@ -96,6 +96,9 @@ export function readTestResult(id:string, health:ProviderHealth[], since:number)
 }
 
 const notes:Record<SourceKind,string>={
+  kimi_code:'只读 Kimi 原生 wire 日志；能力随日志版本而异。',
+  qoder:'只读 Qoder Desktop 轮次投影及 IDE/CLI 转录；原生审批和提问尚未提供。',
+  trae:'公开会话发现；当前非标准会话库的任务状态读取受限。',
   opencode:'只读本机 OpenCode 会话、模型和运行记录；明确本轮结束才提醒，不从工具返回推断完成。提问与审批事件尚不提供。',
   workbuddy:'只读 WorkBuddy 本地数据库与会话记录；关注新执行，不导入空闲历史，不包含云端任务。提问与审批事件尚不提供。',
   zcode:'自动读取本机 ZCode 会话、项目和模型；工具执行完成不会当作整轮结束。',

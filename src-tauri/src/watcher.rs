@@ -781,6 +781,39 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::KimiCode => {
+                    let mut provider = crate::providers::kimi::KimiProvider::new(
+                        (!source.location.is_empty()).then(|| PathBuf::from(&source.location)),
+                    );
+                    provider.resume(known_sessions().into_iter().filter(|t| {
+                        t.agent_id.as_deref() == Some("kimi-code")
+                            && t.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
+                SourceKind::Qoder => {
+                    let mut provider = crate::providers::qoder::QoderProvider::new(
+                        (!source.location.is_empty()).then(|| PathBuf::from(&source.location)),
+                    );
+                    provider.resume(
+                        known_sessions()
+                            .into_iter()
+                            .filter(|t| {
+                                t.agent_id.as_deref().is_some_and(|a| {
+                                    matches!(a, "qoder-desktop" | "qoder-transcript")
+                                }) && t.source_instance.as_deref() == Some(source.id.as_str())
+                            })
+                            .collect(),
+                    );
+                    Box::new(provider)
+                }
+                SourceKind::Trae => Box::new(crate::providers::trae::TraeProvider::new(
+                    if source.location.is_empty() {
+                        crate::providers::trae::default_root()
+                    } else {
+                        PathBuf::from(&source.location)
+                    },
+                )),
                 SourceKind::Opencode => {
                     let mut provider = crate::providers::opencode::OpenCodeProvider::new(
                         if source.location.is_empty() {

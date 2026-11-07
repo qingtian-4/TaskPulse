@@ -17,6 +17,9 @@ pub enum SourceKind {
     Zcode,
     Opencode,
     Workbuddy,
+    KimiCode,
+    Qoder,
+    Trae,
     Codex,
     CodexWsl,
     ClaudeCode,
@@ -162,6 +165,9 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         source("opencode", "OpenCode · 本机", SourceKind::Opencode, ""),
         source("workbuddy", "WorkBuddy · 本机", SourceKind::Workbuddy, ""),
         source("doubao", "豆包 · 本机", SourceKind::Doubao, ""),
+        source("kimi_code", "Kimi Code · 本机", SourceKind::KimiCode, ""),
+        source("qoder", "Qoder · 本机", SourceKind::Qoder, ""),
+        source("trae", "TRAE · 本机", SourceKind::Trae, ""),
     ];
     for item in &mut sources {
         item.projects = match item.kind {
@@ -182,6 +188,9 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
                     | SourceKind::Zcode
                     | SourceKind::Opencode
                     | SourceKind::Workbuddy
+                    | SourceKind::KimiCode
+                    | SourceKind::Qoder
+                    | SourceKind::Trae
             );
     }
     for host in &cfg.remote_hosts {
@@ -369,6 +378,21 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
             return Err("请输入有效的 SSH 别名".into());
         }
         let location = match source.kind {
+            SourceKind::KimiCode => Some(if source.location.is_empty() {
+                crate::providers::kimi::default_roots()[0].clone()
+            } else {
+                PathBuf::from(&source.location)
+            }),
+            SourceKind::Qoder => Some(if source.location.is_empty() {
+                crate::providers::qoder::default_roots()[0].clone()
+            } else {
+                PathBuf::from(&source.location)
+            }),
+            SourceKind::Trae => Some(if source.location.is_empty() {
+                crate::providers::trae::default_root()
+            } else {
+                PathBuf::from(&source.location)
+            }),
             SourceKind::Opencode => Some(if source.location.is_empty() {
                 crate::providers::opencode::default_db()
             } else {
@@ -622,6 +646,8 @@ fn automatic_local(kind: SourceKind) -> bool {
             | SourceKind::Zcode
             | SourceKind::Opencode
             | SourceKind::Workbuddy
+            | SourceKind::KimiCode
+            | SourceKind::Qoder
     )
 }
 
@@ -1199,6 +1225,9 @@ fn discover_source_rows_with_wsl(
         .iter()
         .map(|source| {
             let (detected, detail) = match source.kind {
+                SourceKind::KimiCode => {let roots=if source.location.is_empty(){crate::providers::kimi::default_roots()}else{vec![PathBuf::from(&source.location)]};(roots.iter().any(|p|crate::providers::kimi::available(p)),"Kimi Code / kimi-cli 原生 wire 日志；不修改 Hook".into())},
+                SourceKind::Qoder => {let roots=if source.location.is_empty(){crate::providers::qoder::default_roots()}else{vec![PathBuf::from(&source.location)]};(roots.iter().any(|p|crate::providers::qoder::available(p)),"Qoder Desktop 数据库 / IDE、CLI 会话记录；支持范围取决于格式".into())},
+                SourceKind::Trae => {let root=if source.location.is_empty(){crate::providers::trae::default_root()}else{PathBuf::from(&source.location)};(crate::providers::trae::available(&root),"TRAE 公开会话发现；非标准会话库的任务状态读取受限".into())},
                 SourceKind::Opencode => {
                     let path=if source.location.is_empty(){crate::providers::opencode::default_db()}else{PathBuf::from(&source.location)};
                     (path.is_file(),format!("{} · 原生任务；不提供独立提问/审批事件",path.display()))

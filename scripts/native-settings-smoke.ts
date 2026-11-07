@@ -181,7 +181,7 @@ poll_interval_ms=3000
   }
   await move(initialPosition.x,initialPosition.y);
   }
-  const catalog:any[]=await ui.invoke('get_source_catalog');assert.equal(catalog.filter(s=>s.category==='local').length,9);
+  const catalog:any[]=await ui.invoke('get_source_catalog');assert.equal(catalog.filter(s=>s.category==='local').length,12);
   assert.equal(catalog.find(s=>s.kind==='scanner').capabilities.turn_end,'unsupported');
   assert.match(await root.evaluate(`__TAURI_INTERNALS__.invoke('probe_ssh_source',{host:'taskpulse-unreachable.invalid'}).then(()=>'',e=>String(e))`),/not allowed|denied/i,'SSH probing is restricted to management');
   const unreachable=await ui.invoke('probe_ssh_source',{host:'taskpulse-unreachable.invalid'});
@@ -267,7 +267,7 @@ poll_interval_ms=3000
   assert.equal((await ui.invoke('get_autostart')).available,false);
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===9`);
+  await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('.ms-tabs button').length`),2);
   assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false);
   assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-agents').textContent)&&/OpenCode/.test(document.querySelector('.local-agents').textContent)`),true);
@@ -428,7 +428,7 @@ poll_interval_ms=3000
     // Reset ephemeral fixture reports before capturing the home/detail page:
     // persisted configuration alone must never paint a successful SSH badge.
     await ui.send('Page.reload');
-    await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===9`);
+    await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
     await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
     await ui.wait(`document.querySelectorAll('.server-card').length===2`);
     assert.equal(await ui.evaluate(`document.querySelector('.server-controls .ms-pill').textContent.includes('not checked')`),true);
@@ -473,7 +473,7 @@ poll_interval_ms=3000
   await ui.wait(`!!document.querySelector('.ms-tabs button')`);
   await ui.evaluate(`document.querySelector('.ms-back')?.click();document.querySelector('.ms-tabs button').click()`);
   await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"]')`);
-  assert.ok(await ui.evaluate(`!!document.querySelector('[data-event-adapter="trae-cn-ide"]')&&document.querySelector('.event-sources').textContent.includes('Qoder')`));
+  assert.ok(await ui.evaluate(`!!document.querySelector('[data-event-adapter="trae-cn-ide"]')&&document.querySelector('[data-agent-kind="qoder"]')`));
   const beforeEvent=await ui.invoke('get_monitoring_settings');
   await ui.evaluate(`document.querySelector('[data-event-adapter="kimi-code-cli"] .ms-btn').click()`);
   await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"] [data-integration-editor]')`);

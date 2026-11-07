@@ -18,6 +18,9 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `projects/*.jsonl` 会话目录 | 数据库与增量日志关联本轮开始/结束；不包含云端任务，不提供独立提问或审批提醒 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 原生标题、项目、模型、工具阶段与整轮结果；不提供独立审批事件 |
 | 豆包 | 桌面端原生执行存储 | 当前工作任务与执行状态；不提供审批提醒；目录设置见[本机来源](LOCAL_AGENTS.md) |
+| Kimi Code / kimi-cli | `~/.kimi-code` / `KIMI_CODE_HOME`；旧版 `~/.kimi` / `KIMI_SHARE_DIR` | 只读主会话 wire；明确轮次结束、审批、提问按原生请求 ID 匹配。仅显示日志报告的模型与推理强度；后台子 Agent 暂不单独导入。当前为源码/固定回放核验，仍需宿主版本实机验收 |
+| Qoder | Desktop 的 `main.sqlite`，以及 `~/.qoder/projects` 转录 | Desktop 完整轮次投影提供结束与时长；IDE/CLI 需要实际存在的顶层 `result`，不把 Stop Hook 或模型回复结束当作整轮结束。原生审批和提问尚未支持 |
+| TRAE | 本机公开工作区元数据 | 可发现公开会话。当前主会话库不是标准 SQLite；完整任务状态、模型、审批、提问和结束仍未适配，不显示为读取健康 |
 
 原生数据格式可能随 Agent 版本改变。读取失败会显示来源异常或状态待更新，不伪造任务结束。来源没有提供模型时不猜测模型；代理所报告的模型名不保证揭示代理背后的实际模型。
 
@@ -36,10 +39,10 @@ Windows 10/11 x64 是主要验收平台。macOS 13.3+ 提供 Intel 与 Apple Sil
 | Codex WSL | 添加独立发行版来源，需要运行中的 WSL 和 Python 3；不会唤醒停止的发行版 |
 | Codex SSH | 添加你自己的 SSH 主机与项目范围 |
 | Gemini CLI | 启用进程扫描发现运行进程；完整任务生命周期需要事件接入 |
-| Kimi Code CLI | 选择适配器，连接标准事件或 MCP；宿主需发送对应事件 |
+| Kimi Code CLI 事件接入 | 原生读取外的可选接入；旧事件来源及其 ID 保留，不会自动安装 Hook |
 | TRAE 中国版 IDE | 选择适配器，连接标准事件或 MCP；宿主需发送对应事件 |
 | ZCode 事件接入 | 除原生读取外，可按需使用标准事件 / MCP |
-| Qoder | 原生读取尚未适配；IDE 与 CLI Hook 不等同，可通过“其他 Agent（标准事件）”手动接入 |
+| Qoder 事件接入 | 原生读取外可选标准事件；IDE 与 CLI Hook 不等同 |
 | 其他 Agent | 使用标准事件、MCP 或兼容状态文件 |
 | 命令行与远程 tmux | `tp-run` 可报告前台子进程退出码；普通 shell 返回只能表示推断结束 |
 
@@ -68,7 +71,9 @@ TaskPulse tracks active turns, explicit requests and unread results. Local disco
 | Claude Code | Native logs provide session evidence. The optional official hook provides explicit approval and lifecycle events. Native questions are unsupported. |
 | Hermes, DeepSeek Harness, OpenCode, WorkBuddy, ZCode, Doubao | Native tasks and models where the Agent supplies evidence. A running lease or completed tool call alone cannot establish a turn outcome. OpenCode and WorkBuddy native records do not expose independent approvals or questions. |
 | DeepSeek Harness | Native `ask_user_question` calls are resolved only by matching call/question IDs; approval decisions match their native request IDs. Request configuration supplies reasoning effort. The reported model ID may be an alias. |
-| Qoder | Native collection is not adapted. IDE and CLI Hooks differ; manual standard-event integration requires the producer to supply reliable correlation. |
+| Kimi Code / kimi-cli | Reads main-agent wire journals from the new and legacy data directories. Native request IDs correlate approvals/questions and their resolution. Recorded model/effort only; subagents and real-host version acceptance remain separate. |
+| Qoder | Reads Desktop native turn projections and IDE/CLI journals. Only complete result metrics or a top-level result establish an end; Stop hooks and assistant completion do not. Native approvals/questions are unsupported. |
+| TRAE | Public workspace metadata only. The installed nonstandard session store is unsupported; lifecycle, model, approval and question monitoring remain unavailable. |
 | Gemini CLI, Kimi Code, TRAE and other agents | Process discovery or configured Standard Events, MCP and compatibility files, as available. A host must actually emit the event to support a precise reminder. |
 | Shell / tmux | `tp-run` can report the foreground child's exit code. An ordinary tmux shell return is inferred and does not establish an Agent turn outcome. |
 
