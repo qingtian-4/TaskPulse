@@ -808,5 +808,7 @@
   "仅会话发现": "Session metadata only",
   "只读 Kimi 原生 wire 日志；能力随日志版本而异。": "Reads native Kimi wire journals. Capabilities depend on the journal version.",
   "只读 Qoder Desktop 轮次投影及 IDE/CLI 转录；原生审批和提问尚未提供。": "Reads Qoder Desktop turn projections and IDE/CLI transcripts. Native approval and question reminders are not supported.",
-  "公开会话发现；当前非标准会话库的任务状态读取受限。": "Public session discovery only. Task state cannot currently be read from the nonstandard session store."
+  "公开会话发现；当前非标准会话库的任务状态读取受限。": "Public session discovery only. Task state cannot currently be read from the nonstandard session store.",
+  "本轮结束，尚未查看": "Turn ended; result unviewed",
+  "来源明确报告本轮失败": "The source reported a failed turn"
 }

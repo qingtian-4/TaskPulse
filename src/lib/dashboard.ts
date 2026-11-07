@@ -116,6 +116,14 @@ export function taskActivity(task: TaskSnapshot): string {
     default: return task.activity ?? '运行中 · 来源未提供执行阶段';
   }
 }
+// The Standard Events reducer owns these terminal messages and overwrites any
+// producer text. Identical native/user messages must remain untranslated data.
+export function taskSummaryIsAppCopy(task:TaskSnapshot):boolean {
+  if(!task.message||task.stale||task.status==='running'||needsAction(task))return true;
+  if(task.source!=='generic_event'||!isEndedResult(task))return false;
+  const messages:Record<string,string>={turn_ended:'本轮结束，尚未查看',failed:'来源明确报告本轮失败',interrupted:'本轮已中断，非成功'};
+  return task.message===messages[task.outcome??''];
+}
 export function taskSection(task: TaskSnapshot): TaskSection {
   if (task.stale) return 'uncertain';
   if (task.status === 'running' || needsAction(task)) return 'ongoing';

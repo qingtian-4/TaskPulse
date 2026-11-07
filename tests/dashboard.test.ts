@@ -1,4 +1,4 @@
-import {taskElapsed} from '../src/lib/dashboard';
+import {taskElapsed,taskSummaryIsAppCopy} from '../src/lib/dashboard';
 import {dashboardHeightForRows} from '../src/lib/dashboard-layout';
 // Pure presentation regression tests. Run with `bun test tests/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
@@ -9,6 +9,20 @@ import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, proje
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('translate reducer-owned terminal copy while preserving identical native and producer text',()=>{
+  for(const [outcome,message] of Object.entries({turn_ended:'本轮结束，尚未查看',failed:'来源明确报告本轮失败',interrupted:'本轮已中断，非成功'})){
+    const ended:TaskSnapshot={...base,source:'generic_event',status:outcome==='failed'?'failed':'waiting_input',waiting_reason:'turn_ended',finished_at:2,outcome,message};
+    const original=structuredClone(ended);
+    expect(taskSummaryIsAppCopy(ended)).toBe(true);
+    expect(taskSummaryIsAppCopy({...ended,source:'codex'})).toBe(false);
+    expect(taskSummaryIsAppCopy({...ended,message:'Native output: '+message})).toBe(false);
+    expect(ended).toEqual(original);
+  }
+  const question:TaskSnapshot={...base,status:'waiting_input',waiting_reason:'question',message:'Host text'};
+  expect(taskSummaryIsAppCopy(question)).toBe(true);
+  expect(taskSummary(question)).toBe('等待你在原 Agent 中回答');
+});
 
 test('anonymous scanner processes are discovery evidence, not independent task cards',()=>{
   const process:TaskSnapshot={...base,id:'scan:codex:process',source_instance:'scanner',name:'unknown',confidence:'inferred'};

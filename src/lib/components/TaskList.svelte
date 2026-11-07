@@ -2,7 +2,7 @@
   import {t} from '$lib/i18n';
   import {preferences} from '$lib/preferences';
   import type { TaskSnapshot, DashboardSettings, ProviderHealth } from '$lib/types';
-  import { taskContext, taskProjectLabel, taskLabel, taskAgent, taskSummary, taskSource, sourceFreshness, isEndedResult, matchesSignal, taskTone,taskElapsed } from '$lib/dashboard';
+  import { taskContext, taskProjectLabel, taskLabel, taskAgent, taskSummary, taskSummaryIsAppCopy, taskSource, sourceFreshness, isEndedResult, matchesSignal, taskTone,taskElapsed } from '$lib/dashboard';
   import Check from '@lucide/svelte/icons/check';
   import Pin from '@lucide/svelte/icons/pin';
   let { tasks, settings, selectedId, onSelect, onViewed, providers=[], now=Date.now(), fitFour=false }: { tasks: TaskSnapshot[]; settings: DashboardSettings | null; selectedId: string | null; onSelect: (task: TaskSnapshot) => void; onViewed?: (task: TaskSnapshot) => void; providers?:ProviderHealth[]; now?:number;fitFour?:boolean } = $props();
@@ -26,7 +26,7 @@
           <span class="row-title" title={task.name}>{task.name}</span>
           <span class="context" title={taskContext(task,settings)+(task.project_path?' · '+task.project_path:'')}><span class="agent">{taskAgent(task)}</span><span class="project">{taskProjectLabel(task)}</span><span class="location">{task.remote ? 'SSH · '+(task.host ?? $t('远程')) : taskSource(task,settings??undefined)?.kind.endsWith('_wsl') ? 'WSL · '+taskSource(task,settings??undefined)?.location : $t('本机')}</span>{#if (!task.model || !$preferences.show_model) && $preferences.show_elapsed && elapsed}<span class="elapsed" title={$t(isEndedResult(task)?'总时长':'运行时长')}>{elapsed}</span>{/if}</span>
           {#if task.model && $preferences.show_model}<span class="metadata"><span class="model" title={'来源最近上报的模型：'+task.model}><span>{$t("模型")}</span> {task.model}{#if task.reasoning_effort}<b class="effort" title={$t('推理强度')}>{task.reasoning_effort}</b>{/if}</span>{#if $preferences.show_elapsed && elapsed}<span class="elapsed" title={$t(isEndedResult(task)?'总时长':'运行时长')}>{elapsed}</span>{/if}</span>{/if}
-          <span class="activity" title={task.message && !task.stale && task.status!=='running' ? taskSummary(task) : $t(taskSummary(task))}>{task.message && !task.stale && task.status!=='running' ? taskSummary(task) : $t(taskSummary(task))}</span>
+          <span class="activity" title={taskSummaryIsAppCopy(task)?$t(taskSummary(task)):taskSummary(task)}>{taskSummaryIsAppCopy(task)?$t(taskSummary(task)):taskSummary(task)}</span>
           {#if stale}<span class="freshness" title={sourceFreshness(task,settings,providers,now)}>{$t("来源数据待更新")}</span>{/if}
         </span>
         <span class="row-status"><span class="status-label tp-chip">{$t(taskLabel(task))}{#if matchesSignal(task,'question')&&(task.input_request_ids?.length??0)>1}<span class="request-count" title={$t('待回答')}> {task.input_request_ids!.length}</span>{/if}</span><span class="markers">{#if task.pinned}<Pin size={11} aria-label={$t("固定")}/>{/if}{#if task.unread}<span class="unread" title={$t("尚未查看")} aria-label={$t("尚未查看")}></span>{/if}</span></span>
