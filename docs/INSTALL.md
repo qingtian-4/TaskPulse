@@ -13,6 +13,7 @@
 | 系统 | 文件 |
 | --- | --- |
 | Windows 10 / 11，x64 | `TaskPulse_<版本>_windows_x64_setup.exe` 或同版本 `.msi` |
+| Windows 11，ARM64 | `TaskPulse_<版本>_windows_arm64_setup.exe` |
 | macOS 13.3+，Apple Silicon | `TaskPulse_<版本>_macos_arm64.dmg` |
 | macOS 13.3+，Intel | `TaskPulse_<版本>_macos_x64.dmg` |
 

@@ -12,7 +12,7 @@ test('Windows bootstrap validates unified identities and native architecture wit
   expect(result.stdout).toContain('PASS: unified');
 },15000);
 
-test('current version keeps legacy attachments and future releases retain MSI compatibility',()=>{
+test('0.0.x uses ARM64-capable compact assets and historical releases retain MSI compatibility',()=>{
   expect(releaseLayout('0.0.1')).toBe('compact');
   expect(releaseLayout('0.0.2')).toBe('compact');
   expect(releaseLayout('1.0.1')).toBe('legacy');
@@ -20,7 +20,23 @@ test('current version keeps legacy attachments and future releases retain MSI co
   for(const version of ['1.1.1','1.2.0','2.0.0'])expect(releaseLayout(version)).toBe('compact');
   expect(()=>releaseLayout('invalid')).toThrow();
   expect(installerNames('1.1.1','arm64')).toEqual(['TaskPulse_1.1.1_windows_arm64_setup.exe']);
+  expect(installerNames('0.0.1','arm64')).toEqual(['TaskPulse_0.0.1_windows_arm64_setup.exe']);
   expect(installerNames('1.1.1')).toContain('TaskPulse_1.1.1_windows_x64.msi');
+});
+
+test('local ARM64 build and release jobs target the same native architecture and NSIS format',()=>{
+  const project=JSON.parse(readFileSync(join(import.meta.dir,'../package.json'),'utf8'));
+  const args=project.scripts['build:windows:arm64'].split(/\s+/);
+  expect(args[args.indexOf('--target')+1]).toBe('aarch64-pc-windows-msvc');
+  expect(args[args.indexOf('--bundles')+1]).toBe('nsis');
+  expect(args.slice(args.indexOf('--')+1)).toContain('--locked');
+  for(const [file,job] of [['release.yml','windows-arm64'],['release-contract.yml','arm64-build']]){
+    const workflow=Bun.YAML.parse(readFileSync(join(import.meta.dir,'../.github/workflows',file),'utf8')) as any;
+    const build=workflow.jobs[job].steps.find((s:any)=>s.name?.startsWith('Build ')&&(s.run??s.with?.args??'').includes('--bundles nsis'));
+    expect(build,`${file}: native ARM64 build required`).toBeDefined();
+    expect(build.run??build.with.args).toContain('--target aarch64-pc-windows-msvc');
+    expect(build.run??build.with.args).toContain('--locked');
+  }
 });
 
 test('release notes show actual installation links first and never invent an ARM64 download',()=>{

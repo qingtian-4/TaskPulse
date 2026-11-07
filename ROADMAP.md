@@ -9,7 +9,7 @@ Prioritize reliable requests, reminders, host return and matching resolutions be
 | 原生来源 / Native sources | 扩大 Kimi、Qoder 的版本实测；适配 TRAE 可公开读取的数据；保持 Codex、Claude Code、DSH 的明确请求语义。Broaden verified formats without guessing lifecycle events. |
 | 远程来源 / Remote sources | 完善 Codex SSH、WSL 的连接恢复和项目范围；具备可靠只读接口后再支持 Claude SSH。Reliable recovery and scopes before adding remote readers. |
 | 返回任务 / Return | 经过身份验证的宿主返回，无可靠接口时保留详情与复制。Verified host return with honest fallbacks. |
-| 平台交付 / Delivery | Windows ARM64、签名、macOS 公证、安装升级、高 DPI、多屏和睡眠恢复。Signing and runtime coverage across supported architectures. |
+| 平台交付 / Delivery | Windows ARM64 安装与宿主实测、签名、macOS 公证、安装升级、高 DPI、多屏和睡眠恢复。Signing and runtime coverage across supported architectures. |
 | 资源与可靠性 / Reliability | 长时间运行、大数据下保留读取预算、未读、固定和未解决请求。Bounded collection and durable attention under sustained load. |
 | 后续探索 / Later | 桌面闭环稳定后评估移动端、手表与手环提醒。Explore mobile and wearables after the desktop workflow is dependable. |
 

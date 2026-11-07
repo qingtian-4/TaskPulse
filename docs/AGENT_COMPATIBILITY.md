@@ -28,7 +28,7 @@ OpenCode 2.2.2 和 WorkBuddy 5.9.3 的 Windows 本机记录已做只读核对；
 
 ## 平台与返回任务
 
-Windows 10/11 x64 是主要验收平台。macOS 13.3+ 提供 Intel 与 Apple Silicon 包；编译和打包通过不代表每个 Agent、每种宿主都已实测。Linux 桌面当前没有同等交付验收。Windows 的 WSL 是独立来源，不等同于 Linux 桌面支持。
+Windows 10/11 x64 是主要验收平台。Windows 11 ARM64 使用独立的 ARM64 EXE 安装包，实际下载以对应 Release 为准。macOS 13.3+ 提供 Intel 与 Apple Silicon 包；编译和打包通过不代表每个 Agent、每种宿主都已实测。Linux 桌面当前没有同等交付验收。Windows 的 WSL 是独立来源，不等同于 Linux 桌面支持。
 
 只有能核验所属进程和窗口时，TaskPulse 才会把宿主聚焦当作成功。聚焦窗口不代表已跳转到精确会话。无法可靠返回时，请打开任务详情并复制路径或会话 ID。关闭通知、返回宿主都不会自动标为已读或批准。
 
@@ -77,7 +77,7 @@ TaskPulse tracks active turns, explicit requests and unread results. Local disco
 | Gemini CLI, Kimi Code, TRAE and other agents | Process discovery or configured Standard Events, MCP and compatibility files, as available. A host must actually emit the event to support a precise reminder. |
 | Shell / tmux | `tp-run` can report the foreground child's exit code. An ordinary tmux shell return is inferred and does not establish an Agent turn outcome. |
 
-Windows 10/11 x64 is the primary validation platform. macOS 13.3+ packages target both Apple Silicon and Intel. Compile and packaging checks do not establish runtime support for every Agent or host. Linux desktop has no equivalent delivery gate; a Windows WSL source is separate.
+Windows 10/11 x64 is the primary validation platform. Windows 11 ARM64 uses its own ARM64 EXE installer when included in the corresponding Release. macOS 13.3+ packages target both Apple Silicon and Intel. Compile and packaging checks do not establish runtime support for every Agent or host. Linux desktop has no equivalent delivery gate; a Windows WSL source is separate.
 
 A verified host window can be focused when TaskPulse can validate its live owner. Host focus does not establish an exact session jump. Use task details or copy the session ID or path when return is unavailable. Dismissing a reminder or focusing a window does not mark a task as read or approve a request. See [installation and troubleshooting](INSTALL.en.md).
 

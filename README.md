@@ -28,6 +28,7 @@ TaskPulse 是一款轻量级桌面工具，统一关注 Codex、Claude Code 等 
 | 系统 | 安装包 |
 | --- | --- |
 | Windows 10 / 11 · x64 | `.exe` 或 `.msi` |
+| Windows 11 · ARM64 | `windows_arm64_setup.exe` |
 | macOS 13.3+ · Apple Silicon | `macos_arm64.dmg` |
 | macOS 13.3+ · Intel | `macos_x64.dmg` |
 
@@ -134,6 +135,15 @@ bun run tauri build
 ```
 
 默认安装包输出到 `src-tauri/target/release/bundle/`。
+
+构建 Windows ARM64 安装包，需先安装 MSVC C++ ARM64 构建工具和 Windows SDK，然后运行：
+
+```powershell
+rustup target add aarch64-pc-windows-msvc
+bun run build:windows:arm64
+```
+
+默认输出到 `src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/`。ARM64 安装包仅在对应 Release 实际提供时可下载，不以 x64 包替代。[构建前置条件](https://v2.tauri.app/distribute/windows-installer/#building-for-32-bit-or-arm)
 
 ## 贡献与许可
 

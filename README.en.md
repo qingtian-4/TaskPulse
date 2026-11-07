@@ -26,6 +26,7 @@ Choose your installer from [GitHub Releases](https://github.com/qingtian-4/TaskP
 | System | Installer |
 | --- | --- |
 | Windows 10 / 11 · x64 | `.exe` or `.msi` |
+| Windows 11 · ARM64 | `windows_arm64_setup.exe` |
 | macOS 13.3+ · Apple Silicon | `macos_arm64.dmg` |
 | macOS 13.3+ · Intel | `macos_x64.dmg` |
 
@@ -132,6 +133,15 @@ bun run tauri build
 ```
 
 Installers are written to `src-tauri/target/release/bundle/` by default.
+
+For Windows ARM64, install the MSVC C++ ARM64 build tools and Windows SDK first, then run:
+
+```powershell
+rustup target add aarch64-pc-windows-msvc
+bun run build:windows:arm64
+```
+
+Output defaults to `src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/`. ARM64 downloads are available only when included in that Release; an x64 package is never substituted. [Build prerequisites](https://v2.tauri.app/distribute/windows-installer/#building-for-32-bit-or-arm)
 
 ## Contributing and license
 
