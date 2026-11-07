@@ -4,9 +4,14 @@ Read only when the change touches this area. User scope takes precedence.
 
 ## Architecture
 
-The runtime pipeline is:
+Collection and durable attention:
 
-`Provider -> scope filtering/normalization/dedup -> TaskStore -> AttentionTracker -> TransitionEngine -> tray/UI/notifications`
+`Provider -> scope filtering/normalization/dedup -> TaskStore -> AttentionTracker`
+
+The attention display plus source health feed dashboard projection/snapshots,
+Svelte and the tray. Tracked sessions separately feed `TransitionEngine` and
+notification delivery. Scoped user commands control window visibility and
+verified host return; snapshot delivery never triggers focus or approval.
 
 Ownership and file locations are maintained in the [architecture map](../../../../docs/ARCHITECTURE.md).
 

@@ -14,21 +14,41 @@ TRAE's public metadata reader does not claim full lifecycle support.
 
 ```mermaid
 flowchart LR
-  A[Providers and event adapters] --> B[Watcher collection and normalization]
-  B --> C[TaskStore]
-  C --> D[AttentionTracker]
-  D --> E[TransitionEngine]
-  E --> F[Tray and task notices]
-  D --> G[Dashboard snapshot and frontend]
-  H[Source registry and configuration] --> B
-  H --> G
+  A[Native readers] --> W[Watcher: bounded collection and scope]
+  B[WSL / SSH / event adapters] --> W
+  W --> C[TaskStore: merged observations]
+  C --> D[AttentionTracker: durable attention]
+  D --> E[TransitionEngine: deduplicated changes]
+  E --> F[Notifier and task notices]
+  W -- Source health --> G[Dashboard projection and snapshot]
+  D -- Display state --> G
+  G --> U[Svelte panel and native tray]
+  U -. User action .-> N[Scoped window / focus commands]
+  H[Source registry and capabilities] -.-> W
+  H -.-> G
 ```
+
+The diagram shows module responsibilities, not a single serial event queue.
+In `watcher.rs`, `TaskStore::merge` feeds `reconcile_attention`. Its display state
+and the collection's source health reach `emit_agents`, which calls
+`dashboard_view::project`, updates the tray icon and emits the dashboard snapshot
+to Svelte. `known_sessions` separately feeds `TransitionEngine::apply_snapshots`
+and `notifier::handle_events`. Ordered integration observations have a dedicated
+dispatch path; notification delivery waits for their durable attention and
+dedup writes. Partial reads do not become terminal events.
+
+The dashed SVG arrow is a user command: opening/hiding windows and returning to
+a verified host go through scoped native commands and focus checks. A snapshot
+update does not focus a host, acknowledge a result or approve a request. Settings
+and capability metadata serve both collection and view projection; they are not
+task-result outputs.
 
 | Owner | Responsibility and boundary |
 | --- | --- |
 | `src-tauri/src/providers/`, `integrations/` | Read native/remote evidence and validate Manifest/Standard Events/MCP input. Produce observations/health without inventing completion or approval. |
 | `watcher.rs`, `watcher/dedup.rs` | Coordinator owns bounded collection, generation guards, source health and consistent publication. The child module owns pure observation dedup, without scheduling or persistence. |
-| `store/`, `attention.rs`, `history.rs` | Reconcile authoritative observations, retain durable unread/pin/request state and archive old attention. Partial/missing data is not a terminal event. |
+| `store/`, `history.rs` | Merge provider observations and retain the recent-observation cache (`recent.json`). Partial/missing data is not a terminal event. |
+| `attention.rs` | Own `attention.json`, durable unread/pin/request state, followed sessions and archival. UI retention is independent of the recent-observation cache. |
 | `transition.rs`, `notifier.rs`, `task_notice.rs` | Deduplicate lifecycle notifications and manage presentation. Dismissal/focus is not user-read. |
 | `monitoring.rs`, `monitoring/discovery.rs`, `source_catalog.rs` | Registry owns source IDs, migration/CAS and catalog state. Discovery is read-only. The catalog owns shared capability metadata. Support, detection, health and current tasks stay separate. |
 | `popup_interaction.rs`, `tray.rs`, native window/startup/focus modules | Backend visibility/focus and OS resources. Validate live identity and release locks before native setters. |
