@@ -1,11 +1,14 @@
 {
-  "version": "1.1.0",
-  "capture_commit": "4195c858aa7171ea6fb48eb740f73507e4708822",
+  "version": "0.0.1",
+  "capture_commit": "0d519456d09cad2326b491827639ce97b9267089",
   "modified": false,
-  "executable_sha256": "47f0ff8401bc054a380cb04fa172e2f4b7526aa099c287ac601d7ec62a6f9a65",
+  "executable_sha256": "99d2da2001c99582337d99566d43f66fd3b930d51a78555ee84798fa26ff088e",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
-  "data": "Public synthetic Standard Events; no real Agent sessions",
+  "data": "Example tasks via Standard Events; no private Agent sessions",
+  "authorization": "Maintainer requested current-interface public screenshots",
+  "rendering": "Native WebView capture at DPR 2; no UI or IPC mocks",
+  "captured_on": "2026-11-07",
   "assets": [
     {
       "file": "dashboard.png",
@@ -16,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 840,
       "dpr": 2,
-      "sha256": "f9f7c7d78a2951900ca3a3fd767fa0c429e1cf3cced028dafa7dc921889c4ca7",
-      "bytes": 165248
+      "sha256": "80e569d683fd6f74872eb2e01eb9971399ee134183ae9f586bdd93582068bc18",
+      "bytes": 181226
     },
     {
       "file": "notice-input.png",
@@ -28,8 +31,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "a4b7335b5f6b725e80c3e0e5d3cae83e8ad317991d19a995b87c598bb98c7930",
-      "bytes": 25974
+      "sha256": "014e2d4cbf2978e3e5baa958ddd3677eebc383fb5e35a28028f4199109a7b4bd",
+      "bytes": 25613
     },
     {
       "file": "notice-approval.png",
@@ -40,8 +43,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "2fec62b1d477e4efdbe35350bb3f6dcfd5c7f6b3edb96791bf0c8704f3d31c5c",
-      "bytes": 24688
+      "sha256": "c12a9f134fb33bc39e9d23775329de45046371ca707c370ef4d363d628a01b8c",
+      "bytes": 24350
     },
     {
       "file": "notice-completed.png",
@@ -52,32 +55,20 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "91fe7cc69411aadc0b92184586fdc3dcae4bf1c693def945cb01d4faad50b7a5",
-      "bytes": 26018
-    },
-    {
-      "file": "demo.gif",
-      "language": "zh-CN",
-      "kind": "demo",
-      "width": 368,
-      "height": 840,
-      "frames": 90,
-      "fps": 5,
-      "seconds": 18,
-      "sha256": "ea112e6c46f6b32570c578b75f5f378506189ad74bb97c1a34bf60c00d188453",
-      "bytes": 2080767
+      "sha256": "807d566e7e86cce6d4e3be8351f7ef990571e99cbf0ef07ffdf18d095c5465eb",
+      "bytes": 25590
     },
     {
       "file": "dashboard-en.png",
       "language": "en",
       "kind": "dashboard",
       "width": 736,
-      "height": 1680,
+      "height": 1722,
       "logical_width": 368,
-      "logical_height": 840,
+      "logical_height": 861,
       "dpr": 2,
-      "sha256": "99d6c84e498931bf622c2b677c6ae9b14f061417ae006675ec71b202de81aa8d",
-      "bytes": 153719
+      "sha256": "25cb428961e9da260fdb119c78eddcbb278901155f462d57230bc3ac0aa4675d",
+      "bytes": 164910
     },
     {
       "file": "notice-input-en.png",
@@ -88,8 +79,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "30280e945057f9b4556c80aee45da5beae3ade867a0fd1e7ecffaca2c7127d4e",
-      "bytes": 22281
+      "sha256": "9876f3fd13820c6148239c27f9fcc2a9fd2160773332032416cce045ab1e3a7b",
+      "bytes": 21213
     },
     {
       "file": "notice-approval-en.png",
@@ -100,8 +91,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "bea45b8b4742d69363e214bd809fc4e8675430345881c2f249de3beaf239dec9",
-      "bytes": 21284
+      "sha256": "449890570115abec5ef1143435cf5705a4dfc608d724aa8e54cb717e2a89641a",
+      "bytes": 20832
     },
     {
       "file": "notice-completed-en.png",
@@ -112,25 +103,16 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "8796361fd983dd90e2ef6869916da0256ab62aff7905767569807c2c31d3217e",
-      "bytes": 23636
-    },
-    {
-      "file": "demo-en.gif",
-      "language": "en",
-      "kind": "demo",
-      "width": 368,
-      "height": 840,
-      "frames": 90,
-      "fps": 5,
-      "seconds": 18,
-      "sha256": "baa66d2566b8a9867c949b90bc1f8d4cc08cfd2056ee7bb41585cf3a096a6696",
-      "bytes": 2296284
+      "sha256": "75e615ab2754cc0623ed9de75d6227af7f738640a32fd8c0e8a2163f8d8d99fd",
+      "bytes": 23072
     }
   ],
-  "captured_on": "2026-11-04",
-  "authorization": "Maintainer requested latest-interface screenshots and a demo",
-  "frontend_tree": "b144e6adfdafcd42d2d52962a3f7f7d737e224ba",
-  "rendering": "Native app WebView capture at DPR 2 for PNGs and DPR 1 for GIF frames; no UI or IPC mocks",
-  "demo": "Scripted native interaction, 5 FPS; illustrative playback, not latency or real-Agent acceptance evidence"
+  "frontend_tree": "8f58b8588e87fbfde5b668ad7310fa9740c86e47",
+  "runtime_tree": "0a0637dac59ca1a1fb81efea03829cc8fe53c650",
+  "locale_tree": "06be0790d10cf742a2a829437fd686f576c0f733",
+  "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
+  "lockfiles": {
+    "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
+    "src-tauri/Cargo.lock": "808e1cd9d124b3bd3f4b1e1c2b6ed13e793ddf17e6063da022f76e5b9639aec1"
+  }
 }

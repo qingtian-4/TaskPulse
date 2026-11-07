@@ -18,7 +18,7 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `projects/*.jsonl` 会话目录 | 数据库与增量日志关联本轮开始/结束；不包含云端任务，不提供独立提问或审批提醒 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 原生标题、项目、模型、工具阶段与整轮结果；不提供独立审批事件 |
 | 豆包 | 桌面端原生执行存储 | 当前工作任务与执行状态；不提供审批提醒；目录设置见[本机来源](LOCAL_AGENTS.md) |
-| Kimi Code / kimi-cli | `~/.kimi-code` / `KIMI_CODE_HOME`；旧版 `~/.kimi` / `KIMI_SHARE_DIR` | 只读主会话 wire；明确轮次结束、审批、提问按原生请求 ID 匹配。仅显示日志报告的模型与推理强度；后台子 Agent 暂不单独导入。当前为源码/固定回放核验，仍需宿主版本实机验收 |
+| Kimi Code / kimi-cli | `~/.kimi-code` / `KIMI_CODE_HOME`；旧版 `~/.kimi` / `KIMI_SHARE_DIR` | 只读主会话 wire；明确轮次结束、审批、提问按原生请求 ID 匹配。仅显示日志报告的模型与推理强度；后台子 Agent 暂不单独导入。宿主版本的实机验证仍待完成 |
 | Qoder | Desktop 的 `main.sqlite`，以及 `~/.qoder/projects` 转录 | Desktop 完整轮次投影提供结束与时长；IDE/CLI 需要实际存在的顶层 `result`，不把 Stop Hook 或模型回复结束当作整轮结束。原生审批和提问尚未支持 |
 | TRAE | 本机公开工作区元数据 | 可发现公开会话。当前主会话库不是标准 SQLite；完整任务状态、模型、审批、提问和结束仍未适配，不显示为读取健康 |
 
@@ -63,7 +63,7 @@ Windows 10/11 x64 是主要验收平台。macOS 13.3+ 提供 Intel 与 Apple Sil
 
 ## English
 
-TaskPulse tracks active turns, explicit requests and unread results. Local discovery reads supported native data after the initial confirmation. The Sources page lists detected and configured agents; use Advanced to manage WSL, SSH, events or custom directories.
+TaskPulse tracks active turns, explicit requests and unread results. Local discovery reads supported native data after the initial confirmation. The Sources page separates local agents and SSH servers. Configure an agent inline; advanced entries retain WSL, events and custom directories.
 
 | Agent or connection | Evidence |
 | --- | --- |

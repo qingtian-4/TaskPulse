@@ -2,6 +2,7 @@ import {test,expect} from 'bun:test';
 import {readFileSync,existsSync} from 'node:fs';
 import {resolve} from 'node:path';
 import {createHash} from 'node:crypto';
+import {spawnSync} from 'node:child_process';
 import {documentationErrors,gitFiles} from '../scripts/repository-audit';
 const root=resolve(import.meta.dir,'..');
 const read=(name:string)=>readFileSync(resolve(root,name),'utf8');
@@ -62,28 +63,29 @@ test('versioned native media has intact provenance and three reminders share one
   expect(manifest.capture_commit).toMatch(/^[a-f0-9]{40}$/);
   expect(manifest.executable_sha256).toMatch(/^[a-f0-9]{64}$/);
   expect(manifest.modified).toBe(false);
-  expect(manifest.data).toContain('Public synthetic');
-  expect(manifest.assets).toHaveLength(10);
+  for(const [field,path] of [['frontend_tree','src'],['runtime_tree','src-tauri/src'],['locale_tree','locales']]){
+    const tree=spawnSync('git',['rev-parse',`HEAD:${path}`],{cwd:root,encoding:'utf8',windowsHide:true});
+    expect(tree.status).toBe(0);
+    expect(manifest[field],`${path}: screenshots must match the current application source`).toBe(tree.stdout.trim());
+  }
+  expect(manifest.application_config_sha256).toBe(createHash('sha256').update(readFileSync(resolve(root,'src-tauri/tauri.conf.json'))).digest('hex'));
+  for(const file of ['bun.lock','src-tauri/Cargo.lock'])expect(manifest.lockfiles[file],file).toBe(createHash('sha256').update(readFileSync(resolve(root,file))).digest('hex'));
+  expect(manifest.data).toContain('Example tasks');
+  expect(manifest.version).toBe(JSON.parse(read('package.json')).version);
+  expect(manifest.assets).toHaveLength(8);
   for(const asset of manifest.assets){
     const bytes=readFileSync(resolve(root,'assets/screenshots',asset.file));
     expect(createHash('sha256').update(bytes).digest('hex'),asset.file).toBe(asset.sha256);
     expect(bytes.length,asset.file).toBe(asset.bytes);
-    if(asset.kind==='demo'){
-      expect(bytes.subarray(0,6).toString(),asset.file).toMatch(/^GIF8[79]a$/);
-      expect(bytes.readUInt16LE(6),asset.file).toBe(asset.width);
-      expect(bytes.readUInt16LE(8),asset.file).toBe(asset.height);
-      expect(bytes.length,asset.file).toBeLessThanOrEqual(5*1024*1024);
-    }else{
-      expect(bytes.subarray(0,8).toString('hex'),asset.file).toBe('89504e470d0a1a0a');
-      expect(bytes.readUInt32BE(16),asset.file).toBe(asset.logical_width*2);
-      expect(bytes.readUInt32BE(20),asset.file).toBe(asset.logical_height*2);
-    }
+    expect(bytes.subarray(0,8).toString('hex'),asset.file).toBe('89504e470d0a1a0a');
+    expect(bytes.readUInt32BE(16),asset.file).toBe(asset.logical_width*2);
+    expect(bytes.readUInt32BE(20),asset.file).toBe(asset.logical_height*2);
   }
   for(const [file,suffix] of [['README.md',''],['README.en.md','-en']]){
     const body=read(file);
     expect(body,file).toContain(`v${manifest.version}`);
     expect(body,file).toContain(`src="assets/screenshots/dashboard${suffix}.png"`);
-    expect(body,file).toContain(`src="assets/screenshots/demo${suffix}.gif"`);
+    expect(body,file).not.toMatch(/\.(?:gif|mp4|webm)\b|<video\b/);
     const rows=[...body.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/g)].map(m=>m[0]);
     const row=rows.find(r=>r.includes(`src="assets/screenshots/notice-input${suffix}.png"`));
     expect(row,file).toBeDefined();

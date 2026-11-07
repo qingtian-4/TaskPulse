@@ -4,6 +4,14 @@ TaskPulse uses Rust/Tauri 2 for collection, durable attention and native deliver
 with Svelte 5 and Bun. [Development](../CONTRIBUTING.md) and
 [maintenance](../.agents/skills/taskpulse-maintenance/SKILL.md) describe how to change it.
 
+[中文架构图](../assets/architecture/architecture-zh.svg) · [English diagram](../assets/architecture/architecture-en.svg)
+
+The SVGs are editable source assets. The flow below and ownership table are the
+reference for implementation. Kimi separates filesystem admission (`kimi.rs`),
+pure wire reduction (`kimi/wire.rs`) and regression cases (`kimi/tests.rs`).
+Qoder readers separate Desktop SQLite projections from IDE/CLI transcripts.
+TRAE's public metadata reader does not claim full lifecycle support.
+
 ```mermaid
 flowchart LR
   A[Providers and event adapters] --> B[Watcher collection and normalization]
@@ -24,7 +32,7 @@ flowchart LR
 | `transition.rs`, `notifier.rs`, `task_notice.rs` | Deduplicate lifecycle notifications and manage presentation. Dismissal/focus is not user-read. |
 | `monitoring.rs`, `monitoring/discovery.rs`, `source_catalog.rs` | Registry owns source IDs, migration/CAS and catalog state. Discovery is read-only. The catalog owns shared capability metadata. Support, detection, health and current tasks stay separate. |
 | `popup_interaction.rs`, `tray.rs`, native window/startup/focus modules | Backend visibility/focus and OS resources. Validate live identity and release locks before native setters. |
-| `src/lib/`, `src/routes/` | Typed presentation and IPC clients. Shared stores own preferences/drafts. SourceSettings owns editing and management close protection. SourceCapabilities only renders catalog metadata. |
+| `src/lib/`, `src/routes/` | Typed presentation and IPC clients. Shared stores own preferences/drafts. SourceSettings owns editing and management close protection. |
 | `locales/` | One pair of app-owned catalogs for Svelte and native Rust, with key-consistency tests. Native task/source text stays data. |
 | `scripts/`, package scripts, `.github/workflows/` | Build/development/audit/delivery entrypoints, with stable shipped runtime resources. |
 | `tests/`, `tests/native/`, `tests/install/`, `tests/support/`, `tests/fixtures/` | Automated contracts, opt-in native/installation acceptance, shared lifecycle helpers and sanitized inputs. |

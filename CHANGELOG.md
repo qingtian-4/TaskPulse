@@ -1,42 +1,29 @@
 # Changelog
 
-## Unreleased · 0.0.1
+## 0.0.1
 
 [Bilingual release notes](docs/releases/0.0.1.md)
 
 ### Added
 
-- Explicit source-reported reasoning effort, frozen end-to-end task duration, and measured four-card popup sizing.
+- Native Kimi Code and Qoder readers, with explicit format and request capability boundaries. TRAE exposes public session discovery and its current storage limits.
+- Local Agent settings and multi-server SSH setup with separate connection/data checks and project scopes.
+- Reported reasoning effort, frozen end-to-end duration, configurable task text and adaptive four-card panel sizing.
 
-- SSH server management with a three-step setup wizard, separate connectivity/data checks and project scopes. Remote Claude remains explicitly unsupported.
+### Improved
 
-- Source capability/platform metadata, grouped settings and advanced connections.
-- Request replay/evaluation tools and same-commit release acceptance guidance.
-- Per-file/shared status read budgets and Claude journal admission/recovery safeguards.
-- Windows resource sampling including verified WebView2 descendants.
-
-### Changed
-
-- Separate source support, data detection, enablement, health, sessions and current tasks.
-- Preserve explicit requests, unread results and pins across incomplete reads and restarts.
-- Reduce repeated Claude admission I/O and omit development debug symbols.
-- Update attention-focused bilingual product copy and prepare consolidated future release assets, retaining current attachments and MSI updates.
+- Preserve pending requests, unread results and pins across restarts and incomplete reads.
+- Distinguish support, detection, enablement, read health, sessions and active tasks.
+- Bound compatibility-file and Claude journal reads; retain trusted state on capacity or format errors.
+- Organize runtime, tools and verification entrypoints with shared maintenance guidance, updated bilingual usage and architecture diagrams.
 
 ### Fixed
 
-- Validate oversized Codex FileChange records without raising buffer limits; retain degradation for malformed or lifecycle records.
-- Group verified project directory aliases, restore settings maximization and provide consistent configurable task typography.
+- Windows tray click/focus races, settings focus ownership, source-detection deduplication and verified project-path aliases.
+- Codex large-record validation and matching input-request resolution, including DeepSeek Harness.
+- Aliased Kimi data roots no longer create false duplicate sessions.
 
-- Open local Agent settings directly and expand configuration inline; simplify settings and About copy.
-
-- Restore every supported local source from the backend catalog; open general settings from the panel gear and tray settings entry.
-- Remove the settings sidebar footer and open the project/license links in the system browser.
-
-- Windows tray click/focus races and late popup readiness stealing settings focus.
-- Scanner detection disappearing when all records are deduplicated.
-- Standard-account probe cold-start stalls and mismatched frontend bootstrap assets.
-
-新增来源能力与高级连接分组、读取预算、日志准入和恢复保护、包含 WebView2 的资源采样。修复托盘竞争、来源检测漏报、探针冷启动及前端构建资源不匹配。当前公开附件保持完整，后续紧凑布局保留 MSI 更新兼容包。真实来源与平台实机验收的剩余范围见更新说明。
+The source version is 0.0.1. Available downloads and migration from the earlier numbering scheme are described in [installation](docs/INSTALL.en.md#version-migration). Copyright, history, configuration and source identities are preserved.
 
 ## 1.0.1 · 2026-10-31
 

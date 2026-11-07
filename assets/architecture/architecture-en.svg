@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="604" viewBox="0 0 1120 604" role="img" aria-labelledby="title desc"><title id="title">Evidence behind every reminder</title><desc id="desc">Read-only sources feed bounded collection, trusted task observations, durable attention and explicit transitions. Scoped native delivery presents snapshots and deduplicated reminders.</desc>
+<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M 0 0 L 10 5 L 0 10 z" fill="#57988c"/></marker></defs>
+<style>text{font-family:Segoe UI,Microsoft YaHei,sans-serif;fill:#193c37}.title{font-size:27px;font-weight:700}.sub{font-size:13px;fill:#5d7772}.label{font-size:15px;font-weight:600}.detail{font-size:12px;fill:#536d68}.code{font-size:12px;fill:#167d70}.edge{fill:none;stroke:#57988c;stroke-width:2;marker-end:url(#arrow)}.foot{font-size:13px;fill:#38655c}</style>
+<rect width="1120" height="604" rx="20" fill="#f1f7f5"/>
+<text x="32" y="46" class="title">Evidence behind every reminder</text><text x="32" y="74" class="sub">TaskPulse · Rust / Tauri 2 / Svelte 5</text>
+<rect x="32" y="133" width="260" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="50" y="159" class="label">Native readers</text><text x="50" y="182" class="detail">Codex · Claude Code · DSH</text><text x="50" y="202" class="code">Kimi · Qoder · more</text>
+<rect x="32" y="269" width="260" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="50" y="295" class="label">Remote &amp; integrations</text><text x="50" y="318" class="detail">WSL · SSH · tmux</text><text x="50" y="338" class="code">Standard Events · MCP</text>
+<rect x="374" y="112" width="330" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="138" class="label">Bounded collection · Watcher</text><text x="392" y="161" class="detail">Budgets / generations / dedup</text><text x="392" y="181" class="code">providers/ · watcher/</text>
+<rect x="374" y="216" width="330" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="242" class="label">Trusted observations · TaskStore</text><text x="392" y="265" class="detail">Partial reads preserve trusted state</text><text x="392" y="285" class="code">store/</text>
+<rect x="374" y="320" width="330" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="346" class="label">Durable attention · AttentionTracker</text><text x="392" y="369" class="detail">Request IDs / unread / pins / recovery</text><text x="392" y="389" class="code">attention.rs · history.rs</text>
+<rect x="374" y="424" width="330" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="450" class="label">State changes · TransitionEngine</text><text x="392" y="473" class="detail">Explicit lifecycle / notification dedup</text><text x="392" y="493" class="code">transition.rs</text>
+<rect x="786" y="164" width="302" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="804" y="190" class="label">Snapshots &amp; settings</text><text x="804" y="213" class="detail">Svelte 5 · scoped IPC</text><text x="804" y="233" class="code">src/lib/ · src/routes/</text>
+<rect x="786" y="294" width="302" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="804" y="320" class="label">Tray &amp; host return</text><text x="804" y="343" class="detail">Tauri 2 · Windows / macOS</text><text x="804" y="363" class="code">tray.rs · popup_interaction.rs</text>
+<rect x="786" y="424" width="302" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="804" y="450" class="label">Task reminders</text><text x="804" y="473" class="detail">Dismissal never reads or approves</text><text x="804" y="493" class="code">notifier.rs · task_notice.rs</text>
+<path class="edge" d="M292 176 H334 V155 H374"/>
+<path class="edge" d="M292 312 H334 V155"/>
+<path class="edge" d="M539 198 V216"/>
+<path class="edge" d="M539 302 V320"/>
+<path class="edge" d="M539 406 V424"/>
+<path class="edge" d="M704 363 H744 V207 H786"/>
+<path class="edge" d="M744 337 H786"/>
+<path class="edge" d="M704 467 H786"/>
+<rect x="32" y="541" width="1056" height="40" rx="10" fill="#e0f0ea"/><text x="560" y="566" text-anchor="middle" class="foot">Source registry &amp; capability catalog · Local persistence · Verified identity · Signed updates</text></svg>

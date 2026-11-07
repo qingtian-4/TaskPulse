@@ -125,6 +125,10 @@ skills-lock.json
 !/docs/releases/
 /assets/*
 !/assets/README.md
+!/assets/architecture/
+/assets/architecture/*
+!/assets/architecture/architecture-zh.svg
+!/assets/architecture/architecture-en.svg
 !/assets/brand/
 !/assets/screenshots/
 /assets/screenshots/*
@@ -136,33 +140,27 @@ skills-lock.json
 !/assets/screenshots/notice-input-en.png
 !/assets/screenshots/notice-approval-en.png
 !/assets/screenshots/notice-completed-en.png
-!/assets/screenshots/demo.gif
-!/assets/screenshots/demo-en.gif
 !/assets/screenshots/manifest.json
 
 /*.md
 !/README.md
 !/README.en.md
 !/AGENTS.md
+!/ROADMAP.md
 !/CHANGELOG.md
 !/CODE_OF_CONDUCT.md
 !/CONTRIBUTING.md
 !/SECURITY.md
-/docs/releases/TEMPLATE.md
-/docs/releases/0.2.0-alpha.1.md
-/docs/releases/0.2.0-alpha.2.md
-/docs/releases/0.2.0-alpha.3.md
-/docs/releases/0.2.0-alpha.4.md
-/docs/releases/0.2.0-alpha.5.md
-/docs/releases/0.2.0-alpha.6.md
-/docs/releases/0.2.0-alpha.7.md
+/docs/releases/*
+!/docs/releases/0.0.1.md
+!/docs/releases/1.0.0.md
+!/docs/releases/1.0.1.md
 
 /dev.sh
 *.tsbuildinfo
 .vite/
 *.timestamp-*.mjs
 *.timestamp-*.js
-/docs/releases/0.2.0-alpha.8.md
 
 /scripts/build.sh
 /scripts/build.ps1

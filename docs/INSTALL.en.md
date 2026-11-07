@@ -2,13 +2,13 @@
 
 [简体中文](INSTALL.md)
 
-Release notes put installation downloads at the top. The current version keeps
-all attachments. Later versions consolidate metadata into a release manifest,
-`SHA256SUMS.txt` and a dependency/license ZIP. Updater signatures stay embedded
-in `latest.json`, with sidecars and per-platform license material retained in
-the ZIP. Existing MSI installations keep their MSI update package. Windows
-ARM64 is selectable only when that release actually provides its installer.
-The bootstrap selects the native system architecture.
+## Version migration
+
+The source version is 0.0.1. Available installers are listed on Releases; a source revision is not an available download. Versions 1.0.0 and 1.0.1 belong to the earlier numbering scheme. The signed updater will not treat 0.0.1 as an upgrade from 1.0.x.
+
+Once a verified 0.0.1 installer is available, exit TaskPulse and back up `~/.taskpulse/`. Uninstall the old application without deleting its profile, then install the matching architecture/package format and verify your sources, unread results and pins. Do not run both versions against the same profile. Signature checks and OS security prompts remain required. Do not remove a working installation before the replacement is available.
+
+Installers, updater metadata, checksums and dependency/license material accompany each release. Existing MSI installations keep their MSI update package. Windows ARM64 is selectable only when that release provides it; the bootstrap uses the native system architecture.
 
 Choose a package from [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases). On Windows 10/11 x64, use the EXE setup wizard or the MSI for managed deployment. Choose one format and uninstall it before switching. Setup can download WebView2 if the runtime is missing. On macOS 13.3 or later, pick the Apple Silicon or Intel DMG and drag TaskPulse into Applications. The [command-line installer](CLI_INSTALL.md) verifies SHA-256 and defaults to `~/Applications` on Mac.
 
