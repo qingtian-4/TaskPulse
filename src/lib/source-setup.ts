@@ -20,9 +20,9 @@ export interface SourceCatalogRow {
   definition:SourceDefinition; source?:MonitorSource; candidate?:MonitorSource; observation?:SourceSnapshot;
   supported:boolean; locationDetected:boolean|null; dataDetected:boolean|null;
 }
-export function createEventSource(definition:SourceDefinition):MonitorSource {
+export function createEventSource(definition:SourceDefinition,name=definition.name):MonitorSource {
   if(definition.kind!=='generic_event'||!definition.adapter_id||!definition.agent_id)throw Error('invalid_event_definition');
-  return {id:`generic_event:${crypto.randomUUID()}`,kind:'generic_event',name:definition.name,location:'',enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,integration:{agent_id:definition.agent_id,adapter_id:definition.adapter_id,transport:'local',accept_since_ms:0}};
+  return {id:`generic_event:${crypto.randomUUID()}`,kind:'generic_event',name,location:'',enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,integration:{agent_id:definition.agent_id,adapter_id:definition.adapter_id,transport:'local',accept_since_ms:0}};
 }
 export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []):SourceCatalogRow[] {
   const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)

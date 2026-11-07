@@ -8,12 +8,13 @@
   import ProjectScope from './ProjectScope.svelte';
   let {settings,catalog,observations,dirty,disabled,changed}:{settings:DashboardSettings;catalog:SourceDefinition[];observations:SourceSnapshot[];dirty:boolean;disabled:boolean;changed:()=>void}=$props();
   let expanded=$state(''),removing=$state(''),qoder=$state(false);
+  function agentName(definition:SourceDefinition){return ['standard-events','kimi-code-cli','trae-cn-ide','zcode-desktop','workbuddy-candidate'].includes(definition.adapter_id??'')?$t(definition.name):definition.name;}
   const rows=$derived(catalog.flatMap<{definition:SourceDefinition;source?:MonitorSource}>(definition=>{
     const saved=settings.sources.filter(s=>s.kind==='generic_event'&&s.integration?.adapter_id===definition.adapter_id);
     return saved.length?saved.map(source=>({definition,source})):[{definition,source:undefined}];
   }));
   async function reveal(id:string){await tick();document.querySelector(`[data-event-source="${id}"]`)?.scrollIntoView({block:'start'});}
-  async function add(definition:SourceDefinition){const source=createEventSource(definition);settings.sources.push(source);expanded=source.id;changed();await reveal(source.id);}
+  async function add(definition:SourceDefinition){const source=createEventSource(definition,agentName(definition));settings.sources.push(source);expanded=source.id;changed();await reveal(source.id);}
   function remove(id:string){settings.sources=settings.sources.filter(s=>s.id!==id);removing='';expanded='';changed();}
 </script>
 
@@ -22,7 +23,7 @@
   {#each rows as {definition,source} (source?.id??definition.id)}
     <div class="agent-entry" data-event-adapter={definition.adapter_id} data-event-source={source?.id}>
       <div class="agent-row">
-        <div class="source-grow"><strong>{source?source.name:$t(definition.name)}</strong><small>{$t(source?sourceStatus(source,observations.find(s=>s.id===source.id)):'尚未接入')}</small></div>
+        <div class="source-grow"><strong>{source?source.name:agentName(definition)}</strong><small>{$t(source?sourceStatus(source,observations.find(s=>s.id===source.id)):'尚未接入')}</small></div>
         <span class="cap-tag planned">{$t('事件接入')}</span>
         <button class="ms-btn small" disabled={disabled} aria-expanded={!!source&&expanded===source.id} onclick={()=>{if(!source)void add(definition);else {expanded=expanded===source.id?'':source.id;if(expanded)void reveal(expanded);}}}>{$t(source&&expanded===source.id?'收起':'配置')}</button>
         {#if source}<input class="settings-switch" type="checkbox" role="switch" aria-label={$t('启用 {name}',{name:source.name})} checked={source.enabled} disabled={disabled} onchange={e=>{source.enabled=e.currentTarget.checked;changed();}}/>{/if}
