@@ -470,6 +470,7 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
     let mut started_at = None;
     let mut finished_at = None;
     let mut requests = super::deepseek_requests::Requests::default();
+    let mut uncorrelated_request = false;
     let mut updated_at = None;
     let mut failed = false;
     let mut parsed_event = false;
@@ -523,7 +524,7 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
         {
             // A changed request schema is a collection fault, not proof that
             // the previous request was answered.
-            return None;
+            uncorrelated_request = true;
         }
         if !requests.bounded() {
             return None;
@@ -584,6 +585,7 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
                 // last reported configuration until another header changes it;
                 // a response from a different model/provider invalidates effort.
                 requests = Default::default();
+                uncorrelated_request = false;
                 failed = false;
                 activity = Some("正在分析".into());
             }
@@ -591,6 +593,7 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
                 last_turn_end_seq = seq;
                 finished_at = time;
                 requests = Default::default();
+                uncorrelated_request = false;
                 failed = v
                     .pointer("/data/reason/kind")
                     .and_then(|value| value.as_str())
@@ -639,6 +642,9 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
     }
 
     if !parsed_event {
+        return None;
+    }
+    if uncorrelated_request || !requests.reliable() {
         return None;
     }
     let (waiting_reason, input_request_ids) = requests.pending();
@@ -1082,6 +1088,39 @@ mod tests {
     }
 
     #[test]
+    fn historical_rejected_question_cannot_poison_a_later_valid_turn_or_create_a_notice() {
+        use serde_json::json;
+        let mut events = vec![
+            json!({"type":"turn/start","seq":1,"time":1000}),
+            json!({"type":"tool/call","seq":2,"data":{"name":"ask_user_question","callId":"bad","arguments":{"questions":"invalid"}}}),
+        ];
+        assert!(
+            parse_session_text(&event_log(&events), "session/log").is_none(),
+            "unresolved malformed call must degrade, not guess a blocker"
+        );
+        events.push(json!({"type":"tool/result","seq":3,"data":{"message":{"toolCallId":"bad","isError":true,"content":[]}}}));
+        let recovered = parse_session_text(&event_log(&events), "session/log").unwrap();
+        assert_eq!(recovered.status, TaskStatus::Running);
+        assert!(recovered.input_request_ids.is_empty());
+        assert!(recovered.waiting_reason.is_none());
+        assert!(recovered.finished_at.is_none());
+        events.push(json!({"type":"turn/end","seq":4,"time":4000}));
+        events.push(json!({"type":"turn/start","seq":5,"time":5000}));
+        let next = parse_session_text(&event_log(&events), "session/log").unwrap();
+        assert_eq!(next.status, TaskStatus::Running);
+        assert_eq!(next.turn_key.as_deref(), Some("turn:5"));
+        // A future schema with no usable ID stays uncertain until an explicit
+        // turn boundary; busy events and tool completion cannot clear it.
+        events.push(json!({"type":"approval/asked","seq":6,"data":{}}));
+        assert!(parse_session_text(&event_log(&events), "session/log").is_none());
+        events.push(json!({"type":"turn/end","seq":7,"time":7000}));
+        assert!(parse_session_text(&event_log(&events), "session/log")
+            .unwrap()
+            .finished_at
+            .is_some());
+    }
+
+    #[test]
     fn native_question_answer_end_and_next_turn_keep_ids_duration_and_effort() {
         use crate::domain::WaitingReason;
         use serde_json::json;
@@ -1493,11 +1532,21 @@ mod tests {
             output.error
         );
         assert!(output.authoritative);
+        println!(
+            "native fields: models={} efforts={} ended_with_time={}",
+            output.tasks.iter().filter(|t| t.model.is_some()).count(),
+            output
+                .tasks
+                .iter()
+                .filter(|t| t.reasoning_effort.is_some())
+                .count(),
+            output
+                .tasks
+                .iter()
+                .filter(|t| t.finished_at.is_some())
+                .count()
+        );
         for task in &output.tasks {
-            println!(
-                "title={:?} project={:?} status={:?} session={:?}",
-                task.name, task.project, task.status, task.session_id
-            );
             assert!(task.id.starts_with("dsh-native:"));
         }
         if let Ok(title) = std::env::var("TASKPULSE_EXPECT_DSH_TITLE") {

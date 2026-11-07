@@ -16,6 +16,7 @@ pub(super) struct Requests {
     questions: BTreeMap<String, BTreeSet<String>>,
     approvals: BTreeSet<String>,
     settled: BTreeSet<String>,
+    invalid_calls: BTreeSet<String>,
 }
 
 impl Requests {
@@ -24,26 +25,15 @@ impl Requests {
         match kind {
             "tool/call" if data.get("name")?.as_str()? == "ask_user_question" => {
                 let call = identifier(data.get("callId")?)?;
-                let args = data.get("arguments")?;
-                let decoded;
-                let args = if let Some(text) = args.as_str() {
-                    decoded = serde_json::from_str::<Value>(text).ok()?;
-                    &decoded
-                } else {
-                    args
+                let ids = question_ids(data.get("arguments"));
+                let Some(ids) = ids else {
+                    // Tool calls are logged before host argument validation.
+                    // A malformed call is not an actual displayed question.
+                    if !self.settled.contains(&format!("question:{call}")) {
+                        self.invalid_calls.insert(call.into());
+                    }
+                    return Some(());
                 };
-                let ids: BTreeSet<_> = args
-                    .get("questions")?
-                    .as_array()?
-                    .iter()
-                    .map(|q| identifier(q.get("id")?))
-                    .collect::<Option<Vec<_>>>()?
-                    .into_iter()
-                    .map(str::to_owned)
-                    .collect();
-                if ids.is_empty() {
-                    return None;
-                }
                 if !self.settled.contains(&format!("question:{call}")) {
                     self.questions.entry(call.into()).or_insert(ids);
                 }
@@ -55,6 +45,9 @@ impl Requests {
                     .or_else(|| message.pointer("/source/callId"))?
                     .as_str()?;
                 if message.get("isError").and_then(Value::as_bool) == Some(true) {
+                    if self.invalid_calls.remove(call) {
+                        self.settled.insert(format!("question:{call}"));
+                    }
                     if self.questions.remove(call).is_some() {
                         self.settled.insert(format!("question:{call}"));
                     }
@@ -111,8 +104,15 @@ impl Requests {
     }
 
     pub fn bounded(&self) -> bool {
-        self.approvals.len() + self.questions.values().map(BTreeSet::len).sum::<usize>() <= 256
+        self.approvals.len()
+            + self.invalid_calls.len()
+            + self.questions.values().map(BTreeSet::len).sum::<usize>()
+            <= 256
             && self.settled.len() <= 4096
+    }
+
+    pub fn reliable(&self) -> bool {
+        self.invalid_calls.is_empty()
     }
 
     pub fn pending(&self) -> (Option<WaitingReason>, Vec<String>) {
@@ -135,10 +135,57 @@ impl Requests {
     }
 }
 
+fn question_ids(arguments: Option<&Value>) -> Option<BTreeSet<String>> {
+    let arguments = arguments?;
+    let decoded;
+    let arguments = if let Some(text) = arguments.as_str() {
+        decoded = serde_json::from_str::<Value>(text).ok()?;
+        &decoded
+    } else {
+        arguments
+    };
+    let ids: BTreeSet<_> = arguments
+        .get("questions")?
+        .as_array()?
+        .iter()
+        .map(|q| identifier(q.get("id")?))
+        .collect::<Option<Vec<_>>>()?
+        .into_iter()
+        .map(str::to_owned)
+        .collect();
+    (!ids.is_empty()).then_some(ids)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn invalid_host_call_is_not_a_question_and_only_its_failure_recovers_collection() {
+        let mut r = Requests::default();
+        let invalid = json!({"data":{"name":"ask_user_question","callId":"bad-call","arguments":{"questions":"invalid JSON array"}}});
+        r.apply("tool/call", &invalid);
+        assert!(!r.reliable());
+        assert!(r.pending().1.is_empty());
+        r.apply(
+            "tool/result",
+            &json!({"data":{"message":{"toolCallId":"other","isError":true}}}),
+        );
+        r.apply("tool/result",&json!({"data":{"message":{"toolCallId":"bad-call","content":[{"text":"{\"accepted\":true}"}]}}}));
+        assert!(!r.reliable());
+        r.apply(
+            "tool/result",
+            &json!({"data":{"message":{"toolCallId":"bad-call","isError":true}}}),
+        );
+        assert!(r.reliable());
+        assert!(r.pending().1.is_empty());
+        r.apply("tool/call", &invalid);
+        assert!(
+            r.reliable(),
+            "duplicate failed call does not resurrect uncertainty"
+        );
+    }
 
     #[test]
     fn questions_require_matching_answers_not_ack_tool_return_or_prose() {
