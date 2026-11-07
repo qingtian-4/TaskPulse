@@ -11,7 +11,7 @@ import {withSmokeWorkspace,stopOwnedChild} from '../support/smoke-workspace';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
 const commitAt=process.argv.indexOf('--commit'),expectedCommit=commitAt<0?undefined:process.argv[commitAt+1];
-if(commitAt>=0)assert.match(expectedCommit??'',/^[a-f0-9]{40}$/);
+if(commitAt>=0 || process.argv.includes('--capture'))assert.match(expectedCommit??'',/^[a-f0-9]{40}$/);
 await withSmokeWorkspace('product-native',async({owned,evidenceDir,onStop})=>{
 let app:ChildProcess|undefined,root:any,management:any,notice:any,spawnFailure:Error|undefined;
 onStop(async()=>{try{notice?.close();management?.close();root?.close();}finally{await stopOwnedChild(app);}});
@@ -148,7 +148,7 @@ async function fittedCards(count:number){
 try{
   root=await page('');await root.wait(`!!document.querySelector('.dashboard')`);
   const build=await root.invoke('get_build_info');if(expectedCommit){assert.equal(build.commit,expectedCommit);assert.equal(build.modified,false);}assert.equal(build.process_id,app!.pid);
-  buildEvidence={commit:build.commit,modified:build.modified,executableSha256:createHash('sha256').update(new Uint8Array(await Bun.file(exe).arrayBuffer())).digest('hex')};
+  buildEvidence={version:build.version,commit:build.commit,modified:build.modified,executableSha256:createHash('sha256').update(new Uint8Array(await Bun.file(exe).arrayBuffer())).digest('hex')};
   assert.equal((await root.invoke('integration_environment')).isolated,true);
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
   const nativeLayout=await root.evaluate(`({width:innerWidth})`);
@@ -570,9 +570,15 @@ try{
     // Curated public examples use the real event/store/UI pipeline. They are
     // deliberately custom-agent tasks, not fabricated native provider output.
     const settings=await root.invoke('get_monitoring_settings');
+    const english=process.argv.includes('--english');
+    const suffix=english?'-en':'';
+    const caption=(zh:string,en:string)=>english?en:zh;
+    settings.preferences.language=english?'en':'zh-CN';
+    settings.preferences.theme='light';
     settings.notifications=false;
-    settings.sources.find((s:any)=>s.id===source.id).name='示例 Agent';
+    settings.sources.find((s:any)=>s.id===source.id).name=caption('示例 Agent','Example agent');
     await management.invoke('save_monitoring_settings',{settings});
+    await root.wait(`document.documentElement.lang===${JSON.stringify(english?'en':'zh-CN')}`);
     for(let n=0;n<32;n++){
       const current=(await root.invoke('get_task_notice')).current;if(!current)break;
       await notice.invoke('dismiss_task_notice',{id:current.id});
@@ -584,33 +590,35 @@ try{
     await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(tasks=>tasks.every(t=>t.status!=='running'))`);
     for(const task of await root.invoke('get_agents'))await root.invoke('update_task_attention',{id:task.id,action:'hide'});
     await click(root,'.all-tasks');
-    if(await root.evaluate(`!!document.querySelector('[aria-label="关闭详情"]')`))await click(root,'[aria-label="关闭详情"]');
+    if(await root.evaluate(`!!document.querySelector('[aria-label="关闭详情"],[aria-label="Close details"]')`))await click(root,'[aria-label="关闭详情"],[aria-label="Close details"]');
     if(await root.evaluate(`document.querySelector('.filter-toggle')?.getAttribute('aria-expanded')==='true'`))await click(root,'.filter-toggle');
     await root.wait(`document.querySelectorAll('.task-row').length===0`);
     const oldMessages=await root.invoke('get_message_center');
     await root.invoke('mark_messages_seen',{ids:oldMessages.entries.map((entry:any)=>entry.id)});
-    event('readme-overview-running','turn.started',{title:'优化任务列表布局',project:'TaskPulse 示例',model:'gpt-5.4'});
-    event('readme-overview-running','tool.started',{activity:'调整任务卡片与状态提示'},{call_id:'readme-layout'});
-    event('readme-overview-input','turn.started',{title:'确认导出文件格式',project:'TaskPulse 示例',model:'gpt-5.4'});
+    event('readme-overview-running','turn.started',{title:caption('优化任务列表布局','Improve the task list'),project:caption('TaskPulse 示例','TaskPulse'),model:'gpt-5.4'});
+    event('readme-overview-running','tool.started',{activity:caption('调整任务卡片与状态提示','Update task cards and status')},{call_id:'readme-layout'});
+    event('readme-overview-input','turn.started',{title:caption('确认导出文件格式','Choose the export format'),project:caption('TaskPulse 示例','TaskPulse'),model:'gpt-5.4'});
     event('readme-overview-input','input.requested',{request_kind:'question'},{request_id:'readme-format'});
-    event('readme-overview-approval','turn.started',{title:'运行项目测试',project:'TaskPulse 示例',model:'gpt-5.4'});
+    event('readme-overview-approval','turn.started',{title:caption('运行项目测试','Run project checks'),project:caption('TaskPulse 示例','TaskPulse'),model:'gpt-5.4'});
     event('readme-overview-approval','input.requested',{request_kind:'approval'},{request_id:'readme-test'});
-    event('readme-overview-result','turn.started',{title:'整理快速入门指南',project:'Docs 示例',model:'gpt-5.4'});
+    event('readme-overview-result','turn.started',{title:caption('整理快速入门指南','Write the quick-start guide'),project:caption('Docs 示例','Documentation'),model:'gpt-5.4'});
     event('readme-overview-result','turn.completed');
-    await root.wait(`document.querySelectorAll('.task-row').length===4&&document.querySelectorAll('.model').length===4&&document.body.innerText.includes('等待输入')&&document.body.innerText.includes('本轮结束')`);
+    await root.wait(`document.querySelectorAll('.task-row').length===4&&document.querySelectorAll('.model').length===4&&document.body.innerText.includes(${JSON.stringify(caption('等待输入','Awaiting input'))})&&document.body.innerText.includes(${JSON.stringify(caption('本轮结束','Turn ended'))})`);
     const overview=await root.invoke('get_agents');
     assert.equal(overview.filter((t:any)=>t.status==='running').length,1);
     assert.equal(overview.filter((t:any)=>t.waiting_reason==='question').length,1);
     assert.equal(overview.filter((t:any)=>t.finished_at&&t.unread).length,1);
     assert.equal(overview.filter((t:any)=>t.waiting_reason==='approval').length,1);
     await Bun.sleep(8000); // Capture a live elapsed clock, not a just-created 0s task.
-    await screenshot(root,'readme-dashboard',368,840);
+    await root.send('Emulation.clearDeviceMetricsOverride');
+    const dashboardHeight=await fittedCards(4);
+    await screenshot(root,'readme-dashboard',368,dashboardHeight);
     assert.ok(await root.evaluate(`[...document.querySelectorAll('.task-item')].every(e=>{const r=e.getBoundingClientRect(),list=document.querySelector('.task-scroll').getBoundingClientRect();return r.top>=list.top&&r.bottom<=list.bottom})`),'Every representative task must be visible');
     settings.notifications=true;await management.invoke('save_monitoring_settings',{settings});
     for(const [kind,title,project,label] of [
-      ['input','确认导出文件格式','TaskPulse 示例','等待输入'],
-      ['approval','运行项目测试','TaskPulse 示例','需要授权'],
-      ['completed','整理快速入门指南','Docs 示例','本轮结束']
+      ['input',caption('确认导出文件格式','Choose the export format'),caption('TaskPulse 示例','TaskPulse'),'等待输入'],
+      ['approval',caption('运行项目测试','Run project checks'),caption('TaskPulse 示例','TaskPulse'),'需要授权'],
+      ['completed',caption('整理快速入门指南','Write the quick-start guide'),caption('Docs 示例','Documentation'),'本轮结束']
     ]){
       const session='readme-notice-'+kind,requestId=session+'-request';
       event(session,'turn.started',{title,project,model:'gpt-5.4'});
@@ -619,7 +627,7 @@ try{
       if(kind==='completed')event(session,'turn.completed');
       else event(session,'input.requested',{request_kind:kind==='input'?'question':'approval'},{request_id:requestId});
       await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.task_id==='${id}')`);
-      await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(label)})`);
+      await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(english?({input:'Awaiting input',approval:'Approval required',completed:'Turn ended'} as Record<string,string>)[kind]:label)})`);
       const current=(await root.invoke('get_task_notice')).current;
       if(kind!=='completed')assert.equal(current.auto_dismiss_ms,null);
       const unreadBefore=(await root.invoke('get_agents')).find((t:any)=>t.id===id).unread;
@@ -633,7 +641,8 @@ try{
       }
     }
     await mkdir('assets/screenshots',{recursive:true});
-    for(const [from,to] of [['readme-dashboard','dashboard'],['readme-notice-input','notice-input'],['readme-notice-approval','notice-approval'],['readme-notice-completed','notice-completed']])await copyFile(join(owned,from+'.png'),join('assets/screenshots',to+'.png'));
+    for(const [from,to] of [['readme-dashboard','dashboard'],['readme-notice-input','notice-input'],['readme-notice-approval','notice-approval'],['readme-notice-completed','notice-completed']])await copyFile(join(owned,from+'.png'),join('assets/screenshots',to+suffix+'.png'));
+    await Bun.write(join(owned,'capture-media.json'),JSON.stringify({...buildEvidence,language:english?'en':'zh-CN',files:['dashboard','notice-input','notice-approval','notice-completed'].map(name=>name+suffix+'.png')},null,2));
     checks.push('public README native captures at DPR 2: four visible tasks across running/input/approval/unviewed states and input/approval/completed notices; no acknowledgement or fabricated native-agent identities');
   }
   const report={passed:true,...buildEvidence,checks,layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};

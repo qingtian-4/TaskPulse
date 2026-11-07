@@ -5,7 +5,7 @@ import {createHash} from 'node:crypto';
 import {mkdir,copyFile,appendFile} from 'node:fs/promises';
 import {dirname,join,resolve} from 'node:path';
 import {spawn,type ChildProcess} from 'node:child_process';
-import {withSmokeWorkspace,stopOwnedChild} from './smoke-workspace';
+import {withSmokeWorkspace,stopOwnedChild} from '../support/smoke-workspace';
 
 const arg=process.argv.indexOf('--exe'),head=process.argv.indexOf('--commit');
 assert.ok(arg>=0&&head>=0,'--exe and full --commit required');
