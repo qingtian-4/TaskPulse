@@ -215,7 +215,7 @@ try{
   const thinking=initial.find((t:any)=>t.session_id==='thinking'),done=initial.find((t:any)=>t.session_id==='done');
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
-  assert.deepEqual(fontSizes,{title:'13px',context:'11px',activity:'11px',number:nativeLayout.width<=350?'23px':'22px'});
+  assert.deepEqual(fontSizes,{title:'14px',context:'14px',activity:'14px',number:nativeLayout.width<=350?'23px':'22px'});
   for(const [width,height] of [[368,840],[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.setDeviceMetricsOverride',{width:368,height:560,deviceScaleFactor:1,mobile:false});
   checks.push('native window measures complete rows, grows and shrinks with four-card scrolling cap; long Chinese/English typography at DPR 1/1.25/1.5/2');
@@ -295,7 +295,7 @@ try{
   await root.invoke('open_management');management=await page('/manage');
   await management.wait(`document.querySelector('.settings-nav [aria-current="page"]')?.getAttribute('href')==='#general'`);
   await root.invoke('open_management',{section:'sources'});
-  await management.wait(`!!document.querySelector('.local-card')`);
+  await management.wait(`document.querySelectorAll('.local-agents .agent-row').length===9`);
   const currentSettings=await management.invoke('get_monitoring_settings');
   const sourceSettings=structuredClone(currentSettings);sourceSettings.sources.find((s:any)=>s.id===source.id).name='标准事件 · 公开合成示例';
   await management.invoke('save_monitoring_settings',{settings:sourceSettings,expected:currentSettings});
@@ -314,7 +314,7 @@ try{
   assert.equal(resolve(mcpConfig.mcpServers.taskpulse.env.TASKPULSE_HOME),resolve(home));
   assert.equal((await root.invoke('get_agents')).length,count,'Export must not create a task');
   checks.push('native management IPC preserves hidden generic-source save, fresh read attempt, connection-only test and source/profile-bound MCP export without host writes or fake tasks');
-  await click(management,'.ms-tabs button:nth-child(2)');
+  await click(management,'.ms-tabs button:nth-child(1)');
   await management.wait(`document.querySelectorAll('.local-agents .agent-row').length===9`);
   await checkScales(management,'sources',960,704);
   await management.send('Emulation.setDeviceMetricsOverride',{width:640,height:600,deviceScaleFactor:2,mobile:false});
@@ -322,6 +322,16 @@ try{
   assert.ok(await management.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.querySelector('.ms-scroll').scrollHeight>document.querySelector('.ms-scroll').clientHeight`),'The Local list must scroll internally without horizontal overflow');
   checks.push('fixed-size management layout opens local Agents directly and retains internal scrolling at compact emulated dimensions');
   await screenshot(management,'sources-current',960,704);
+  await management.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
+  await management.wait(`!!document.querySelector('[aria-label="任务字号"]')`);
+  await management.evaluate(`(()=>{const select=document.querySelector('[aria-label="任务字号"]');select.value='18';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await root.wait(`['.row-title','.context','.activity'].every(selector=>getComputedStyle(document.querySelector(selector)).fontSize==='18px')`);
+  const textMetrics=await root.evaluate(`['.row-title','.context','.activity'].map(selector=>({size:getComputedStyle(document.querySelector(selector)).fontSize,line:getComputedStyle(document.querySelector(selector)).lineHeight}))`);
+  assert.ok(textMetrics.every((value:any)=>value.size==='18px'&&value.line==='27px'));
+  await management.evaluate(`(()=>{const select=document.querySelector('[aria-label="任务字号"]');select.value='14';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await root.wait(`getComputedStyle(document.querySelector('.row-title')).fontSize==='14px'`);
+  assert.equal(await root.evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
+  checks.push('task size changes live to 18px with uniform 27px line height and restores to 14px; density never changes text size');
   // Separate test notice is real renderer delivery, never a monitored Agent completion.
   const config=await root.invoke('get_monitoring_settings');config.notifications=true;await management.invoke('save_monitoring_settings',{settings:config});
   await management.invoke('test_notification');notice=await page('/notice');
@@ -498,6 +508,7 @@ try{
         const current=(await root.invoke('get_task_notice')).current;await notice.invoke('dismiss_task_notice',{id:current.id});
       }
       assert.ok((await root.invoke('get_agents')).filter((t:any)=>t.source_instance?.startsWith('public-native-')).every((t:any)=>t.unread),'Dismissing native reminders cannot acknowledge results');
+      await management.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
       await management.wait(`document.body.innerText.includes('OpenCode')&&document.body.innerText.includes('WorkBuddy')`);
       checks.push('OpenCode/WorkBuddy native SQLite+JSONL through settings/provider/store/UI: no history import, stable rename, models, tool return stays running, explicit end and unread-preserving reminders (public fixtures, not host certification)');
       settings.sources=settings.sources.filter((s:any)=>!s.id.startsWith('public-native-'));await management.invoke('save_monitoring_settings',{settings});

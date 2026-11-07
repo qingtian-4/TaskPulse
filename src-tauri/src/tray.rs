@@ -494,8 +494,8 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
             crate::localization::text("设置")
         ))
         .inner_size(960.0, 704.0)
-        .resizable(false)
-        .maximizable(false)
+        .resizable(true)
+        .maximizable(true)
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
@@ -661,6 +661,11 @@ fn management_area(window: &tauri::WebviewWindow) -> Result<ManagementArea, Stri
 }
 
 fn fit_management_in(window: &tauri::WebviewWindow, area: ManagementArea) -> Result<(), String> {
+    if window.is_maximized().map_err(|e| e.to_string())?
+        || window.is_fullscreen().map_err(|e| e.to_string())?
+    {
+        return Ok(());
+    }
     let inner = window.inner_size().map_err(|e| e.to_string())?;
     let outer = window.outer_size().map_err(|e| e.to_string())?;
     let decoration = (

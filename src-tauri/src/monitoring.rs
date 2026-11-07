@@ -1010,6 +1010,44 @@ pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
     }
 }
 
+pub fn project_paths(source_id: &str) -> Vec<String> {
+    let settings = get_monitoring_settings();
+    let mut paths: HashSet<String> = settings
+        .sources
+        .iter()
+        .find(|s| s.id == source_id)
+        .map(|s| {
+            s.projects
+                .iter()
+                .filter(|p| p.as_str() != "*")
+                .cloned()
+                .collect()
+        })
+        .unwrap_or_default();
+    let mut add = |task: &TaskSnapshot| {
+        if paths.len() < 1024
+            && !task.internal
+            && collector_for(&settings, task).is_some_and(|s| s.id == source_id)
+        {
+            if let Some(path) = task.project_path.as_ref().or(task.project.as_ref()) {
+                paths.insert(path.clone());
+            }
+        }
+    };
+    for task in crate::watcher::known_sessions() {
+        add(&task);
+    }
+    {
+        let state = runtime().lock().unwrap_or_else(|e| e.into_inner());
+        for task in state.catalog.values() {
+            add(task);
+        }
+    }
+    let mut result: Vec<_> = paths.into_iter().collect();
+    result.sort();
+    result
+}
+
 #[derive(Serialize)]
 pub struct DiscoveredSession {
     pub task: TaskSnapshot,

@@ -1,3 +1,4 @@
+import {scopeOptions} from '../src/lib/project-options';
 import {test,expect} from 'bun:test';
 import {servers,pauseServer,removeServer,projectChoices,sourceStatus,createSource,canRead} from '../src/lib/monitor-sources';
 import {reconcileSourceDraft} from '../src/lib/settings-draft';
@@ -37,4 +38,11 @@ test('project scopes and preference broadcasts preserve drafts and source identi
 test('new singleton source drafts keep backend-required fixed IDs',()=>{
   expect(createSource('codex').id).toBe('codex');expect(createSource('scanner').id).toBe('scanner');expect(createSource('hooks').id).toBe('local_file');
   expect(createSource('remote_codex','host').id).not.toBe(createSource('remote_codex','host').id);
+});
+
+test('project options use verified alias groups and preserve raw scopes and distinct repositories',()=>{
+  const configured=['/mnt/d/Project/agenttray'];
+  const aliases=[{id:'codex:project',path:'D:/Project/agenttray',aliases:['D:\\Project\\agenttray','/mnt/d/Project/agenttray']}];
+  const choices=scopeOptions(configured,['D:/Project/agenttray','/mnt/d/Project/agenttray','D:/other/agenttray'],aliases);
+  expect(choices).toHaveLength(2);expect(choices[0].aliases).toContain(configured[0]);expect(configured).toEqual(['/mnt/d/Project/agenttray']);
 });

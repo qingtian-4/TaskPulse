@@ -20,6 +20,7 @@ mod popup_interaction;
 mod preferences;
 mod privacy;
 mod process;
+mod project_choices;
 mod project_links;
 mod providers;
 mod runtime;
@@ -275,6 +276,7 @@ fn main() {
             ssh_sources::discover_ssh_hosts,
             ssh_sources::probe_ssh_source,
             project_links::open_project_link,
+            project_choices::get_project_choices,
             monitoring::list_discovered_sessions,
             claude_integration::configure_claude_events,
             notifier::test_notification,

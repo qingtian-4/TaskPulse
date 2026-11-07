@@ -94,5 +94,6 @@ commands.allow = [
   "discover_ssh_hosts",
   "probe_ssh_source",
   "open_project_link",
+  "get_project_choices",
   "test_notification",
 ]

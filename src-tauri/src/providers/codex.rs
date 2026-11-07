@@ -147,7 +147,11 @@ struct RolloutCache {
 impl Default for RolloutCache {
     fn default() -> Self {
         Self {
-            tail: super::jsonl_tail::JsonlTail::ignoring_envelopes(&["compacted", "world_state"]),
+            tail: super::jsonl_tail::JsonlTail::ignoring_envelopes(&[
+                "compacted",
+                "world_state",
+                "event_msg/item_completed/FileChange",
+            ]),
             state: None,
         }
     }

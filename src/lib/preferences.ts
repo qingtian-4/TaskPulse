@@ -5,9 +5,9 @@ import type { DashboardSettings } from './types';
 
 export interface Preferences {
   theme:'system'|'light'|'dark'; language:'system'|'zh-CN'|'en'; show_on_start:boolean;
-  show_model:boolean; show_elapsed:boolean; panel_density:'comfortable'|'compact';
+  show_model:boolean; show_elapsed:boolean;task_font_size:number; panel_density:'comfortable'|'compact';
 }
-export const LEGACY_PREFERENCES:Preferences={theme:'dark',language:'zh-CN',show_on_start:false,show_model:true,show_elapsed:true,panel_density:'comfortable'};
+export const LEGACY_PREFERENCES:Preferences={theme:'dark',language:'zh-CN',show_on_start:false,show_model:true,show_elapsed:true,task_font_size:14,panel_density:'comfortable'};
 export const appSettings=writable<DashboardSettings|null>(null);
 export const preferences=derived(appSettings,s=>s?.preferences??LEGACY_PREFERENCES);
 export const locale=derived(preferences,p=>p.language==='system'?(typeof navigator!=='undefined'&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'):p.language);

@@ -24,6 +24,9 @@
 
 ### Fixed
 
+- Validate oversized Codex FileChange records without raising buffer limits; retain degradation for malformed or lifecycle records.
+- Group verified project directory aliases, restore settings maximization and provide consistent configurable task typography.
+
 - Open local Agent settings directly and expand configuration inline; simplify settings and About copy.
 
 - Restore every supported local source from the backend catalog; open general settings from the panel gear and tray settings entry.

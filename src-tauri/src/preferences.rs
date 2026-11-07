@@ -14,6 +14,7 @@ pub struct Preferences {
     pub show_model: bool,
     pub show_elapsed: bool,
     pub panel_density: String,
+    pub task_font_size: u8,
 }
 impl Default for Preferences {
     fn default() -> Self {
@@ -24,6 +25,7 @@ impl Default for Preferences {
             show_model: true,
             show_elapsed: true,
             panel_density: "comfortable".into(),
+            task_font_size: 14,
         }
     }
 }
@@ -44,6 +46,9 @@ impl Preferences {
         }
         if !matches!(self.panel_density.as_str(), "comfortable" | "compact") {
             return Err("Invalid panel density".into());
+        }
+        if !(12..=20).contains(&self.task_font_size) {
+            return Err("Invalid task font size".into());
         }
         Ok(())
     }
@@ -201,5 +206,26 @@ mod tests {
         assert_eq!(sources, s.sources);
         assert!(s.onboarding_complete);
         assert!(!s.preferences.show_model);
+    }
+}
+
+#[cfg(test)]
+mod font_tests {
+    use super::*;
+    #[test]
+    fn old_preferences_default_the_font_and_custom_sizes_are_bounded() {
+        let value = serde_json::json!({"theme":"light","language":"en","panel_density":"compact"});
+        let old: Preferences = serde_json::from_value(value).unwrap();
+        assert_eq!(old.task_font_size, 14);
+        for size in [12, 14, 18, 20] {
+            let mut next = old.clone();
+            next.task_font_size = size;
+            assert!(next.validate().is_ok());
+        }
+        for size in [0, 11, 21, 255] {
+            let mut next = old.clone();
+            next.task_font_size = size;
+            assert!(next.validate().is_err());
+        }
     }
 }

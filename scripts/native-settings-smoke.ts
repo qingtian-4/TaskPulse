@@ -128,6 +128,16 @@ poll_interval_ms=3000
   const nativeMonitors:any[]=await ui.invoke('plugin:window|available_monitors');
   const title:string=await ui.invoke('plugin:window|title',{label:'management'});
   assert.equal(title,`${product} · 设置`,'Initial window title must retain the build identity');
+  const actions=fileURLToPath(new URL('./settings-window-move.ps1',import.meta.url));
+  const windowAction=async(action:string)=>{
+    const child=Bun.spawn([join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),'-NoProfile','-ExecutionPolicy','Bypass','-File',actions,'-ProcessId',String(app!.pid),'-Exe',exe,'-Title',title,'-Action',action],{stdout:'pipe',stderr:'pipe'});
+    const [code,,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);assert.equal(code,0,error);
+  };
+  await windowAction('Maximize');await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'management'})`);
+  const maximized=await ui.invoke('plugin:window|inner_size',{label:'management'});
+  await root.invoke('open_management',{section:'sources'});assert.equal(await ui.invoke('plugin:window|is_maximized',{label:'management'}),true,'Reopening settings must preserve maximization');
+  assert.deepEqual(await ui.invoke('plugin:window|inner_size',{label:'management'}),maximized);
+  await windowAction('Restore');await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'management'}).then(v=>!v)`);
   const movementChecks:any[]=[];
   if(!sourcesOnly){
   const move=async(x:number,y:number)=>{
@@ -254,13 +264,11 @@ poll_interval_ms=3000
   assert.equal((await ui.invoke('get_autostart')).available,false);
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.wait(`!!document.querySelector('.local-card')`);
-  assert.equal(await ui.evaluate(`document.querySelectorAll('.local-card .mini-tag').length`),catalog.filter(s=>s.category==='local').length);
-  assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-card').textContent)&&/OpenCode/.test(document.querySelector('.local-card').textContent)`),true,'All catalog local Agents remain configurable');
-  assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
-  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
   await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===9`);
-  assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false,'The Local tab opens the Agent list directly');
+  assert.equal(await ui.evaluate(`document.querySelectorAll('.ms-tabs button').length`),2);
+  assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false);
+  assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-agents').textContent)&&/OpenCode/.test(document.querySelector('.local-agents').textContent)`),true);
+  assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
   await ui.evaluate(`document.querySelector('[data-agent-kind="codex"] .agent-row button').click()`);
   assert.equal(await ui.evaluate(`document.querySelector('[data-source-id="codex"]').closest('[data-agent-kind]').dataset.agentKind`),'codex');
   await ui.wait(`!!document.querySelector('[data-source-id="codex"] .project-scope')`);
@@ -295,6 +303,12 @@ poll_interval_ms=3000
   await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
   assert.equal(await ui.evaluate(`document.querySelector('.ms-head h1').textContent`),'Sources');
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
+  await ui.evaluate(`(()=>{const select=document.querySelector('[aria-label="Task text size"]');select.value='18';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await ui.wait(`document.querySelector('[aria-label="Task text size"]').value==='18' && document.querySelector('.settings-status').textContent===''`);
+  await root.wait(`getComputedStyle(document.querySelector('.dashboard')).getPropertyValue('--tp-task-font-size').trim()==='18px'`);
+  assert.equal((await ui.invoke('get_monitoring_settings')).preferences.task_font_size,18);
+  await ui.evaluate(`(()=>{const select=document.querySelector('[aria-label="Task text size"]');select.value='14';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await ui.wait(`document.querySelector('[aria-label="Task text size"]').value==='14' && document.querySelector('.settings-status').textContent===''`);
   await ui.evaluate(`document.querySelector('[aria-label="Show task model"]').click()`);
   await ui.wait(`document.querySelector('[aria-label="Show task model"]').checked===false && document.querySelector('.settings-status').textContent===''`);
   saved=await root.invoke('get_monitoring_settings');assert.equal(saved.preferences.show_model,false);
@@ -309,6 +323,18 @@ poll_interval_ms=3000
     assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.ms-success')?.textContent??'')`),false,'Application save feedback must follow the selected language');
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
+  // Actual filesystem aliases produce one picker row without rewriting scopes.
+  const aliasProject=join(owned,'public-project');await mkdir(aliasProject);
+  const drive=aliasProject[0].toLowerCase(),relative=aliasProject.slice(3).split(String.fromCharCode(92)).join('/');
+  const aliases=[aliasProject,String.fromCharCode(92,92,63,92)+aliasProject,`/mnt/${drive}/${relative}`,`${drive.toUpperCase()}:/mnt/${drive}/${relative}`];
+  const aliasBaseline=await ui.invoke('get_monitoring_settings'),aliasSettings=structuredClone(aliasBaseline);
+  aliasSettings.sources.find((s:any)=>s.id==='codex').projects=aliases;
+  await ui.invoke('save_monitoring_settings',{settings:aliasSettings,expected:aliasBaseline});
+  const grouped=await ui.invoke('get_project_choices',{sourceId:'codex'});
+  assert.equal(grouped.length,1);assert.equal(grouped[0].aliases.length,4);
+  const aliasSaved=await ui.invoke('get_monitoring_settings');assert.deepEqual(aliasSaved.sources.find((s:any)=>s.id==='codex').projects,aliases);
+  await ui.invoke('save_monitoring_settings',{settings:{...aliasSaved,sources:aliasSaved.sources.map((s:any)=>s.id==='codex'?{...s,projects:['protected-project']}:s)},expected:aliasSaved});
+  assert.match(await root.evaluate(`__TAURI_INTERNALS__.invoke('get_project_choices',{sourceId:'codex'}).then(()=>'',e=>String(e))`),/not allowed|denied/i);
   // Windows read-only replacement fails through the real Rust persistence path.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
   await chmod(join(home,'config.toml'),0o444);
@@ -330,8 +356,8 @@ poll_interval_ms=3000
   await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
   const withHermes=await ui.invoke('get_monitoring_settings'),hermes=withHermes.sources.find((s:any)=>s.kind==='hermes');
   assert.equal(await ui.evaluate(`document.querySelector('[data-source-id]').closest('[data-agent-kind]').dataset.agentKind`),'hermes');
-  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[0].click()`);
   await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
+  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[0].click()`);
   assert.equal(await ui.evaluate(`document.querySelector('[data-source-id]').closest('[data-agent-kind]').dataset.agentKind`),'hermes','Returning to Local retains the selected Agent and its own editor');
   assert.ok(hermes?.id);assert.deepEqual(hermes.projects,['/fixture/hermes']);assert.equal(hermes.enabled,false);
   await ui.invoke('save_monitoring_settings',{settings:{...withHermes,sources:withHermes.sources.filter((s:any)=>s.id!==hermes.id)},expected:withHermes});
@@ -353,7 +379,7 @@ poll_interval_ms=3000
   // Return to the selected Codex editor for the SSH wizard flow.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   await ui.evaluate(`[...document.querySelectorAll('.agent-row')].find(row=>row.querySelector('strong')?.textContent==='Codex').querySelector('button').click()`);
-  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[2].click()`);
+  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
   await ui.wait(`!!document.querySelector('.ms-head .ms-btn')`);
   // Native wizard with controlled read-only capability responses. Actual Rust
   // save/CAS/config persistence remains live; no production probe override exists.
@@ -399,6 +425,8 @@ poll_interval_ms=3000
     // Reset ephemeral fixture reports before capturing the home/detail page:
     // persisted configuration alone must never paint a successful SSH badge.
     await ui.send('Page.reload');
+    await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===9`);
+    await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
     await ui.wait(`document.querySelectorAll('.server-card').length===2`);
     assert.equal(await ui.evaluate(`document.querySelector('.server-controls .ms-pill').textContent.includes('not checked')`),true);
     await Bun.write(join(owned,'settings-home-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -440,8 +468,8 @@ poll_interval_ms=3000
   }
   sockets.forEach(ws=>ws.close());await stopOwnedChild(app);start();
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
-  const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.deepEqual(restored.sources[0].projects,['protected-project']);
+  const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.equal(restored.preferences.task_font_size,14);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','native fixed window across six sections','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language and theme synchronized across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','initial preferred size across six sections; active native maximize/restore and maximized warm reuse','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language/theme/font size synchronized and persisted across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

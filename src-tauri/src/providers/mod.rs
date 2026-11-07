@@ -9,6 +9,7 @@ pub mod deepseek_harness;
 pub mod doubao;
 pub mod generic_event;
 pub mod hermes;
+mod jsonl_probe;
 pub mod jsonl_tail;
 pub mod local_file;
 mod native_sessions;

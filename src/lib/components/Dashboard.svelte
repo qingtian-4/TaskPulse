@@ -244,8 +244,8 @@
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selectTask(e.payload)));
         await subscribe(listen<boolean>('pinned-changed',e=>pinned=e.payload));
         await subscribe(listen('popup-opened',()=>{layoutEpoch++;}));
-        await subscribe(listen<{phase:string;version:string|null}>('application-update',e=>availableUpdate=e.payload.phase==='available' ? e.payload.version ?? '' : ''));
-        void invoke<{phase:string;version:string|null}>('get_update_status').then(s=>availableUpdate=s.phase==='available'?s.version ?? '':'');
+        await subscribe(listen<{phase:string;version:string|null;can_install:boolean}>('application-update',e=>availableUpdate=e.payload.phase==='available'&&e.payload.can_install ? e.payload.version ?? '' : ''));
+        void invoke<{phase:string;version:string|null;can_install:boolean}>('get_update_status').then(s=>availableUpdate=s.phase==='available'&&s.can_install?s.version ?? '':'');
         await snapshots(); view=settings?.default_view ?? 'tasks';
         void discover();
         error=await invoke<string | null>('get_monitoring_error') ?? '';
@@ -265,7 +265,7 @@
   });
 </script>
 
-<div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(candidates,filtered))}>
+<div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" style={`--tp-task-font-size:${$preferences.task_font_size??14}px`} data-continuity={JSON.stringify(dashboardContinuity(candidates,filtered))}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><BrandMark />TaskPulse</span>
     <div class="header-actions">
@@ -349,6 +349,7 @@
   </footer>
 </div>
 <style>
+  .detail{font-size:var(--tp-task-font-size,14px);line-height:1.5}
   .model-detail{overflow-wrap:anywhere}.detail-effort{margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--tp-accent-soft);color:var(--tp-accent);font-size:10px}
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}

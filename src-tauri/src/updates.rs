@@ -30,7 +30,12 @@ fn state() -> &'static Mutex<State> {
     STATE.get_or_init(|| {
         Mutex::new(State {
             status: UpdateStatus {
-                phase: "idle".into(),
+                phase: if checking_supported() {
+                    "idle"
+                } else {
+                    "unavailable"
+                }
+                .into(),
                 current_version: env!("CARGO_PKG_VERSION").into(),
                 can_install: install_supported(),
                 ..Default::default()
@@ -39,6 +44,10 @@ fn state() -> &'static Mutex<State> {
         })
     })
 }
+fn checking_supported() -> bool {
+    !cfg!(debug_assertions) && !crate::runtime::isolated()
+}
+
 fn install_supported() -> bool {
     if !cfg!(all(feature = "custom-protocol", not(debug_assertions))) || crate::runtime::isolated()
     {
@@ -141,6 +150,16 @@ fn allowed_download(update: &Update) -> bool {
         && !update.signature.trim().is_empty()
 }
 async fn check(app: &AppHandle) {
+    if !checking_supported() {
+        let mut state = state().lock().unwrap_or_else(|e| e.into_inner());
+        state.status.phase = "unavailable".into();
+        state.status.version = None;
+        state.status.notes = None;
+        state.pending = None;
+        drop(state);
+        notify(app);
+        return;
+    }
     {
         let mut state = state().lock().unwrap_or_else(|e| e.into_inner());
         if state.busy {

@@ -1,13 +1,14 @@
 <script lang="ts">
   import {Plus,Folder,Check} from '@lucide/svelte';
   import {t} from '$lib/i18n';
-  let {projects,choices=[],onchange,disabled=false}:{projects:string[];choices?:string[];onchange:(value:string[])=>void;disabled?:boolean}=$props();
+  import {scopeOptions,type ProjectChoice} from '$lib/project-options';
+  let {projects,choices=[],aliases=[],onchange,disabled=false}:{projects:string[];choices?:string[];aliases?:ProjectChoice[];onchange:(value:string[])=>void;disabled?:boolean}=$props();
   const group=$props.id();
   let path=$state(''),selectedBeforeAll=$state<string[]>([]);
   const all=$derived(projects.includes('*'));
-  const options=$derived([...new Set([...choices,...projects.filter(p=>p!=='*')])]);
+  const options=$derived(scopeOptions(projects,choices,aliases));
   function mode(value:boolean){if(value){selectedBeforeAll=[...projects];onchange(['*']);}else onchange(selectedBeforeAll.filter(p=>p!=='*'));}
-  function toggle(value:string,checked:boolean){onchange(checked?[...new Set([...projects.filter(p=>p!=='*'),value])]:projects.filter(p=>p!==value));}
+  function toggle(option:ProjectChoice,checked:boolean){onchange(checked?[...new Set([...projects.filter(p=>p!=='*'),...option.aliases])]:projects.filter(p=>!option.aliases.includes(p)));}
   function add(){const value=path.trim();if(!value||/[\r\n\0]/.test(value))return;onchange([...new Set([...projects.filter(p=>p!=='*'),value])]);path='';}
 </script>
 <div class="project-scope">
@@ -17,7 +18,7 @@
   </div>
   {#if all}<p class="scope-notice"><Check size={15}/>{$t('自动关注此来源后续发现的新项目。')}</p>
   {:else}
-    <div class="project-options">{#each options as value (value)}<label><input type="checkbox" checked={projects.includes(value)} disabled={disabled} onchange={e=>toggle(value,e.currentTarget.checked)}/><Folder size={14}/><span title={value}><strong>{value.split(/[\\/]/).filter(Boolean).at(-1)||value}</strong><small>{value}</small></span></label>{/each}</div>
+    <div class="project-options">{#each options as option (option.id)}<label><input type="checkbox" checked={option.aliases.some(value=>projects.includes(value))} disabled={disabled} onchange={e=>toggle(option,e.currentTarget.checked)}/><Folder size={14}/><span title={option.path}><strong>{option.path.split(/[\\/]/).filter(Boolean).at(-1)||option.path}</strong><small>{option.path}</small></span></label>{/each}</div>
     {#if !options.length}<p class="scope-empty">{$t('暂无已发现项目，可以手动添加路径。')}</p>{/if}
     <form class="add-path" onsubmit={e=>{e.preventDefault();add();}}><input bind:value={path} disabled={disabled} aria-label={$t('添加项目路径')} placeholder={$t('输入项目路径，例如 /home/user/project')}/><button class="ms-btn" type="submit" disabled={disabled||!path.trim()}><Plus size={13}/>{$t('添加')}</button></form>
     {#if !projects.length}<p class="scope-empty">{$t('未选择项目，此来源暂不会纳入任务。')}</p>{/if}

@@ -120,7 +120,8 @@ await withSmokeWorkspace('development-native',async({owned,onStop})=>{
   if(process.platform==='win32')assert.equal(nativeProcess.owned_executable,true,JSON.stringify(nativeProcess));
   assert.equal(result.environment.isolated,true);assert.equal(result.environment.state_directory,profile.state_directory);
   assert.equal(result.build.channel,'development');assert.equal(result.settings.onboarding_complete,false);
-  assert.equal(result.startup.available,false);assert.equal(result.tasks.length,0);
+  assert.equal(result.startup.available,false);
+  const updates=await evaluate(`__TAURI_INTERNALS__.invoke('get_update_status')`);assert.equal(updates.phase,'unavailable');assert.equal(updates.version,null);assert.equal(result.tasks.length,0);
 
   // Exercise the real IPC ACL with valid synthetic arguments. Inspect the
   // framework error so business-rule failures cannot make the test pass.
