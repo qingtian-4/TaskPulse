@@ -551,7 +551,9 @@ try{
     await root.wait(`document.querySelector('[data-task-id="${native.id}"] .elapsed')?.textContent==='1m 1s'`);
     const ended=(await root.invoke('get_agents')).find((t:any)=>t.id===native.id);
     assert.equal(ended.finished_at-ended.started_at,61000);assert.equal(ended.reasoning_effort,'high');assert.equal(ended.unread,true);
+    await input(root,'[aria-label="搜索任务"]',title);await fittedCards(1);
     await Bun.write(join(owned,'dsh-ended-duration-native.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    await click(root,'.all-tasks');
     const current=(await root.invoke('get_task_notice')).current;if(current?.task_id===native.id)await notice.invoke('dismiss_task_notice',{id:current.id});
     settings=await root.invoke('get_monitoring_settings');settings.sources=settings.sources.filter((s:any)=>s.id!=='public-dsh');await management.invoke('save_monitoring_settings',{settings});
     checks.push('DSH native zstd → provider/store/tray/UI/independent popup: high, explicit question, unrelated return preserved, matching answer resolves without ending or reading, and frozen 61-second total (public fixture; real read-only replay is separate)');
