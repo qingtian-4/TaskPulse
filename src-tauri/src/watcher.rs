@@ -1533,6 +1533,7 @@ pub fn watch(app: AppHandle) {
             let _ = refresh_tx.try_send(());
         }
         let mut changed = false;
+        let mut observed_results = Vec::new();
         while let Ok((generation, output)) = remote_rx.try_recv() {
             if generation != revision {
                 continue;
@@ -1571,7 +1572,7 @@ pub fn watch(app: AppHandle) {
                 .into_iter()
                 .filter(crate::monitoring::allows)
                 .collect();
-            let authoritative = active_settings
+            let authoritative: HashSet<String> = active_settings
                 .sources
                 .iter()
                 .filter(|source| source.enabled)
@@ -1587,6 +1588,15 @@ pub fn watch(app: AppHandle) {
                 })
                 .map(|source| source.id.clone())
                 .collect();
+            observed_results.extend(
+                tasks
+                    .iter()
+                    .filter(|task| {
+                        task.finished_at.is_some()
+                            && authoritative.contains(&crate::monitoring::collector_id(task))
+                    })
+                    .cloned(),
+            );
             store.merge_instances(tasks, &authoritative, SystemTime::now());
             changed = true;
         }
@@ -1696,6 +1706,18 @@ pub fn watch(app: AppHandle) {
                 }
             }
             store.retain(crate::monitoring::allows);
+            observed_results.extend(
+                batch
+                    .tasks
+                    .iter()
+                    .filter(|task| {
+                        task.finished_at.is_some()
+                            && batch
+                                .authoritative_instances
+                                .contains(&crate::monitoring::collector_id(task))
+                    })
+                    .cloned(),
+            );
             store.merge_instances(
                 batch.tasks,
                 &batch.authoritative_instances,
@@ -1706,6 +1728,7 @@ pub fn watch(app: AppHandle) {
         }
         if changed {
             let mut merged = store.merge(Vec::new(), SystemTime::now());
+            crate::store::refresh_retained_results(&mut merged, observed_results, known_sessions());
             crate::monitoring::refresh_known_metadata(&mut merged);
             let display = reconcile_attention(merged);
             let mut tracked = known_sessions();

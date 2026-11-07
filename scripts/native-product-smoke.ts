@@ -521,7 +521,7 @@ try{
   {
     const dshRoot=join(owned,'public-dsh'),logPath=join(dshRoot,'sessions','workspace','session-public','session.v4.jsonl.zstd');
     await mkdir(dirname(logPath),{recursive:true});
-    const started=Date.now()-61000,title='DSH 原生提问与总时长回归';
+    const started=Date.now()-31*60*1000-61000,title='DSH 原生提问与总时长回归';
     const projection=join(dshRoot,'storages','session_projcache','sessions');await mkdir(projection,{recursive:true});
     await Bun.write(join(projection,'session-public.json'),JSON.stringify({version:7,record:{identity:{cwd:'C:/public/DSH'},rows:{title:{seq:0,val:title}}}}));
     const events:any[]=[{type:'session',version:4,id:'session-public',cwd:'C:/public/DSH',name:title},
