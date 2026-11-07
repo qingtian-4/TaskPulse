@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "0d519456d09cad2326b491827639ce97b9267089",
+  "capture_commit": "657a1f813f8c711506a3be38273a7a836382e02e",
   "modified": false,
-  "executable_sha256": "99d2da2001c99582337d99566d43f66fd3b930d51a78555ee84798fa26ff088e",
+  "executable_sha256": "f64c59a5bc3423741dde2ec4cd51f5b98b3a4268690860564541a10300c89fd7",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "807d566e7e86cce6d4e3be8351f7ef990571e99cbf0ef07ffdf18d095c5465eb",
-      "bytes": 25590
+      "sha256": "8f1b7aa5cd47081bccfd7437c2a04dd5aece3273c9007276532321e47ad4aed8",
+      "bytes": 25592
     },
     {
       "file": "dashboard-en.png",
@@ -67,8 +67,8 @@
       "logical_width": 368,
       "logical_height": 861,
       "dpr": 2,
-      "sha256": "25cb428961e9da260fdb119c78eddcbb278901155f462d57230bc3ac0aa4675d",
-      "bytes": 164910
+      "sha256": "878a8ba57f9b0e7d1b1072065b4966b075364ce4088931141e44f010d4df257d",
+      "bytes": 163595
     },
     {
       "file": "notice-input-en.png",
@@ -107,9 +107,9 @@
       "bytes": 23072
     }
   ],
-  "frontend_tree": "8f58b8588e87fbfde5b668ad7310fa9740c86e47",
+  "frontend_tree": "e20a85f6a135c272c08796b35c1c815f6834fe50",
   "runtime_tree": "0a0637dac59ca1a1fb81efea03829cc8fe53c650",
-  "locale_tree": "06be0790d10cf742a2a829437fd686f576c0f733",
+  "locale_tree": "427e2ba927686ad8ee5cfa9658cadb72655bded8",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
