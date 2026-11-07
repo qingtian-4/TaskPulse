@@ -153,7 +153,7 @@ try{
   buildEvidence={version:build.version,commit:build.commit,modified:build.modified,executableSha256:createHash('sha256').update(new Uint8Array(await Bun.file(exe).arrayBuffer())).digest('hex')};
   assert.equal((await root.invoke('integration_environment')).isolated,true);
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
-  let layout:unknown=null;
+  let layout={scroll:false,height:0,horizontal:false};
   if(!captureOnly){
   const nativeLayout=await root.evaluate(`({width:innerWidth})`);
   await fittedCards(0);
@@ -654,7 +654,7 @@ try{
     await Bun.write(join(owned,'capture-media.json'),JSON.stringify({...buildEvidence,language:english?'en':'zh-CN',files:['dashboard','notice-input','notice-approval','notice-completed'].map(name=>name+suffix+'.png')},null,2));
     checks.push('public README native captures at DPR 2: four visible tasks across running/input/approval/unviewed states and input/approval/completed notices; no acknowledgement or fabricated native-agent identities');
   }
-  const report={passed:true,captureOnly,...buildEvidence,checks,layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
+  const report={passed:true,captureOnly,...buildEvidence,checks,layout:captureOnly?null:layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:captureOnly?'Not sampled during image-only capture':'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:captureOnly?'Native WebView2 DPR 2 capture; not OS display-scale acceptance':'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){const ui=await management?.evaluate(`({read:document.querySelector('.ms-success')?.textContent,buttons:[...document.querySelectorAll('.ms-advanced button')].map(b=>({text:b.textContent,disabled:b.disabled})),errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)})`).catch(()=>null);const providers=await root?.invoke('get_providers').catch(()=>null);await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr,errors,ui,providers},null,2));console.error('Evidence: '+evidenceDir);throw error;}
 });
