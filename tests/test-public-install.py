@@ -19,7 +19,7 @@ class ManifestTests(unittest.TestCase):
     def test_actual_workflow_platform_plan_keeps_legacy_and_adds_arm64_only_later(self):
         workflow = (Path(__file__).resolve().parent.parent / '.github/workflows/public-install-smoke.yml').read_text(encoding='utf-8')
         program = textwrap.dedent(re.search(r"python3 - <<'PY'\n(.*?)\n          PY", workflow, re.S).group(1))
-        for tag, count in [('v1.0.1', 3), ('v1.1.0', 3), ('v1.1.1', 4), ('v2.0.0', 4), ('bad', None), ('v1.1.1-rc.1', None)]:
+        for tag, count in [('v0.0.1', 4), ('v0.0.2', 4), ('v1.0.1', 3), ('v1.1.0', 3), ('v1.1.1', 4), ('v2.0.0', 4), ('bad', None), ('v1.1.1-rc.1', None)]:
             with self.subTest(tag=tag), tempfile.TemporaryDirectory(prefix='tp-public-plan-') as temp:
                 output = Path(temp) / 'output'
                 result = subprocess.run([sys.executable, '-c', program], env=dict(os.environ, RELEASE_TAG=tag, GITHUB_OUTPUT=str(output)), capture_output=True, timeout=10)

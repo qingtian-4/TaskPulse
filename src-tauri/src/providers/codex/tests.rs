@@ -2138,7 +2138,7 @@ fn remote_model_context_is_optional_and_preserves_task_identity() {
 
 #[test]
 fn reported_effort_and_explicit_end_are_metadata_not_lifecycle_guesses() {
-    let now = SystemTime::now();
+    let now = parse_rfc3339("2026-11-07T00:02:00Z").unwrap();
     let body = r#"{"timestamp":"2026-11-07T00:00:00Z","payload":{"type":"task_started","turn_id":"t"}}
 {"type":"turn_context","payload":{"turn_id":"t","model":"gpt-test","effort":"xhigh"}}
 {"timestamp":"2026-11-07T00:01:01Z","payload":{"type":"task_complete"}}"#;

@@ -1,27 +1,117 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="640" viewBox="0 0 1120 640" role="img" aria-labelledby="title desc"><title id="title">Evidence behind every reminder</title><desc id="desc">Native and remote inputs feed Watcher, TaskStore and AttentionTracker. Attention and source health feed dashboard projection and the tray. TransitionEngine feeds notifications. User actions, not state updates, trigger verified host return.</desc>
-<defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#57988c"/></marker><marker id="action-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto"><path d="M0 0 10 5 0 10Z" fill="#748a94"/></marker></defs>
-<style>text{font-family:Segoe UI,Microsoft YaHei,sans-serif;fill:#193c37}.title{font-size:27px;font-weight:700}.sub{font-size:13px;fill:#5d7772}.label{font-size:15px;font-weight:600}.detail{font-size:12px;fill:#536d68}.code{font-size:12px;fill:#167d70}.edge{fill:none;stroke:#57988c;stroke-width:2;marker-end:url(#arrow)}.action{fill:none;stroke:#748a94;stroke-width:2;stroke-dasharray:5 5;marker-end:url(#action-arrow)}.note{font-size:11px;fill:#647b76}.foot{font-size:13px;fill:#38655c}</style>
-<rect width="1120" height="640" rx="20" fill="#f1f7f5"/>
-<text x="32" y="46" class="title">Evidence behind every reminder</text><text x="32" y="74" class="sub">TaskPulse · Rust / Tauri 2 / Svelte 5</text>
-<path class="edge" data-from="native" data-to="watcher" d="M292 165 H320 Q330 165 330 155 H374"/>
-<path class="edge" data-from="remote" data-to="watcher" d="M292 317 H336 Q348 317 348 305 V192 Q348 180 360 180 H374"/>
-<path class="edge" data-from="watcher" data-to="store" d="M539 200 V230"/>
-<path class="edge" data-from="store" data-to="attention" d="M539 318 V348"/>
-<path class="edge" data-from="attention" data-to="transition" d="M539 436 V466"/>
-<path class="edge" data-from="watcher" data-to="presentation" d="M704 156 H746 Q758 156 758 168 V330 Q758 342 770 342 H810"/>
-<path class="edge" data-from="attention" data-to="presentation" d="M704 392 H810"/>
-<path class="edge" data-from="transition" data-to="notices" d="M704 510 H810"/>
-<path class="action" data-from="presentation" data-to="actions" d="M949 306 V220"/>
-<g id="native"><rect x="32" y="122" width="260" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="50" y="148" class="label">Native sources</text><text x="50" y="171" class="detail">Codex · Claude Code · DSH</text><text x="50" y="192" class="code">Kimi · Qoder · other readers</text></g>
-<g id="remote"><rect x="32" y="274" width="260" height="86" rx="12" fill="white" stroke="#ccded8"/><text x="50" y="300" class="label">Remote &amp; event inputs</text><text x="50" y="323" class="detail">WSL · SSH · tmux</text><text x="50" y="344" class="code">Standard Events · MCP</text></g>
-<g id="watcher"><rect x="374" y="112" width="330" height="88" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="138" class="label">Bounded collection · Watcher</text><text x="392" y="161" class="detail">Budgets / generations / scope / dedup</text><text x="392" y="182" class="code">providers/ · watcher.rs</text></g>
-<g id="store"><rect x="374" y="230" width="330" height="88" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="256" class="label">Trusted observations · TaskStore</text><text x="392" y="279" class="detail">Merge observations / retain trusted facts</text><text x="392" y="300" class="code">store/ · history.rs</text></g>
-<g id="attention"><rect x="374" y="348" width="330" height="88" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="374" class="label">Durable attention · AttentionTracker</text><text x="392" y="397" class="detail">Requests / unread / pins / recovery</text><text x="392" y="418" class="code">attention.rs · attention.json</text></g>
-<g id="transition"><rect x="374" y="466" width="330" height="88" rx="12" fill="white" stroke="#ccded8"/><text x="392" y="492" class="label">State changes · TransitionEngine</text><text x="392" y="515" class="detail">Explicit lifecycle / durable dedup</text><text x="392" y="536" class="code">transition.rs · notifications.json</text></g>
-<g id="actions"><rect x="810" y="112" width="278" height="108" rx="12" fill="white" stroke="#ccded8"/><text x="828" y="138" class="label">Windows &amp; host return</text><text x="828" y="161" class="detail">User actions / verified owner / fallback</text><text x="828" y="182" class="code">popup_interaction.rs · focusers/</text></g>
-<g id="presentation"><rect x="810" y="306" width="278" height="130" rx="12" fill="white" stroke="#ccded8"/><text x="828" y="332" class="label">Snapshot &amp; presentation</text><text x="828" y="355" class="detail">Task panel / source health / tray</text><text x="828" y="376" class="code">dashboard_view.rs · emit_agents</text></g>
-<text x="828" y="401" class="code">Svelte 5 · tray::update_icon</text>
-<g id="notices"><rect x="810" y="466" width="278" height="88" rx="12" fill="white" stroke="#ccded8"/><text x="828" y="492" class="label">Task reminders</text><text x="828" y="515" class="detail">Dismissal never reads or approves</text><text x="828" y="536" class="code">notifier.rs · task_notice.rs</text></g>
-<text x="964" y="264" class="note">User action</text>
-<text x="770" y="245" class="note"><tspan x="770">Source</tspan><tspan x="770" dy="15">health</tspan></text>
-<rect x="32" y="582" width="1056" height="34" rx="10" fill="#e0f0ea"/><text x="560" y="604" text-anchor="middle" class="foot">Source registry &amp; capabilities feed collection and views · Local persistence · Verified identity · Signed updates</text></svg>
+<svg xml:lang="en" xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="svg-title svg-desc">
+  <title id="svg-title">TaskPulse architecture — Evidence to Attention</title>
+  <desc id="svg-desc">TaskPulse reads local, remote and event sources through Watcher, merges trusted observations in TaskStore, persists attention in AttentionTracker, and separately projects dashboard and tray state or deduplicated notifications through TransitionEngine. Returning to the agent is triggered only by a scoped user action.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1424"/><stop offset="0.55" stop-color="#102638"/><stop offset="1" stop-color="#0B1B28"/></linearGradient>
+    <radialGradient id="aura" cx="50%" cy="50%" r="60%"><stop offset="0" stop-color="#188E82" stop-opacity=".23"/><stop offset="1" stop-color="#188E82" stop-opacity="0"/></radialGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#172B3B"/><stop offset="1" stop-color="#102330"/></linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#40C9B2"/><stop offset="1" stop-color="#95E8D8"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6C579"/><stop offset="1" stop-color="#F4A862"/></linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#6C9FAD" stroke-opacity=".065" stroke-width="1"/></pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#031019" flood-opacity=".25"/></filter>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4.5 L1 8" fill="none" stroke="#58DDC8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="arrow-gold" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4.5 L1 8" fill="none" stroke="#F2B86C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <style><![CDATA[
+      text{font-family:'Inter','Segoe UI','DejaVu Sans',Arial,sans-serif}
+      .eyebrow{font-size:14px;font-weight:750;letter-spacing:2.5px;fill:#67B9B1}
+      .h1{font-size:40px;font-weight:740;fill:#F4FBFC;letter-spacing:-1.2px}
+      .sub{font-size:17px;fill:#91ADBA}
+      .stage{font-size:14px;font-weight:750;fill:#71A7AE;letter-spacing:1.5px}
+      .name{font-size:25px;font-weight:720;fill:#F5FBFC}
+      .label{font-size:18px;font-weight:680;fill:#ECF9F8}
+      .detail{font-size:15px;fill:#9DB7BE}
+      .code{font-size:13px;fill:#6FD4C4;font-weight:600}
+      .tiny{font-size:12px;fill:#7598A4;letter-spacing:.2px}
+      .line{fill:none;stroke:#51CAB9;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+      .line-muted{fill:none;stroke:#427987;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+      .line-user{fill:none;stroke:#F2B86C;stroke-width:2.6;stroke-dasharray:8 9;stroke-linecap:round;marker-end:url(#arrow-gold)}
+    ]]></style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#background)"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+  <ellipse cx="575" cy="310" rx="560" ry="340" fill="url(#aura)"/>
+  <ellipse cx="1355" cy="740" rx="350" ry="270" fill="url(#aura)" opacity=".45"/>
+
+  <!-- Brand and headline -->
+  <g transform="translate(64 50) scale(.56)"><rect x="7" y="7" width="86" height="86" rx="23" fill="#152C3D" stroke="#467C83" stroke-width="2"/><path d="M20 30 H36 M36 30 V74" fill="none" stroke="#EAF9F6" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M36 30 H57 C73 30 79 39 79 48 C79 59 71 64 58 64 H50" fill="none" stroke="#76DFCD" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="128" y="90" font-size="26" font-weight="780" fill="#F2FAFB">Task<tspan fill="#7EE2D2">Pulse</tspan></text>
+  <text x="307" y="90" class="eyebrow">SYSTEM ARCHITECTURE</text>
+  <text x="64" y="159" class="h1">From real Agent signals to timely alerts</text>
+  <text x="66" y="194" class="sub">Evidence-first · Durable attention · Native delivery</text>
+  <rect x="1277" y="65" width="260" height="44" rx="22" fill="#143B43" stroke="#33797A" stroke-width="1"/>
+  <circle cx="1302" cy="87" r="5" fill="#65E0C9"/><text x="1319" y="93" font-size="15" font-weight="630" fill="#C1F2E9">Rust + Tauri 2 + Svelte 5</text>
+
+  <!-- Stage titles -->
+  <text x="64" y="248" class="stage">01  EVIDENCE INPUT</text>
+  <text x="395" y="248" class="stage">02  COLLECTION &amp; TRUST</text>
+  <text x="765" y="248" class="stage">03  ATTENTION &amp; EVENTS</text>
+  <text x="1135" y="248" class="stage">04  USER EXPERIENCE</text>
+
+  <!-- Left source cluster -->
+  <rect x="64" y="276" width="260" height="480" rx="24" fill="#112838" stroke="#305362" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="82" y="296" width="224" height="119" rx="15" fill="#1A3445" stroke="#3A6170" stroke-width="1"/>
+  <circle cx="110" cy="327" r="11" fill="#1D716D"/><path d="M105 325h10m-10 5h10" stroke="#B7FBED" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="132" y="332" class="label">Local readers</text><text x="101" y="365" class="detail">Codex · Claude Code</text><text x="101" y="390" class="tiny">Other supported adapters</text>
+  <rect x="82" y="430" width="224" height="119" rx="15" fill="#1A3445" stroke="#3A6170" stroke-width="1"/>
+  <circle cx="110" cy="461" r="11" fill="#235A83"/><path d="M105 458h10m-10 5h10m-10 5h10" stroke="#C0EAFF" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="132" y="467" class="label">Remote sessions</text><text x="101" y="499" class="detail">SSH · WSL · tmux</text><text x="101" y="524" class="tiny">tmux is a runtime, not an Agent</text>
+  <rect x="82" y="564" width="224" height="119" rx="15" fill="#1A3445" stroke="#3A6170" stroke-width="1"/>
+  <circle cx="110" cy="595" r="11" fill="#6D5839"/><path d="m106 595 3 3 6-7" stroke="#FFE4AD" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="132" y="601" class="label">Explicit events</text><text x="101" y="632" class="detail">Hooks · Standard Events</text><text x="101" y="657" class="tiny">MCP · request / finish signals</text>
+  <text x="194" y="725" text-anchor="middle" font-size="13" fill="#74B9B6">READ-ONLY BY DEFAULT</text>
+
+  <!-- Collection cards -->
+  <rect x="394" y="288" width="300" height="180" rx="22" fill="url(#card)" stroke="#397E7E" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="416" y="310" width="68" height="26" rx="13" fill="#174C4D"/><text x="450" y="328" text-anchor="middle" font-size="12" font-weight="780" fill="#7DE7D7">WATCH</text>
+  <text x="416" y="376" class="name">Watcher</text><text x="416" y="410" class="detail">Bounded scans · guards · dedup</text><text x="416" y="439" class="code">providers/ · watcher.rs</text>
+  <rect x="394" y="536" width="300" height="180" rx="22" fill="url(#card)" stroke="#397E7E" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="416" y="558" width="68" height="26" rx="13" fill="#174C4D"/><text x="450" y="576" text-anchor="middle" font-size="12" font-weight="780" fill="#7DE7D7">MERGE</text>
+  <text x="416" y="624" class="name">TaskStore</text><text x="416" y="658" class="detail">Merge evidence · retain state</text><text x="416" y="687" class="code">store/ · history.rs</text>
+
+  <!-- Attention cards -->
+  <rect x="764" y="288" width="300" height="180" rx="22" fill="url(#card)" stroke="#3C8981" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="786" y="310" width="85" height="26" rx="13" fill="#174C4D"/><text x="829" y="328" text-anchor="middle" font-size="12" font-weight="780" fill="#7DE7D7">DURABLE</text>
+  <text x="786" y="376" class="name">AttentionTracker</text><text x="786" y="410" class="detail">Unread · pinned · pending</text><text x="786" y="439" class="code">attention.rs · attention.json</text>
+  <rect x="764" y="536" width="300" height="180" rx="22" fill="url(#card)" stroke="#A67A4D" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="786" y="558" width="82" height="26" rx="13" fill="#604C32"/><text x="827" y="576" text-anchor="middle" font-size="12" font-weight="780" fill="#FFD3A0">LIFECYCLE</text>
+  <text x="786" y="624" class="name">TransitionEngine</text><text x="786" y="658" class="detail">Event changes · alert dedup</text><text x="786" y="687" font-size="13" font-weight="600" fill="#F8C78D">transition.rs · notifications.json</text>
+
+  <!-- Presentation cards -->
+  <rect x="1134" y="288" width="402" height="180" rx="22" fill="#163742" stroke="#388987" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="1156" y="310" width="91" height="26" rx="13" fill="#1B5553"/><text x="1202" y="328" text-anchor="middle" font-size="12" font-weight="780" fill="#95F2E1">SNAPSHOT</text>
+  <text x="1156" y="376" class="name">Dashboard · System tray</text><text x="1156" y="410" class="detail">Dashboard Projection → Svelte UI</text><text x="1156" y="439" class="code">Tauri 2 · scoped IPC · tray.rs</text>
+  <rect x="1134" y="536" width="402" height="180" rx="22" fill="#263440" stroke="#8C745E" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="1156" y="558" width="76" height="26" rx="13" fill="#5B4A39"/><text x="1194" y="576" text-anchor="middle" font-size="12" font-weight="780" fill="#FFD9B0">NOTIFY</text>
+  <text x="1156" y="624" class="name">Popups · System alerts</text>
+  <rect x="1156" y="644" width="98" height="26" rx="8" fill="#274B4D"/><text x="1205" y="662" text-anchor="middle" font-size="14" font-weight="640" fill="#9FE9DB">Needs input</text>
+  <rect x="1265" y="644" width="98" height="26" rx="8" fill="#644B30"/><text x="1314" y="662" text-anchor="middle" font-size="14" font-weight="640" fill="#FFE0A5">Approval</text>
+  <rect x="1374" y="644" width="98" height="26" rx="8" fill="#314C59"/><text x="1423" y="662" text-anchor="middle" font-size="14" font-weight="640" fill="#B8E8FC">Turn ended</text>
+  <text x="1156" y="698" class="tiny">notifier.rs · task_notice.rs</text>
+
+  <!-- Explicit host return -->
+  <rect x="1134" y="750" width="402" height="68" rx="16" fill="#322C27" stroke="#866447" stroke-width="1.5"/>
+  <circle cx="1161" cy="783" r="13" fill="#695034"/><path d="M1157 777v10m0-10 8 5-8 5" stroke="#FFDBA9" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1185" y="783" font-size="17" font-weight="700" fill="#F8E8D2">Return to host or open details</text>
+  <text x="1185" y="802" font-size="12" fill="#D7B99A">Scoped identity · never auto-approve or read</text>
+
+  <!-- Data flow; separate branches for display and notifications -->
+  <path class="line" d="M324 378 H394"/>
+  <path class="line" d="M544 468 V536"/>
+  <path class="line" d="M694 627 H729 Q740 627 740 616 V389 Q740 378 751 378 H764"/>
+  <path class="line" d="M914 468 V536"/>
+  <path class="line" d="M1064 378 H1134"/>
+  <path class="line" d="M1064 626 H1134"/>
+  <!-- Source health goes to presentation without passing through lifecycle notifications. -->
+  <path class="line-muted" marker-end="url(#arrow)" d="M600 288 V263 H1324 V288"/>
+  <text x="1007" y="258" font-size="12" font-weight="650" fill="#76ADB3">HEALTH → VIEW</text>
+  <!-- Host return is triggered by a user action only. -->
+  <path class="line-user" d="M1536 388 H1565 V784 H1536"/>
+
+  <!-- Explicit invariants -->
+  <g transform="translate(64 836)"><rect width="258" height="40" rx="20" fill="#153A41" stroke="#2C696A"/><circle cx="23" cy="20" r="5" fill="#6DDCC9"/><text x="40" y="26" font-size="15" font-weight="640" fill="#C2F4EB">Read-only by default</text></g>
+  <g transform="translate(338 836)"><rect width="273" height="40" rx="20" fill="#153A41" stroke="#2C696A"/><circle cx="23" cy="20" r="5" fill="#6DDCC9"/><text x="40" y="26" font-size="15" font-weight="640" fill="#C2F4EB">Missing data ≠ turn end</text></g>
+  <g transform="translate(627 836)"><rect width="278" height="40" rx="20" fill="#153A41" stroke="#2C696A"/><circle cx="23" cy="20" r="5" fill="#6DDCC9"/><text x="40" y="26" font-size="15" font-weight="640" fill="#C2F4EB">Attention survives restarts</text></g>
+  <g transform="translate(921 836)"><rect width="300" height="40" rx="20" fill="#362E27" stroke="#846847"/><circle cx="23" cy="20" r="5" fill="#EAB46E"/><text x="40" y="26" font-size="15" font-weight="640" fill="#FFE0BA">Explicit Agent lifecycle evidence</text></g>
+  <text x="1535" y="863" text-anchor="end" font-size="12" fill="#628897">TaskPulse · v0.0.1</text>
+</svg>

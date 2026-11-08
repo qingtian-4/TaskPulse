@@ -2,9 +2,9 @@
 
 基础一行命令直接见 [README](../README.md#安装) / [English](../README.en.md#install)。以下是可选参数，无需先阅读本页才能安装。
 
-Scripts select public stable releases by default. Prereleases require explicit selection. Drafts are rejected.
+Scripts default to the public v0.0.1 package. Missing or draft packages are rejected. Downloads open only after installer verification.
 
-## Windows 10/11 x64
+## Windows 10/11 x64 · Windows ARM64 自行构建 / source build
 
 ```powershell
 irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | iex
@@ -12,8 +12,7 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 
 | 参数 / Option | 用途 / Purpose |
 | --- | --- |
-| `-Prerelease` | 包含预发布版本 / Include public prereleases |
-| `-Version 1.0.0` | 指定已公开版本 / Select a published version |
+| `-Version 0.0.1` | 指定已公开版本 / Select a published version |
 | `-DownloadOnly` | 只下载校验，不安装 / Verify and save without installing |
 | `-OutputDirectory .\downloads` | 下载目录 / Download directory |
 | `-Language zh-CN` or `en` | 输出语言 / Output language |
@@ -22,7 +21,7 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 
 ```powershell
 irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 -OutFile install.ps1
-powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version 1.0.0
+powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1 -Version 0.0.1
 ```
 
 Windows 打开标准 NSIS 安装向导；MSI 用户继续使用 MSI，切换格式前卸载旧格式。
@@ -42,8 +41,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 | 参数 / Option | 用途 / Purpose |
 | --- | --- |
-| `--prerelease` | 包含预发布版本 / Include public prereleases |
-| `--version 1.0.0` | 指定已公开版本 / Select a published version |
+| `--version 0.0.1` | 指定已公开版本 / Select a published version |
 | `--download-only --output-dir ./downloads` | 仅下载校验 / Verify and save without installing |
 | `--dir "$HOME/Applications"` | 安装位置，默认值如左 / Installation directory and default |
 | `--no-launch` | 安装后不启动 / Do not launch after installation |
@@ -53,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 例如指定版本：
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash -s -- --version 1.0.0
+curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash -s -- --version 0.0.1
 ```
 
 使用 macOS 自带 Bash 和系统工具，不要求 Python、jq、Bun 或 Rust。按真实硬件选择 arm64/x64，Rosetta 下仍选择 arm64。仅下载目录为 `TaskPulse-v<version>-macos-<arch>/`。

@@ -21,7 +21,9 @@ test('both READMEs expose the actual one-line installation commands before isola
     expect(body.indexOf(mac)).toBeLessThan(body.indexOf('git clone'));
     expect(body).not.toContain('docs/CANDIDATE_TESTING.md');
     expect(body).toContain('- [ ]');
-    expect(body).toContain('ZCode');expect(body).toContain('WorkBuddy');
+    expect(body).toContain('Codex');expect(body).toContain('Claude Code');
+    expect(body).toContain('docs/AGENT_COMPATIBILITY.md');
+    expect(body).not.toMatch(/1\.0\.[01x]|版本迁移|version migration|numbering scheme/i);
     expect(body).toContain('Apple Silicon');expect(body).toContain('Intel');
     expect(body).toContain('bun run dev:desktop');
     expect(body).toContain('(CONTRIBUTING.md)');
@@ -85,7 +87,7 @@ test('versioned native media has intact provenance and three reminders share one
     const body=read(file);
     expect(body,file).toContain(`v${manifest.version}`);
     expect(body,file).toContain(`src="assets/screenshots/dashboard${suffix}.png"`);
-    expect(body,file).not.toMatch(/\.(?:gif|mp4|webm)\b|<video\b/);
+    expect(body,file).not.toMatch(/assets\/screenshots\/demo[^"\s]*\.gif|\.(?:mp4|webm)\b|<video\b/);
     const rows=[...body.matchAll(/<p\b[^>]*>[\s\S]*?<\/p>/g)].map(m=>m[0]);
     const row=rows.find(r=>r.includes(`src="assets/screenshots/notice-input${suffix}.png"`));
     expect(row,file).toBeDefined();
@@ -96,6 +98,23 @@ test('versioned native media has intact provenance and three reminders share one
     expect(widths.every(n=>n>0),file).toBe(true);
     expect(widths.reduce((a,b)=>a+b,0),file).toBeLessThanOrEqual(100);
   }
+});
+
+test('the supplied eight-second promotion stays separate from native capture evidence',()=>{
+  const manifest=JSON.parse(read('assets/promo/manifest.json'));
+  const bytes=readFileSync(resolve(root,'assets/promo',manifest.file));
+  expect(bytes.subarray(0,6).toString()).toMatch(/^GIF8[79]a$/);
+  expect(createHash('sha256').update(bytes).digest('hex')).toBe(manifest.sha256);
+  expect(bytes.length).toBe(manifest.bytes);
+  expect(manifest.duration_ms).toBe(8000);
+  expect(manifest.native_capture).toBe(false);
+  for(const file of ['README.md','README.en.md']){
+    const body=read(file);
+    expect(body).toContain('src="assets/promo/teaser-8s.gif"');
+    expect(Math.abs(body.indexOf('assets/promo/teaser-8s.gif')-body.indexOf('src="assets/screenshots/dashboard'))).toBeLessThan(1800);
+  }
+  expect(read('README.md')).toContain('assets/architecture/architecture-zh.svg');
+  expect(read('README.en.md')).toContain('assets/architecture/architecture-en.svg');
 });
 
 test('repository tests use exact root paths rather than collecting nested worktrees',()=>{

@@ -4,6 +4,14 @@
 
 `architecture/` contains editable Chinese and English SVG diagrams of the current
 runtime boundaries. See the [architecture map](../docs/ARCHITECTURE.md).
+The current diagrams use the maintainer-supplied designs, with code paths and
+capability wording checked against the runtime.
+
+`promo/` contains the maintainer-supplied eight-second promotional animation.
+It uses Standard Events example images and is not an interaction recording or
+real-host performance evidence. Its [manifest](promo/manifest.json) records the
+original file hash, dimensions, frame count and duration. Chinese captions are
+preserved in both READMEs.
 
 `screenshots/` contains native Windows panel and reminder images in Chinese and
 English. Only authorized example tasks are shown; no private desktop, account or

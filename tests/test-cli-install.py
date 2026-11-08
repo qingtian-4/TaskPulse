@@ -112,8 +112,19 @@ class InstallerTests(unittest.TestCase):
         self.run_script('--download-only', success=False)
         self.run_script('--version', 'v' + VERSION, '--download-only')
         calls = (self.root / 'calls.jsonl').read_text()
-        self.assertIn('/latest', calls)
+        self.assertIn('/tags/v0.0.1', calls)
+        self.assertNotIn('/latest', calls)
         self.assertIn('/tags/v' + VERSION, calls)
+
+    def test_official_first_release_is_the_default_and_missing_package_never_falls_back(self):
+        self.release.update(tag_name='v0.0.1', prerelease=False)
+        self.prepare_assets('0.0.1')
+        self.run_script('--download-only')
+        calls=(self.root/'calls.jsonl').read_text()
+        self.assertIn('/tags/v0.0.1',calls)
+        self.assertNotIn('/latest',calls)
+        self.release['assets']=[]
+        self.run_script('--download-only',success=False)
 
     def test_newest_public_selection_skips_draft(self):
         self.releases = [dict(self.release, draft=True, published_at='2026-10-29T09:00:00Z'), self.release]

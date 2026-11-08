@@ -17,20 +17,22 @@ Windows 10 / 11 · macOS 13.3+ · [MIT](LICENSE)
 
 </div>
 
-TaskPulse keeps track of your coding agents and notifies you when they need approval, input, or attention. Stay focused on your work instead of constantly checking their progress.
+TaskPulse is a lightweight tray app for local Codex and Claude Code tasks. Come back when they need an answer, approval or a review of the latest turn's result. Stay focused instead of constantly checking their progress.
 
 ## Install
 
-Choose your installer from [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases):
+**v0.0.1 downloads open after installer verification.** You can [build from source](#build-from-source) now.
 
-| System | Installer |
+| System | Installation |
 | --- | --- |
-| Windows 10 / 11 · x64 | `.exe` or `.msi` |
-| Windows 11 · ARM64 | `windows_arm64_setup.exe` |
-| macOS 13.3+ · Apple Silicon | `macos_arm64.dmg` |
-| macOS 13.3+ · Intel | `macos_x64.dmg` |
+| Windows 10 / 11 · x64 | Installers after verification; source build available |
+| Windows 11 · ARM64 | Build from source |
+| macOS 13.3+ · Apple Silicon / Intel | Installers after verification; source build available |
 
-Or install with one command. No repository clone or programming tools required.
+<details>
+<summary>Command-line installation once verified packages are available</summary>
+
+The scripts select the corresponding public package and verify its version, architecture and SHA-256. A missing package stops installation; another version is never substituted.
 
 **Windows · PowerShell**
 
@@ -44,11 +46,13 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-The scripts install and verify the latest public version. Mac installs to `~/Applications` by default. [OS prompts, version selection and removal](docs/INSTALL.en.md). The source version is **v0.0.1**; Releases lists available downloads. Existing 1.0.x users should read [version migration](docs/INSTALL.en.md#version-migration) first.
+Mac installs to `~/Applications` by default. [OS prompts, command options and removal](docs/INSTALL.en.md).
+
+</details>
 
 ## Get started
 
-1. **Choose your sources.** On first launch, confirm agents under Sources → Local and apply your choices. Local data is discovered automatically; add SSH servers when needed.
+1. **Choose your sources.** On first launch, confirm agents under Sources → Local and start monitoring. Local data is discovered automatically; add SSH servers when needed.
 2. **Work as usual.** Start a task in your agent. The tray panel keeps running tasks, requests and unread results together. On Windows, press `Ctrl+Shift+A` to open it.
 3. **Come back when needed.** Answer or approve in the original agent. A matching source event clears the request. Mark a result as viewed after reading it.
 
@@ -58,9 +62,9 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 
 - **Focus without waiting:** run several agents without watching every terminal.
 - **Know when to return:** reminders for explicit input, approvals, results and failures supported by the source.
-- **See what needs attention:** tasks, reported models, effort and duration in a panel that fits up to four cards. Additional tasks scroll inside it.
+- **See what needs attention:** running tasks, requests and unread results together in the tray.
 - **Keep important results:** unread results, pins and unresolved requests survive restarts. Read failures preserve the last trusted state.
-- **Connect on your terms:** local agents, multiple SSH servers and project scopes. Configure WSL, Standard Events or MCP when needed.
+- **Connect on your terms:** discover local sources and manage multiple SSH servers and project scopes.
 - **Keep conversations local:** no TaskPulse cloud account or conversation uploads. Agent hooks and approval policies are never changed automatically.
 
 ## Task panel
@@ -68,6 +72,10 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 <p align="center"><a href="assets/screenshots/dashboard-en.png"><img src="assets/screenshots/dashboard-en.png" width="368" alt="TaskPulse v0.0.1 showing running tasks, input, approval and unread results"></a></p>
 
 Native Windows interface with example tasks and no private data. Models, effort and start/end times appear only when supplied by the source.
+
+<p align="center"><img src="assets/promo/teaser-8s.gif" width="768" alt="An eight-second introduction to TaskPulse: return for input, approval or results"></p>
+
+Eight-second promotional animation with Chinese captions and Standard Events examples; not an interaction recording or performance evaluation.
 
 ## Task reminders
 
@@ -81,18 +89,12 @@ Left to right: input, approval and completion. Click an image to view it at full
 
 ## Supported agents
 
-| Agent | Local capability |
+| Agent | Local monitoring |
 | --- | --- |
-| Codex | Native tasks, models, explicit questions and outcomes. Approval needs an existing explicit event channel. Separate WSL and SSH sources |
-| Claude Code | Native sessions; optional official hooks for explicit approval and lifecycle. Native questions and SSH reading are unsupported |
-| DeepSeek Harness | Desktop / CLI tasks, models and effort; native request IDs match questions, approvals and their resolutions |
-| Kimi Code / kimi-cli | Main-agent wire journals for turns, models, approvals and questions; coverage depends on the journal format |
-| Qoder | Desktop turn projections and IDE / CLI transcripts with complete outcome evidence and duration. Native approval and questions are unsupported |
-| OpenCode, WorkBuddy, ZCode, Hermes, Doubao | Native task observations; model, phase and outcome coverage vary |
-| TRAE | Public workspace discovery; task state, model and request reading from the current primary store remains limited |
-| Gemini CLI and other sources | Process discovery finds running processes only. Full reminders require host-emitted Standard Events or MCP events |
+| Codex | Sessions, turn state and explicit questions. Approval requires an existing explicit host event channel |
+| Claude Code | Session observations; optional official hooks for explicit approval and lifecycle. Native questions are unsupported |
 
-An installed agent does not imply every reminder is supported. Connection, detection, read health and current tasks are separate. Missing evidence never becomes a guessed request or completion. [Capabilities and platforms](docs/AGENT_COMPATIBILITY.md#english) · [Integration guide](docs/AGENT_INTEGRATION_GUIDE.md)
+Configure multiple SSH servers to monitor remote Codex. **Claude Code over SSH is unsupported.** See [compatibility](docs/AGENT_COMPATIBILITY.md#english) for WSL and other agents, or the [integration guide](docs/AGENT_INTEGRATION_GUIDE.md) for extensions. Missing evidence never becomes a guessed request or turn ending. A turn ending does not mean the whole project is finished.
 
 A host is focused only when its live owner can be verified. This does not guarantee an exact session jump; use details to copy a path or session ID when return is unavailable. See the compatibility guide for platform validation.
 

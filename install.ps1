@@ -8,7 +8,7 @@ The normal interactive installer handles installation, upgrades and uninstall.
 .EXAMPLE
 .\install.ps1 -Prerelease
 .EXAMPLE
-.\install.ps1 -Version 1.0.0 -DownloadOnly -OutputDirectory .\downloads
+.\install.ps1 -Version 0.0.1 -DownloadOnly -OutputDirectory .\downloads
 #>
 [CmdletBinding()]
 param(
@@ -50,6 +50,14 @@ function Get-TaskPulsePublicPageRelease {
     return [pscustomobject]@{tag_name=$resolved;draft=$false;prerelease=$resolved.Contains('-');assets=@($names | ForEach-Object {
         [pscustomobject]@{name=$_;browser_download_url="https://github.com/qingtian-4/TaskPulse/releases/download/$resolved/$_"}
     })}
+}
+
+$script:TaskPulsePublicVersion = '0.0.1'
+
+function Resolve-TaskPulseVersion {
+    param([string]$Version, [bool]$Prerelease)
+    if ($Version -or $Prerelease) { return $Version }
+    return $script:TaskPulsePublicVersion
 }
 
 function Get-TaskPulseRelease {
@@ -175,6 +183,7 @@ function Invoke-TaskPulseInstall {
         $arch = Get-TaskPulseArchitecture
         if ($env:OS -ne 'Windows_NT' -or [Environment]::OSVersion.Version.Major -lt 10) { throw 'This installer requires Windows 10/11.' }
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $Version = Resolve-TaskPulseVersion $Version $Prerelease
         $release = Get-TaskPulseRelease $Version $Prerelease
         $tag = [string]$release.tag_name
         if ($tag -cnotmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid release tag.' }

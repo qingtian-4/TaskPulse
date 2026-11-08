@@ -5,7 +5,19 @@ import { join } from 'node:path';
 import {windowsTestProcess} from './support/windows-test-process';
 import './installer-webview.test';
 import './cli-install.test';
-import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateCandidateCommit, validateMsiVersion, validateRelease, validateTauriApiVersion, verifyChecksums } from '../scripts/release';
+import { installerNames, msiVersionFor, projectVersions, stageInstallers, validateBootstrapVersions, validateCandidateCommit, validateMsiVersion, validateRelease, validateTauriApiVersion, verifyChecksums } from '../scripts/release';
+
+test('public bootstrap defaults match the version before release staging',()=>{
+  const root=mkdtempSync(join(tmpdir(),'tp-bootstrap-versions-'));
+  try{
+    writeFileSync(join(root,'install.ps1'),"$script:TaskPulsePublicVersion = '0.0.1'\n");
+    writeFileSync(join(root,'install.sh'),'public_release_version=0.0.1\n');
+    expect(()=>validateBootstrapVersions(root,'0.0.1')).not.toThrow();
+    expect(()=>validateBootstrapVersions(root,'0.0.2')).toThrow('defaults must match');
+    writeFileSync(join(root,'install.sh'),'public_release_version=0.0.2\n');
+    expect(()=>validateBootstrapVersions(root,'0.0.1')).toThrow('defaults must match');
+  }finally{rmSync(root,{recursive:true,force:true});}
+});
 
 test('Tauri JavaScript API and locked Rust core have compatible major.minor versions',()=>{
   expect(()=>validateTauriApiVersion(join(import.meta.dir,'..'))).not.toThrow();

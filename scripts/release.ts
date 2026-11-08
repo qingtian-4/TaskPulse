@@ -45,6 +45,12 @@ export function validateTauriApiVersion(root:string):void {
     throw Error(`Tauri Rust/JavaScript major.minor versions must match before packaging: Rust ${core??'missing'}, API ${api??'missing'}`);
 }
 
+export function validateBootstrapVersions(root:string,version:string):void {
+  const windows=readFileSync(join(root,'install.ps1'),'utf8').match(/\$script:TaskPulsePublicVersion\s*=\s*'([^']+)'/)?.[1];
+  const mac=readFileSync(join(root,'install.sh'),'utf8').match(/^public_release_version=([^\s]+)$/m)?.[1];
+  if(windows!==version||mac!==version)throw Error(`Public installer defaults must match ${version}: Windows ${windows??'missing'}, macOS ${mac??'missing'}`);
+}
+
 export function projectVersions(root: string): string[] {
   const cargo = Bun.TOML.parse(readFileSync(join(root, 'src-tauri/Cargo.toml'), 'utf8')) as { package: {version:string} };
   const lock = Bun.TOML.parse(readFileSync(join(root, 'src-tauri/Cargo.lock'), 'utf8')) as {package:Array<{name:string;version:string}>};
@@ -136,7 +142,10 @@ if (import.meta.main) {
       if (i < 0 || !args[i+1] || args[i+1].startsWith('--')) throw new Error(`Missing ${name}`);
       return args[i+1];
     };
-    if(['check','candidate','preflight'].includes(command))validateTauriApiVersion(root);
+    if(['check','candidate','preflight'].includes(command)){
+      validateTauriApiVersion(root);
+      validateBootstrapVersions(root,projectVersions(root)[0]);
+    }
     if(command === 'publication-check') {
       const tag=argument('--tag');validateRelease(tag,projectVersions(root));
       const repository=process.env.GITHUB_REPOSITORY??'qingtian-4/TaskPulse';

@@ -2,15 +2,11 @@
 
 [简体中文](INSTALL.md)
 
-## Version migration
-
-The source version is 0.0.1. Available installers are listed on Releases; a source revision is not an available download. Versions 1.0.0 and 1.0.1 belong to the earlier numbering scheme. The signed updater will not treat 0.0.1 as an upgrade from 1.0.x.
-
-Once a verified 0.0.1 installer is available, exit TaskPulse and back up `~/.taskpulse/`. Uninstall the old application without deleting its profile, then install the matching architecture/package format and verify your sources, unread results and pins. Do not run both versions against the same profile. Signature checks and OS security prompts remain required. Do not remove a working installation before the replacement is available.
+TaskPulse v0.0.1 downloads open after installer verification. You can [build from source](../README.en.md#build-from-source) now. Windows ARM64 is currently source-build only.
 
 Installers, updater metadata, checksums and dependency/license material accompany each release. Existing MSI installations keep their MSI update package. Windows ARM64 is selectable only when that release provides it; the bootstrap uses the native system architecture.
 
-Choose a package from [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases). On Windows 10/11 x64, use the EXE setup wizard or the MSI for managed deployment. On Windows 11 ARM64, use `TaskPulse_<version>_windows_arm64_setup.exe` when included in that Release. Choose one format and uninstall it before switching. Setup can download WebView2 if the runtime is missing. On macOS 13.3 or later, pick the Apple Silicon or Intel DMG and drag TaskPulse into Applications. The [command-line installer](CLI_INSTALL.md) verifies SHA-256 and defaults to `~/Applications` on Mac.
+Once packages are available, use the EXE setup wizard on Windows 10/11 x64 or MSI for managed deployment. For Windows 11 ARM64, [build from source](../README.en.md#build-from-source). Choose one format and uninstall it before switching. Setup can download WebView2 if the runtime is missing. On macOS 13.3 or later, pick the Apple Silicon or Intel DMG and drag TaskPulse into Applications. The [command-line installer](CLI_INSTALL.md) defaults to v0.0.1, verifies the package and SHA-256, and stops if it is unavailable. Mac installs to `~/Applications` by default.
 
 Compare the download with its published SHA-256. If Windows reports an unknown publisher or macOS cannot verify the developer, verify the download source and follow the system prompt or contact your administrator. TaskPulse does not remove quarantine or disable system security checks. If the Mac installer reports that installation succeeded but launch failed, open the installed application from Finder. Keep any `.taskpulse-recovery/TaskPulse.app` backup until the new app starts and its state is intact.
 
@@ -18,7 +14,7 @@ Compare the download with its published SHA-256. If Windows reports an unknown p
 
 Confirm the detected local agents and choose **Start monitoring**. Start a task in an enabled Agent and open the tray panel. On Windows, `Ctrl+Shift+A` also opens the panel. Use **Settings → Sources** to configure project scope or advanced connections.
 
-**Settings → Application updates** checks for a new version. Download and installation require your click; TaskPulse verifies the updater signature before running the installer. A network or signature failure leaves the installed version in place. You can disable automatic checks, or install a newer package manually if your old version has no update page. Updates retain the profile under `~/.taskpulse/`.
+**Settings → Application updates** checks for a new version. Download and installation require your click; TaskPulse verifies the updater signature before running the installer. A network or signature failure leaves the installed version in place. You can disable automatic checks or install a verified package manually. Updates retain the profile under `~/.taskpulse/`.
 
 ## Displays, sleep and system prompts
 

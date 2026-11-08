@@ -9,6 +9,9 @@ class ReleaseLimitException : System.Exception {
 # Reproduce hosts where this optional convenience command is unavailable.
 function Get-FileHash { throw 'Get-FileHash unavailable in this test host' }
 function Assert([bool]$Condition,[string]$Message) { if(-not $Condition){throw $Message} }
+Assert ((Resolve-TaskPulseVersion '' $false) -eq '0.0.1') 'Default install must select the official first release'
+Assert ((Resolve-TaskPulseVersion '0.0.2' $false) -eq '0.0.2') 'Explicit version must remain available'
+Assert ([string]::IsNullOrEmpty((Resolve-TaskPulseVersion '' $true))) 'Explicit prerelease selection must retain its own resolver'
 function Reject([scriptblock]$Action,[string]$Message) {
     $rejected=$false
     try { & $Action | Out-Null } catch { $rejected=$true }

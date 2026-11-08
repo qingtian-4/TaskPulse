@@ -125,9 +125,21 @@ skills-lock.json
 !/docs/releases/
 /assets/*
 !/assets/README.md
+!/assets/promo/
+/assets/promo/*
+!/assets/promo/teaser-8s.gif
+!/assets/promo/manifest.json
 !/assets/architecture/
 /assets/architecture/*
+!/assets/promo/
+/assets/promo/*
+!/assets/promo/teaser-8s.gif
+!/assets/promo/manifest.json
 !/assets/architecture/architecture-zh.svg
+!/assets/promo/
+/assets/promo/*
+!/assets/promo/teaser-8s.gif
+!/assets/promo/manifest.json
 !/assets/architecture/architecture-en.svg
 !/assets/brand/
 !/assets/screenshots/
@@ -153,8 +165,6 @@ skills-lock.json
 !/SECURITY.md
 /docs/releases/*
 !/docs/releases/0.0.1.md
-!/docs/releases/1.0.0.md
-!/docs/releases/1.0.1.md
 
 /dev.sh
 *.tsbuildinfo
