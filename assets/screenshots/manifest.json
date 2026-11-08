@@ -1,14 +1,14 @@
 {
   "version": "0.0.1",
-  "capture_commit": "657a1f813f8c711506a3be38273a7a836382e02e",
+  "capture_commit": "161ae6b5668b86e13bad7a165bc84a6d16e87a6e",
   "modified": false,
-  "executable_sha256": "f64c59a5bc3423741dde2ec4cd51f5b98b3a4268690860564541a10300c89fd7",
+  "executable_sha256": "7bbae4b0df09ff1446698eaa3c22d687934594a02ab573e04ffecfa9432ee099",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
   "authorization": "Maintainer requested current-interface public screenshots",
   "rendering": "Native WebView capture at DPR 2; no UI or IPC mocks",
-  "captured_on": "2026-11-07",
+  "captured_on": "2026-11-09",
   "assets": [
     {
       "file": "dashboard.png",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 840,
       "dpr": 2,
-      "sha256": "80e569d683fd6f74872eb2e01eb9971399ee134183ae9f586bdd93582068bc18",
-      "bytes": 181226
+      "sha256": "987455e82e52eaeea6f9a549463a48cb9010aed4c0e55b9e2d3634915b87f580",
+      "bytes": 181316
     },
     {
       "file": "notice-input.png",
@@ -67,8 +67,8 @@
       "logical_width": 368,
       "logical_height": 861,
       "dpr": 2,
-      "sha256": "878a8ba57f9b0e7d1b1072065b4966b075364ce4088931141e44f010d4df257d",
-      "bytes": 163595
+      "sha256": "2fea97d2b512c5cfde611b280caa571f7452895b4de54d67b9e869b7f417412b",
+      "bytes": 163686
     },
     {
       "file": "notice-input-en.png",
@@ -108,11 +108,12 @@
     }
   ],
   "frontend_tree": "e20a85f6a135c272c08796b35c1c815f6834fe50",
-  "runtime_tree": "0a0637dac59ca1a1fb81efea03829cc8fe53c650",
+  "runtime_tree": "dc5f38c804cb43e43e970aecd584e2f96b289678",
   "locale_tree": "427e2ba927686ad8ee5cfa9658cadb72655bded8",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
     "src-tauri/Cargo.lock": "808e1cd9d124b3bd3f4b1e1c2b6ed13e793ddf17e6063da022f76e5b9639aec1"
-  }
+  },
+  "capture_timezone": "Asia/Shanghai"
 }
