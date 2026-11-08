@@ -93,6 +93,7 @@ function Get-TaskPulseRelease {
     }
     if (-not $release -or $release.draft -or (-not $publicPageVerified -and -not $release.published_at)) { throw 'No public release available. Draft releases cannot be installed.' }
     if (-not $Version -and -not $Prerelease -and $release.prerelease) { throw 'Prerelease requires -Prerelease or an explicit -Version.' }
+    if (-not $Prerelease -and $release.tag_name -cmatch '^v\d+\.\d+\.\d+$' -and $release.prerelease -ne $false) { throw 'Stable version tags require a public stable release.' }
     if ($Version -and $release.tag_name -cne $tag) { throw 'Release tag mismatch.' }
     return $release
 }

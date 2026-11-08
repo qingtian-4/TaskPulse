@@ -155,6 +155,9 @@ published=$(required "$release" published_at)
 [[ "$published" =~ $time_pattern ]] || fail 'Release is not published.' '版本尚未公开。'
 tag=$(required "$release" tag_name)
 [[ "$tag" =~ $tag_pattern ]] || fail 'Invalid release tag.' '版本标签无效。'
+if [ "$prerelease" = 0 ] && [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  [ "$(required "$release" prerelease)" = false ] || fail 'Stable version tags require a public stable release.' '正式版本标签必须对应正式公开发布。'
+fi
 if [ -n "$version" ]; then [ "$tag" = "v$version" ] || fail 'Release tag mismatch.' '版本标签不匹配。'
 elif [ "$prerelease" = 0 ]; then
   [ "$(required "$release" prerelease)" = false ] && [[ "$tag" != *-* ]] || fail 'Prerelease requires explicit selection.' '预发布须明确选择。'

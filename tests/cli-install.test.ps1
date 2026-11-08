@@ -162,5 +162,9 @@ try {
     Invoke-TaskPulseBootstrapProbe -Assets $root -Version '0.2.0-alpha.8' -Evidence $probeEvidence
     $probe=Get-Content -LiteralPath (Join-Path $probeEvidence 'bootstrap.json') -Raw | ConvertFrom-Json
     Assert ($probe.passed -and $probe.source_commit -eq ('a'*40)) 'Native preview bootstrap probe failed'
+    function Invoke-RestMethod { return [pscustomobject]@{tag_name='v0.0.1';draft=$false;prerelease=$true;published_at='2026-11-09T00:00:00Z';assets=@()} }
+    $stableFailure=''
+    try { Get-TaskPulseRelease '0.0.1' $false | Out-Null } catch { $stableFailure=$_.Exception.Message }
+    Assert ($stableFailure.Contains('Stable version tags require a public stable release')) 'Bare stable tag accepted a prerelease without explicit opt-in'
     Write-Output 'PASS: release selection, draft rejection, asset origin, manifest, checksum, corruption, download-only and bilingual output; no installer executed.'
 } finally { Remove-Item -LiteralPath $root -Recurse -Force }

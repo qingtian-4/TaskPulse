@@ -130,6 +130,11 @@ class InstallerTests(unittest.TestCase):
         self.releases = [dict(self.release, draft=True, published_at='2026-10-29T09:00:00Z'), self.release]
         self.run_script('--prerelease', '--download-only')
 
+    def test_stable_tag_does_not_silently_select_a_prerelease(self):
+        self.release.update(tag_name='v0.0.1', prerelease=True)
+        self.prepare_assets('0.0.1')
+        self.assertIn('Stable version tags require a public stable release', self.run_script('--download-only', success=False))
+
     def test_draft_unpublished_and_wrong_version(self):
         for key, value in [('draft', True), ('published_at', None), ('tag_name', 'v9.0.0')]:
             old = self.release[key]; self.release[key] = value
