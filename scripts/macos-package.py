@@ -51,17 +51,32 @@ def stage(bundle_root, output, version, commit, arch, build_kind=None):
 
 def compact_empty_dashboard(measurement):
     area = measurement.get("work_area", {})
-    width, height = area.get("width", 0), area.get("height", 0)
-    if not all(isinstance(value, (int, float)) and math.isfinite(value) and value > 16
-               for value in (width, height)):
+    x, y, width, height = (area.get(key) for key in ("x", "y", "width", "height"))
+    if not all(type(value) in (int, float) and math.isfinite(value)
+               for value in (x, y, width, height)) or min(width, height) <= 16:
         raise ValueError("Missing usable native display work area")
-    expected_width = min(368, max(320, width * .32), width - 16)
-    expected_height = min(400, height * .82, height - 16)
-    # CoreGraphics and NSScreen both use logical points. Allow pixel rounding,
-    # not the old platform-wide 0.9 scale or a larger fallback window.
-    return any(abs(window["width"] - expected_width) <= 1
-               and abs(window["height"] - expected_height) <= 1
-               for window in measurement.get("windows", []))
+
+    windows = measurement.get("windows", [])
+    if len(windows) != 1:
+        return False
+    left, top, w, h = (windows[0].get(key) for key in ("x", "y", "width", "height"))
+    if not all(type(value) in (int, float) and math.isfinite(value)
+               for value in (left, top, w, h)):
+        return False
+
+    # The renderer measures the empty copy after font layout and line wrapping.
+    # Verify a compact, on-screen window, never the expanded startup fallback.
+    margin, rounding = 8, 1
+    expected_width = min(368, max(320, width * .32), width - 2 * margin)
+    usable_height = height - 2 * margin
+    return (
+        abs(w - expected_width) <= rounding
+        and min(280, usable_height) - rounding <= h <= min(440, usable_height) + rounding
+        and left >= x + margin - rounding
+        and top >= y + margin - rounding
+        and left + w <= x + width - margin + rounding
+        and top + h <= y + height - margin + rounding
+    )
 
 
 def smoke(dmg, version, arch, evidence):
@@ -166,7 +181,10 @@ def smoke(dmg, version, arch, evidence):
                             except subprocess.TimeoutExpired:
                                 child.kill()
                                 child.wait(timeout=5)
-            result["passed"] = True
+        if root.exists():
+            raise RuntimeError("Owned temporary install was not removed")
+        result["cleaned_up"] = True
+        result["passed"] = True
     except Exception as error:
         result["error"] = str(error)
         raise
