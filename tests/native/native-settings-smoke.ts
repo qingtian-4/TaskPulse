@@ -78,6 +78,8 @@ poll_interval_ms=3000
   console.log('settings smoke: native startup');start();let root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const build=await root.invoke('get_build_info');
   if(expectedCommit){assert.equal(build.commit,expectedCommit);assert.equal(build.modified,false);assert.equal(build.process_id,app!.pid);}
+  await root.wait(`getComputedStyle(document.querySelector('.dashboard')).getPropertyValue('--tp-task-font-size').trim()==='12px'`);
+  assert.equal((await root.invoke('get_monitoring_settings')).preferences.task_font_size,12);
   const hasher=createHash('sha256');for await(const chunk of createReadStream(exe))hasher.update(chunk);
   const buildEvidence={commit:build.commit,modified:build.modified,executableSha256:hasher.digest('hex')};
   const product=build.channel==='development'?'TaskPulse Dev':'TaskPulse';
@@ -292,7 +294,7 @@ poll_interval_ms=3000
   assert.equal((await ui.invoke('get_autostart')).available,false);
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
+  await ui.wait(`document.querySelectorAll('.local-agents > [data-agent-kind]').length===11`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('.ms-tabs button').length`),2);
   assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false);
   assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-agents').textContent)&&/OpenCode/.test(document.querySelector('.local-agents').textContent)`),true);
@@ -453,7 +455,7 @@ poll_interval_ms=3000
     // Reset ephemeral fixture reports before capturing the home/detail page:
     // persisted configuration alone must never paint a successful SSH badge.
     await ui.send('Page.reload');
-    await ui.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
+    await ui.wait(`document.querySelectorAll('.local-agents > [data-agent-kind]').length===11`);
     await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
     await ui.wait(`document.querySelectorAll('.server-card').length===2`);
     assert.equal(await ui.evaluate(`document.querySelector('.server-controls .ms-pill').textContent.includes('not checked')`),true);
@@ -500,10 +502,26 @@ poll_interval_ms=3000
   await ui.wait(`!!document.querySelector('.event-sources')`);
   assert.ok(await ui.evaluate(`!document.querySelector('.event-sources').open && !document.querySelector('[data-event-adapter]') && !!document.querySelector('[data-agent-kind="qoder"]')`));
   const beforeEvent=await ui.invoke('get_monitoring_settings');
+  assert.ok(await ui.evaluate(`!document.querySelector('.local-agents [data-agent-kind="scanner"]') && !document.querySelector('[data-process-discovery]').open && !!document.querySelector('[data-process-discovery] [data-agent-kind="scanner"]')`));
   await ui.evaluate(`document.querySelector('.event-sources summary').click()`);
-  await ui.evaluate(`(()=>{const select=document.querySelector('[data-event-picker]');select.value='kimi-code-cli';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-event-picker] option')].map(option=>option.value).filter(value=>['standard-events','kimi-code-cli','trae-cn-ide','zcode-desktop'].includes(value))`),['standard-events']);
+  await ui.evaluate(`(()=>{const select=document.querySelector('[data-event-picker]');select.value='standard-events';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await ui.wait(`!document.querySelector('[data-event-add]').disabled`);
   await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
+  await ui.wait(`document.querySelectorAll('[data-event-adapter="standard-events"]').length===1`);
+  await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
+  await ui.wait(`document.querySelectorAll('[data-event-adapter="standard-events"]').length===2`);
+  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-event-adapter="standard-events"] .agent-row strong')].map(el=>el.textContent)`),['Connection 1','Connection 2']);
+  for(const [kind,adapter] of [['trae','trae-cn-ide'],['zcode','zcode-desktop'],['kimi_code','kimi-code-cli']]){
+    const row=`[data-agent-kind="${kind}"]`;
+    assert.equal(await ui.evaluate(`document.querySelectorAll(${JSON.stringify(row)}).length`),1);
+    await ui.evaluate(`document.querySelector(${JSON.stringify(row+' .agent-row button')}).click()`);
+    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' .local-hook summary')})`);
+    await ui.evaluate(`document.querySelector(${JSON.stringify(row+' .local-hook summary')}).click()`);
+    await ui.evaluate(`document.querySelector(${JSON.stringify(row+' [data-event-add]')}).click()`);
+    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' [data-event-adapter="'+adapter+'"] [data-integration-editor]')})`);
+    assert.equal(await ui.evaluate(`document.querySelector(${JSON.stringify(row+' [data-event-adapter="'+adapter+'"] .agent-row strong')}).textContent`),'Connection 1');
+  }
   await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"] [data-integration-editor]')`);
   assert.deepEqual((await ui.invoke('get_monitoring_settings')).sources,beforeEvent.sources,'Opening an event draft must not write configuration or Hooks');
   await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
@@ -512,6 +530,10 @@ poll_interval_ms=3000
   const eventSource=eventSaved.sources.find((s:any)=>s.integration?.adapter_id==='kimi-code-cli');
   assert.equal(eventSource.enabled,false);assert.equal(eventSource.integration.agent_id,'kimi-code-cli');
   assert.ok(eventSource.id.startsWith('generic_event:'));
+  const standardSaved=eventSaved.sources.filter((s:any)=>s.integration?.adapter_id==='standard-events');
+  assert.equal(standardSaved.length,2);
+  assert.equal(new Set(standardSaved.map((s:any)=>s.id)).size,2);
+  assert.ok(standardSaved.every((s:any)=>!s.enabled));
   if(captureScreenshots)await Bun.write(join(owned,'settings-event-agents-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await ui.invoke('save_monitoring_settings',{settings:{...eventSaved,sources:beforeEvent.sources},expected:eventSaved});
   sockets.forEach(ws=>ws.close());await stopOwnedChild(app);start();

@@ -1,6 +1,6 @@
 <script lang="ts">
   import {t} from '$lib/i18n';
-  import {eventAdapterLabel} from '$lib/source-setup';
+  import {eventAdapterLabel,localHookKind} from '$lib/source-setup';
   import {emit} from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -8,7 +8,7 @@
   type Capability={support:string;channel:string;validation:string;tested_versions:string[];limitations:string};
   type Manifest={adapter_id:string;agent_id:string;display_name:string;product_form:string;systems:string[];official_sources:string[];supported_versions:string[];capabilities:Record<string,Capability>};
   type Preview={token:string;source_id:string;path:string;action:string;entries:unknown[];decoded_command:string;notes:string[]};
-  let {source,dirty,changed}:{source:MonitorSource;dirty:boolean;changed:()=>void}=$props();
+  let {source,dirty,changed,localHook=false}:{source:MonitorSource;dirty:boolean;changed:()=>void;localHook?:boolean}=$props();
   let catalog=$state<Manifest[]>([]), text=$state(''), message=$state(''), error=$state(''), busy=$state(false);
   let preview=$state<Preview|null>(null), confirmed=$state(false), diagnostic=$state(''), exported=$state('');
   const adapter=$derived(catalog.find(m=>m.adapter_id===source.integration?.adapter_id));
@@ -42,7 +42,7 @@
 <div class="integration-editor" data-integration-editor>
   <h3>{$t("选择 Agent 与接入能力")}</h3>
   <p>{$t("只关注确认后的新执行。Agent 身份与所用模型分开；这里没有通用进程猜测或任意插件代码。")}</p>
-  <label>{$t("Agent / 适配描述")}<select aria-label={$t("Agent 适配描述")} value={source.integration?.adapter_id??'standard-events'} disabled={!!source.integration?.accept_since_ms} onchange={e=>select(e.currentTarget.value)}>{#each catalog as m}<option value={m.adapter_id}>{adapterName(m)}</option>{/each}</select></label>
+  {#if !localHook}<label>{$t("Agent / 适配描述")}<select aria-label={$t("Agent 适配描述")} value={source.integration?.adapter_id??'standard-events'} disabled={!!source.integration?.accept_since_ms} onchange={e=>select(e.currentTarget.value)}>{#each catalog.filter(m=>!localHookKind(m.adapter_id)) as m (m.adapter_id)}<option value={m.adapter_id}>{adapterName(m)}</option>{/each}</select></label>{/if}
   {#if source.integration}
     <label>{$t("传输环境")}<select aria-label={$t("通用事件传输")} value="local"><option value="local">{platformName} {$t("本机")}</option><option disabled>{$t("WSL（尚未实现）")}</option><option disabled>{$t("SSH（尚未实现）")}</option></select></label>
   {/if}
@@ -91,7 +91,7 @@
   {/if}
   {#if diagnostic}<pre aria-label={$t("接入诊断结果")}>{diagnostic}</pre>{/if}
   {#if exported}<pre aria-label={$t("标准接入说明")}>{exported}</pre>{/if}
-  <details class="manifest tp-fold"><summary>{$t("导入社区 / 自定义 Agent 描述文件")}</summary><p>{$t("仅支持受限 JSON 字段映射，不执行其中的程序或写入任意宿主配置。以 integrations/community-template.json 为起点。")}</p><textarea aria-label={$t("适配描述 JSON")} bind:value={text} placeholder={$t("粘贴 manifest JSON")}></textarea><button class="tp-btn" disabled={busy||!text.trim()} onclick={importManifest}>{$t("验证并导入描述")}</button></details>
+  {#if !localHook}<details class="manifest tp-fold"><summary>{$t("导入社区 / 自定义 Agent 描述文件")}</summary><p>{$t("仅支持受限 JSON 字段映射，不执行其中的程序或写入任意宿主配置。以 integrations/community-template.json 为起点。")}</p><textarea aria-label={$t("适配描述 JSON")} bind:value={text} placeholder={$t("粘贴 manifest JSON")}></textarea><button class="tp-btn" disabled={busy||!text.trim()} onclick={importManifest}>{$t("验证并导入描述")}</button></details>{/if}
   </details>
   {#if message}<p role="status">{$t(message)}</p>{/if}{#if error}<p class="error" role="alert">{error}</p>{/if}
 </div>

@@ -21,6 +21,10 @@ pub fn integration_installations() -> Vec<Value> {
 
 #[tauri::command]
 pub fn integration_catalog() -> Vec<manifest::Manifest> {
+    integration_catalog_at(&super::home().join("manifests"))
+}
+
+fn integration_catalog_at(directory: &std::path::Path) -> Vec<manifest::Manifest> {
     let mut ids = vec![
         "standard-events".to_string(),
         "kimi-code-cli".into(),
@@ -28,12 +32,13 @@ pub fn integration_catalog() -> Vec<manifest::Manifest> {
         "zcode-desktop".into(),
         "workbuddy-candidate".into(),
     ];
-    if let Ok(entries) = std::fs::read_dir(super::home().join("manifests")) {
+    let mut seen: std::collections::HashSet<_> = ids.iter().cloned().collect();
+    if let Ok(entries) = std::fs::read_dir(directory) {
         for path in entries.take(128).filter_map(Result::ok).map(|e| e.path()) {
             if std::fs::metadata(&path).is_ok_and(|m| m.len() < 64 * 1024) {
                 if let Ok(text) = std::fs::read_to_string(path) {
                     if let Ok(m) = serde_json::from_str::<manifest::Manifest>(&text) {
-                        if m.validate().is_ok() {
+                        if m.validate().is_ok() && seen.insert(m.adapter_id.clone()) {
                             ids.push(m.adapter_id);
                         }
                     }
@@ -44,6 +49,25 @@ pub fn integration_catalog() -> Vec<manifest::Manifest> {
     ids.into_iter()
         .filter_map(|id| manifest::load(&id).ok())
         .collect()
+}
+
+#[cfg(test)]
+mod catalog_tests {
+    #[test]
+    fn local_manifest_copies_cannot_duplicate_builtin_adapters() {
+        let directory = tempfile::tempdir().unwrap();
+        for id in ["standard-events", "trae-cn-ide", "zcode-desktop"] {
+            std::fs::write(
+                directory.path().join(format!("{id}.json")),
+                super::manifest::builtin(id).unwrap(),
+            )
+            .unwrap();
+        }
+        let catalog = super::integration_catalog_at(directory.path());
+        for id in ["standard-events", "trae-cn-ide", "zcode-desktop"] {
+            assert_eq!(catalog.iter().filter(|m| m.adapter_id == id).count(), 1);
+        }
+    }
 }
 
 #[tauri::command]

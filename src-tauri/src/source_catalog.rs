@@ -284,13 +284,7 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
         definition("zcode", "ZCode", Zcode, "local", "file"),
         definition("hermes", "Hermes", Hermes, "local", "file"),
         definition("doubao", "豆包", Doubao, "local", "directory"),
-        definition(
-            "scanner",
-            "进程识别（含 Gemini CLI）",
-            Scanner,
-            "local",
-            "none",
-        ),
+        definition("scanner", "进程检测", Scanner, "local", "none"),
         definition("codex_wsl", "Codex · WSL", CodexWsl, "remote", "distro"),
         definition(
             "deepseek_harness",

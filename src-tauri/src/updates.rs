@@ -149,6 +149,17 @@ fn allowed_download(update: &Update) -> bool {
         ))
         && !update.signature.trim().is_empty()
 }
+// These tags predate the first official release. They may still be public
+// during acceptance, but must never be offered to the stable application.
+fn is_stable_update(current: &semver::Version, candidate: &semver::Version) -> bool {
+    candidate.pre.is_empty()
+        && !matches!(
+            (candidate.major, candidate.minor, candidate.patch),
+            (1, 0, 0 | 1)
+        )
+        && candidate.cmp_precedence(current).is_gt()
+}
+
 async fn check(app: &AppHandle) {
     if !checking_supported() {
         let mut state = state().lock().unwrap_or_else(|e| e.into_inner());
@@ -172,6 +183,7 @@ async fn check(app: &AppHandle) {
     notify(app);
     let result = match app
         .updater_builder()
+        .version_comparator(|current, remote| is_stable_update(&current, &remote.version))
         .timeout(Duration::from_secs(30))
         .build()
     {
@@ -322,6 +334,33 @@ pub fn start(app: AppHandle) {
 #[cfg(test)]
 mod tests {
     use base64::Engine;
+
+    #[test]
+    fn official_update_channel_excludes_old_test_releases_and_keeps_future_updates() {
+        let version = |text: &str| semver::Version::parse(text).unwrap();
+        let first = version("0.0.1");
+        for ignored in [
+            "0.0.0",
+            "0.0.1",
+            "0.0.1+other",
+            "0.2.0-alpha.8",
+            "1.0.0",
+            "1.0.1",
+            "1.0.1+test",
+        ] {
+            assert!(
+                !super::is_stable_update(&first, &version(ignored)),
+                "{ignored}"
+            );
+        }
+        for available in ["0.0.2", "1.0.2", "2.0.0"] {
+            assert!(
+                super::is_stable_update(&first, &version(available)),
+                "{available}"
+            );
+        }
+        assert!(!super::is_stable_update(&version("0.0.2"), &first));
+    }
     #[test]
     fn unpackaged_paths_never_become_macos_replacement_targets() {
         let dir = tempfile::tempdir().unwrap();

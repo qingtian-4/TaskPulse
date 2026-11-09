@@ -22,6 +22,7 @@ dependencies = [
  "notify-rust",
  "plist",
  "rusqlite",
+ "semver",
  "serde",
  "serde_json",
  "sha2",

@@ -22,9 +22,27 @@ export interface SourceCatalogRow {
 }
 // Short labels are presentation only. Manifests and persisted source IDs
 // continue to carry the original adapter identity.
+const LOCAL_HOOKS:Readonly<Record<string,SourceKind>>={
+  'kimi-code-cli':'kimi_code','trae-cn-ide':'trae','zcode-desktop':'zcode',
+};
+export function localHookKind(adapterId:string|undefined):SourceKind|undefined {
+  return adapterId&&Object.hasOwn(LOCAL_HOOKS,adapterId)?LOCAL_HOOKS[adapterId]:undefined;
+}
+export function eventConnections(catalog:SourceDefinition[],sources:MonitorSource[]){
+  return catalog.flatMap(definition=>{
+    const connections=sources.filter(s=>s.kind==='generic_event'&&s.integration?.adapter_id===definition.adapter_id);
+    return connections.length?[{definition,connections}]:[];
+  });
+}
+export function isDefaultEventName(name:string,definition:SourceDefinition):boolean {
+  return name===definition.name||name===eventAdapterLabel(definition.adapter_id??'',definition.name)||
+    definition.adapter_id==='standard-events'&&[
+      '其他 Agent','其他 Agent · 通用事件','其他 Agent（标准事件）','Other Agent','Other agents (standard events)','Generic events (MCP / scripts)',
+    ].includes(name);
+}
 export function eventAdapterLabel(adapterId:string,displayName:string):string {
   return ({
-    'standard-events':'其他 Agent',
+    'standard-events':'通用事件（MCP / 脚本）',
     'kimi-code-cli':'Kimi Code',
     'trae-cn-ide':'Trae',
     'zcode-desktop':'ZCode',
