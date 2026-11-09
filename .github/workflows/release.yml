@@ -156,6 +156,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.preflight.outputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           tauriScript: bun run tauri
+          # Tauri validates downloaded installer tools on every attempt.
+          retryAttempts: '2'
           args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
         run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
@@ -253,6 +255,8 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ needs.preflight.outputs.tag != '' && secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD || '' }}
         with:
           tauriScript: bun run tauri
+          # Tauri validates downloaded installer tools on every attempt.
+          retryAttempts: '2'
           args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target aarch64-pc-windows-msvc --features custom-protocol --bundles nsis -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
         run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui

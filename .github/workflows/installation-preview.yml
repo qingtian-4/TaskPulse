@@ -117,6 +117,8 @@ jobs:
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
         with:
           tauriScript: bun run tauri
+          # Tauri validates downloaded installer tools on every attempt.
+          retryAttempts: '2'
           args: --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
         run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
