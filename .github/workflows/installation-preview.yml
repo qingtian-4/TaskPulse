@@ -107,7 +107,11 @@ jobs:
         run: cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
       - name: Lint Rust
         run: cargo clippy --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+      # The Claude journal fixture still starts 12 concurrent writers.
+      # Keep unrelated tests from contending for the Windows runner during it.
       - name: Test Rust
+        env:
+          RUST_TEST_THREADS: '1'
         run: cargo test --locked --manifest-path src-tauri/Cargo.toml --bin agent-tray
       - name: Build NSIS and MSI installers
         uses: tauri-apps/tauri-action@84b9d35b5fc46c1e45415bdb6144030364f7ebc5 # v0
