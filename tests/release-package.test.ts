@@ -61,7 +61,13 @@ test('draft publication requires native acceptance on every included architectur
     expect(draft.if).toContain(`needs.${job}.result == 'success'`);
   }
   expect(workflow.jobs['windows-arm64']['runs-on']).toBe('windows-11-arm');
-  expect(workflow.jobs['installer-smoke-arm64']['runs-on']).toBe('windows-11-arm');
+  const armSmoke=workflow.jobs['installer-smoke-arm64'];
+  expect(armSmoke['runs-on']).toBe('windows-11-arm');
+  expect(armSmoke.strategy.matrix.round).toEqual([1,2]);
+  const armCommands=armSmoke.steps.map((s:any)=>s.run??'').join('\n');
+  expect(armCommands).not.toMatch(/\bwinget\s+install\b/i);
+  expect(armCommands).toContain('installer-smoke.ps1');
+  expect(armCommands).toContain('-Architecture arm64');
   const steps=draft.steps.map((s:any)=>s.run??'').join('\n');
   expect(steps).toContain('release-package.py');expect(steps).toContain('release-notes.ts');
   expect(draft.steps.find((s:any)=>s.uses?.startsWith('softprops/')).with.files).toBe('dist/publish/*');
