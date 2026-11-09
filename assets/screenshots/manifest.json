@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "75be65de112e9b607c8f8dbbda622e221af64cea",
+  "capture_commit": "a95d45fcfe1794a1be764bef22989e1eed757943",
   "modified": false,
-  "executable_sha256": "2ea4b0a4a82fcb888638a3b355217230dddd836316e11bde05fe85375f6fe5e1",
+  "executable_sha256": "cf4eecf6d1ae3c5a33df44ae89eb05b50d584e5c64d2a41911f06351405e442b",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -15,12 +15,12 @@
       "language": "zh-CN",
       "kind": "dashboard",
       "width": 736,
-      "height": 1684,
+      "height": 1672,
       "logical_width": 368,
-      "logical_height": 842,
+      "logical_height": 836,
       "dpr": 2,
-      "sha256": "7f87aa04a5b563657df67140056e3e27cf140da5e10fcd3bfd037c4a3e27c9fd",
-      "bytes": 179487
+      "sha256": "91f89faf162b98c273e7e46b860c98e8737ebd4ddf77a7711319133eaa05d6a9",
+      "bytes": 178658
     },
     {
       "file": "notice-input.png",
@@ -63,12 +63,12 @@
       "language": "en",
       "kind": "dashboard",
       "width": 736,
-      "height": 1726,
+      "height": 1714,
       "logical_width": 368,
-      "logical_height": 863,
+      "logical_height": 857,
       "dpr": 2,
-      "sha256": "9ab00ac586100a6c342c71a23ed56ef2c487f3b27d9f49d181ddd7d2fd8c26b4",
-      "bytes": 161473
+      "sha256": "95f0c9fe96964abbd0d76f3c723330899ff27bdee3aada34422e1c8ab6247d87",
+      "bytes": 160340
     },
     {
       "file": "notice-input-en.png",
@@ -107,9 +107,9 @@
       "bytes": 23072
     }
   ],
-  "frontend_tree": "27f71b5a40f2190e74bff044873ee3041ac6dc31",
-  "runtime_tree": "5fe55f8955ea30fdf45caf8cd060650c333cc3fa",
-  "locale_tree": "427e2ba927686ad8ee5cfa9658cadb72655bded8",
+  "frontend_tree": "92ad04e669447f211aa5b940f04c2dfc38631d5e",
+  "runtime_tree": "c087f76fd2b01901e1433748c9eece2f3ce15e58",
+  "locale_tree": "457b1c77f4fcc99a5c9854f74154c33c0b442f01",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",

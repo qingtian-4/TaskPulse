@@ -88,6 +88,7 @@ poll_interval_ms=3000
   assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
   // The route must render its shell while the initial settings read is pending.
   // Reload the real WebView and hold the existing IPC request at its boundary.
+  await ui.wait(`document.readyState==='complete' && !!document.querySelector('[aria-label="登录时自动启动"]')`);
   const heldSettingsReads:string[]=[];
   let firstPaint:any;
   let holdSettingsRead=true;
