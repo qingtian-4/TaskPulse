@@ -355,7 +355,17 @@ fn live_wal_precedence_tombstone_rotation_and_cache_invalidation() {
     assert_eq!(r.read(d.path()).unwrap(), one);
     fs::write(p.join("MANIFEST-000002"), log_record(&[2, 4])).unwrap();
     fs::write(p.join("000004.log"), batch(11, &[(key(1), None)])).unwrap();
-    fs::write(p.join("CURRENT"), b"MANIFEST-000002\n").unwrap();
+    let current = p.join("CURRENT");
+    let before_rotation = stamp(&current).unwrap();
+    fs::write(&current, b"MANIFEST-000002\n").unwrap();
+    // An equal-length pointer update can share the previous filesystem timestamp.
+    fs::File::options()
+        .write(true)
+        .open(&current)
+        .unwrap()
+        .set_modified(before_rotation.modified)
+        .unwrap();
+    assert!(stamp(&current).unwrap() == before_rotation);
     assert!(r.read(d.path()).is_err());
     fs::write(p.join("000004.log"), batch(12, &[(key(1), Some(inline()))])).unwrap();
     assert_eq!(r.read(d.path()).unwrap(), one);

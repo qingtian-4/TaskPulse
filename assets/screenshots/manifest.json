@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "e3d99129816f66d321409f4b2d5af609aef96d87",
+  "capture_commit": "c94a691f5476ed0f2f6192a5545b34c52de4c51a",
   "modified": false,
-  "executable_sha256": "2fd7da12001126f8fb97a601e6ffd7b5d8022547d040c5c1c9d82fe60271a545",
+  "executable_sha256": "666393757cddff1a793a434419c09a43a1f71b5e56797405e05cf15aa32d48d2",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 836,
       "dpr": 2,
-      "sha256": "999441895c716f45bc54a6bf548680f57e26b5b12baa30503f80c3658af5b652",
-      "bytes": 178657
+      "sha256": "275fb08901cb6563419645f192bd536ee759b2d5f98332e29db6e6c64da5aa95",
+      "bytes": 178581
     },
     {
       "file": "notice-input.png",
@@ -31,8 +31,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "af8c6bdd807ec6670f61b4c8e1c57f1c98ddbf3e3a92203c4bd58315e903e765",
-      "bytes": 25809
+      "sha256": "014e2d4cbf2978e3e5baa958ddd3677eebc383fb5e35a28028f4199109a7b4bd",
+      "bytes": 25613
     },
     {
       "file": "notice-approval.png",
@@ -43,8 +43,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "a6624f631fbaaaa9e056c6c5abbc8fc1176c79ba7c99e2d30c223c8f33d3483d",
-      "bytes": 24529
+      "sha256": "c12a9f134fb33bc39e9d23775329de45046371ca707c370ef4d363d628a01b8c",
+      "bytes": 24350
     },
     {
       "file": "notice-completed.png",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "f5a37a90db61a9d1fbe93ff674831a8d49fe7d596c5f1a616b2085163732a24c",
-      "bytes": 26726
+      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
+      "bytes": 25774
     },
     {
       "file": "dashboard-en.png",
@@ -103,12 +103,12 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "820a751e0d3f3cce1f28fc04e3e4bacdb4a51fbbcd5e22a80c54f583b7c3d554",
-      "bytes": 23208
+      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
+      "bytes": 23209
     }
   ],
   "frontend_tree": "813fa925b685a97d78423cfc93942f5a162e59cd",
-  "runtime_tree": "2c44ee747a2f89f9556208b90d0f04aab3559678",
+  "runtime_tree": "ec3caa9663e3c79d570d09e52d04a291fec0e29a",
   "locale_tree": "457b1c77f4fcc99a5c9854f74154c33c0b442f01",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {

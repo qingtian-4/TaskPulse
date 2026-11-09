@@ -15,6 +15,7 @@ mod tests;
 
 pub type Result<T> = std::result::Result<T, &'static str>;
 const LIMIT: usize = 32 * 1024 * 1024;
+const CURRENT_LIMIT: u64 = 64;
 const RECORD: &str = "default-chat-im-protocol-store";
 pub const DATABASE: &str = "chrome_doubao-chat_0.indexeddb.leveldb";
 type Records = BTreeMap<Vec<u8>, (u64, Option<Vec<u8>>)>;
@@ -235,23 +236,29 @@ fn stamp(p: &Path) -> Result<Stamp> {
 #[derive(Default)]
 pub struct Reader {
     stamps: Vec<Stamp>,
+    manifest_pointer: Vec<u8>,
     cached: Option<Value>,
     pub titles: BTreeMap<String, String>,
 }
 impl Reader {
     pub fn read(&mut self, root: &Path) -> Result<Value> {
+        let db = root.join(DATABASE);
+        let current_path = db.join("CURRENT");
+        let mut files = Files::default();
+        let current = files.read_bounded(&current_path, CURRENT_LIMIT)?;
         if let Some(cached) = self.cached.as_ref().filter(|_| {
-            !self.stamps.is_empty()
+            // A manifest rotation can change the pointer without changing its
+            // length or timestamp. Compare its bounded content on every poll.
+            self.manifest_pointer == current
+                && self.stamps.first() == files.stamps.first()
                 && self
                     .stamps
                     .iter()
+                    .skip(1)
                     .all(|s| stamp(&s.path).ok().as_ref() == Some(s))
         }) {
             return Ok(cached.clone());
         }
-        let mut files = Files::default();
-        let db = root.join(DATABASE);
-        let current = files.read(&db.join("CURRENT"))?;
         let manifest = std::str::from_utf8(&current)
             .map_err(|_| "manifest name")?
             .trim();
@@ -404,6 +411,7 @@ impl Reader {
             .stamps
             .iter()
             .any(|s| stamp(&s.path).ok().as_ref() != Some(s))
+            || Files::default().read_bounded(&current_path, CURRENT_LIMIT)? != current
         {
             return Err("concurrent write");
         }
@@ -416,6 +424,7 @@ impl Reader {
         }
         self.titles = titles;
         self.stamps = files.stamps;
+        self.manifest_pointer = current;
         self.cached = Some(value.clone());
         Ok(value)
     }
@@ -502,7 +511,14 @@ struct Files {
 }
 impl Files {
     fn read(&mut self, p: &Path) -> Result<Vec<u8>> {
+        self.read_bounded(p, LIMIT as u64)
+    }
+
+    fn read_bounded(&mut self, p: &Path, limit: u64) -> Result<Vec<u8>> {
         let s = stamp(p)?;
+        if s.len > limit {
+            return Err("file budget/type");
+        }
         self.bytes += s.len;
         if self.bytes > (LIMIT * 4) as u64 {
             return Err("snapshot budget");
@@ -510,7 +526,7 @@ impl Files {
         let mut out = Vec::new();
         fs::File::open(p)
             .map_err(|_| "open")?
-            .take(LIMIT as u64 + 1)
+            .take(limit + 1)
             .read_to_end(&mut out)
             .map_err(|_| "read")?;
         if out.len() as u64 != s.len {
