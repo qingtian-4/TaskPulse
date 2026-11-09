@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "c94a691f5476ed0f2f6192a5545b34c52de4c51a",
+  "capture_commit": "22516abbea4ac3dc968f1e040219c8e9abb87f92",
   "modified": false,
-  "executable_sha256": "666393757cddff1a793a434419c09a43a1f71b5e56797405e05cf15aa32d48d2",
+  "executable_sha256": "5380051395153d38d4a7f10abe83da102eb420076f98d88d6ea6cae389ddffe3",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -67,8 +67,8 @@
       "logical_width": 368,
       "logical_height": 857,
       "dpr": 2,
-      "sha256": "58513e6f245f8cbaaa68ebd6fc0e659e35ae681c524d2a1b5399002950e94a75",
-      "bytes": 160648
+      "sha256": "7b31b59fc3542ae44c98dd13ea705323b73c9ae773a3368704ef96defe2862f3",
+      "bytes": 160738
     },
     {
       "file": "notice-input-en.png",
@@ -108,7 +108,7 @@
     }
   ],
   "frontend_tree": "813fa925b685a97d78423cfc93942f5a162e59cd",
-  "runtime_tree": "ec3caa9663e3c79d570d09e52d04a291fec0e29a",
+  "runtime_tree": "740921567bb7541bb9bfadf8c3fb58da902434fc",
   "locale_tree": "457b1c77f4fcc99a5c9854f74154c33c0b442f01",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {

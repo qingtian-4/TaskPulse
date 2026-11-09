@@ -68,11 +68,25 @@ impl Drop for ProbeChild {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum LogRevision {
+    Native { modified: SystemTime, len: u64 },
+    Wsl(f64),
+}
+
+impl LogRevision {
+    fn modified(self) -> SystemTime {
+        match self {
+            Self::Native { modified, .. } => modified.max(UNIX_EPOCH),
+            Self::Wsl(seconds) => UNIX_EPOCH + Duration::from_secs_f64(seconds),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct CachedSession {
     model: Option<String>,
     reasoning_effort: Option<String>,
-    mtime: f64,
     status: TaskStatus,
     cwd: String,
     name: String,
@@ -103,8 +117,8 @@ struct SessionMetadata {
 pub struct DeepSeekHarnessProvider {
     distro: String,
     native_root: Option<PathBuf>,
-    /// path → parsed state; unchanged logs are not re-parsed.
-    cache: std::collections::HashMap<String, CachedSession>,
+    /// path → observed log revision and parsed state.
+    cache: std::collections::HashMap<String, (LogRevision, CachedSession)>,
     last_metadata: std::collections::HashMap<String, SessionMetadata>,
     shard_cache: std::collections::HashMap<PathBuf, (SystemTime, u64, SessionMetadata)>,
     last_tasks: Vec<TaskSnapshot>,
@@ -260,21 +274,21 @@ impl DeepSeekHarnessProvider {
 
     /// Paths + mtimes of the most recently written session logs. NUL-delimited
     /// output preserves workspaces containing spaces or shell punctuation.
-    fn recent_sessions(&self) -> std::io::Result<Vec<(String, f64)>> {
+    fn recent_sessions(&self) -> std::io::Result<Vec<(String, LogRevision)>> {
         if let Some(root) = &self.native_root {
             let mut files = std::collections::HashMap::new();
             collect_native_sessions(&root.join("sessions"), &mut files)?;
             let mut sessions = Vec::new();
             for path in files.into_values() {
-                let modified = path
-                    .metadata()?
-                    .modified()?
-                    .duration_since(UNIX_EPOCH)
-                    .unwrap_or_default()
-                    .as_secs_f64();
-                sessions.push((path.to_string_lossy().into_owned(), modified));
+                let file = path.metadata()?;
+                // A newly appended compressed frame may have the same mtime.
+                let revision = LogRevision::Native {
+                    modified: file.modified()?,
+                    len: file.len(),
+                };
+                sessions.push((path.to_string_lossy().into_owned(), revision));
             }
-            sessions.sort_by(|a, b| b.1.total_cmp(&a.1));
+            sessions.sort_by_key(|session| std::cmp::Reverse(session.1.modified()));
             return Ok(sessions);
         }
         let out = self.wsl(
@@ -284,7 +298,7 @@ impl DeepSeekHarnessProvider {
         for (path, mtime) in parse_discovery_output(&out) {
             let id = session_id_from_path(&path);
             if !sessions.contains_key(&id) || path.ends_with("session.v4.jsonl.zstd") {
-                sessions.insert(id, (path, mtime));
+                sessions.insert(id, (path, LogRevision::Wsl(mtime)));
             }
         }
         Ok(sessions.into_values().collect())
@@ -679,7 +693,6 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
     Some(CachedSession {
         model,
         reasoning_effort,
-        mtime: 0.0,
         status,
         cwd,
         name,
@@ -834,32 +847,31 @@ impl Provider for DeepSeekHarnessProvider {
 
         let mut tasks = Vec::new();
         let mut live_paths = std::collections::HashSet::new();
-        for (path, mtime) in sessions {
-            let mtime_time = UNIX_EPOCH + Duration::from_secs_f64(mtime);
+        for (path, revision) in sessions {
+            let mtime_time = revision.modified();
             live_paths.insert(path.clone());
 
             let cached = self.cache.get(&path).cloned();
             let (mut state, stale) = match cached {
-                Some(cached) if cached.mtime == mtime => (cached, false),
+                Some((known, cached)) if known == revision => (cached, false),
                 previous => {
                     self.decode_attempts += 1;
                     match self.parse_session(&path) {
-                        Some(mut parsed) => {
+                        Some(parsed) => {
                             self.compressed_bytes_read = self
                                 .compressed_bytes_read
                                 .saturating_add(parsed.compressed_bytes);
                             self.decoded_bytes_read = self
                                 .decoded_bytes_read
                                 .saturating_add(parsed.decoded_bytes as u64);
-                            parsed.mtime = mtime;
-                            self.cache.insert(path.clone(), parsed.clone());
+                            self.cache.insert(path.clone(), (revision, parsed.clone()));
                             (parsed, false)
                         }
                         None => {
                             metadata_error.get_or_insert_with(|| {
                                 "会话日志暂不可读或压缩帧尚未写完".to_string()
                             });
-                            let Some(previous) = previous else {
+                            let Some((_, previous)) = previous else {
                                 continue;
                             };
                             (previous, true)
@@ -1463,6 +1475,7 @@ mod tests {
     fn desktop_completion_notifies_once_and_new_turn_reopens_hidden_task() {
         use crate::attention::AttentionTracker;
         use crate::transition::{TaskEvent, TransitionEngine};
+        use std::io::Write;
         let root = tempfile::tempdir().unwrap();
         desktop_fixture(root.path(), false, "Native task", 11);
         let mut provider = DeepSeekHarnessProvider::with_native_root(root.path().to_path_buf());
@@ -1483,20 +1496,28 @@ mod tests {
         let path = root
             .path()
             .join("sessions/workspace/session-fixture/session.v4.jsonl.zstd");
-        let mut text =
-            zstd::decode_all(std::io::Cursor::new(std::fs::read(&path).unwrap())).unwrap();
-        text.extend_from_slice(
-            format!(
-                "{}\n",
-                serde_json::json!({"type":"turn/start","seq":20,"time":1791500000000u64})
-            )
-            .as_bytes(),
+        let before = path.metadata().unwrap();
+        let turn = format!(
+            "{}\n",
+            serde_json::json!({"type":"turn/start","seq":20,"time":1791500000000u64})
         );
-        std::fs::write(
-            path,
-            zstd::encode_all(std::io::Cursor::new(text), 3).unwrap(),
-        )
-        .unwrap();
+        let frame = zstd::encode_all(turn.as_bytes(), 3).unwrap();
+        std::fs::File::options()
+            .append(true)
+            .open(&path)
+            .unwrap()
+            .write_all(&frame)
+            .unwrap();
+        // An appended frame need not produce a distinct filesystem timestamp.
+        std::fs::File::options()
+            .write(true)
+            .open(&path)
+            .unwrap()
+            .set_modified(before.modified().unwrap())
+            .unwrap();
+        let after = path.metadata().unwrap();
+        assert_eq!(after.modified().unwrap(), before.modified().unwrap());
+        assert!(after.len() > before.len());
         let resumed = provider.poll(SystemTime::now()).tasks;
         assert!(engine.apply(&resumed, &[], SystemTime::now()).is_empty());
         let attention = tracker.reconcile(resumed);
