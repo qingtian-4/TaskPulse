@@ -1,5 +1,6 @@
 <script lang="ts">
   import '../app.css';
+  import { page } from '$app/state';
   import { onMount } from 'svelte';
   import { connectPreferences } from '$lib/preferences';
   let { children } = $props();
@@ -11,5 +12,5 @@
   });
 </script>
 {#if error}<p role="alert" class="boot-error">{error}</p>{/if}
-{#if ready}{@render children()}{/if}
+{#if ready || page.route.id === '/manage'}{@render children()}{/if}
 <style>.boot-error{padding:12px;color:var(--tp-danger);background:var(--tp-bg);font:13px/1.5 system-ui;margin:0}</style>

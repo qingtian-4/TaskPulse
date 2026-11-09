@@ -31,13 +31,13 @@
         </span>
         <span class="row-status"><span class="status-label tp-chip">{$t(taskLabel(task))}{#if matchesSignal(task,'question')&&(task.input_request_ids?.length??0)>1}<span class="request-count" title={$t('待回答')}> {task.input_request_ids!.length}</span>{/if}</span><span class="markers">{#if task.pinned}<Pin size={11} aria-label={$t("固定")}/>{/if}{#if task.unread}<span class="unread" title={$t("尚未查看")} aria-label={$t("尚未查看")}></span>{/if}</span></span>
       </button>
-      {#if onViewed && isEndedResult(task)}<button class="viewed tp-chip" onclick={()=>onViewed?.(task)} title={$t("标记本轮已查看")} aria-label={'标记已查看：'+task.name}><Check size={12}/>{$t("已查看")}</button>{/if}
+      {#if onViewed && isEndedResult(task)}<button class="viewed tp-chip" onclick={()=>onViewed?.(task)} title={$t("标记本轮已查看")} aria-label={'标记已查看：'+task.name}><Check size={14} aria-hidden="true"/></button>{/if}
     </li>
   {/each}
 </ul>
 <style>
   ul{display:flex;flex-direction:column;gap:8px;padding-top:8px}
-  .task-item{position:relative;margin:0;font-size:var(--tp-task-font-size,14px);line-height:1.5}
+  .task-item{--result-control-height:max(24px,calc(var(--tp-task-font-size,14px)*1.5 + 6px));position:relative;margin:0;font-size:var(--tp-task-font-size,14px);line-height:1.5}
   .task-row{position:relative;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 8px;font-size:inherit;text-align:left;padding:12px 12px 12px 24px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-card);color:var(--tp-text);cursor:pointer;transition:background .12s,border-color .12s}
   .task-row:hover{background:var(--tp-raised);border-color:var(--tp-border-strong)}
   .task-row.selected{background:var(--tp-accent-soft);border-color:var(--tp-accent-line);box-shadow:inset 2px 0 var(--tp-accent)}
@@ -57,8 +57,8 @@
   .markers{grid-row:2;grid-column:2;display:flex;gap:6px;align-items:center;justify-content:flex-end;color:var(--tp-quiet)}.unread{width:5px;height:5px;border-radius:50%;background:var(--tp-unread)}
   .task-row:has(.unread,.markers svg) .context{padding-right:28px}
   .elapsed{margin-left:auto;flex:none;font-size:inherit;color:var(--tp-quiet);font-variant-numeric:tabular-nums;white-space:nowrap}
-  .task-item:has(.viewed) .activity,.task-item:has(.viewed) .freshness{min-height:calc(var(--tp-task-font-size,14px)*1.5 + 4px);padding-right:calc(var(--tp-task-font-size,14px)*4 + 16px)}
-  .viewed{position:absolute;right:12px;bottom:12px;min-height:0;padding:2px 6px;gap:4px;font-size:inherit;line-height:1.5;color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line);cursor:pointer}
+  .task-item:has(.viewed) .activity,.task-item:has(.viewed) .freshness{min-height:var(--result-control-height);padding-right:38px}
+  .viewed{position:absolute;right:12px;bottom:12px;min-height:var(--result-control-height);width:28px;padding:2px;font-size:inherit;line-height:1.5;color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line);cursor:pointer}
   @media(max-width:380px){.task-row{padding-top:8px;padding-bottom:8px}.dot{top:16px}.viewed{bottom:8px}}
   @media(max-width:350px){.task-row{padding:8px 8px 8px 20px;gap:4px 6px}.dot{left:8px;top:16px}.status-label{max-width:90px;padding:2px 4px}.context{gap:4px}.project{padding-left:4px}.viewed{right:8px;bottom:8px}}
   .fit-four .task-row{padding-top:7px;padding-bottom:7px;row-gap:4px}

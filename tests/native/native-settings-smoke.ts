@@ -86,6 +86,30 @@ poll_interval_ms=3000
   let ui=await connect(await tab('/manage'));await ui.wait(`!!document.querySelector('.settings-main h1')`);
   await ui.wait(`document.querySelector('.settings-nav a[href="#general"]')?.getAttribute('aria-current')==='page'`);
   assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
+  // The route must render its shell while the initial settings read is pending.
+  // Reload the real WebView and hold the existing IPC request at its boundary.
+  const heldSettingsReads:string[]=[];
+  let firstPaint:any;
+  let holdSettingsRead=true;
+  ui.onRequestPaused(async({requestId})=>{
+    if(holdSettingsRead)heldSettingsReads.push(requestId);
+    else await ui.send('Fetch.continueRequest',{requestId});
+  });
+  try{
+    await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/get_monitoring_settings',requestStage:'Request'}]});
+    await ui.send('Page.reload');
+    for(let attempt=0;attempt<100&&!heldSettingsReads.length;attempt++)await Bun.sleep(50);
+    assert.ok(heldSettingsReads.length,'The native settings read must reach the IPC gate');
+    await ui.wait(`document.querySelector('.settings-content [role="status"]')?.textContent.includes('正在读取设置')`);
+    firstPaint=await ui.evaluate(`({shell:!!document.querySelector('.settings-shell'),loading:document.querySelector('.settings-content [role="status"]')?.textContent,theme:document.documentElement.dataset.theme})`);
+    assert.equal(firstPaint.theme,'light','Settings should paint in the saved theme');
+  }finally{
+    holdSettingsRead=false;
+    try{await Promise.all(heldSettingsReads.map(requestId=>ui.send('Fetch.continueRequest',{requestId})));}
+    finally{await ui.send('Fetch.disable');ui.onRequestPaused(undefined);}
+  }
+  await ui.wait(`!!document.querySelector('[aria-label="登录时自动启动"]')`);
+
   await root.invoke('open_management',{section:'sources'});
   await ui.wait(`!!document.querySelector('.ms-head')`);
   console.log('settings smoke: cold section',await ui.evaluate(`document.querySelector('.settings-main h1').textContent`));
@@ -490,6 +514,6 @@ poll_interval_ms=3000
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.equal(restored.preferences.task_font_size,14);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','initial preferred size across six sections; active native maximize/restore and maximized warm reuse','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language/theme/font size synchronized and persisted across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,firstPaint,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','initial preferred size across six sections; active native maximize/restore and maximized warm reuse','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language/theme/font size synchronized and persisted across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

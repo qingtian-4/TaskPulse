@@ -467,6 +467,39 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
     }
+    let settings = crate::monitoring::get_monitoring_settings();
+    let theme = match settings.preferences.theme.as_str() {
+        "light" => "light",
+        "dark" => "dark",
+        _ => "system",
+    };
+    let light = theme == "light"
+        || (theme == "system"
+            && app
+                .get_webview_window("popup")
+                .and_then(|win| win.theme().ok())
+                == Some(tauri::Theme::Light));
+    let background = if light {
+        Color(255, 255, 255, 255)
+    } else {
+        Color(16, 23, 28, 255)
+    };
+    // Match the native surface and the first document paint to the saved theme
+    // while the settings page is still waiting for its first IPC snapshot.
+    let first_paint_theme = format!(
+        r#"(() => {{
+            const apply = () => {{
+                const root = document.documentElement;
+                if (!root || root.dataset.theme) return;
+                const preference = "{theme}";
+                root.dataset.theme = preference === "system"
+                    ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+                    : preference;
+            }};
+            if (document.documentElement) apply();
+            else document.addEventListener("DOMContentLoaded", apply, {{ once: true }});
+        }})();"#
+    );
     let builder = WebviewWindowBuilder::new(
         &app,
         "management",
@@ -494,6 +527,8 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
             crate::localization::text("设置")
         ))
         .inner_size(960.0, 704.0)
+        .background_color(background)
+        .initialization_script(first_paint_theme)
         .resizable(true)
         .maximizable(true)
         .visible(false)
