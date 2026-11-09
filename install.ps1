@@ -8,7 +8,7 @@ The normal interactive installer handles installation, upgrades and uninstall.
 .EXAMPLE
 .\install.ps1 -Prerelease
 .EXAMPLE
-.\install.ps1 -Version 1.0.0 -DownloadOnly -OutputDirectory .\downloads
+.\install.ps1 -Version 0.0.1 -DownloadOnly -OutputDirectory .\downloads
 #>
 [CmdletBinding()]
 param(
@@ -52,6 +52,14 @@ function Get-TaskPulsePublicPageRelease {
     })}
 }
 
+$script:TaskPulsePublicVersion = '0.0.1'
+
+function Resolve-TaskPulseVersion {
+    param([string]$Version, [bool]$Prerelease)
+    if ($Version -or $Prerelease) { return $Version }
+    return $script:TaskPulsePublicVersion
+}
+
 function Get-TaskPulseRelease {
     param([string]$Version, [bool]$Prerelease)
     $api = 'https://api.github.com/repos/qingtian-4/TaskPulse/releases'
@@ -85,6 +93,7 @@ function Get-TaskPulseRelease {
     }
     if (-not $release -or $release.draft -or (-not $publicPageVerified -and -not $release.published_at)) { throw 'No public release available. Draft releases cannot be installed.' }
     if (-not $Version -and -not $Prerelease -and $release.prerelease) { throw 'Prerelease requires -Prerelease or an explicit -Version.' }
+    if (-not $Prerelease -and $release.tag_name -cmatch '^v\d+\.\d+\.\d+$' -and $release.prerelease -ne $false) { throw 'Stable version tags require a public stable release.' }
     if ($Version -and $release.tag_name -cne $tag) { throw 'Release tag mismatch.' }
     return $release
 }
@@ -175,6 +184,7 @@ function Invoke-TaskPulseInstall {
         $arch = Get-TaskPulseArchitecture
         if ($env:OS -ne 'Windows_NT' -or [Environment]::OSVersion.Version.Major -lt 10) { throw 'This installer requires Windows 10/11.' }
         [Net.ServicePointManager]::SecurityProtocol = [Net.ServicePointManager]::SecurityProtocol -bor [Net.SecurityProtocolType]::Tls12
+        $Version = Resolve-TaskPulseVersion $Version $Prerelease
         $release = Get-TaskPulseRelease $Version $Prerelease
         $tag = [string]$release.tag_name
         if ($tag -cnotmatch '^v\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$') { throw 'Invalid release tag.' }

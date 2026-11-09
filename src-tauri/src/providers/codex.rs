@@ -147,7 +147,11 @@ struct RolloutCache {
 impl Default for RolloutCache {
     fn default() -> Self {
         Self {
-            tail: super::jsonl_tail::JsonlTail::ignoring_envelopes(&["compacted", "world_state"]),
+            tail: super::jsonl_tail::JsonlTail::ignoring_envelopes(&[
+                "compacted",
+                "world_state",
+                "event_msg/item_completed/FileChange",
+            ]),
             state: None,
         }
     }
@@ -500,6 +504,10 @@ impl CodexProvider {
             .and_then(|meta| meta.cwd.clone())
             .or_else(|| host.cwd.clone());
         task.model = host.model.clone();
+        task.reasoning_effort = host.reasoning_effort.clone();
+        if host.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
+            task.finished_at = host.finished_at;
+        }
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
         task.quota_5h_used_pct = host.quota_5h_used_pct;
@@ -553,6 +561,8 @@ fn normalize_windows_path(path: &str) -> PathBuf {
 #[derive(Debug, Clone, PartialEq)]
 pub struct SessionState {
     pub model: Option<String>,
+    pub reasoning_effort: Option<String>,
+    pub finished_at: Option<SystemTime>,
     pub status: TaskStatus,
     pub waiting_reason: Option<crate::domain::WaitingReason>,
     pub input_request_id: Option<String>,
@@ -983,6 +993,8 @@ fn apply_codex_rollout(
     }
     let SessionState {
         mut model,
+        mut reasoning_effort,
+        mut finished_at,
         mut project,
         mut cwd,
         mut internal,
@@ -1008,6 +1020,8 @@ fn apply_codex_rollout(
         mut quota_1w_resets_at,
     } = previous.unwrap_or_else(|| SessionState {
         model: None,
+        reasoning_effort: None,
+        finished_at: None,
         project: None,
         cwd: None,
         internal: false,
@@ -1163,7 +1177,24 @@ fn apply_codex_rollout(
                 .and_then(|v| v.as_str())
                 .and_then(super::reported_model)
             {
+                if model.as_deref() != Some(reported.as_str()) {
+                    reasoning_effort = None;
+                }
                 model = Some(reported);
+            }
+            if envelope == Some("turn_context") {
+                let effort = payload
+                    .get("effort")
+                    .or_else(|| payload.get("reasoning_effort"))
+                    .or_else(|| payload.pointer("/collaboration_mode/settings/reasoning_effort"));
+                if let Some(value) = effort {
+                    reasoning_effort = value
+                        .as_str()
+                        .filter(|s| {
+                            matches!(*s, "none" | "minimal" | "low" | "medium" | "high" | "xhigh")
+                        })
+                        .map(str::to_owned);
+                }
             }
         }
 
@@ -1205,6 +1236,7 @@ fn apply_codex_rollout(
             "task_started" => {
                 questions.clear();
                 turn_completed = false;
+                finished_at = None;
                 status = TaskStatus::Running;
                 waiting_reason = None;
                 input_request_id = None;
@@ -1262,6 +1294,7 @@ fn apply_codex_rollout(
                     )
                 {
                     started_at = ts;
+                    finished_at = None;
                     turn_key = value_timestamp_key(ts);
                     waiting_reason = None;
                     input_request_id = None;
@@ -1424,6 +1457,7 @@ fn apply_codex_rollout(
                     .or(ts)
                 {
                     updated_at = t;
+                    finished_at = Some(t);
                 }
                 if let Some(msg) = payload.get("last_agent_message").and_then(|v| v.as_str()) {
                     last_message = Some(truncate(msg, 120));
@@ -1481,6 +1515,8 @@ fn apply_codex_rollout(
 
     let state = SessionState {
         model,
+        reasoning_effort,
+        finished_at,
         status,
         waiting_reason,
         input_request_id,
@@ -1901,6 +1937,10 @@ fn flush_codex(
         t.activity = state.activity;
         t.phase = state.phase;
         t.model = state.model;
+        t.reasoning_effort = state.reasoning_effort;
+        if state.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
+            t.finished_at = state.finished_at;
+        }
         t.cli = Some("codex".into());
         t.session_id = Some(sid);
         t.turn_key = state.turn_key;

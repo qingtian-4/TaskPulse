@@ -1,11 +1,4 @@
-import { SOURCE_LABEL, formatAgo, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
-
-// Keep a compact single task; allow four task cards before scrolling.
-export function preferredDashboardHeight(taskCount:number, expanded:boolean):number {
-  if(expanded || taskCount>=4)return 840;
-  if(taskCount===3)return 680;
-  return taskCount>1 ? 560 : 400;
-}
+import { SOURCE_LABEL, formatAgo, formatElapsed, type DashboardSettings, type TaskSnapshot, type ProviderHealth } from './types';
 
 export type TaskSection = 'ongoing' | 'results' | 'uncertain' | 'pinned';
 export type TaskSignal = 'approval' | 'question' | 'failed' | 'action';
@@ -44,7 +37,7 @@ export function taskAgent(task:TaskSnapshot):string {return task.agent_name ?? S
 // Visual semantics only: never derive an end, approval or read acknowledgement.
 export function taskTone(task:TaskSnapshot):'running'|'action'|'danger'|'unread'|'stale'|'neutral' {
   if(task.stale || task.status==='unknown' || task.status==='disconnected')return 'stale';
-  if(needsAction(task) || task.outcome==='interrupted' && task.finished_at)return 'action';
+  if(needsAction(task))return 'action';
   if(task.status==='failed')return 'danger';
   if(task.status==='running')return 'running';
   if(isEndedResult(task))return 'unread';
@@ -123,6 +116,14 @@ export function taskActivity(task: TaskSnapshot): string {
     default: return task.activity ?? '运行中 · 来源未提供执行阶段';
   }
 }
+// The Standard Events reducer owns these terminal messages and overwrites any
+// producer text. Identical native/user messages must remain untranslated data.
+export function taskSummaryIsAppCopy(task:TaskSnapshot):boolean {
+  if(!task.message||task.stale||task.status==='running'||needsAction(task))return true;
+  if(task.source!=='generic_event'||!isEndedResult(task))return false;
+  const messages:Record<string,string>={turn_ended:'本轮结束，尚未查看',failed:'来源明确报告本轮失败',interrupted:'本轮已中断，非成功'};
+  return task.message===messages[task.outcome??''];
+}
 export function taskSection(task: TaskSnapshot): TaskSection {
   if (task.stale) return 'uncertain';
   if (task.status === 'running' || needsAction(task)) return 'ongoing';
@@ -193,4 +194,15 @@ export function isEndedResult(task: TaskSnapshot): boolean {
 
 export function isInferredCommandEnd(task:TaskSnapshot):boolean {
   return task.source==='remote_tmux' && task.session_id==null && task.confidence==='inferred' && task.status==='idle' && task.finished_at!==undefined && task.exit_code===undefined;
+}
+
+// Elapsed values freeze at the explicit end; never use refresh/observation time.
+export function taskElapsed(task:TaskSnapshot,now:number):string|null {
+  const start=task.started_at;
+  if(start==null||!Number.isFinite(start))return null;
+  const ended=isEndedResult(task);
+  if(!ended&&task.stale)return null;
+  const end=ended?task.finished_at:task.status==='running'?now:undefined;
+  if(end==null||!Number.isFinite(end)||end<start)return null;
+  return formatElapsed(start,end);
 }

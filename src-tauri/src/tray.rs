@@ -52,10 +52,9 @@ static POPUP_CREATING: AtomicBool = AtomicBool::new(false);
 // Logical size preference is independent of the monitor's Retina/DPI scale.
 const DASHBOARD_WIDTH: f64 = 368.0;
 const DASHBOARD_MIN_WIDTH: f64 = 320.0;
-const DASHBOARD_MIN_HEIGHT: u32 = 360;
-const DASHBOARD_MAX_HEIGHT: u32 = 840;
-static DASHBOARD_HEIGHT: std::sync::atomic::AtomicU32 =
-    std::sync::atomic::AtomicU32::new(DASHBOARD_MAX_HEIGHT);
+const DASHBOARD_MIN_HEIGHT: u32 = 280;
+const DASHBOARD_MAX_HEIGHT: u32 = 1600;
+static DASHBOARD_HEIGHT: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(400);
 
 /// Presentation only: consumes the same scoped, reconciled attention snapshot
 /// as the Dashboard. Never changes lifecycle, unread state or notifications.
@@ -93,10 +92,17 @@ fn aggregate(snapshot: &DashboardSnapshot, english: bool) -> TrayPresentation {
         .filter(|h| h.status == HostStatus::Disconnected)
         .count();
     let starting = snapshot.revision == 0;
+    // Show the highest priority confirmed task. An unrelated source
+    // warning remains in the tooltip and takes the icon when no task does.
     let icon = if counts.action > 0 {
         "needs-input"
-    } else if counts.failed > 0
-        || unhealthy > 0
+    } else if counts.failed > 0 {
+        "error"
+    } else if counts.results > 0 {
+        "review"
+    } else if counts.ongoing > 0 {
+        "working"
+    } else if unhealthy > 0
         || disconnected > 0
         || counts.uncertain > 0
         || waiting > 0
@@ -104,10 +110,6 @@ fn aggregate(snapshot: &DashboardSnapshot, english: bool) -> TrayPresentation {
         || enabled == 0
     {
         "error"
-    } else if counts.results > 0 {
-        "review"
-    } else if counts.ongoing > 0 {
-        "working"
     } else {
         "idle"
     };
@@ -406,7 +408,7 @@ fn create_popup(app: &AppHandle) {
     };
     match builder
         .title(crate::runtime::display_name())
-        .inner_size(DASHBOARD_WIDTH, f64::from(DASHBOARD_MAX_HEIGHT))
+        .inner_size(DASHBOARD_WIDTH, 400.0)
         .decorations(false)
         // Windows adds a white non-client frame when an undecorated window
         // keeps its native shadow. The transparent dashboard draws its own edge.
@@ -428,7 +430,7 @@ fn create_popup(app: &AppHandle) {
                 }
                 _ => {}
             });
-            let _ = fit_popup(&win, DASHBOARD_MAX_HEIGHT, false);
+            let _ = fit_popup(&win, DASHBOARD_HEIGHT.load(Ordering::SeqCst), false);
             #[cfg(target_os = "linux")]
             {
                 let _ = std::process::Command::new("wmctrl")
@@ -468,6 +470,39 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
         win.show().map_err(|e| e.to_string())?;
         return win.set_focus().map_err(|e| e.to_string());
     }
+    let settings = crate::monitoring::get_monitoring_settings();
+    let theme = match settings.preferences.theme.as_str() {
+        "light" => "light",
+        "dark" => "dark",
+        _ => "system",
+    };
+    let light = theme == "light"
+        || (theme == "system"
+            && app
+                .get_webview_window("popup")
+                .and_then(|win| win.theme().ok())
+                == Some(tauri::Theme::Light));
+    let background = if light {
+        Color(255, 255, 255, 255)
+    } else {
+        Color(16, 23, 28, 255)
+    };
+    // Match the native surface and the first document paint to the saved theme
+    // while the settings page is still waiting for its first IPC snapshot.
+    let first_paint_theme = format!(
+        r#"(() => {{
+            const apply = () => {{
+                const root = document.documentElement;
+                if (!root || root.dataset.theme) return;
+                const preference = "{theme}";
+                root.dataset.theme = preference === "system"
+                    ? (matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light")
+                    : preference;
+            }};
+            if (document.documentElement) apply();
+            else document.addEventListener("DOMContentLoaded", apply, {{ once: true }});
+        }})();"#
+    );
     let builder = WebviewWindowBuilder::new(
         &app,
         "management",
@@ -495,8 +530,10 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
             crate::localization::text("设置")
         ))
         .inner_size(960.0, 704.0)
-        .resizable(false)
-        .maximizable(false)
+        .background_color(background)
+        .initialization_script(first_paint_theme)
+        .resizable(true)
+        .maximizable(true)
         .visible(false)
         .build()
         .map_err(|e| e.to_string())?;
@@ -569,7 +606,7 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
 }
 
 fn management_section(section: Option<&str>) -> Option<&str> {
-    section.filter(|s| {
+    Some(section.unwrap_or("general")).filter(|s| {
         matches!(
             *s,
             "general" | "panel" | "sources" | "notifications" | "updates" | "about"
@@ -662,6 +699,11 @@ fn management_area(window: &tauri::WebviewWindow) -> Result<ManagementArea, Stri
 }
 
 fn fit_management_in(window: &tauri::WebviewWindow, area: ManagementArea) -> Result<(), String> {
+    if window.is_maximized().map_err(|e| e.to_string())?
+        || window.is_fullscreen().map_err(|e| e.to_string())?
+    {
+        return Ok(());
+    }
     let inner = window.inner_size().map_err(|e| e.to_string())?;
     let outer = window.outer_size().map_err(|e| e.to_string())?;
     let decoration = (
@@ -738,10 +780,9 @@ fn popup_geometry(
     let margin = (8.0 * scale).round() as i32;
     let logical_width =
         (f64::from(available_width) / scale * 0.32).clamp(DASHBOARD_MIN_WIDTH, DASHBOARD_WIDTH);
-    // Expanded task lists can use more of the screen; keep the idle view compact.
-    let work_area_fraction = if height > 400 { 0.92 } else { 0.82 };
-    let logical_height = f64::from(height.clamp(DASHBOARD_MIN_HEIGHT, DASHBOARD_MAX_HEIGHT))
-        .min(f64::from(available_height) / scale * work_area_fraction);
+    // The renderer requests the measured content height. Only the actual work
+    // area/margins constrain it; a percentage cap can unnecessarily cut a card.
+    let logical_height = f64::from(height.clamp(DASHBOARD_MIN_HEIGHT, DASHBOARD_MAX_HEIGHT));
     let width = ((logical_width * scale).round() as u32)
         .min(available_width.saturating_sub((margin * 2) as u32).max(1));
     let height = ((logical_height * scale).round() as u32)
@@ -813,7 +854,7 @@ mod tests {
         for section in ["", "unknown", "sources?section=updates", "../notice"] {
             assert_eq!(super::management_section(Some(section)), None);
         }
-        assert_eq!(super::management_section(None), None);
+        assert_eq!(super::management_section(None), Some("general"));
     }
 
     #[test]
@@ -870,7 +911,8 @@ mod tests {
         assert_eq!((retina.0, retina.1), (736, 1680));
         let small = super::popup_geometry((0, 0, 1366, 728), 1.5, 840, None);
         assert_eq!(small.0, 480);
-        assert!(small.1 <= 671 && small.3 + small.1 as i32 <= 728);
+        assert_eq!((small.1, small.3), (704, 12));
+        assert!(small.3 + small.1 as i32 <= 728);
     }
 
     use super::*;
@@ -883,7 +925,11 @@ mod tests {
                 let (w, h, x, y) =
                     popup_geometry((-1920, 40, aw, ah), scale, 620, Some((-9999, 9999)));
                 assert!(f64::from(w) / scale <= DASHBOARD_WIDTH + 1.0);
-                assert!(f64::from(h) <= f64::from(ah) * 0.92 + 1.0);
+                let margin = (8.0_f64 * scale).round() as u32;
+                assert_eq!(
+                    h,
+                    ((620.0 * scale).round() as u32).min(ah.saturating_sub(2 * margin).max(1))
+                );
                 assert!(x >= -1920 && y >= 40);
                 assert!(x + w as i32 <= -1920 + aw as i32 && y + h as i32 <= 40 + ah as i32);
             }
@@ -892,7 +938,7 @@ mod tests {
         assert_eq!((large.0, large.1), (368, 620));
         let laptop = popup_geometry((0, 0, 1536, 824), 1.5, 620, None);
         assert_eq!(laptop.0, 492);
-        assert!(laptop.1 <= 759);
+        assert_eq!(laptop.1, 800);
         let (w, h, x, y) = popup_geometry((0, 0, 10, 10), 1.0, 0, None);
         assert!(x >= 0 && y >= 0 && x + w as i32 <= 10 && y + h as i32 <= 10);
     }
@@ -999,6 +1045,7 @@ mod tests {
         let mut state = snapshot(vec![current]);
         state.providers.push(provider);
         let shown = aggregate(&state);
+        assert_eq!(shown.icon, "working");
         assert!(shown.tooltip.contains("进行中 1"));
         assert!(shown.tooltip.contains("来源异常 1"));
         state.tasks[0].turn_key = Some("different-turn".into());
@@ -1070,7 +1117,13 @@ mod tests {
             aggregate(&snapshot(vec![codex.clone(), hermes.clone(), failure])).icon,
             "error"
         );
-        assert_eq!(aggregate(&snapshot(vec![codex, hermes])).icon, "review");
+        let mut mixed = snapshot(vec![codex, hermes]);
+        mixed.hosts.push(crate::providers::HostHealth::disconnected(
+            "unrelated-host",
+            None,
+        ));
+        assert_eq!(aggregate(&mixed).icon, "review");
+        assert!(aggregate(&mixed).tooltip.contains("断连 1"));
     }
 
     #[test]
@@ -1104,13 +1157,16 @@ mod tests {
             "fixture-host",
             None,
         ));
-        assert_eq!(aggregate(&state).icon, "error");
+        assert_eq!(aggregate(&state).icon, "working");
         state.tasks.push(pending());
         assert_eq!(aggregate(&state).icon, "needs-input");
         state.tasks[1].stale = true;
-        assert_eq!(aggregate(&state).icon, "error");
+        assert_eq!(aggregate(&state).icon, "working");
         state.tasks[1].stale = false;
         state.tasks[1].source_instance = Some("not-yet-observed".into());
+        assert_eq!(aggregate(&state).icon, "working");
+        assert!(aggregate(&state).tooltip.contains("断连 1"));
+        state.tasks[0].stale = true;
         assert_eq!(aggregate(&state).icon, "error");
     }
 
@@ -1227,6 +1283,17 @@ mod tests {
             assert!(t_bar[0] > 220 && t_bar[1] > 235 && t_bar[2] > 230);
             assert_eq!(t_bar[3], 255);
             assert!(image.rgba().chunks_exact(4).any(|p| p[3] == 255));
+            let state_color = match state {
+                "working" => [0x8b, 0xb9, 0xfa, 255],
+                "needs-input" => [0xff, 0xc1, 0x5a, 255],
+                "review" => [0x76, 0xdf, 0xcd, 255],
+                "idle" => [0x9e, 0xab, 0xbc, 255],
+                _ => [0xff, 0x70, 0x79, 255],
+            };
+            assert!(
+                image.rgba().chunks_exact(4).any(|p| p == state_color),
+                "{state}"
+            );
             assert!(!pixels.contains(&image.rgba().to_vec()));
             pixels.push(image.rgba().to_vec());
         }

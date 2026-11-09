@@ -2,7 +2,7 @@
 
 普通 Codex rollout 不一定记录审批请求。2026-10-26 对当前 VS Code / Ubuntu 会话的只读核对未发现 `requestApproval`；不能根据命令参数、工具耗时或静默时间模拟审批。
 
-当前安装的 Codex `0.164.0-alpha.11.1` 将 Hooks 列为 stable。官方 `PermissionRequest` 在即将询问批准时触发；没有决策输出时，原审批流程继续。参见 [官方 Hooks 文档](https://learn.chatgpt.com/docs/hooks)。
+需使用提供官方 Hooks 与 `PermissionRequest` 的 Codex 版本。官方 `PermissionRequest` 在即将询问批准时触发；没有决策输出时，原审批流程继续。参见 [官方 Hooks 文档](https://learn.chatgpt.com/docs/hooks)。
 
 `scripts/codex-observer.py` 仅观察 `PreToolUse`、`PermissionRequest`、`PostToolUse`、`Stop`、`Interrupt`、`SessionEnd`。它不输出批准/拒绝、上下文或提示词，不修改审批策略。只保存会话/轮次 ID、关联指纹、未决请求及序号。没有唯一关联的请求不会凭任意工具结果解除。无法读取事件时保留待确认状态。
 

@@ -4,7 +4,7 @@ param(
     [ValidateRange(1,100)][int]$Top = 15,
     [switch]$Json
 )
-. (Join-Path $PSScriptRoot 'cache-common.ps1')
+. (Join-Path $PSScriptRoot '.\cache-common.ps1')
 if (-not $Root) { $Root = Split-Path -Parent $PSScriptRoot }
 $workspace = Resolve-CacheWorkspace $Root
 $groups = @{}

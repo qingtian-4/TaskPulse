@@ -2,8 +2,8 @@
  * No global installation, credential upload, baselines or ignored advisories.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, writeFileSync, lstatSync, realpathSync, rmSync } from 'node:fs';
+import { basename, dirname, join, resolve } from 'node:path';
 import { spawnSync } from 'node:child_process';
 
 type ToolName = 'cargo-audit' | 'gitleaks';
@@ -25,6 +25,37 @@ export const tools = {
 export function assertDigest(bytes: Uint8Array, expected: string) {
   if (!/^[a-f0-9]{64}$/.test(expected) || createHash('sha256').update(bytes).digest('hex') !== expected) {
     throw Error('Security tool checksum mismatch; refusing execution');
+  }
+}
+
+// Hosted runners can receive transient errors on GitHub's asset CDN. The
+// bytes are still accepted only after matching the same pinned digest.
+export async function downloadVerifiedTool(
+  url: string,
+  expected: string,
+  fetchAsset: (url: string, init: RequestInit) => Promise<Response> = fetch,
+  pause: (milliseconds: number) => Promise<void> = Bun.sleep,
+): Promise<Uint8Array> {
+  const retryable = new Set([408, 429, 500, 502, 503, 504]);
+  for (let attempt = 1; ; attempt++) {
+    let bytes: Uint8Array | undefined;
+    let status = 0;
+    try {
+      const response = await fetchAsset(url, { signal: AbortSignal.timeout(60000) });
+      status = response.status;
+      if (response.ok) bytes = new Uint8Array(await response.arrayBuffer());
+      else await response.body?.cancel().catch(() => {});
+    } catch {
+      status = 0; // A transport error or a timeout while reading the body.
+    }
+    if (bytes) {
+      assertDigest(bytes, expected);
+      return bytes;
+    }
+    if (attempt === 3 || (status !== 0 && !retryable.has(status))) {
+      throw Error(status ? `Security tool download failed: HTTP ${status}` : 'Security tool download failed: network error or timeout');
+    }
+    await pause(attempt * 1000);
   }
 }
 
@@ -73,7 +104,21 @@ function run(argv: string[], timeout = 240000) {
   return result;
 }
 
-async function executable(name: ToolName) {
+// Each invocation owns exactly one extraction directory. Never sweep another
+// invocation's files, and refuse a replaced directory before recursive cleanup.
+export async function withToolDirectory<T>(cache:string,work:(directory:string)=>T|Promise<T>):Promise<T> {
+  mkdirSync(cache,{recursive:true});
+  const parent=realpathSync(cache),directory=mkdtempSync(join(parent,'unpacked-'));
+  const identity=lstatSync(directory,{bigint:true});
+  try{return await work(directory);}finally{
+    const current=lstatSync(directory,{bigint:true});
+    if(current.isSymbolicLink()||current.dev!==identity.dev||current.ino!==identity.ino||dirname(realpathSync(directory))!==parent||!basename(directory).startsWith('unpacked-'))
+      throw Error('Security tool directory was replaced; refusing cleanup');
+    rmSync(directory,{recursive:true,maxRetries:4,retryDelay:100});
+  }
+}
+
+async function withExecutable<T>(name: ToolName,use:(binary:string)=>Promise<T>) {
   if (process.arch !== 'x64' || !['win32', 'linux'].includes(process.platform)) throw Error('Security bootstrap supports Windows/Linux x64; install official tools manually on other hosts');
   const spec = tools[name];
   const asset = spec[process.platform as 'win32' | 'linux'];
@@ -82,61 +127,61 @@ async function executable(name: ToolName) {
   const archive = join(cache, asset.asset);
   if (!existsSync(archive)) {
     console.error(`Downloading pinned ${name} ${spec.version} from its official release`);
-    const response = await fetch(spec.release + asset.asset, { signal: AbortSignal.timeout(60000) });
-    if (!response.ok) throw Error(`Security tool download failed: HTTP ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    assertDigest(bytes, asset.sha256);
+    const bytes = await downloadVerifiedTool(spec.release + asset.asset, asset.sha256);
     writeFileSync(archive, bytes);
   }
   assertDigest(readFileSync(archive), asset.sha256);
   // Re-extract the verified archive, rather than trusting a previously cached executable.
-  const unpacked = mkdtempSync(join(cache, 'unpacked-'));
-  const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
-  const extraction = process.platform === 'win32'
-    ? run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop';Expand-Archive -LiteralPath ${literal(archive)} -DestinationPath ${literal(unpacked)}`], 60000)
-    : run(['tar', '-xzf', archive, '-C', unpacked], 60000);
-  if (extraction.status !== 0) throw Error('Could not extract the verified security tool');
-  const filename = name + (process.platform === 'win32' ? '.exe' : '');
-  const candidates: string[] = [];
-  function find(dir: string, depth = 0) {
-    for (const entry of readdirSync(dir, { withFileTypes: true })) {
-      if (entry.isFile() && entry.name === filename) candidates.push(join(dir, entry.name));
-      else if (entry.isDirectory() && depth < 2) find(join(dir, entry.name), depth + 1);
+  return withToolDirectory(cache,async(unpacked)=>{
+    const literal = (value: string) => `'${value.replaceAll("'", "''")}'`;
+    const extraction = process.platform === 'win32'
+      ? run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', `$ErrorActionPreference='Stop';Expand-Archive -LiteralPath ${literal(archive)} -DestinationPath ${literal(unpacked)}`], 60000)
+      : run(['tar', '-xzf', archive, '-C', unpacked], 60000);
+    if (extraction.status !== 0) throw Error('Could not extract the verified security tool');
+    const filename = name + (process.platform === 'win32' ? '.exe' : '');
+    const candidates: string[] = [];
+    function find(dir: string, depth = 0) {
+      for (const entry of readdirSync(dir, { withFileTypes: true })) {
+        if (entry.isFile() && entry.name === filename) candidates.push(join(dir, entry.name));
+        else if (entry.isDirectory() && depth < 2) find(join(dir, entry.name), depth + 1);
+      }
     }
-  }
-  find(unpacked);
-  if (candidates.length !== 1) throw Error('Expected exactly one extracted security executable');
-  return candidates[0];
+    find(unpacked);
+    if (candidates.length !== 1) throw Error('Expected exactly one extracted security executable');
+    return await use(candidates[0]);
+  });
 }
 
 export async function auditRust() {
   mkdirSync(evidence, { recursive: true });
-  const binary = await executable('cargo-audit');
-  const result = run([binary, 'audit', '--file', join(root, 'src-tauri/Cargo.lock'), '--db', join(evidence, 'advisory-db'), '--deny', 'yanked', '--json']);
-  const summary = summarizeRust(result.stdout, result.status, result.stderr);
-  writeFileSync(join(evidence, 'rust-summary.json'), JSON.stringify({ tool: tools['cargo-audit'].version, ...summary }, null, 2));
-  console.log(JSON.stringify(summary));
-  if (!summary.passed) throw Error('Rust audit blocked: vulnerabilities, yanked dependencies, or incomplete registry checks; see local rust-summary.json');
+  return withExecutable('cargo-audit',async(binary)=>{
+    const result = run([binary, 'audit', '--file', join(root, 'src-tauri/Cargo.lock'), '--db', join(evidence, 'advisory-db'), '--deny', 'yanked', '--json']);
+    const summary = summarizeRust(result.stdout, result.status, result.stderr);
+    writeFileSync(join(evidence, 'rust-summary.json'), JSON.stringify({ tool: tools['cargo-audit'].version, ...summary }, null, 2));
+    console.log(JSON.stringify(summary));
+    if (!summary.passed) throw Error('Rust audit blocked: vulnerabilities, yanked dependencies, or incomplete registry checks; see local rust-summary.json');
+  });
 }
 
 export async function auditSecrets() {
   mkdirSync(evidence, { recursive: true });
   const shallow = run(['git', 'rev-parse', '--is-shallow-repository']);
   if (shallow.status !== 0 || shallow.stdout.trim() !== 'false') throw Error('Secret history scan requires a full, non-shallow checkout');
-  const binary = await executable('gitleaks');
-  const config = join(evidence, 'gitleaks-default.toml');
-  const ignore = join(evidence, 'gitleaks-empty.ignore');
-  writeFileSync(config, '[extend]\nuseDefault = true\n');
-  writeFileSync(ignore, '');
-  const report = join(evidence, 'gitleaks-history.json');
-  const result = run([binary, 'git', '--log-opts=--all --full-history --diff-merges=first-parent', '--config', config, '--gitleaks-ignore-path', ignore, '--ignore-gitleaks-allow', '--redact=100', '--no-banner', '--no-color', '--timeout=120', '--report-format=json', '--report-path', report, root]);
-  // Do not print matches, secrets, author emails or raw report context.
-  const summary = summarizeSecrets(readFileSync(report, 'utf8'), result.status);
-  const commits = run(['git', 'rev-list', '--all', '--count']);
-  if (commits.status !== 0) throw Error('Could not record secret-scan scope');
-  writeFileSync(join(evidence, 'secrets-summary.json'), JSON.stringify({ tool: tools.gitleaks.version, reachableCommits: Number(commits.stdout.trim()), ...summary }, null, 2));
-  console.log(JSON.stringify(summary));
-  if (!summary.passed) throw Error('Secret scan blocked; review only the redacted local report, never upload raw contexts');
+  return withExecutable('gitleaks',async(binary)=>{
+    const config = join(evidence, 'gitleaks-default.toml');
+    const ignore = join(evidence, 'gitleaks-empty.ignore');
+    writeFileSync(config, '[extend]\nuseDefault = true\n');
+    writeFileSync(ignore, '');
+    const report = join(evidence, 'gitleaks-history.json');
+    const result = run([binary, 'git', '--log-opts=--all --full-history --diff-merges=first-parent', '--config', config, '--gitleaks-ignore-path', ignore, '--ignore-gitleaks-allow', '--redact=100', '--no-banner', '--no-color', '--timeout=120', '--report-format=json', '--report-path', report, root]);
+    // Do not print matches, secrets, author emails or raw report context.
+    const summary = summarizeSecrets(readFileSync(report, 'utf8'), result.status);
+    const commits = run(['git', 'rev-list', '--all', '--count']);
+    if (commits.status !== 0) throw Error('Could not record secret-scan scope');
+    writeFileSync(join(evidence, 'secrets-summary.json'), JSON.stringify({ tool: tools.gitleaks.version, reachableCommits: Number(commits.stdout.trim()), ...summary }, null, 2));
+    console.log(JSON.stringify(summary));
+    if (!summary.passed) throw Error('Secret scan blocked; review only the redacted local report, never upload raw contexts');
+  });
 }
 
 if (import.meta.main) {

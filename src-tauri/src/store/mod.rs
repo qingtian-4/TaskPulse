@@ -14,6 +14,9 @@ use std::time::{Duration, SystemTime};
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource};
 use crate::providers::sort_tasks;
 
+mod observed;
+pub use observed::refresh_retained_results;
+
 pub const DEFAULT_RECENT_TTL: Duration = Duration::from_secs(30 * 60);
 
 pub struct TaskStore {

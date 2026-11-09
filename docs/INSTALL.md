@@ -1,20 +1,19 @@
 # 安装与快速入门
 
-[English](INSTALL.en.md)
+在 [TaskPulse v0.0.1](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) 下载与你的系统匹配的安装包。
 
-发布说明顶部提供对应系统的安装下载链接。当前版本保留完整附件。
-后续版本会合并为统一发布清单、`SHA256SUMS.txt` 和一个依赖许可 ZIP，
-更新签名仍包含在 `latest.json` 中，完整签名及分平台许可资料保存在 ZIP。
+安装包、更新清单、校验和及依赖许可资料随对应版本提供。
 已有 MSI 用户继续使用 MSI 更新包。Windows ARM64 安装包仅在相应版本实际
 提供时可选，脚本按真实系统架构选择，不会以 x64 包冒充 ARM64 包。
 
 ## 下载安装包
 
-打开 [GitHub Releases](https://github.com/qingtian-4/TaskPulse/releases)，按系统选择：
+按系统选择对应文件。
 
 | 系统 | 文件 |
 | --- | --- |
 | Windows 10 / 11，x64 | `TaskPulse_<版本>_windows_x64_setup.exe` 或同版本 `.msi` |
+| Windows 11，ARM64 | `TaskPulse_<版本>_windows_arm64_setup.exe` |
 | macOS 13.3+，Apple Silicon | `TaskPulse_<版本>_macos_arm64.dmg` |
 | macOS 13.3+，Intel | `TaskPulse_<版本>_macos_x64.dmg` |
 
@@ -32,6 +31,8 @@ Mac 打开 DMG，将 TaskPulse 拖入 Applications。命令行安装默认使用
 
 ## 命令行安装
 
+命令会识别系统架构并下载对应版本。
+
 Windows PowerShell：
 
 ```powershell
@@ -44,7 +45,7 @@ macOS 终端：
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-脚本获取 Releases 中的最新正式版本，自动选择架构并校验 SHA-256。没有可用版本时会明确报错，不会改装其他软件。指定版本、仅下载和语言选项见[命令行选项](CLI_INSTALL.md)。
+脚本默认选择 v0.0.1 的公开安装包，自动识别架构并校验 SHA-256。不存在对应包时明确报错。指定版本、仅下载和语言选项见[命令行选项](CLI_INSTALL.md)。
 
 ## 开始监控
 
@@ -64,7 +65,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 - 更新保留 `~/.taskpulse/` 中的配置与任务状态。
 - 网络或签名校验失败时显示错误，未通过验证的安装包不会运行。
 - 检查更新只访问 GitHub 的版本清单，不发送任务内容。
-- 旧版没有更新入口时，退出 TaskPulse 后重新运行安装命令或新版安装包。
+- 使用安装包更新时，先正常退出 TaskPulse，并保留本机配置目录。
 
 ## 跨屏、休眠和系统安全提示
 

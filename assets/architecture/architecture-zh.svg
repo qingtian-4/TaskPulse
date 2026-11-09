@@ -1,0 +1,117 @@
+<svg xml:lang="zh-CN" xmlns="http://www.w3.org/2000/svg" width="1600" height="900" viewBox="0 0 1600 900" role="img" aria-labelledby="svg-title svg-desc">
+  <title id="svg-title">TaskPulse 系统架构——从真实证据到主动提醒</title>
+  <desc id="svg-desc">TaskPulse 从本机、远程与明确事件来源读取证据，经 Watcher 采集与 TaskStore 可信合并，由 AttentionTracker 持久保存注意力状态，再分别投影到任务面板和托盘，或通过 TransitionEngine 判断明确事件并去重提醒；只有用户主动操作才返回原 Agent。</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0B1424"/><stop offset="0.55" stop-color="#102638"/><stop offset="1" stop-color="#0B1B28"/></linearGradient>
+    <radialGradient id="aura" cx="50%" cy="50%" r="60%"><stop offset="0" stop-color="#188E82" stop-opacity=".23"/><stop offset="1" stop-color="#188E82" stop-opacity="0"/></radialGradient>
+    <linearGradient id="card" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#172B3B"/><stop offset="1" stop-color="#102330"/></linearGradient>
+    <linearGradient id="teal" x1="0" y1="0" x2="1" y2="0"><stop offset="0" stop-color="#40C9B2"/><stop offset="1" stop-color="#95E8D8"/></linearGradient>
+    <linearGradient id="gold" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#F6C579"/><stop offset="1" stop-color="#F4A862"/></linearGradient>
+    <pattern id="grid" width="48" height="48" patternUnits="userSpaceOnUse"><path d="M48 0H0V48" fill="none" stroke="#6C9FAD" stroke-opacity=".065" stroke-width="1"/></pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#031019" flood-opacity=".25"/></filter>
+    <marker id="arrow" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4.5 L1 8" fill="none" stroke="#58DDC8" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <marker id="arrow-gold" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto" markerUnits="userSpaceOnUse"><path d="M1 1 L7 4.5 L1 8" fill="none" stroke="#F2B86C" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></marker>
+    <style><![CDATA[
+      text{font-family:'Noto Sans CJK SC','Microsoft YaHei','PingFang SC','Segoe UI',sans-serif}
+      .eyebrow{font-size:14px;font-weight:750;letter-spacing:2.5px;fill:#67B9B1}
+      .h1{font-size:40px;font-weight:740;fill:#F4FBFC;letter-spacing:-1.2px}
+      .sub{font-size:17px;fill:#91ADBA}
+      .stage{font-size:14px;font-weight:750;fill:#71A7AE;letter-spacing:1.5px}
+      .name{font-size:25px;font-weight:720;fill:#F5FBFC}
+      .label{font-size:18px;font-weight:680;fill:#ECF9F8}
+      .detail{font-size:15px;fill:#9DB7BE}
+      .code{font-size:13px;fill:#6FD4C4;font-weight:600}
+      .tiny{font-size:12px;fill:#7598A4;letter-spacing:.2px}
+      .line{fill:none;stroke:#51CAB9;stroke-width:3;stroke-linecap:round;stroke-linejoin:round;marker-end:url(#arrow)}
+      .line-muted{fill:none;stroke:#427987;stroke-width:2.2;stroke-linecap:round;stroke-linejoin:round}
+      .line-user{fill:none;stroke:#F2B86C;stroke-width:2.6;stroke-dasharray:8 9;stroke-linecap:round;marker-end:url(#arrow-gold)}
+    ]]></style>
+  </defs>
+
+  <rect width="1600" height="900" fill="url(#background)"/>
+  <rect width="1600" height="900" fill="url(#grid)"/>
+  <ellipse cx="575" cy="310" rx="560" ry="340" fill="url(#aura)"/>
+  <ellipse cx="1355" cy="740" rx="350" ry="270" fill="url(#aura)" opacity=".45"/>
+
+  <!-- Brand and headline -->
+  <g transform="translate(64 50) scale(.56)"><rect x="7" y="7" width="86" height="86" rx="23" fill="#152C3D" stroke="#467C83" stroke-width="2"/><path d="M20 30 H36 M36 30 V74" fill="none" stroke="#EAF9F6" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/><path d="M36 30 H57 C73 30 79 39 79 48 C79 59 71 64 58 64 H50" fill="none" stroke="#76DFCD" stroke-width="11.5" stroke-linecap="round" stroke-linejoin="round"/></g>
+  <text x="128" y="90" font-size="26" font-weight="780" fill="#F2FAFB">Task<tspan fill="#7EE2D2">Pulse</tspan></text>
+  <text x="307" y="90" class="eyebrow">系统架构</text>
+  <text x="64" y="159" class="h1">从智能体的真实状态，到恰好的提醒</text>
+  <text x="66" y="194" class="sub">以证据为先 · 关注状态持久化 · 系统原生提醒</text>
+  <rect x="1277" y="65" width="260" height="44" rx="22" fill="#143B43" stroke="#33797A" stroke-width="1"/>
+  <circle cx="1302" cy="87" r="5" fill="#65E0C9"/><text x="1319" y="93" font-size="15" font-weight="630" fill="#C1F2E9">Rust + Tauri 2 + Svelte 5</text>
+
+  <!-- Stage titles -->
+  <text x="64" y="248" class="stage">01  证据输入</text>
+  <text x="395" y="248" class="stage">02  采集与可信状态</text>
+  <text x="765" y="248" class="stage">03  注意力与事件</text>
+  <text x="1135" y="248" class="stage">04  用户体验</text>
+
+  <!-- Left source cluster -->
+  <rect x="64" y="276" width="260" height="480" rx="24" fill="#112838" stroke="#305362" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="82" y="296" width="224" height="119" rx="15" fill="#1A3445" stroke="#3A6170" stroke-width="1"/>
+  <circle cx="110" cy="327" r="11" fill="#1D716D"/><path d="M105 325h10m-10 5h10" stroke="#B7FBED" stroke-width="1.8" stroke-linecap="round"/>
+  <text x="132" y="332" class="label">本机读取器</text><text x="101" y="365" class="detail">Codex · Claude Code</text><text x="101" y="390" class="tiny">以及其他已适配来源</text>
+  <rect x="82" y="430" width="224" height="119" rx="15" fill="#1A3445" stroke="#3A6170" stroke-width="1"/>
+  <circle cx="110" cy="461" r="11" fill="#235A83"/><path d="M105 458h10m-10 5h10m-10 5h10" stroke="#C0EAFF" stroke-width="1.6" stroke-linecap="round"/>
+  <text x="132" y="467" class="label">远程会话</text><text x="101" y="499" class="detail">SSH · WSL · tmux</text><text x="101" y="524" class="tiny">tmux 是运行方式，非智能体</text>
+  <rect x="82" y="564" width="224" height="119" rx="15" fill="#1A3445" stroke="#3A6170" stroke-width="1"/>
+  <circle cx="110" cy="595" r="11" fill="#6D5839"/><path d="m106 595 3 3 6-7" stroke="#FFE4AD" stroke-width="1.8" fill="none" stroke-linecap="round"/>
+  <text x="132" y="601" class="label">精确事件</text><text x="101" y="632" class="detail">钩子 · 标准事件</text><text x="101" y="657" class="tiny">MCP · 明确请求 / 结束证据</text>
+  <text x="194" y="725" text-anchor="middle" font-size="13" fill="#74B9B6">默认只读 · 不修改宿主</text>
+
+  <!-- Collection cards -->
+  <rect x="394" y="288" width="300" height="180" rx="22" fill="url(#card)" stroke="#397E7E" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="416" y="310" width="68" height="26" rx="13" fill="#174C4D"/><text x="450" y="328" text-anchor="middle" font-size="12" font-weight="780" fill="#7DE7D7">采集</text>
+  <text x="416" y="376" class="name">Watcher</text><text x="416" y="410" class="detail">有界采集 · 代际保护 · 去重</text><text x="416" y="439" class="code">providers/ · watcher.rs</text>
+  <rect x="394" y="536" width="300" height="180" rx="22" fill="url(#card)" stroke="#397E7E" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="416" y="558" width="68" height="26" rx="13" fill="#174C4D"/><text x="450" y="576" text-anchor="middle" font-size="12" font-weight="780" fill="#7DE7D7">合并</text>
+  <text x="416" y="624" class="name">TaskStore</text><text x="416" y="658" class="detail">可信观测合并 · 保留已知状态</text><text x="416" y="687" class="code">store/ · history.rs</text>
+
+  <!-- Attention cards -->
+  <rect x="764" y="288" width="300" height="180" rx="22" fill="url(#card)" stroke="#3C8981" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="786" y="310" width="85" height="26" rx="13" fill="#174C4D"/><text x="829" y="328" text-anchor="middle" font-size="12" font-weight="780" fill="#7DE7D7">持久化</text>
+  <text x="786" y="376" class="name">AttentionTracker</text><text x="786" y="410" class="detail">未读 · 固定 · 待处理 · 重启恢复</text><text x="786" y="439" class="code">attention.rs · attention.json</text>
+  <rect x="764" y="536" width="300" height="180" rx="22" fill="url(#card)" stroke="#A67A4D" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="786" y="558" width="82" height="26" rx="13" fill="#604C32"/><text x="827" y="576" text-anchor="middle" font-size="12" font-weight="780" fill="#FFD3A0">状态变化</text>
+  <text x="786" y="624" class="name">TransitionEngine</text><text x="786" y="658" class="detail">明确状态变化 · 通知去重</text><text x="786" y="687" font-size="13" font-weight="600" fill="#F8C78D">transition.rs · notifications.json</text>
+
+  <!-- Presentation cards -->
+  <rect x="1134" y="288" width="402" height="180" rx="22" fill="#163742" stroke="#388987" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="1156" y="310" width="91" height="26" rx="13" fill="#1B5553"/><text x="1202" y="328" text-anchor="middle" font-size="12" font-weight="780" fill="#95F2E1">状态快照</text>
+  <text x="1156" y="376" class="name">任务面板 · 系统托盘</text><text x="1156" y="410" class="detail">状态投影 → Svelte 界面</text><text x="1156" y="439" class="code">Tauri 2 · 权限受限通信 · tray.rs</text>
+  <rect x="1134" y="536" width="402" height="180" rx="22" fill="#263440" stroke="#8C745E" stroke-width="1.5" filter="url(#shadow)"/>
+  <rect x="1156" y="558" width="76" height="26" rx="13" fill="#5B4A39"/><text x="1194" y="576" text-anchor="middle" font-size="12" font-weight="780" fill="#FFD9B0">通知</text>
+  <text x="1156" y="624" class="name">弹窗 · 系统提醒</text>
+  <rect x="1156" y="644" width="98" height="26" rx="8" fill="#274B4D"/><text x="1205" y="662" text-anchor="middle" font-size="14" font-weight="640" fill="#9FE9DB">等待输入</text>
+  <rect x="1265" y="644" width="98" height="26" rx="8" fill="#644B30"/><text x="1314" y="662" text-anchor="middle" font-size="14" font-weight="640" fill="#FFE0A5">请求批准</text>
+  <rect x="1374" y="644" width="98" height="26" rx="8" fill="#314C59"/><text x="1423" y="662" text-anchor="middle" font-size="14" font-weight="640" fill="#B8E8FC">本轮结束</text>
+  <text x="1156" y="698" class="tiny">notifier.rs · task_notice.rs</text>
+
+  <!-- Explicit host return -->
+  <rect x="1134" y="750" width="402" height="68" rx="16" fill="#322C27" stroke="#866447" stroke-width="1.5"/>
+  <circle cx="1161" cy="783" r="13" fill="#695034"/><path d="M1157 777v10m0-10 8 5-8 5" stroke="#FFDBA9" stroke-width="1.7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+  <text x="1185" y="783" font-size="17" font-weight="700" fill="#F8E8D2">用户返回宿主或打开详情</text>
+  <text x="1185" y="802" font-size="12" fill="#D7B99A">归属校验 · 不自动批准或标记已读</text>
+
+  <!-- Data flow; separate branches for display and notifications -->
+  <path class="line" d="M324 378 H394"/>
+  <path class="line" d="M544 468 V536"/>
+  <path class="line" d="M694 627 H729 Q740 627 740 616 V389 Q740 378 751 378 H764"/>
+  <path class="line" d="M914 468 V536"/>
+  <path class="line" d="M1064 378 H1134"/>
+  <path class="line" d="M1064 626 H1134"/>
+  <!-- Source health goes to presentation without passing through lifecycle notifications. -->
+  <path class="line-muted" marker-end="url(#arrow)" d="M600 288 V263 H1324 V288"/>
+  <text x="992" y="258" font-size="12" font-weight="650" fill="#76ADB3">来源健康 → 界面</text>
+  <!-- Host return is triggered by a user action only. -->
+  <path class="line-user" d="M1536 388 H1565 V784 H1536"/>
+
+  <!-- Explicit invariants -->
+  <g transform="translate(64 836)"><rect width="258" height="40" rx="20" fill="#153A41" stroke="#2C696A"/><circle cx="23" cy="20" r="5" fill="#6DDCC9"/><text x="40" y="26" font-size="15" font-weight="640" fill="#C2F4EB">只读接入 · 默认不修改宿主</text></g>
+  <g transform="translate(338 836)"><rect width="273" height="40" rx="20" fill="#153A41" stroke="#2C696A"/><circle cx="23" cy="20" r="5" fill="#6DDCC9"/><text x="40" y="26" font-size="15" font-weight="640" fill="#C2F4EB">缺少证据 ≠ 本轮结束</text></g>
+  <g transform="translate(627 836)"><rect width="278" height="40" rx="20" fill="#153A41" stroke="#2C696A"/><circle cx="23" cy="20" r="5" fill="#6DDCC9"/><text x="40" y="26" font-size="15" font-weight="640" fill="#C2F4EB">关键关注状态跨重启恢复</text></g>
+  <g transform="translate(921 836)"><rect width="300" height="40" rx="20" fill="#362E27" stroke="#846847"/><circle cx="23" cy="20" r="5" fill="#EAB46E"/><text x="40" y="26" font-size="15" font-weight="640" fill="#FFE0BA">Agent 提醒依据明确事件</text></g>
+  <text x="1535" y="863" text-anchor="end" font-size="12" fill="#628897">TaskPulse · v0.0.1</text>
+</svg>

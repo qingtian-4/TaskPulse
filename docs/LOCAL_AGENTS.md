@@ -12,6 +12,9 @@ TaskPulse 自动发现受支持的本机 Agent。首次确认后，来源中的�
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `~/.workbuddy/projects` | 来源中填写 `.workbuddy` 数据目录 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 来源中填写数据库路径 |
 | 豆包 | 桌面端 IndexedDB | 来源中填写 IndexedDB 目录 |
+| Kimi Code / kimi-cli | `~/.kimi-code`，旧版 `~/.kimi` | `KIMI_CODE_HOME` / `KIMI_SHARE_DIR` 或来源目录 |
+| Qoder | 系统配置目录的 `com.qodercn.app.stable` / `com.qoder.app.stable`；CLI / IDE 的 `~/.qoder/projects` | `QODER_HOME` 指定 CLI / IDE 根目录，或来源中指定数据根目录 |
+| TRAE | 系统配置目录的 `Trae` | 来源中指定数据根目录；当前只读公开会话元数据 |
 
 豆包的 Windows 默认目录为 `%LOCALAPPDATA%\Doubao\User Data\Default\IndexedDB`；读取当前工作任务，不生成审批提醒。
 
@@ -34,6 +37,8 @@ OpenCode 读取会话数据库，WorkBuddy 结合本地数据库与 `projects` �
 这两款目前不从本地记录生成独立提问或批准提醒；WorkBuddy 的含糊 pending 状态显示为状态待更新，不猜测它在等待批准。云端 WorkBuddy 会话以及国际版 WorkBuddy AI 不属于此适配范围。Windows 本机数据已验证的版本及限制见[兼容说明](AGENT_COMPATIBILITY.md)；macOS 使用相同目录约定，仍需对应版本的实机确认。
 
 ## 接入精确事件
+
+Kimi 原生 wire 与 Qoder 原生记录不要求安装事件 Hook。Kimi 的主会话明确请求按 ID 匹配；Qoder 原生审批和提问尚未支持。TRAE 当前主会话库的状态读取受限，发现目录不表示可监控完整任务。详细格式与验证边界见[兼容说明](AGENT_COMPATIBILITY.md)。
 
 Claude Code 可在来源高级设置中显式安装官方 Hook；原有 Hook、statusLine、代理和模型设置保留，也可以撤销。Codex 的审批事件见 [Codex 审批提醒](CODEX_APPROVAL_OBSERVER.md)。
 

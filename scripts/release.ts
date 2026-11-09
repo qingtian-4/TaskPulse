@@ -8,12 +8,14 @@ export const ALPHA_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|b
 
 export const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
-// The current 1.1.0 release keeps its complete legacy asset set. Later
-// versions consolidate metadata without removing the installed MSI update lane.
-export function releaseLayout(version:string):'legacy'|'compact' {
+// Historical releases through 1.1.0 retain their complete legacy assets.
+// The first official release includes ARM64 and the standalone release files.
+// Later 0.0.x releases consolidate metadata and retain the MSI update lane.
+export function releaseLayout(version:string):'legacy'|'full'|'compact' {
   if(!STABLE_VERSION.test(version) && !ALPHA_VERSION.test(version))throw Error('Invalid release version');
   const [major,minor,patch]=version.split('-')[0].split('.').map(Number);
-  return major>1 || (major===1 && (minor>1 || (minor===1 && patch>0))) ? 'compact' : 'legacy';
+  if(major===0&&minor===0&&patch===1)return 'full';
+  return (major===0&&minor===0) || major>1 || (major===1 && (minor>1 || (minor===1 && patch>0))) ? 'compact' : 'legacy';
 }
 
 export function validateRelease(tag: string, versions: string[]) {
@@ -43,6 +45,12 @@ export function validateTauriApiVersion(root:string):void {
   const api=readFileSync(join(root,'bun.lock'),'utf8').match(/"@tauri-apps\/api":\s*\["@tauri-apps\/api@(\d+\.\d+\.\d+)/)?.[1];
   if(!core || !api || core.split('.').slice(0,2).join('.')!==api.split('.').slice(0,2).join('.'))
     throw Error(`Tauri Rust/JavaScript major.minor versions must match before packaging: Rust ${core??'missing'}, API ${api??'missing'}`);
+}
+
+export function validateBootstrapVersions(root:string,version:string):void {
+  const windows=readFileSync(join(root,'install.ps1'),'utf8').match(/\$script:TaskPulsePublicVersion\s*=\s*'([^']+)'/)?.[1];
+  const mac=readFileSync(join(root,'install.sh'),'utf8').match(/^public_release_version=([^\s]+)$/m)?.[1];
+  if(windows!==version||mac!==version)throw Error(`Public installer defaults must match ${version}: Windows ${windows??'missing'}, macOS ${mac??'missing'}`);
 }
 
 export function projectVersions(root: string): string[] {
@@ -136,7 +144,10 @@ if (import.meta.main) {
       if (i < 0 || !args[i+1] || args[i+1].startsWith('--')) throw new Error(`Missing ${name}`);
       return args[i+1];
     };
-    if(['check','candidate','preflight'].includes(command))validateTauriApiVersion(root);
+    if(['check','candidate','preflight'].includes(command)){
+      validateTauriApiVersion(root);
+      validateBootstrapVersions(root,projectVersions(root)[0]);
+    }
     if(command === 'publication-check') {
       const tag=argument('--tag');validateRelease(tag,projectVersions(root));
       const repository=process.env.GITHUB_REPOSITORY??'qingtian-4/TaskPulse';
@@ -155,7 +166,7 @@ if (import.meta.main) {
       validateCandidateCommit(commit,git(root,['rev-parse','HEAD']),git(root,['rev-parse','refs/remotes/origin/main']));
       const version=validateRelease(`v${projectVersions(root)[0]}`,projectVersions(root));
       validateMsiVersion(root,version);
-      if(process.env.GITHUB_OUTPUT)appendFileSync(process.env.GITHUB_OUTPUT,`version=${version}\ntag=\ncommit=${commit}\n`);
+      if(process.env.GITHUB_OUTPUT)appendFileSync(process.env.GITHUB_OUTPUT,`version=${version}\ntag=\ncommit=${commit}\nlayout=${releaseLayout(version)}\n`);
       console.log(`Validated untagged main candidate at ${commit}; CI artifacts only, no Release`);
     } else if (command === 'preflight') {
       const tag = argument('--tag');

@@ -23,7 +23,34 @@ Debug builds select their development directory automatically, including direct 
 
 On macOS, development webviews use nonpersistent WebKit stores (including macOS 13.3); native configuration/task data still persists in the development profile. `dev:desktop` also provides a separate application identity. Windows/Linux development builds have separate browser storage and do not register login startup, install updates or claim the installed app's global shortcut. Fresh profiles require source confirmation. Native Agent data stays read-only; WSL and SSH remain opt-in. Configure real host hooks only from an installed build in a test account; development builds block real hook changes and use isolated event fixtures. Existing automated fixtures retain their explicit isolation, including disabled real-source discovery.
 
-On Windows, use `bun.cmd` if PowerShell blocks `bun.ps1`. If using a GNU Rust toolchain, configure its C/C++ compiler and linker as described in [AGENTS.md](AGENTS.md); do not install packages just to inspect a UI change.
+On Windows, use `bun.cmd` if PowerShell blocks `bun.ps1`. If using a GNU Rust toolchain, configure its C/C++ compiler and linker as described below; do not install packages just to inspect a UI change.
+
+## Windows compiler and verification commands
+
+Use Bun's executable directly if PowerShell blocks `bun.ps1`:
+
+```powershell
+$env:PATH = "C:\tools\mingw64\bin;$env:USERPROFILE\.cargo\bin;$env:PATH"
+$env:CC = 'gcc'
+$env:CXX = 'g++'
+$env:RUSTFLAGS = '-C link-self-contained=yes'
+& "$env:LOCALAPPDATA\hermes\node\bun.cmd" run check
+& "$env:LOCALAPPDATA\hermes\node\bun.cmd" run build
+cargo fmt --manifest-path src-tauri/Cargo.toml -- --check
+cargo clippy --manifest-path src-tauri/Cargo.toml --bin agent-tray -- -D warnings
+cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray
+cargo build --manifest-path src-tauri/Cargo.toml --bin agent-tray --features custom-protocol
+```
+
+When the tray app is running, use the isolated verification target so Windows
+never has to replace the live executable:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/verify.ps1
+```
+
+Machine-specific development wrappers such as `dev.sh` are local-only. Use the shared commands above and the [contributing guide](CONTRIBUTING.md) for reproducible setup.
+
 
 ## Check a change
 
@@ -35,15 +62,15 @@ bun run test:ui-model
 bun run test:workflow
 ```
 
-Before submitting, run the frontend build, Rust fmt/Clippy and the complete Rust test target listed in [AGENTS.md](AGENTS.md). Run `bun run build` before embedding assets with Cargo; it rejects a mismatch between the entry pages and their SvelteKit startup scripts. On Windows the shared entry point is:
+Before submitting, run the frontend build, Rust fmt/Clippy and the complete Rust test target listed above. Run `bun run build` before embedding assets with Cargo; it rejects a mismatch between the entry pages and their SvelteKit startup scripts. On Windows the shared entry point is:
 
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File scripts/verify.ps1 -Frontend
 ```
 
-It reuses the repository's audit, documentation, release-contract, unit and native bridge checks, and builds into the separate `codex-check` target. Run the relevant `scripts/native-*-smoke.ts --exe <unused-built-exe>` for UI/window changes; on Windows, `native-development-smoke.ts` verifies automatic development isolation without a `TASKPULSE_HOME` override. Provider changes also need real-source validation when available. The opt-in live SSH/WSL tests must use an already available, explicitly selected source.
+It reuses the repository's audit, documentation, release-contract, unit and native bridge checks, and builds into the separate `codex-check` target. Run the relevant `tests/native/native-*-smoke.ts --exe <unused-built-exe>` for UI/window changes; on Windows, `native-development-smoke.ts` verifies automatic development isolation without a `TASKPULSE_HOME` override. Provider changes also need real-source validation when available. The opt-in live SSH/WSL tests must use an already available, explicitly selected source.
 
-Windows tray acceptance requires a clean binary for an explicit full commit SHA. Run `bun scripts/native-tray-smoke.ts --exe <unused-built-exe> --expected-commit <full-SHA> --callbacks-only`, then repeat with `--physical-only` during a quiet desktop interval. Reports retain the compiled commit, dirty flag, executable SHA-256 and separate cleanup evidence.
+Windows tray acceptance requires a clean binary for an explicit full commit SHA. Run `bun tests/native/native-tray-smoke.ts --exe <unused-built-exe> --expected-commit <full-SHA> --callbacks-only`, then repeat with `--physical-only` during a quiet desktop interval. Reports retain the compiled commit, dirty flag, executable SHA-256 and separate cleanup evidence.
 
 ## Share a temporary test build
 
@@ -84,7 +111,8 @@ as applicable. Describe user-visible changes since the previous public version.
 The draft pipeline puts actual installation links above these sections. Missing
 architectures do not receive download links.
 
-Versions through 1.1.0 retain all legacy attachments. Later versions use four
+The first official release v0.0.1 keeps standalone signatures, manifests, checksums
+and license files alongside the unified metadata. Later releases use four
 primary installers (Windows x64/ARM64 NSIS and macOS Apple Silicon/Intel DMG),
 two Mac updater archives, `latest.json`, a unified `release-manifest.json`,
 `SHA256SUMS.txt` and one dependency/license ZIP. Retain the additional Windows
@@ -131,7 +159,7 @@ For a clean Windows development executable, run the isolated settings and
 process-tree sample with no screenshot capture:
 
 ```powershell
-bun scripts/native-settings-smoke.ts --exe <exe> --commit <full-sha> --sample-resources --no-screenshots
+bun tests/native/native-settings-smoke.ts --exe <exe> --commit <full-sha> --sample-resources --no-screenshots
 ```
 
 The report counts the root process and validated live descendants, including

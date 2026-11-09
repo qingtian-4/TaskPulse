@@ -36,6 +36,7 @@ export interface TaskSnapshot {
   agent_id?:string; agent_name?:string; evidence_channel?:string; outcome?:string; pending_confirmed_at?:number; integration_epoch?:string; integration_sequence?:number;
   source_instance?: string;
   model?: string;
+  reasoning_effort?: string;
   internal?: boolean;
   project_path?: string;
   tmux_session?: string;
@@ -80,7 +81,7 @@ export interface TaskSnapshot {
   hook_matcher?: string;
 }
 
-export type SourceKind = 'opencode' | 'workbuddy' | 'zcode' | 'doubao' | 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner' | 'generic_event';
+export type SourceKind = 'kimi_code' | 'qoder' | 'trae' | 'opencode' | 'workbuddy' | 'zcode' | 'doubao' | 'codex' | 'codex_wsl' | 'claude_code' | 'hermes' | 'deepseek_desktop' | 'deepseek_wsl' | 'remote_codex' | 'tmux' | 'hooks' | 'scanner' | 'generic_event';
 export interface MonitorSource {
   id: string; name: string; kind: SourceKind; enabled: boolean; location: string;
   projects: string[]; excluded_projects: string[]; tmux_sessions: string[]; tmux_panes: string[]; poll_interval_ms: number;
@@ -90,6 +91,7 @@ export interface DashboardSettings {
   preferences?: import('./preferences').Preferences;
   version: number; onboarding_complete: boolean; sources: MonitorSource[];
   auto_discover_local?: boolean; auto_discovery_seen?: string[]; auto_check_updates?: boolean;
+  ssh_paused_sources?: string[];
   notifications: boolean; sound: boolean; default_view: 'tasks' | 'projects';
   recent_days?: number; // 0 keeps all ages; legacy configs default to 7.
   notification_mode?: 'popup' | 'system' | 'both';

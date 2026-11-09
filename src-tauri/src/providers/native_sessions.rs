@@ -90,7 +90,7 @@ impl Sessions {
             let fresh =
                 now.duration_since(task.updated_at).unwrap_or_default() < Duration::from_secs(120);
             // Title/model changes cannot enroll old idle history or renew a turn.
-            let executing = task.status == TaskStatus::Running && fresh;
+            let executing = (task.status == TaskStatus::Running || task.requires_action()) && fresh;
             if task.new_execution || executing {
                 self.followed.insert(task.id.clone());
             }

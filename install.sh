@@ -4,6 +4,7 @@ set -euo pipefail
 language=en
 case "${LANG:-}" in zh*) language=zh-CN;; esac
 version= prerelease=0 download_only=0 output_dir=. install_dir="${HOME}/Applications" no_launch=0
+public_release_version=0.0.1
 work= stage= lock= recovery= target= attached=0 transaction=0 committed=0 incoming_id= old_id= finished=0
 version_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-(alpha|beta|rc)\.(0|[1-9][0-9]*))?$'
 tag_pattern="^v${version_pattern#^}"
@@ -107,6 +108,7 @@ while [ "$#" -gt 0 ]; do
     *) fail "Unknown argument: $1" "未知参数：$1";;
   esac
 done
+if [ -z "$version" ] && [ "$prerelease" = 0 ]; then version=$public_release_version; fi
 case "$language" in en|zh-CN) ;; *) fail 'Language must be en or zh-CN.' '语言必须为 en 或 zh-CN。';; esac
 [ -z "$version" ] || [[ "$version" =~ $version_pattern ]] || fail 'Invalid version.' '版本无效。'
 [ "$(uname -s)" = Darwin ] || fail 'This installer requires macOS.' '此脚本仅支持 macOS。'
@@ -153,6 +155,9 @@ published=$(required "$release" published_at)
 [[ "$published" =~ $time_pattern ]] || fail 'Release is not published.' '版本尚未公开。'
 tag=$(required "$release" tag_name)
 [[ "$tag" =~ $tag_pattern ]] || fail 'Invalid release tag.' '版本标签无效。'
+if [ "$prerelease" = 0 ] && [[ "$tag" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  [ "$(required "$release" prerelease)" = false ] || fail 'Stable version tags require a public stable release.' '正式版本标签必须对应正式公开发布。'
+fi
 if [ -n "$version" ]; then [ "$tag" = "v$version" ] || fail 'Release tag mismatch.' '版本标签不匹配。'
 elif [ "$prerelease" = 0 ]; then
   [ "$(required "$release" prerelease)" = false ] && [[ "$tag" != *-* ]] || fail 'Prerelease requires explicit selection.' '预发布须明确选择。'

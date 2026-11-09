@@ -6,10 +6,11 @@
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery, type DashboardView, type DashboardSnapshot } from '$lib/types';
-  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
+  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, taskElapsed, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import MessageCenter from './MessageCenter.svelte';
-  import {projectDashboardTasks,preferredDashboardHeight} from '$lib/dashboard';
+  import {projectDashboardTasks} from '$lib/dashboard';
+  import {measureDashboard} from '$lib/dashboard-layout';
   import {summarizeSources} from '$lib/source-setup';
   import {acceptMessageState} from '$lib/messages';
   import type {MessageCenterState} from '$lib/types';
@@ -59,6 +60,8 @@
   let layoutReady = $state(false);
   let sessionHeight = $state(400);
   let resizeQueue:Promise<unknown> = Promise.resolve();
+  let layoutQueue:Promise<void> = Promise.resolve();
+  let layoutEpoch=$state(0);let layoutTicket=0,lastWidth=0;
   const progress = $derived(refreshProgress(settings,providers,refreshSince));
   const confirmedTasks = $derived(projectDashboardTasks(tasks,snapshotView?.unconfirmed_task_ids??[]));
   const selectedTask = $derived([...confirmedTasks,...archived].find(t => t.id === selected?.id) ?? selected);
@@ -148,7 +151,8 @@
     catch(e) { error='刷新失败：'+String(e); } finally { refreshing=false; }
   }
   let availableUpdate=$state('');
-  function manage(){return openManagement("sources");}
+  function manage(){return openManagement("general");}
+  function manageSources(){return openManagement("sources");}
   function manageUpdates(){return openManagement("updates");}
   async function openManagement(section:string) {
     if (!isTauri()) { note='浏览器演示：真实设置请在托盘应用中打开'; return; }
@@ -187,13 +191,12 @@
     }
     catch(e) { error=String(e); }
   }
-  // Grow within one opening, using attention cards rather than hidden process
-  // observations. Shrink only when the popup is opened again.
+  // Measure natural card content after rendering, including status/filter chrome.
   $effect(()=>{
     if(!layoutReady)return;
-    const expanded=showPrompts || !!selectedTask || showFilters || showArchive || !!error || !!note;
-    const needed=preferredDashboardHeight(attentionTasks.length,expanded);
-    if(needed>sessionHeight)sessionHeight=needed;
+    JSON.stringify([sorted,view,showPrompts,selectedTask,showFilters,showArchive,error,note,sourceIssues,$preferences,$t,layoutEpoch,now]);
+    const ticket=++layoutTicket;
+    layoutQueue=tick().then(()=>{if(ticket===layoutTicket&&panel)sessionHeight=measureDashboard(panel,showPrompts||!!selectedTask);}).then(()=>tick());
   });
   $effect(()=>{
     if(!layoutReady || !isTauri())return;
@@ -240,9 +243,9 @@
         await subscribe(listen<DashboardSettings>('monitoring-settings-updated',e=>{settingsEpoch++;settings=e.payload;view=e.payload.default_view;void discover();}));
         await subscribe(listen<TaskSnapshot>('task-selected',e=>selectTask(e.payload)));
         await subscribe(listen<boolean>('pinned-changed',e=>pinned=e.payload));
-        await subscribe(listen('popup-opened',()=>{if(!pinned)sessionHeight=400;}));
-        await subscribe(listen<{phase:string;version:string|null}>('application-update',e=>availableUpdate=e.payload.phase==='available' ? e.payload.version ?? '' : ''));
-        void invoke<{phase:string;version:string|null}>('get_update_status').then(s=>availableUpdate=s.phase==='available'?s.version ?? '':'');
+        await subscribe(listen('popup-opened',()=>{layoutEpoch++;}));
+        await subscribe(listen<{phase:string;version:string|null;can_install:boolean}>('application-update',e=>availableUpdate=e.payload.phase==='available'&&e.payload.can_install ? e.payload.version ?? '' : ''));
+        void invoke<{phase:string;version:string|null;can_install:boolean}>('get_update_status').then(s=>availableUpdate=s.phase==='available'&&s.can_install?s.version ?? '':'');
         await snapshots(); view=settings?.default_view ?? 'tasks';
         void discover();
         error=await invoke<string | null>('get_monitoring_error') ?? '';
@@ -250,22 +253,24 @@
         if(selection)selectTask(selection);
         pinned=await invoke<boolean>('get_pinned');
         const win=getCurrentWindow();
+        await subscribe(win.onResized(({payload})=>{if(payload.width!==lastWidth){lastWidth=payload.width;layoutEpoch++;}}));
+        void document.fonts.ready.then(()=>{if(mounted)layoutEpoch++;});
         await subscribe(win.onFocusChanged(({payload:focused})=>{
           if(focused) {showArchive=false;resetFilters();void snapshots().catch(e=>error=String(e));}
         }));
       } catch(e) { error='无法读取监控数据：'+String(e); }
-      finally { layoutReady=true; await tick(); await resizeQueue; await emit('popup-ready',null).catch(()=>{}); }
+      finally { layoutReady=true; await tick(); await layoutQueue; await resizeQueue; await emit('popup-ready',null).catch(()=>{}); }
     })();
     return ()=>{mounted=false;window.removeEventListener('keydown',searchShortcut);clearInterval(clock);clearInterval(discoveryTimer);cleanups.forEach(fn=>fn());};
   });
 </script>
 
-<div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" data-continuity={JSON.stringify(dashboardContinuity(candidates,filtered))}>
+<div bind:this={panel} role="region" aria-label={$t("TaskPulse 任务监控")} class="dashboard tp-theme" style={`--tp-task-font-size:${$preferences.task_font_size??14}px`} data-continuity={JSON.stringify(dashboardContinuity(candidates,filtered))}>
   <header data-tauri-drag-region>
     <span class="brand" data-tauri-drag-region><BrandMark />TaskPulse</span>
     <div class="header-actions">
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={()=>showPrompts=!showPrompts} aria-expanded={showPrompts} title={$t('消息中心 · {count} 条未读',{count:messages.unread})} aria-label={$t('消息中心：{count} 条未读',{count:messages.unread})}><Bell size={15}/>{#if messages.unread}<span>{messages.unread}</span>{/if}</button>
-      <button class="tp-btn tp-icon" data-variant="ghost" onclick={manage} title={$t("管理监控来源")} aria-label={$t("管理监控来源")}><Settings size={15}/></button>
+      <button class="tp-btn tp-icon" data-variant="ghost" onclick={manage} title={$t("设置")} aria-label={$t("设置")}><Settings size={15}/></button>
       <button class="tp-btn tp-icon" data-variant="ghost" onclick={refresh} disabled={refreshing || demo} title={$t("立即刷新")} aria-label={$t("立即刷新")}><RefreshCw size={15} class={refreshing?'animate-spin':''}/></button>
       <button class="tp-btn tp-icon" data-variant="ghost" disabled={demo} onclick={()=>invoke('toggle_pin')} title={pinned?$t('取消固定窗口'):$t('固定窗口')} aria-label={pinned?$t('取消固定窗口'):$t('固定窗口')}>{#if pinned}<Pin size={15}/>{:else}<PinOff size={15}/>{/if}</button>
     </div>
@@ -280,7 +285,7 @@
     {#if candidates.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>{$t("待批准")} {candidates.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
     {#if candidates.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>{$t("待回答")} {candidates.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
     {#if candidates.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>{$t("失败结果")} {candidates.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
-    {#if sourceIssues}<button class="tp-chip tp-tone" data-tone="stale" onclick={manage}>{$t("来源待更新")} {sourceIssues}</button>{/if}
+    {#if sourceIssues}<button class="tp-chip tp-tone" data-tone="stale" onclick={manageSources}>{$t("来源待更新")} {sourceIssues}</button>{/if}
   </div>{/if}
   <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>{$t("当前关注")} {attentionTasks.length}</button>{#if uncertainTasks.length}<button class:active={filterSection==='uncertain'} onclick={()=>chooseSection('uncertain')}>{$t("状态待更新")} {uncertainTasks.length}</button>{/if}{#if archiveTasks.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>{$t("较早关注")} {archiveTasks.length}</button>{/if}<button class="filter-toggle tp-btn" class:active={!!filterText} data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?$t('收起筛选'):$t('筛选 / 分组')}</button></div>
   <div class="search-bar"><label class="search"><Search size={14}/><input aria-label={$t("搜索任务")} placeholder={$t("搜索任务、项目、Agent 或模型   /")} bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label={$t("清除搜索")}>×</button>{/if}</label></div>
@@ -290,8 +295,8 @@
   {#if note}<p class="notice" role="status">{$t(note)}<button class="dismiss" onclick={()=>note=''} aria-label={$t("关闭提示")}>×</button></p>{/if}
   {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label={$t("关闭刷新结果")}>×</button></p>{/if}
   {#if availableUpdate}<p class="notice">TaskPulse {availableUpdate} {$t("可更新")}<button class="link" onclick={manageUpdates}>{$t("查看更新")}</button></p>{/if}
-  {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>{$t("选择你要关注的 Agent")}</strong><p>{$t("确认本机来源，或添加远程服务器。新任务会自动出现。")}</p><button onclick={manage}>{$t("设置监控来源")}</button></div>{/if}
-  {#if settings?.onboarding_complete && newSources}<p class="notice">{$t("发现")} {newSources} {$t("个可监控来源")}<button class="link" onclick={manage}>{$t("选择添加")}</button></p>{/if}
+  {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>{$t("选择你要关注的 Agent")}</strong><p>{$t("确认本机来源，或添加远程服务器。新任务会自动出现。")}</p><button onclick={manageSources}>{$t("设置监控来源")}</button></div>{/if}
+  {#if settings?.onboarding_complete && newSources}<p class="notice">{$t("发现")} {newSources} {$t("个可监控来源")}<button class="link" onclick={manageSources}>{$t("选择添加")}</button></p>{/if}
   {#if refreshing}<p class="notice" role="status">{$t("刷新中：")}{progress.total-progress.pending.length} / {progress.total} {$t("个来源已返回")}{#if progress.failed.length} · {progress.failed.length} {$t("个失败")}{/if}</p>{/if}
   {#if showArchive}<p class="notice">{$t("较早关注保留原状态和未读标记，不占近期面板；可重新加入或固定。")}</p>{/if}
   {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?$t('已隐藏本轮'):$t('已停止监控此会话')}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>{$t("撤销")}</button></div>{/if}
@@ -307,16 +312,17 @@
   {/if}
   {#if outsideRunning.length}<p class="notice outside-running" role="status">{outsideRunning.length} {$t("个运行任务在当前视图之外")}<button class="link" onclick={showRunning}>{$t("查看全部运行任务")}</button></p>{/if}
   <main class="glass-scroll task-scroll" aria-label={$t("关注任务")}>
-    {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manage}>{$t("查看来源与已发现会话")}</button>{/if}</div>
+    {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manageSources}>{$t("查看来源与已发现会话")}</button>{/if}</div>
     {:else if view==='tasks'}
-      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
-    {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/each}{/if}
+      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/if}{/each}
+    {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/each}{/if}
   </main>
   {#if selectedTask}
     <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label={$t("任务详情")}>
       <div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span class="tp-chip">{$t(taskLabel(selectedTask))}</span><button class="tp-icon" onclick={()=>selected=null} aria-label={$t("关闭详情")}>×</button></div>
       <p>{taskContext(selectedTask,settings)}</p>
-      {#if $preferences.show_model}<p class="model-detail">{$t("上报模型：")}{selectedTask.model ?? $t('来源未提供')}</p>{/if}
+      {#if $preferences.show_model&&selectedTask.model}<p class="model-detail">{selectedTask.model}{#if selectedTask.reasoning_effort}<span class="detail-effort">{selectedTask.reasoning_effort}</span>{/if}</p>{/if}
+      {#if $preferences.show_elapsed&&taskElapsed(selectedTask,now)}<p>{$t(selectedTask.status==='running'?'运行时长':'总时长')} {taskElapsed(selectedTask,now)}</p>{/if}
       <details class="evidence tp-fold"><summary>{$t("状态依据与采集时间")}</summary><p>{$t("状态依据：")}{$t(CONFIDENCE_LABEL[selectedTask.confidence])}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} {$t("· 最后活动")} {$t(formatAgo(selectedTask.updated_at,now))}</p></details>
       <div class="command glass-scroll"><span>{selectedTask.stale?$t('上次观测活动（非实时）'):selectedTask.status==='running'?$t('当前活动'):$t('最近消息')}</span><pre>{taskActivity(selectedTask)}</pre></div>
       <div class="detail-actions">
@@ -330,7 +336,7 @@
     </aside>
   {/if}
   <footer>
-    <button class:degraded={sourceIssues>0} onclick={manage} title={$t("管理来源；任务详情可查看采集时间")}>
+    <button class:degraded={sourceIssues>0} onclick={manageSources} title={$t("管理来源；任务详情可查看采集时间")}>
       {#if !demo&&dashboardRevision===0}{$t('正在读取来源状态')}
       {:else if sourceSummary.enabled===0}{$t('无启用来源')}
       {:else}{$t('{count} 个启用来源',{count:sourceSummary.enabled})}
@@ -343,7 +349,8 @@
   </footer>
 </div>
 <style>
-  .model-detail{overflow-wrap:anywhere}
+  .detail{font-size:var(--tp-task-font-size,14px);line-height:1.5}
+  .model-detail{overflow-wrap:anywhere}.detail-effort{margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--tp-accent-soft);color:var(--tp-accent);font-size:10px}
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}
   .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;color:var(--tp-text)}
@@ -357,7 +364,7 @@
   .search-bar{display:flex;padding:0 12px 8px;flex:none}.search{display:flex;gap:8px;align-items:center;min-height:36px;border:1px solid var(--tp-border-strong);background:var(--tp-input);border-radius:8px;padding:6px 8px;min-width:0;flex:1;color:var(--tp-muted)}
   .search:focus-within{border-color:var(--tp-accent-line)}.search input{width:100%;min-width:0;border:0;outline:none;background:transparent;color:var(--tp-text);font-size:12px;line-height:1.5;padding:0;border-radius:0}.search input:focus-visible{outline:none}.search input::placeholder{color:var(--tp-quiet)}.search>button{font-size:16px;width:24px;line-height:24px}
   .unread-filter{font-size:11px;white-space:nowrap;padding:4px 8px}.unread-filter.active{border-color:var(--tone-line);background:var(--tone-soft);color:var(--tone)}
-  .task-scroll{min-height:80px;overflow-y:auto;flex:1;padding:0 12px 8px;overscroll-behavior:contain}
+  .task-scroll{min-height:80px;overflow-y:auto;scrollbar-gutter:stable;flex:1;padding:0 12px 8px;overscroll-behavior:contain}
   h2{font-size:11px;font-weight:550;color:var(--tp-muted);padding:8px 0 0;margin:0;display:flex;gap:8px;min-width:0;overflow-wrap:anywhere}h2 span{font-size:11px;color:var(--tp-quiet);font-variant-numeric:tabular-nums}
   .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px 12px;color:var(--tp-text)}.empty-icon{display:none}
   .empty strong{font-size:14px;font-weight:550}.empty p{font-size:12px;line-height:1.6;color:var(--tp-muted);margin:8px 0 12px}.empty button,.onboarding button{border:1px solid var(--tp-accent-line);padding:6px 12px;border-radius:8px;color:var(--tp-accent);background:var(--tp-accent-soft);font-size:12px}
@@ -374,5 +381,6 @@
   .onboarding{padding:12px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:14px}.onboarding p{font-size:12px;color:var(--tp-muted);line-height:1.6;margin:8px 0}
   @media(max-width:380px){header{min-height:46px;padding:6px 10px 6px 12px}.counts{gap:6px;padding:8px 10px 6px}.overview{padding:6px 10px}.overview b{font-size:22px;margin-top:2px}.header-actions{gap:2px}footer{min-height:36px;padding-top:6px;padding-bottom:6px}}
   @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.search-bar{padding-left:8px;padding-right:8px}footer{padding:8px;font-size:10px}footer>button{font-size:10px}.detail-heading{flex-wrap:wrap}}
-  @media(max-height:500px){header{min-height:44px;padding-top:6px;padding-bottom:6px}.counts{padding-top:8px}.overview{padding-top:4px;padding-bottom:4px}.view-bar{padding-bottom:4px}.notice{max-height:44px}.detail{max-height:30dvh;min-height:80px;padding:8px}.task-scroll{min-height:40px}}
+
+  @media(max-height:500px){.dashboard:has(.detail) header{min-height:44px;padding-top:6px;padding-bottom:6px}.dashboard:has(.detail) .counts{padding-top:8px}.dashboard:has(.detail) .overview{padding-top:4px;padding-bottom:4px}.detail{max-height:30dvh;min-height:80px;padding:8px}.task-scroll{min-height:40px}}
 </style>

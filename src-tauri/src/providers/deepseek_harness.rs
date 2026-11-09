@@ -71,6 +71,7 @@ impl Drop for ProbeChild {
 #[derive(Debug, Clone)]
 struct CachedSession {
     model: Option<String>,
+    reasoning_effort: Option<String>,
     mtime: f64,
     status: TaskStatus,
     cwd: String,
@@ -80,6 +81,9 @@ struct CachedSession {
     activity: Option<String>,
     last_seq: i64,
     started_at: Option<SystemTime>,
+    finished_at: Option<SystemTime>,
+    waiting_reason: Option<crate::domain::WaitingReason>,
+    input_request_ids: Vec<String>,
     updated_at: Option<SystemTime>,
     compressed_bytes: u64,
     decoded_bytes: usize,
@@ -458,10 +462,15 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
     let mut first_user_message: Option<String> = None;
     let mut last_msg: Option<String> = None;
     let mut model = None;
+    let mut model_provider: Option<String> = None;
+    let mut reasoning_effort = None;
     let mut model_seq = -1;
     let mut activity = None;
     let mut last_seq = -1;
     let mut started_at = None;
+    let mut finished_at = None;
+    let mut requests = super::deepseek_requests::Requests::default();
+    let mut uncorrelated_request = false;
     let mut updated_at = None;
     let mut failed = false;
     let mut parsed_event = false;
@@ -498,6 +507,28 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
             .and_then(|value| value.as_u64())
             .and_then(|ms| UNIX_EPOCH.checked_add(Duration::from_millis(ms)));
         updated_at = time.or(updated_at);
+        if ty == "request/header" {
+            // Effort belongs to the request configuration, not the response's
+            // model alias or a guess from thinking tokens.
+            reasoning_effort = v
+                .pointer("/data/header/config/reasoningEffort")
+                .and_then(serde_json::Value::as_str)
+                .and_then(super::reported_model);
+        }
+        let correlated = requests.apply(ty, &v);
+        if correlated.is_none()
+            && (ty == "approval/asked"
+                || ty == "tool/call"
+                    && v.pointer("/data/name").and_then(serde_json::Value::as_str)
+                        == Some("ask_user_question"))
+        {
+            // A changed request schema is a collection fault, not proof that
+            // the previous request was answered.
+            uncorrelated_request = true;
+        }
+        if !requests.bounded() {
+            return None;
+        }
         // Request configuration and response source are explicit model facts.
         // Prefer later sequence evidence, including a response's actual alias.
         let model_path = match ty {
@@ -511,7 +542,26 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
                 .and_then(|value| value.as_str())
                 .and_then(super::reported_model)
             {
+                let provider_path = if ty == "request/header" {
+                    "/data/header/config/provider"
+                } else {
+                    "/data/message/source/provider"
+                };
+                let provider = v
+                    .pointer(provider_path)
+                    .and_then(serde_json::Value::as_str)
+                    .map(str::to_owned);
+                if ty != "request/header"
+                    && (model.as_ref().is_some_and(|old| old != &reported)
+                        || model_provider
+                            .as_ref()
+                            .zip(provider.as_ref())
+                            .is_some_and(|(a, b)| a != b))
+                {
+                    reasoning_effort = None;
+                }
                 model = Some(reported);
+                model_provider = provider;
                 model_seq = seq;
             }
         }
@@ -530,11 +580,20 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
             "turn/start" => {
                 last_turn_start_seq = seq;
                 started_at = time;
+                finished_at = None;
+                // Headers are deduplicated by the native logger. Carry the
+                // last reported configuration until another header changes it;
+                // a response from a different model/provider invalidates effort.
+                requests = Default::default();
+                uncorrelated_request = false;
                 failed = false;
                 activity = Some("正在分析".into());
             }
             "turn/end" => {
                 last_turn_end_seq = seq;
+                finished_at = time;
+                requests = Default::default();
+                uncorrelated_request = false;
                 failed = v
                     .pointer("/data/reason/kind")
                     .and_then(|value| value.as_str())
@@ -585,7 +644,13 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
     if !parsed_event {
         return None;
     }
-    let status = if failed && last_turn_end_seq > last_turn_start_seq {
+    if uncorrelated_request || !requests.reliable() {
+        return None;
+    }
+    let (waiting_reason, input_request_ids) = requests.pending();
+    let status = if waiting_reason.is_some() {
+        TaskStatus::WaitingInput
+    } else if failed && last_turn_end_seq > last_turn_start_seq {
         TaskStatus::Failed
     } else if last_turn_start_seq < 0 && last_turn_end_seq < 0 {
         TaskStatus::Idle
@@ -613,6 +678,7 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
     let turn_key = (last_turn_start_seq >= 0).then(|| format!("turn:{last_turn_start_seq}"));
     Some(CachedSession {
         model,
+        reasoning_effort,
         mtime: 0.0,
         status,
         cwd,
@@ -622,6 +688,9 @@ fn parse_session_reader(input: impl Read, session_path: &str) -> Option<CachedSe
         activity,
         last_seq,
         started_at,
+        finished_at,
+        waiting_reason,
+        input_request_ids,
         updated_at,
         compressed_bytes: 0,
         decoded_bytes,
@@ -799,8 +868,8 @@ impl Provider for DeepSeekHarnessProvider {
                 }
             };
             let session_id = session_id_from_path(&path);
-            let mut waiting_reason = None;
-            let mut input_request_id = None;
+            let mut waiting_reason = state.waiting_reason;
+            let mut input_request_ids = state.input_request_ids.clone();
             if let Some(native) = metadata.get(&session_id) {
                 if let Some(title) = native
                     .title
@@ -813,7 +882,7 @@ impl Provider for DeepSeekHarnessProvider {
                     state.cwd = cwd.to_string();
                 }
                 let current = native.seq.is_none_or(|seq| seq >= state.last_seq);
-                if current {
+                if current && input_request_ids.is_empty() {
                     if let Some(status) = native.status {
                         // A generic closed projection must not erase an
                         // explicit failed turn, nor an unversioned stale open
@@ -826,7 +895,13 @@ impl Provider for DeepSeekHarnessProvider {
                         {
                             state.status = status;
                             waiting_reason = native.waiting_reason;
-                            input_request_id = native.input_request_id.clone();
+                            input_request_ids = native.input_request_id.iter().cloned().collect();
+                            if status == TaskStatus::Running
+                                || native.waiting_reason
+                                    == Some(crate::domain::WaitingReason::Question)
+                            {
+                                state.finished_at = None;
+                            }
                         }
                     }
                     if let Some(seq) = native.turn_start_seq {
@@ -845,12 +920,17 @@ impl Provider for DeepSeekHarnessProvider {
                 now,
             );
             task.model = state.model.clone();
+            task.reasoning_effort = state.reasoning_effort.clone();
             task.started_at = state.started_at;
+            task.finished_at = state
+                .finished_at
+                .filter(|_| input_request_ids.is_empty() && state.status != TaskStatus::Running);
             task.project_path = (!state.cwd.is_empty()).then_some(state.cwd.clone());
             if task.status == TaskStatus::WaitingInput {
                 task.waiting_reason =
                     waiting_reason.or(Some(crate::domain::WaitingReason::TurnEnded));
-                task.input_request_id = input_request_id;
+                task.input_request_id = input_request_ids.first().cloned();
+                task.input_request_ids = input_request_ids;
             }
             task.activity = if state.status == TaskStatus::Running {
                 state.activity.or_else(|| Some("正在分析".into()))
@@ -944,8 +1024,13 @@ fn parse_metadata_record(session: &serde_json::Value) -> SessionMetadata {
     let question_seq = rows
         .pointer("/userQuestions/seq")
         .and_then(serde_json::Value::as_i64);
-    let gate =
-        active_questions.is_some() && question_seq.is_some_and(|q| seq.is_none_or(|s| q >= s));
+    let gate = active_questions.is_some_and(|questions| {
+        questions.iter().all(|q| {
+            q.get("id")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|id| !id.trim().is_empty())
+        })
+    }) && question_seq.is_some_and(|q| seq.is_none_or(|s| q >= s));
     if gate {
         seq = question_seq;
     }
@@ -978,13 +1063,210 @@ fn parse_metadata_record(session: &serde_json::Value) -> SessionMetadata {
             None
         },
         input_request_id: gate
-            .then(|| serde_json::to_string(&active_questions).unwrap_or_default()),
+            .then(|| {
+                // Stable native IDs only; text/answer edits must not create another
+                // request or leak full question payloads into attention state.
+                let mut ids: Vec<_> = active_questions
+                    .into_iter()
+                    .flatten()
+                    .filter_map(|question| question.get("id").and_then(serde_json::Value::as_str))
+                    .collect();
+                ids.sort_unstable();
+                ids.dedup();
+                format!("projection:{}", ids.join(":"))
+            })
+            .filter(|id| id != "projection:"),
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn event_log(events: &[serde_json::Value]) -> String {
+        events.iter().map(|v| format!("{v}\n")).collect()
+    }
+
+    #[test]
+    fn historical_rejected_question_cannot_poison_a_later_valid_turn_or_create_a_notice() {
+        use serde_json::json;
+        let mut events = vec![
+            json!({"type":"turn/start","seq":1,"time":1000}),
+            json!({"type":"tool/call","seq":2,"data":{"name":"ask_user_question","callId":"bad","arguments":{"questions":"invalid"}}}),
+        ];
+        assert!(
+            parse_session_text(&event_log(&events), "session/log").is_none(),
+            "unresolved malformed call must degrade, not guess a blocker"
+        );
+        events.push(json!({"type":"tool/result","seq":3,"data":{"message":{"toolCallId":"bad","isError":true,"content":[]}}}));
+        let recovered = parse_session_text(&event_log(&events), "session/log").unwrap();
+        assert_eq!(recovered.status, TaskStatus::Running);
+        assert!(recovered.input_request_ids.is_empty());
+        assert!(recovered.waiting_reason.is_none());
+        assert!(recovered.finished_at.is_none());
+        events.push(json!({"type":"turn/end","seq":4,"time":4000}));
+        events.push(json!({"type":"turn/start","seq":5,"time":5000}));
+        let next = parse_session_text(&event_log(&events), "session/log").unwrap();
+        assert_eq!(next.status, TaskStatus::Running);
+        assert_eq!(next.turn_key.as_deref(), Some("turn:5"));
+        // A future schema with no usable ID stays uncertain until an explicit
+        // turn boundary; busy events and tool completion cannot clear it.
+        events.push(json!({"type":"approval/asked","seq":6,"data":{}}));
+        assert!(parse_session_text(&event_log(&events), "session/log").is_none());
+        events.push(json!({"type":"turn/end","seq":7,"time":7000}));
+        assert!(parse_session_text(&event_log(&events), "session/log")
+            .unwrap()
+            .finished_at
+            .is_some());
+    }
+
+    #[test]
+    fn native_question_answer_end_and_next_turn_keep_ids_duration_and_effort() {
+        use crate::domain::WaitingReason;
+        use serde_json::json;
+        let mut events = vec![
+            json!({"type":"turn/start","seq":1,"time":1000}),
+            json!({"type":"request/header","seq":2,"time":2000,"data":{"header":{"config":{"model":"deepseek-flash","reasoningEffort":"high"}}}}),
+            json!({"type":"tool/call","seq":3,"time":3000,"data":{"name":"ask_user_question","callId":"call-1","arguments":"{\"questions\":[{\"id\":\"q1\"}]}"}}),
+        ];
+        let pending = parse_session_text(&event_log(&events), "session-fixture/log").unwrap();
+        assert_eq!(pending.status, TaskStatus::WaitingInput);
+        assert_eq!(pending.waiting_reason, Some(WaitingReason::Question));
+        assert_eq!(pending.input_request_ids, ["question:call-1:q1"]);
+        assert_eq!(pending.reasoning_effort.as_deref(), Some("high"));
+        assert!(pending.finished_at.is_none());
+        events.push(json!({"type":"tool/result","seq":4,"time":4000,"data":{"message":{"toolCallId":"call-1","content":[{"text":"{\"answers\":[{\"id\":\"q1\",\"custom\":\"choice\"}]}"}]}}}));
+        let answered = parse_session_text(&event_log(&events), "session-fixture/log").unwrap();
+        assert_eq!(answered.status, TaskStatus::Running);
+        assert!(answered.input_request_ids.is_empty());
+        assert!(answered.finished_at.is_none());
+        events.push(
+            json!({"type":"turn/end","seq":5,"time":5000,"data":{"reason":{"kind":"completed"}}}),
+        );
+        events.push(json!({"type":"assistant/message","seq":6,"time":6000,"data":{"message":{"source":{"model":"deepseek-flash"}}}}));
+        let ended = parse_session_text(&event_log(&events), "session-fixture/log").unwrap();
+        assert_eq!(
+            ended
+                .finished_at
+                .unwrap()
+                .duration_since(ended.started_at.unwrap())
+                .unwrap(),
+            Duration::from_secs(4)
+        );
+        assert_eq!(ended.reasoning_effort.as_deref(), Some("high"));
+        events.push(json!({"type":"turn/start","seq":7,"time":7000}));
+        let next = parse_session_text(&event_log(&events), "session-fixture/log").unwrap();
+        assert!(next.finished_at.is_none());
+        assert_eq!(
+            next.reasoning_effort.as_deref(),
+            Some("high"),
+            "native headers are deduplicated across turns"
+        );
+        events.push(json!({"type":"request/header","seq":8,"time":8000,"data":{"header":{"config":{"model":"another-model"}}}}));
+        let changed = parse_session_text(&event_log(&events), "session-fixture/log").unwrap();
+        assert!(
+            changed.reasoning_effort.is_none(),
+            "an explicit header without effort clears the old mode"
+        );
+    }
+
+    #[test]
+    fn native_question_notifies_once_survives_restart_and_matching_answer_resolves() {
+        use crate::transition::{TaskEvent, TransitionEngine};
+        use serde_json::json;
+        let root = tempfile::tempdir().unwrap();
+        desktop_fixture(root.path(), false, "Fixture", 11);
+        let path = root
+            .path()
+            .join("sessions/workspace/session-fixture/session.v4.jsonl.zstd");
+        let mut log =
+            String::from_utf8(zstd::decode_all(std::fs::File::open(&path).unwrap()).unwrap())
+                .unwrap();
+        let mut p = DeepSeekHarnessProvider::with_native_root(root.path().into());
+        let mut engine = TransitionEngine::new();
+        let mut attention =
+            crate::attention::AttentionTracker::open(root.path().join("attention.json"));
+        let first = p.poll(SystemTime::now()).tasks;
+        engine.apply(&first, &[], SystemTime::now());
+        attention.reconcile(first);
+        log.push_str(&event_log(&[json!({"type":"tool/call","seq":12,"time":1791500012000u64,"data":{"name":"ask_user_question","callId":"c","arguments":{"questions":[{"id":"q"}]}}})]));
+        std::fs::write(&path, zstd::encode_all(log.as_bytes(), 3).unwrap()).unwrap();
+        let blocked = p.poll(SystemTime::now()).tasks;
+        assert!(matches!(
+            engine.apply(&blocked, &[], SystemTime::now()).as_slice(),
+            [TaskEvent::WaitingInput { .. }]
+        ));
+        assert!(engine.apply(&blocked, &[], SystemTime::now()).is_empty());
+        attention.reconcile(blocked);
+        drop(attention);
+        let mut restored =
+            crate::attention::AttentionTracker::open(root.path().join("attention.json"));
+        assert_eq!(
+            restored.reconcile(p.poll(SystemTime::now()).tasks)[0]
+                .input_request_id
+                .as_deref(),
+            Some("question:c:q")
+        );
+        log.push_str(&event_log(&[json!({"type":"tool/result","seq":13,"time":1791500013000u64,"data":{"message":{"toolCallId":"c","content":[{"text":"{\"answers\":[{\"id\":\"q\",\"selected\":[\"yes\"]}]}"}]}}})]));
+        std::fs::write(path, zstd::encode_all(log.as_bytes(), 3).unwrap()).unwrap();
+        let answered = p.poll(SystemTime::now()).tasks;
+        assert_eq!(answered[0].status, TaskStatus::Running);
+        assert!(answered[0].input_request_id.is_none());
+        assert!(engine.apply(&answered, &[], SystemTime::now()).is_empty());
+    }
+
+    #[test]
+    #[ignore = "read-only real DSH log; no private transcript is printed"]
+    fn live_native_request_replay() {
+        let path = PathBuf::from(
+            std::env::var_os("TASKPULSE_DSH_REPLAY_LOG").expect("explicit log required"),
+        );
+        let original = std::fs::read(&path).unwrap();
+        let decoded = zstd::decode_all(original.as_slice()).unwrap();
+        assert!(decoded.len() < DECODED_BUDGET);
+        let text = std::str::from_utf8(&decoded).unwrap();
+        let mut prefix = String::new();
+        let mut questions = 0;
+        let mut resolutions = 0;
+        let mut previous = 0;
+        for line in text.lines() {
+            prefix.push_str(line);
+            prefix.push('\n');
+            let value: serde_json::Value = serde_json::from_str(line).unwrap();
+            let kind = value["type"].as_str().unwrap_or_default();
+            if matches!(kind, "tool/call" | "tool/result" | "turn/end") {
+                let state = parse_session_text(&prefix, &path.to_string_lossy()).unwrap();
+                let count = state.input_request_ids.len();
+                if value
+                    .pointer("/data/name")
+                    .and_then(serde_json::Value::as_str)
+                    == Some("ask_user_question")
+                {
+                    assert!(count > 0);
+                    assert_eq!(state.status, TaskStatus::WaitingInput);
+                    questions += 1;
+                }
+                if count < previous {
+                    resolutions += 1;
+                }
+                previous = count;
+            }
+        }
+        let final_state = parse_session_text(text, &path.to_string_lossy()).unwrap();
+        assert!(questions > 0 && resolutions > 0);
+        if let Ok(effort) = std::env::var("TASKPULSE_EXPECT_DSH_EFFORT") {
+            assert_eq!(
+                final_state.reasoning_effort.as_deref(),
+                Some(effort.as_str())
+            );
+        }
+        assert_eq!(
+            original,
+            std::fs::read(path).unwrap(),
+            "source must remain unchanged"
+        );
+        println!("DSH read-only replay: questions={questions}, resolutions={resolutions}, model={:?}, effort={:?}, explicit_end={}", final_state.model,final_state.reasoning_effort,final_state.finished_at.is_some());
+    }
 
     #[test]
     fn structured_questions_block_but_an_old_question_cannot_override_end() {
@@ -1250,11 +1532,21 @@ mod tests {
             output.error
         );
         assert!(output.authoritative);
+        println!(
+            "native fields: models={} efforts={} ended_with_time={}",
+            output.tasks.iter().filter(|t| t.model.is_some()).count(),
+            output
+                .tasks
+                .iter()
+                .filter(|t| t.reasoning_effort.is_some())
+                .count(),
+            output
+                .tasks
+                .iter()
+                .filter(|t| t.finished_at.is_some())
+                .count()
+        );
         for task in &output.tasks {
-            println!(
-                "title={:?} project={:?} status={:?} session={:?}",
-                task.name, task.project, task.status, task.session_id
-            );
             assert!(task.id.starts_with("dsh-native:"));
         }
         if let Ok(title) = std::env::var("TASKPULSE_EXPECT_DSH_TITLE") {

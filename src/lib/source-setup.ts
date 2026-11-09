@@ -20,6 +20,21 @@ export interface SourceCatalogRow {
   definition:SourceDefinition; source?:MonitorSource; candidate?:MonitorSource; observation?:SourceSnapshot;
   supported:boolean; locationDetected:boolean|null; dataDetected:boolean|null;
 }
+// Short labels are presentation only. Manifests and persisted source IDs
+// continue to carry the original adapter identity.
+export function eventAdapterLabel(adapterId:string,displayName:string):string {
+  return ({
+    'standard-events':'其他 Agent',
+    'kimi-code-cli':'Kimi Code',
+    'trae-cn-ide':'Trae',
+    'zcode-desktop':'ZCode',
+    'workbuddy-candidate':'WorkBuddy',
+  } as Record<string,string>)[adapterId]??displayName;
+}
+export function createEventSource(definition:SourceDefinition,name=definition.name):MonitorSource {
+  if(definition.kind!=='generic_event'||!definition.adapter_id||!definition.agent_id)throw Error('invalid_event_definition');
+  return {id:`generic_event:${crypto.randomUUID()}`,kind:'generic_event',name,location:'',enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,integration:{agent_id:definition.agent_id,adapter_id:definition.adapter_id,transport:'local',accept_since_ms:0}};
+}
 export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []):SourceCatalogRow[] {
   const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)
     .map(source=>{
@@ -92,6 +107,9 @@ export function readTestResult(id:string, health:ProviderHealth[], since:number)
 }
 
 const notes:Record<SourceKind,string>={
+  kimi_code:'只读 Kimi 原生 wire 日志；能力随日志版本而异。',
+  qoder:'只读 Qoder Desktop 轮次投影及 IDE/CLI 转录；原生审批和提问尚未提供。',
+  trae:'公开会话发现；当前非标准会话库的任务状态读取受限。',
   opencode:'只读本机 OpenCode 会话、模型和运行记录；明确本轮结束才提醒，不从工具返回推断完成。提问与审批事件尚不提供。',
   workbuddy:'只读 WorkBuddy 本地数据库与会话记录；关注新执行，不导入空闲历史，不包含云端任务。提问与审批事件尚不提供。',
   zcode:'自动读取本机 ZCode 会话、项目和模型；工具执行完成不会当作整轮结束。',

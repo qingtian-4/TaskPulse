@@ -38,6 +38,14 @@ use notify::{Config, RecommendedWatcher, RecursiveMode, Watcher};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, Emitter};
 
+mod dedup;
+#[cfg(test)]
+use dedup::same_observed_identity;
+use dedup::{
+    dedup_by_terminal, dedup_claude_over_scan, dedup_codex_over_scan, dedup_dsh_over_scan,
+    dedup_hermes_over_scan, is_scanner_observation,
+};
+
 // Backward-compat re-exports (scanner / heuristics / focusers reference these).
 pub use crate::domain::TerminalInfo;
 pub use crate::providers::local_file::status_from_legacy;
@@ -97,6 +105,7 @@ impl From<AgentStatus> for TaskSnapshot {
             status,
             source_instance: None,
             model: None,
+            reasoning_effort: None,
             internal: false,
             project_path: None,
             tmux_session: None,
@@ -576,140 +585,6 @@ pub fn request_refresh() -> u64 {
     requested_at
 }
 
-/// Cross-provider dedup: when a hook/file task and a scan task share the same
-/// terminal focus_id and CLI, keep the higher-confidence one (hook beats
-/// scan) and drop the duplicate.  Mirrors AgentTray's focus_id budget logic
-/// for the common case.
-#[allow(clippy::ptr_arg)]
-fn dedup_by_terminal(tasks: &mut Vec<TaskSnapshot>) {
-    let mut keep = vec![true; tasks.len()];
-    let mut best: std::collections::HashMap<(String, String), usize> =
-        std::collections::HashMap::new();
-
-    for (i, t) in tasks.iter().enumerate() {
-        // A project window can contain many native sessions. Its PID is not
-        // session identity and must not deduplicate them by evidence strength.
-        if is_scanner_observation(t) || t.session_id.is_some() {
-            continue;
-        }
-        let Some(term) = &t.terminal else { continue };
-        if term.focus_id.is_empty() || term.focus_id == "0" {
-            continue;
-        }
-        let cli = t.cli.clone().unwrap_or_default();
-        let key = (term.focus_id.clone(), cli);
-        match best.get(&key) {
-            Some(&prev) => {
-                let prev_conf = tasks[prev].confidence;
-                let cur_conf = t.confidence;
-                if cur_conf < prev_conf {
-                    keep[prev] = false;
-                    best.insert(key, i);
-                } else if cur_conf == prev_conf {
-                    // Same confidence: distinct sessions in one window — keep both.
-                    continue;
-                } else {
-                    keep[i] = false;
-                }
-            }
-            None => {
-                best.insert(key, i);
-            }
-        }
-    }
-
-    let mut out = Vec::with_capacity(tasks.len());
-    for (i, t) in tasks.drain(..).enumerate() {
-        if keep[i] {
-            out.push(t);
-        }
-    }
-    *tasks = out;
-}
-
-/// Merge provider output into the store, run the transition engine, notify,
-/// and emit to tray + UI.
-/// Session-metadata (Codex) beats process-scan (Codex): if a real Codex
-/// session task exists, drop the scanner's inferred scan entry for the same
-/// CLI so we never show the same agent twice.
-fn dedup_codex_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    dedup_scanner_observations(tasks, TaskSource::Codex, Some("codex"));
-}
-
-fn is_scanner_observation(task: &TaskSnapshot) -> bool {
-    task.source_instance.as_deref() == Some("scanner") || task.id.starts_with("scan:")
-}
-
-fn dedup_hermes_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    // Native Hermes leases also use Inferred confidence. Evidence strength
-    // does not identify a scanner row; only remove actual scanner output with
-    // a matching stable identity.
-    dedup_scanner_observations(tasks, TaskSource::Hermes, Some("hermes"));
-}
-
-fn dedup_dsh_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    dedup_scanner_observations(tasks, TaskSource::DeepSeekHarness, Some("dsh"));
-}
-
-fn dedup_scanner_observations(
-    tasks: &mut Vec<TaskSnapshot>,
-    source: TaskSource,
-    cli: Option<&str>,
-) {
-    let native: Vec<TaskSnapshot> = tasks
-        .iter()
-        .filter(|task| task.source == source && !is_scanner_observation(task))
-        .cloned()
-        .collect();
-    if native.is_empty() {
-        return;
-    }
-    tasks.retain(|task| {
-        let scanner = is_scanner_observation(task)
-            && cli.is_none_or(|name| task.cli.as_deref() == Some(name))
-            && task.confidence == DetectionConfidence::Inferred;
-        !(scanner
-            && native
-                .iter()
-                .any(|candidate| same_observed_identity(candidate, task)))
-    });
-}
-
-/// Only merge a scanner row when a stable identity proves it is the same
-/// session. Ambiguous rows remain visible instead of deleting an independent
-/// scanner observation from another Agent or terminal.
-fn same_observed_identity(a: &TaskSnapshot, b: &TaskSnapshot) -> bool {
-    if a.source != b.source || a.host != b.host || a.remote != b.remote {
-        return false;
-    }
-    // A terminal is a focus target, not proof that two observations describe
-    // the same session. Unknown or mismatched session IDs must remain visible.
-    matches!((&a.session_id, &b.session_id), (Some(a_id), Some(b_id))
-        if !a_id.is_empty() && a_id == b_id)
-}
-
-fn dedup_claude_over_scan(tasks: &mut Vec<TaskSnapshot>) {
-    let native: Vec<TaskSnapshot> = tasks
-        .iter()
-        .filter(|task| {
-            task.source == TaskSource::ClaudeCode
-                && !is_scanner_observation(task)
-                && (task.id.starts_with("claude:") || task.id.contains(":claude:"))
-        })
-        .cloned()
-        .collect();
-    if native.is_empty() {
-        return;
-    }
-    tasks.retain(|task| {
-        !(task.source == TaskSource::ClaudeCode
-            && is_scanner_observation(task)
-            && native
-                .iter()
-                .any(|candidate| same_observed_identity(candidate, task)))
-    });
-}
-
 struct LocalBatch {
     ordered: Vec<crate::providers::generic_event::OrderedObservation>,
     tasks: Vec<TaskSnapshot>,
@@ -780,6 +655,39 @@ impl LocalProviders {
                 continue;
             }
             let mut provider: Box<dyn Provider> = match source.kind {
+                SourceKind::KimiCode => {
+                    let mut provider = crate::providers::kimi::KimiProvider::new(
+                        (!source.location.is_empty()).then(|| PathBuf::from(&source.location)),
+                    );
+                    provider.resume(known_sessions().into_iter().filter(|t| {
+                        t.agent_id.as_deref() == Some("kimi-code")
+                            && t.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
+                SourceKind::Qoder => {
+                    let mut provider = crate::providers::qoder::QoderProvider::new(
+                        (!source.location.is_empty()).then(|| PathBuf::from(&source.location)),
+                    );
+                    provider.resume(
+                        known_sessions()
+                            .into_iter()
+                            .filter(|t| {
+                                t.agent_id.as_deref().is_some_and(|a| {
+                                    matches!(a, "qoder-desktop" | "qoder-transcript")
+                                }) && t.source_instance.as_deref() == Some(source.id.as_str())
+                            })
+                            .collect(),
+                    );
+                    Box::new(provider)
+                }
+                SourceKind::Trae => Box::new(crate::providers::trae::TraeProvider::new(
+                    if source.location.is_empty() {
+                        crate::providers::trae::default_root()
+                    } else {
+                        PathBuf::from(&source.location)
+                    },
+                )),
                 SourceKind::Opencode => {
                     let mut provider = crate::providers::opencode::OpenCodeProvider::new(
                         if source.location.is_empty() {
@@ -1532,6 +1440,7 @@ pub fn watch(app: AppHandle) {
             let _ = refresh_tx.try_send(());
         }
         let mut changed = false;
+        let mut observed_results = Vec::new();
         while let Ok((generation, output)) = remote_rx.try_recv() {
             if generation != revision {
                 continue;
@@ -1570,7 +1479,7 @@ pub fn watch(app: AppHandle) {
                 .into_iter()
                 .filter(crate::monitoring::allows)
                 .collect();
-            let authoritative = active_settings
+            let authoritative: HashSet<String> = active_settings
                 .sources
                 .iter()
                 .filter(|source| source.enabled)
@@ -1586,6 +1495,15 @@ pub fn watch(app: AppHandle) {
                 })
                 .map(|source| source.id.clone())
                 .collect();
+            observed_results.extend(
+                tasks
+                    .iter()
+                    .filter(|task| {
+                        task.finished_at.is_some()
+                            && authoritative.contains(&crate::monitoring::collector_id(task))
+                    })
+                    .cloned(),
+            );
             store.merge_instances(tasks, &authoritative, SystemTime::now());
             changed = true;
         }
@@ -1695,6 +1613,18 @@ pub fn watch(app: AppHandle) {
                 }
             }
             store.retain(crate::monitoring::allows);
+            observed_results.extend(
+                batch
+                    .tasks
+                    .iter()
+                    .filter(|task| {
+                        task.finished_at.is_some()
+                            && batch
+                                .authoritative_instances
+                                .contains(&crate::monitoring::collector_id(task))
+                    })
+                    .cloned(),
+            );
             store.merge_instances(
                 batch.tasks,
                 &batch.authoritative_instances,
@@ -1705,6 +1635,7 @@ pub fn watch(app: AppHandle) {
         }
         if changed {
             let mut merged = store.merge(Vec::new(), SystemTime::now());
+            crate::store::refresh_retained_results(&mut merged, observed_results, known_sessions());
             crate::monitoring::refresh_known_metadata(&mut merged);
             let display = reconcile_attention(merged);
             let mut tracked = known_sessions();

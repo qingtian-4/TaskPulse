@@ -294,6 +294,7 @@ impl ClaudeCodeProvider {
                         task.input_request_ids = hook.input_request_ids.clone();
                         task.activity = hook.activity.clone();
                         task.phase = hook.phase;
+                        task.finished_at = hook.finished_at;
                         task.confidence = DetectionConfidence::Hook;
                         task.updated_at = hook.updated_at;
                         task.hook_event = hook.hook_event.clone();
@@ -720,6 +721,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                     .or_else(|| text(value, "uuid"))
                     .map(str::to_owned);
                 task.started_at = at;
+                task.finished_at = None;
                 task.updated_at = at.unwrap_or(task.updated_at);
                 task.status = TaskStatus::Running;
                 task.waiting_reason = None;
@@ -759,6 +761,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
         Some("assistant") => {
             let api_error = value.get("isApiErrorMessage").and_then(Value::as_bool) == Some(true);
             if api_error {
+                task.finished_at = at;
                 state.explicit_end = true;
                 task.status = TaskStatus::Failed;
                 task.waiting_reason = None;
@@ -767,6 +770,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                 task.phase = None;
                 task.stale = false;
             } else if task.status == TaskStatus::Failed {
+                task.finished_at = None;
                 task.status = TaskStatus::Running;
                 state.explicit_end = false;
             }
@@ -822,6 +826,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                     == Some("end_turn")
             {
                 task.status = TaskStatus::WaitingInput;
+                task.finished_at = at;
                 state.explicit_end = true;
                 task.waiting_reason = Some(WaitingReason::TurnEnded);
                 task.activity = None;
@@ -834,6 +839,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
                 && task.status != TaskStatus::Failed =>
         {
             state.explicit_end = true;
+            task.finished_at = task.finished_at.or(at);
             task.status = TaskStatus::WaitingInput;
             task.waiting_reason = Some(WaitingReason::TurnEnded);
             task.activity = None;
@@ -959,6 +965,12 @@ fn apply_hook(task: &mut TaskSnapshot, event: &Value) {
             task.turn_key = Some(turn.into());
         }
     }
+    task.finished_at = if matches!(name, "Stop" | "StopFailure") && task.input_request_id.is_none()
+    {
+        millis(event.get("observed_at"))
+    } else {
+        None
+    };
     if let Some(cwd) = text(event, "cwd") {
         set_project(task, cwd);
     }
@@ -1134,6 +1146,70 @@ pub fn process_alive(pid: u32) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn explicit_native_and_hook_ends_retain_duration_but_requests_never_finish() {
+        use serde_json::json;
+        let mut transcript = Transcript::default();
+        let now = SystemTime::now();
+        apply_record(
+            &mut transcript,
+            &json!({"type":"user","uuid":"u1","timestamp":"2026-11-07T00:00:00Z","message":{"content":"fixture"}}),
+            "s",
+            now,
+        );
+        apply_record(
+            &mut transcript,
+            &json!({"type":"assistant","timestamp":"2026-11-07T00:00:02Z","message":{"stop_reason":"tool_use","content":[]}}),
+            "s",
+            now,
+        );
+        assert!(transcript.task.as_ref().unwrap().finished_at.is_none());
+        apply_record(
+            &mut transcript,
+            &json!({"type":"assistant","timestamp":"2026-11-07T00:01:00Z","message":{"stop_reason":"end_turn","content":[]}}),
+            "s",
+            now,
+        );
+        let ended = transcript.task.as_ref().unwrap().clone();
+        assert_eq!(
+            ended
+                .finished_at
+                .unwrap()
+                .duration_since(ended.started_at.unwrap())
+                .unwrap(),
+            Duration::from_secs(60)
+        );
+        apply_record(
+            &mut transcript,
+            &json!({"type":"system","subtype":"turn_duration","timestamp":"2026-11-07T00:01:01Z"}),
+            "s",
+            now,
+        );
+        assert_eq!(
+            transcript.task.as_ref().unwrap().finished_at,
+            ended.finished_at
+        );
+        apply_record(
+            &mut transcript,
+            &json!({"type":"user","uuid":"u2","timestamp":"2026-11-07T00:02:00Z","message":{"content":"next"}}),
+            "s",
+            now,
+        );
+        let task = transcript.task.as_mut().unwrap();
+        assert!(task.finished_at.is_none());
+        apply_hook(
+            task,
+            &json!({"hook_event_name":"Stop","observed_at":1794009780000u64}),
+        );
+        assert!(task.finished_at.is_some());
+        apply_hook(
+            task,
+            &json!({"hook_event_name":"PermissionRequest","observed_at":1794009790000u64,"request_id":"r1"}),
+        );
+        assert!(task.finished_at.is_none());
+        assert_eq!(task.waiting_reason, Some(WaitingReason::Approval));
+    }
     #[test]
     fn damaged_hook_journal_cannot_turn_pending_into_native_running_after_restart() {
         let dir = tempfile::tempdir().unwrap();

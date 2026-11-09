@@ -91,5 +91,9 @@ commands.allow = [
   "integration_export",
   "save_monitoring_settings",
   "configure_claude_events",
+  "discover_ssh_hosts",
+  "probe_ssh_source",
+  "open_project_link",
+  "get_project_choices",
   "test_notification",
 ]

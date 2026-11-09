@@ -1,5 +1,6 @@
 //! Append-only JSONL reader. Partial UTF-8/JSON lines survive the next refresh;
 //! truncation/replacement resets the caller's parser instead of merging turns.
+use super::jsonl_probe::EnvelopeProbe;
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
@@ -98,6 +99,16 @@ impl JsonlTail {
     }
     pub fn retained_bytes(&self) -> usize {
         self.pending.capacity() + self.anchor.capacity() + self.head.capacity()
+    }
+    /// Release a completed line's allocation without losing offset, identity,
+    /// partial-line state, or the permanent gap marker.
+    pub fn trim_read_buffer(&mut self) {
+        if self.pending.is_empty() {
+            self.pending.shrink_to_fit();
+        }
+    }
+    pub fn has_partial_line(&self) -> bool {
+        !self.pending.is_empty()
     }
     pub fn diagnostics(&self) -> serde_json::Value {
         serde_json::json!({"length":self.signature.map(|(_,len)|len),"offset":self.offset,
@@ -330,93 +341,6 @@ impl JsonlTail {
 /// Bounded lexical discriminator for adapter-declared irrelevant envelopes.
 /// Root fields may occur after megabytes of nested history. Never search text,
 /// retain history, trust duplicate discriminators, or filter unknown events.
-#[derive(Default)]
-struct EnvelopeProbe {
-    depth: usize,
-    in_string: bool,
-    escaped: bool,
-    key: bool,
-    type_value: bool,
-    capture: bool,
-    text: Vec<u8>,
-    name: Option<String>,
-    ambiguous: bool,
-    object: bool,
-}
-impl EnvelopeProbe {
-    fn feed(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            if self.in_string {
-                if self.capture && self.text.len() < 256 {
-                    self.text.push(byte);
-                } else if self.capture {
-                    self.ambiguous = true;
-                }
-                if self.escaped {
-                    self.escaped = false;
-                    continue;
-                }
-                if byte == b'\\' {
-                    self.escaped = true;
-                    continue;
-                }
-                if byte == b'"' {
-                    self.in_string = false;
-                    if self.capture {
-                        let value = serde_json::from_slice::<String>(&self.text).ok();
-                        if self.key {
-                            self.type_value = value.as_deref() == Some("type");
-                            if self.type_value && self.name.is_some() {
-                                self.ambiguous = true;
-                            }
-                            self.key = false;
-                        } else if self.type_value {
-                            if self.name.is_some() {
-                                self.ambiguous = true;
-                            }
-                            self.name = value;
-                            self.type_value = false;
-                        }
-                    }
-                }
-                continue;
-            }
-            match byte {
-                b'"' => {
-                    self.in_string = true;
-                    self.capture = self.depth == 1 && (self.key || self.type_value);
-                    self.text.clear();
-                    if self.capture {
-                        self.text.push(b'"');
-                    }
-                }
-                b'{' | b'[' => {
-                    if self.depth == 0 {
-                        self.object = byte == b'{';
-                        self.key = self.object;
-                    }
-                    self.depth = self.depth.saturating_add(1);
-                }
-                b'}' | b']' => self.depth = self.depth.saturating_sub(1),
-                b',' if self.depth == 1 => {
-                    self.key = true;
-                    self.type_value = false;
-                }
-                _ => {}
-            }
-        }
-    }
-    fn ignored(&self, allowed: &[&str]) -> bool {
-        self.object
-            && self.depth == 0
-            && !self.in_string
-            && !self.ambiguous
-            && self
-                .name
-                .as_deref()
-                .is_some_and(|name| allowed.contains(&name))
-    }
-}
 
 #[cfg(test)]
 mod tests {

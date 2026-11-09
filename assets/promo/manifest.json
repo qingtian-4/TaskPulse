@@ -1,0 +1,13 @@
+{
+  "kind": "maintainer-supplied concept animation",
+  "file": "teaser-8s.gif",
+  "width": 768,
+  "height": 432,
+  "frames": 80,
+  "duration_ms": 8000,
+  "bytes": 1177417,
+  "sha256": "fe43d4b387d4e87bb88c27980133635886c3ca88dc9f4c7ab116bdb03d7b47ff",
+  "native_capture": false,
+  "captions": "Chinese",
+  "authorization": "Maintainer supplied this asset for the v0.0.1 README"
+}

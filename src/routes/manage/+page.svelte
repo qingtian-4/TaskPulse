@@ -1,6 +1,6 @@
 <script lang="ts">
   import {onMount,tick} from 'svelte';
-  import {SlidersHorizontal,PanelsTopLeft,RadioTower,Bell,RefreshCw,Info,ShieldCheck} from '@lucide/svelte';
+  import {SlidersHorizontal,PanelsTopLeft,RadioTower,Bell,RefreshCw,Info} from '@lucide/svelte';
   import {listen} from '@tauri-apps/api/event';
   import {isTauri,invoke} from '@tauri-apps/api/core';
   import BrandMark from '$lib/components/BrandMark.svelte';
@@ -36,21 +36,20 @@
     return()=>{active=false;cleanups.forEach(fn=>fn());};
   });
 </script>
-<div class="settings-shell tp-theme">
+<div class="settings-shell tp-theme" class:monitoring-shell={section==='sources'}>
   <aside class="settings-side"><div class="settings-brand"><BrandMark size={34}/><div><strong>TaskPulse</strong><small>{$t('偏好设置')}</small></div></div>
     <nav class="settings-nav" aria-label={$t('设置分类')}>{#each sections as [id,label,,Icon]}<a href={'#'+id} aria-current={section===id?'page':undefined} onclick={e=>{e.preventDefault();void navigate(id);}}><Icon size={17} aria-hidden="true"/><span>{$t(label)}</span></a>{/each}</nav>
-    <div class="settings-footnote"><span><ShieldCheck size={14} aria-hidden="true"/> {$t('任务数据保存在本机')}</span><span>TaskPulse</span></div>
   </aside>
-  <main class="settings-main"><header class="settings-heading"><div><h1>{$t(current[1])}</h1><p>{$t(current[2])}</p></div></header>
-    <div class="settings-content glass-scroll" bind:this={scroll}>
+  <main class="settings-main" class:source-page={section==='sources'}>{#if section!=='sources'}<header class="settings-heading"><div><h1>{$t(current[1])}</h1><p>{$t(current[2])}</p></div></header>{/if}
+    <div class="settings-content glass-scroll" class:source-layout={section==='sources'} bind:this={scroll}>
       {#if $preferenceError||loadError}<div class="settings-inline-error" role="alert">{$t($preferenceError||loadError)} <button class="tp-btn" onclick={reload}>{$t('重新加载')}</button></div>{/if}
       {#if !$appSettings}<p role="status">{$t(isTauri()?'正在读取设置…':'请在 TaskPulse 应用中打开设置。')}</p>{:else}
-        <fieldset disabled={busy}>
+        <fieldset disabled={busy} class:source-pane={section==='sources'}>
           {#if section==='general'}<GeneralSettings/>{:else if section==='panel'}<PanelSettings/>{:else if section==='notifications'}<NotificationSettings/>{:else if section==='updates'}<UpdateSettings blocked={sourceDirty}/>{:else if section==='about'}<AboutSettings/>{/if}
-          <div hidden={section!=='sources'}><SourceSettings onDirtyChange={value=>sourceDirty=value} onAttention={()=>void navigate('sources')}/></div>
+          <div class:source-host={section==='sources'} hidden={section!=='sources'}><SourceSettings onDirtyChange={value=>sourceDirty=value} onAttention={()=>void navigate('sources')}/></div>
         </fieldset>
       {/if}
     </div>
-    <div class="settings-status" role="status" aria-live="polite">{$t(busy?'正在更新，请稍候…':$autostart.pending?'正在核对系统启动设置…':$preferencePending?'正在保存设置…':'')}</div>
+    {#if section!=='sources'}<div class="settings-status" role="status" aria-live="polite">{$t(busy?'正在更新，请稍候…':$autostart.pending?'正在核对系统启动设置…':$preferencePending?'正在保存设置…':'')}</div>{/if}
   </main>
 </div>

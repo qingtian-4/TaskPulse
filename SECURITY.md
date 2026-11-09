@@ -5,7 +5,7 @@
 | Version | Supported          |
 |---------|--------------------|
 | Latest [published stable release](https://github.com/qingtian-4/TaskPulse/releases/latest) | Best effort |
-| Development builds, prereleases and older versions | Reproduce on the latest stable release if possible |
+| Other versions or source revisions | Reproduce on the latest stable release if possible |
 
 ## Reporting a Vulnerability
 

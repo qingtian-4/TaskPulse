@@ -52,6 +52,33 @@ fn native_capabilities(kind: SourceKind) -> Capabilities {
     use Evidence::*;
     use SourceKind::*;
     let (discovery, model, turn_start, turn_end, approval, question, return_target) = match kind {
+        KimiCode => (
+            Explicit,
+            Explicit,
+            Explicit,
+            Explicit,
+            Explicit,
+            Explicit,
+            ReturnTarget::Details,
+        ),
+        Qoder => (
+            Explicit,
+            Inferred,
+            Explicit,
+            Explicit,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
+        Trae => (
+            Explicit,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
         Codex | CodexWsl => (
             Explicit,
             Explicit,
@@ -93,7 +120,7 @@ fn native_capabilities(kind: SourceKind) -> Capabilities {
             Explicit,
             Inferred,
             Explicit,
-            Unsupported,
+            Explicit,
             Explicit,
             ReturnTarget::Details,
         ),
@@ -201,6 +228,9 @@ fn definition(
         kind,
         category: category.into(),
         description: match kind {
+            SourceKind::KimiCode => "只读 Kimi Code 和旧版 kimi-cli 会话。明确轮次结束、审批和提问按请求 ID 关联；模型与推理强度仅显示日志提供的值。尚需对应版本实机验收。",
+            SourceKind::Qoder => "只读 Qoder Desktop 轮次投影和 IDE/CLI 转录。完整投影或明确结束字段才结束任务；原生审批与提问尚未支持。",
+            SourceKind::Trae => "公开会话发现；当前非标准会话库的任务状态读取受限。审批、提问和完成提醒仍需独立事件接入。",
             SourceKind::Opencode => "只读本机 OpenCode 会话、模型和运行记录；明确本轮结束才提醒，不从工具返回推断完成。提问与审批事件尚不提供。",
             SourceKind::Workbuddy => "只读 WorkBuddy 本地数据库与会话记录；关注新执行，不导入空闲历史，不包含云端任务。提问与审批事件尚不提供。",
             SourceKind::Zcode => "自动读取本机 ZCode 会话、项目和模型；工具执行完成不会当作整轮结束。",
@@ -248,6 +278,9 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
         ),
         definition("opencode", "OpenCode", Opencode, "local", "file"),
         definition("workbuddy", "WorkBuddy", Workbuddy, "local", "directory"),
+        definition("kimi_code", "Kimi Code", KimiCode, "local", "directory"),
+        definition("qoder", "Qoder", Qoder, "local", "directory"),
+        definition("trae", "Trae", Trae, "local", "directory"),
         definition("zcode", "ZCode", Zcode, "local", "file"),
         definition("hermes", "Hermes", Hermes, "local", "file"),
         definition("doubao", "豆包", Doubao, "local", "directory"),
@@ -323,7 +356,7 @@ mod tests {
         assert_eq!(event.capabilities.approval, Evidence::Producer);
         assert_eq!(event.capabilities.return_target, ReturnTarget::Details);
         assert!(event.verified_platforms.is_empty());
-        assert_eq!(entries.iter().filter(|e| e.category == "local").count(), 9);
+        assert_eq!(entries.iter().filter(|e| e.category == "local").count(), 12);
         assert!(entries
             .iter()
             .filter(|e| e.category == "local")

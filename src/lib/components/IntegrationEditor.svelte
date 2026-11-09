@@ -1,5 +1,6 @@
 <script lang="ts">
   import {t} from '$lib/i18n';
+  import {eventAdapterLabel} from '$lib/source-setup';
   import {emit} from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -19,11 +20,15 @@
   const labels:Record<string,string>={session_discovery:'会话发现',title:'原生标题',project:'项目',turn_start:'执行开始',phase:'运行阶段',final_end:'最终本轮结束',failure:'本轮失败',approval_request:'批准请求',approval_resolution:'批准解除',question:'提问',focus:'原生跳转'};
   const supports:Record<string,string>={explicit:'明确事件',inferred:'受限关联',unsupported:'不支持'};
   const grades:Record<string,string>={documented:'文档核验', 'fixture-tested':'合成测试', 'native-tested':'实机验证'};
+  function adapterName(m:Manifest){
+    const label=eventAdapterLabel(m.adapter_id,m.display_name);
+    return m.adapter_id==='standard-events'?$t(label):label;
+  }
   async function load(){catalog=await invoke<Manifest[]>('integration_catalog');}
   function select(id:string){
     const m=catalog.find(m=>m.adapter_id===id);if(!m)return;
     source.integration={agent_id:m.agent_id,adapter_id:m.adapter_id,transport:'local',accept_since_ms:0};
-    source.name=m.display_name;preview=null;confirmed=false;mcpConfig='';changed();
+    source.name=adapterName(m);preview=null;confirmed=false;mcpConfig='';changed();
   }
   async function action(fn:()=>Promise<void>){busy=true;error='';message='';try{await fn();}catch(e){error=String(e);}finally{busy=false;}}
   async function importManifest(){await action(async()=>{const m=await invoke<Manifest>('integration_import',{text});await load();await emit('integration-catalog-updated');message='描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。';if(!source.integration?.accept_since_ms)select(m.adapter_id);});}
@@ -37,7 +42,7 @@
 <div class="integration-editor" data-integration-editor>
   <h3>{$t("选择 Agent 与接入能力")}</h3>
   <p>{$t("只关注确认后的新执行。Agent 身份与所用模型分开；这里没有通用进程猜测或任意插件代码。")}</p>
-  <label>{$t("Agent / 适配描述")}<select aria-label={$t("Agent 适配描述")} value={source.integration?.adapter_id??'standard-events'} disabled={!!source.integration?.accept_since_ms} onchange={e=>select(e.currentTarget.value)}>{#each catalog as m}<option value={m.adapter_id}>{m.display_name}</option>{/each}</select></label>
+  <label>{$t("Agent / 适配描述")}<select aria-label={$t("Agent 适配描述")} value={source.integration?.adapter_id??'standard-events'} disabled={!!source.integration?.accept_since_ms} onchange={e=>select(e.currentTarget.value)}>{#each catalog as m}<option value={m.adapter_id}>{adapterName(m)}</option>{/each}</select></label>
   {#if source.integration}
     <label>{$t("传输环境")}<select aria-label={$t("通用事件传输")} value="local"><option value="local">{platformName} {$t("本机")}</option><option disabled>{$t("WSL（尚未实现）")}</option><option disabled>{$t("SSH（尚未实现）")}</option></select></label>
   {/if}
@@ -92,22 +97,22 @@
 </div>
 
 <style>
-  .universal{padding:12px;margin:12px 0}.universal h4{margin:0;color:var(--tp-text)}.universal ol{padding-left:20px;font-size:12px;color:var(--tp-muted);line-height:1.7}.universal li{margin:8px 0}
-  .integration-editor{border-top:1px solid var(--tp-border);border-bottom:1px solid var(--tp-border);margin:17px 0 12px;padding:15px 0 8px;font-size:11px;color:var(--tp-muted)}
-  h3{font-size:12px;font-weight:600;color:var(--tp-text);margin:0 0 8px}
+  .universal{padding:12px;margin:12px 0}.universal h4{margin:0;color:var(--tp-text)}.universal ol{padding-left:20px;font-size:13px;color:var(--tp-muted);line-height:1.7}.universal li{margin:8px 0}
+  .integration-editor{border-top:1px solid var(--tp-border);border-bottom:1px solid var(--tp-border);margin:17px 0 12px;padding:15px 0 8px;font-size:13px;color:var(--tp-muted)}
+  h3{font-size:13px;font-weight:600;color:var(--tp-text);margin:0 0 8px}
   p{line-height:1.8;overflow-wrap:anywhere;margin:8px 0}label{display:grid;gap:6px;margin:12px 0;color:var(--tp-muted)}
   select,input,textarea{width:100%;box-sizing:border-box}textarea{height:140px;resize:vertical}
-  .warning{color:var(--tp-action);font-size:10px;border-left:2px solid #edc38040;padding:4px 0 4px 10px;margin:14px 0}
+  .warning{color:var(--tp-action);font-size:12px;border-left:2px solid #edc38040;padding:4px 0 4px 10px;margin:14px 0}
   .capability-summary{padding:12px;background:linear-gradient(120deg,var(--tp-accent-soft),transparent 80%),var(--tp-card);border-color:var(--tp-accent-line);border-radius:var(--tp-radius-md);margin:12px 0}
-  .capability-title{display:flex;align-items:center;gap:8px;justify-content:space-between}.capability-title strong{font-size:12px;font-weight:600;color:var(--tp-text)}.capability-title .tp-chip{font-size:9px;color:var(--tp-quiet)}
-  .capability-summary p{font-size:11px;color:var(--tp-muted);margin:8px 0 0;line-height:1.8}.capability-summary p:last-child{border-top:1px solid var(--tp-border);padding-top:8px;color:var(--tp-stale)}
-  .capability-details,.integration-advanced{margin:12px 0}.capability-details>summary,.integration-advanced>summary{font-size:11px}
+  .capability-title{display:flex;align-items:center;gap:8px;justify-content:space-between}.capability-title strong{font-size:13px;font-weight:600;color:var(--tp-text)}.capability-title .tp-chip{font-size:12px;color:var(--tp-quiet)}
+  .capability-summary p{font-size:13px;color:var(--tp-muted);margin:8px 0 0;line-height:1.8}.capability-summary p:last-child{border-top:1px solid var(--tp-border);padding-top:8px;color:var(--tp-stale)}
+  .capability-details,.integration-advanced{margin:12px 0}.capability-details>summary,.integration-advanced>summary{font-size:13px}
   .capabilities{padding:0 12px}.capability{display:grid;grid-template-columns:minmax(80px,1fr) minmax(0,2fr);align-items:center;gap:6px;padding:11px 0;border-bottom:1px solid var(--tp-border)}
-  .capability:last-child{border:0}.capability strong{font-weight:550;font-size:11px;color:var(--tp-text)}.capability-badges{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.capability small{grid-column:1/-1;color:var(--tp-muted);font-size:10px;line-height:1.8;overflow-wrap:anywhere}
-  .actions{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.tp-btn{font-size:11px;min-height:30px}.actions p{width:100%;font-size:10px}
-  .integration-advanced>.actions,.integration-advanced>p,.integration-advanced>label,.integration-advanced>.tp-fold{margin-left:12px;margin-right:12px}.identity{font-size:10px;color:var(--tp-quiet)}
-  pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;background:var(--tp-input);border:1px solid var(--tp-border);padding:10px;border-radius:var(--tp-radius-sm);font-size:10px;color:var(--tp-muted);margin:10px 12px}
-  .preview{border:1px solid #edc38045;background:#edc38005;border-radius:var(--tp-radius-md);padding:12px;margin:12px}.preview h4{font-size:12px;color:var(--tp-action);margin:0 0 10px}.preview pre{margin:10px 0}.preview .tp-btn{margin:4px 4px 0 0}
+  .capability:last-child{border:0}.capability strong{font-weight:550;font-size:13px;color:var(--tp-text)}.capability-badges{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.capability small{grid-column:1/-1;color:var(--tp-muted);font-size:12px;line-height:1.8;overflow-wrap:anywhere}
+  .actions{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.tp-btn{font-size:13px;min-height:30px}.actions p{width:100%;font-size:12px}
+  .integration-advanced>.actions,.integration-advanced>p,.integration-advanced>label,.integration-advanced>.tp-fold{margin-left:12px;margin-right:12px}.identity{font-size:12px;color:var(--tp-quiet)}
+  pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;background:var(--tp-input);border:1px solid var(--tp-border);padding:10px;border-radius:var(--tp-radius-sm);font-size:12px;color:var(--tp-muted);margin:10px 12px}
+  .preview{border:1px solid #edc38045;background:#edc38005;border-radius:var(--tp-radius-md);padding:12px;margin:12px}.preview h4{font-size:13px;color:var(--tp-action);margin:0 0 10px}.preview pre{margin:10px 0}.preview .tp-btn{margin:4px 4px 0 0}
   .confirmation{display:flex;align-items:flex-start;gap:8px;color:var(--tp-text);line-height:1.8}.confirmation input{width:auto;margin-top:3px;flex:none}.error{color:var(--tp-danger)}
   .manifest p,.manifest textarea,.manifest>.tp-btn{margin:10px 12px}.manifest textarea{width:calc(100% - 24px)}
   @media(max-width:400px){.capability{grid-template-columns:1fr}.capability-badges{justify-content:flex-start}}
