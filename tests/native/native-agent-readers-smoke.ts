@@ -14,8 +14,9 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
  let app:ChildProcess|undefined;const sockets:WebSocket[]=[];let stderr='';
  onStop(async()=>{sockets.forEach(s=>s.close());await stopOwnedChild(app);});
  const exe=join(owned,'agent-tray.exe');await copyFile(original,exe);if(await Bun.file(join(dirname(original),'WebView2Loader.dll')).exists())await copyFile(join(dirname(original),'WebView2Loader.dll'),join(owned,'WebView2Loader.dll'));
- const home=join(owned,'profile'),kimi=join(owned,'kimi'),qoder=join(owned,'qoder'),trae=join(owned,'trae');
+ const home=join(owned,'profile'),kimi=join(owned,'kimi'),qoder=join(owned,'qoder'),trae=join(owned,'trae'),claude=join(owned,'claude');
  const session=join(kimi,'sessions','public','session-kimi');await mkdir(join(session,'agents','main'),{recursive:true});await mkdir(home);await mkdir(qoder);await mkdir(join(trae,'ModularData','ai-agent'),{recursive:true});
+ await mkdir(join(claude,'projects'),{recursive:true});
  await Bun.write(join(trae,'ModularData','ai-agent','database.db'),Buffer.alloc(32,0x91));
  await Bun.write(join(session,'state.json'),JSON.stringify({id:'session-kimi',title:'Kimi 原生会话公开夹具',cwd:'C:/public/Kimi'}));
  const wire=join(session,'agents','main','wire.jsonl'),at=Date.now();
@@ -27,7 +28,7 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
  const iso=new Date(at).toISOString();db.query('INSERT INTO chat_sessions VALUES(?,?,?,?,NULL,0,NULL,?)').run('session-qoder','Qoder 原生轮次公开夹具','C:/public/Qoder','qoder-public-model',iso);
  const row=(id:string,seq:number,status:string,value:unknown)=>db.query("INSERT INTO chat_session_messages VALUES('session-qoder',?,'turn-qoder',?,?,?,'host-projection',?,?)").run(id,seq,JSON.stringify(value),status,iso,iso);
  row('user',1,'completed',{id:'user',role:'user',text:'Public fixture'});row('assistant',2,'streaming',{id:'assistant',role:'assistant',turnId:'turn-qoder',turnStartedAt:iso,timestamp:iso,tools:[]});
- const sources=[['public-kimi','kimi_code',kimi],['public-qoder','qoder',qoder],['public-trae','trae',trae]];
+ const sources=[['public-kimi','kimi_code',kimi],['public-qoder','qoder',qoder],['public-trae','trae',trae],['public-claude','claude_code',claude]];
  await Bun.write(join(home,'config.toml'),`[dashboard]\nversion=2\nonboarding_complete=true\nauto_discover_local=false\nauto_check_updates=false\nnotifications=true\nsound=false\nnotification_mode="popup"\ndefault_view="tasks"\n`+sources.map(([id,kind,location])=>`[[dashboard.sources]]\nid=${JSON.stringify(id)}\nkind=${JSON.stringify(kind)}\nname=${JSON.stringify(id)}\nenabled=true\nlocation=${JSON.stringify(location.replaceAll('\\','/'))}\nprojects=["*"]\nexcluded_projects=[]\ntmux_sessions=[]\ntmux_panes=[]\npoll_interval_ms=500\n`).join(''));
  const env={...process.env,TASKPULSE_HOME:home,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:'--remote-debugging-port=9341'};
  assert.equal(await fetch('http://127.0.0.1:9341/json').then(()=>true).catch(()=>false),false,'CDP port occupied');
@@ -68,11 +69,13 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
   await root.invoke('update_task_attention',{id:k.id,action:'pin'});
   await Bun.write(join(owned,'native-reader-results.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.invoke('open_management',{section:'sources'});const manage=await connect('/manage');await manage.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
-  await manage.wait(`document.querySelector('[data-agent-kind="trae"]').textContent.includes('当前存储格式受限')`);
+  await manage.wait(`document.querySelector('[data-agent-kind="trae"]').textContent.includes('已检测到 · 仅支持会话目录')`);
+  await manage.wait(`document.querySelector('[data-agent-kind="claude_code"]').textContent.includes('读取正常 · 暂无近期会话')`);
+  assert.equal(await manage.evaluate(`document.querySelector('[data-agent-kind="trae"] strong').textContent`),'Trae');
   await Bun.write(join(owned,'native-reader-settings.png'),Buffer.from((await manage.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   sockets.forEach(s=>s.close());await stopOwnedChild(app);start();root=await connect();await root.wait(`typeof __TAURI_INTERNALS__!=='undefined'&&!!document.querySelector('.dashboard')`);await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${k.id}'&&t.finished_at&&t.unread&&t.pinned&&t.reasoning_effort==='high')&&t.some(t=>t.id==='${q.id}'&&t.finished_at&&t.model==='qoder-public-model'))`);
   assert.equal((await root.invoke('get_agents')).length,2);
-  const result={passed:true,commit,modified:false,executableSha256:createHash('sha256').update(await Bun.file(exe).bytes()).digest('hex'),checks:['Kimi native v1.5 request → panel → independent popup → exact resolution','unrelated response and queued cancel cannot end or resolve active request','partial native write preserves unresolved request and degrades health','explicit Kimi/Qoder end freezes source duration','opaque TRAE data never invents tasks or healthy state','12 catalog-driven native entries and honest TRAE limitation','same native session IDs, unread, pin, model and effort survive restart'],inputs:'Public synthetic native schema; not real Agent-host certification',realAgentConfigurationsChanged:false};
+  const result={passed:true,commit,modified:false,executableSha256:createHash('sha256').update(await Bun.file(exe).bytes()).digest('hex'),checks:['Kimi native v1.5 request → panel → independent popup → exact resolution','unrelated response and queued cancel cannot end or resolve active request','partial native write preserves unresolved request and degrades health','explicit Kimi/Qoder end freezes source duration','opaque TRAE data never invents tasks or healthy state','12 catalog-driven native entries; Trae catalog-only and healthy empty Claude reads','same native session IDs, unread, pin, model and effort survive restart'],inputs:'Public synthetic native schema; not real Agent-host certification',realAgentConfigurationsChanged:false};
   await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
  }catch(error){await Bun.write(join(owned,'failure.json'),JSON.stringify({error:String(error),stderr},null,2));throw error;}finally{db.close();}
 });

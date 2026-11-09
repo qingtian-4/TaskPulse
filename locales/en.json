@@ -810,5 +810,18 @@
   "只读 Qoder Desktop 轮次投影及 IDE/CLI 转录；原生审批和提问尚未提供。": "Reads Qoder Desktop turn projections and IDE/CLI transcripts. Native approval and question reminders are not supported.",
   "公开会话发现；当前非标准会话库的任务状态读取受限。": "Public session discovery only. Task state cannot currently be read from the nonstandard session store.",
   "本轮结束，尚未查看": "Turn ended; result unviewed",
-  "来源明确报告本轮失败": "The source reported a failed turn"
+  "来源明确报告本轮失败": "The source reported a failed turn",
+  "读取正常 · 暂无近期会话": "Reads healthy · No recent sessions",
+  "已检测到 · 未启用": "Detected · Disabled",
+  "未检测到本机数据": "No local data detected",
+  "已检测到 · 仅支持会话目录": "Detected · Session catalog only",
+  "Trae 的任务库尚不能直接读取。可在已发现会话中查看目录，任务进度与提醒暂不可用。": "Trae’s task database cannot be read directly. Check Discovered sessions for catalog entries. Task progress and reminders are unavailable.",
+  "Claude Code 有新活动后会自动更新，旧会话不会当作运行中的任务。": "New Claude Code activity appears automatically. Old sessions are kept out of running tasks.",
+  "读取 Trae 会话目录": "Read Trae session catalog",
+  "高级接入：手动连接": "Advanced connections",
+  "用于让 Agent 或脚本主动发送任务开始、结束或请求等通知。需要在发送端单独配置。": "Connect an agent or script that sends task starts, completions, or requests. Set up the sender separately.",
+  "选择连接类型": "Connection type",
+  "请选择": "Select a connection",
+  "添加连接": "Add connection",
+  "等待首条任务通知": "Waiting for the first task event"
 }

@@ -220,9 +220,8 @@ try{
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
   assert.deepEqual(fontSizes,{title:'14px',context:'14px',activity:'14px',number:nativeLayout.width<=350?'23px':'22px'});
-  const compactResult=await root.evaluate(`(()=>{const row=document.querySelector('[data-task-id="${done.id}"]'),chip=row.querySelector('.status-label').getBoundingClientRect(),control=row.closest('.task-item').querySelector('.viewed'),button=control.getBoundingClientRect(),elapsed=row.querySelector('.elapsed'),model=row.querySelector('.model');return {chip:chip.height,button:button.height,iconOnly:!control.textContent.trim()&&!!control.querySelector('svg')&&!!control.getAttribute('aria-label'),extraFooter:!!row.querySelector('.result-space'),sharedTime:!!elapsed?.closest('.metadata,.context')};})()`);
-  assert.equal(compactResult.iconOnly,true,'Mark as viewed must be an accessible icon-only button');
-  assert.ok(Math.abs(compactResult.chip-compactResult.button)<=2,'Viewed action must match status-chip height');
+  const compactResult=await root.evaluate(`(()=>{const row=document.querySelector('[data-task-id="${done.id}"]');return {floatingAction:!!row.closest('.task-item').querySelector('.viewed'),extraFooter:!!row.querySelector('.result-space'),sharedTime:!!row.querySelector('.elapsed')?.closest('.metadata,.context')};})()`);
+  assert.equal(compactResult.floatingAction,false,'Result cards have no floating read action');
   assert.equal(compactResult.extraFooter,false);assert.equal(compactResult.sharedTime,true);
   for(const [width,height] of [[368,840],[368,560],[368,400],[328,400],[380,640],[320,480],[440,720]])await checkScales(root,'dashboard',width,height);
   await root.send('Emulation.setDeviceMetricsOverride',{width:368,height:560,deviceScaleFactor:1,mobile:false});
@@ -238,7 +237,10 @@ try{
   assert.equal(await root.evaluate(`getComputedStyle(document.querySelector('.task-item[data-tone="danger"] .status-label')).color`),'rgb(240, 155, 167)');
   await click(root,'.signals [data-tone="danger"]');
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.status-label').textContent==='失败'`);
-  await click(root,'[aria-label="标记已查看：示例：失败结果展示回归"]');
+  await click(root,'.task-row');
+  await root.wait(`!!document.querySelector('.detail-actions [data-variant="primary"]')`);
+  await click(root,'.detail-actions [data-variant="primary"]');
+  await root.evaluate(`document.querySelector('.detail-heading>button')?.click()`);
   await click(root,'.all-tasks');
   await root.wait(`document.querySelectorAll('.task-row').length===4`);
   checks.push('explicit failed-result chip/filter/viewed action remain separate from running and uncertainty');
@@ -279,7 +281,11 @@ try{
   await Bun.write(join(owned,'search-filter-368x560.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await click(root,'.all-tasks');
   await click(root,'.filter-toggle');
-  await click(root,'[aria-label="标记已查看：'+done.name+'"]');
+  await click(root,'[data-task-id="'+done.id+'"]');
+  await root.wait(`!!document.querySelector('.detail-actions [data-variant="primary"]')`);
+  assert.equal((await root.invoke('get_agents')).find((task:any)=>task.id===done.id).unread,true);
+  await click(root,'.detail-actions [data-variant="primary"]');
+  await root.evaluate(`document.querySelector('.detail-heading>button')?.click()`);
   await root.wait(`!document.querySelector('[data-task-id="${done.id}"]')`);
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id===thinking.id && t.status==='running'));
   checks.push('unread intersection and explicit viewed action preserve other running tasks');

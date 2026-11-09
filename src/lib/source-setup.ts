@@ -20,6 +20,17 @@ export interface SourceCatalogRow {
   definition:SourceDefinition; source?:MonitorSource; candidate?:MonitorSource; observation?:SourceSnapshot;
   supported:boolean; locationDetected:boolean|null; dataDetected:boolean|null;
 }
+// Short labels are presentation only. Manifests and persisted source IDs
+// continue to carry the original adapter identity.
+export function eventAdapterLabel(adapterId:string,displayName:string):string {
+  return ({
+    'standard-events':'其他 Agent',
+    'kimi-code-cli':'Kimi Code',
+    'trae-cn-ide':'Trae',
+    'zcode-desktop':'ZCode',
+    'workbuddy-candidate':'WorkBuddy',
+  } as Record<string,string>)[adapterId]??displayName;
+}
 export function createEventSource(definition:SourceDefinition,name=definition.name):MonitorSource {
   if(definition.kind!=='generic_event'||!definition.adapter_id||!definition.agent_id)throw Error('invalid_event_definition');
   return {id:`generic_event:${crypto.randomUUID()}`,kind:'generic_event',name,location:'',enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,integration:{agent_id:definition.agent_id,adapter_id:definition.adapter_id,transport:'local',accept_since_ms:0}};

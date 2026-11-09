@@ -314,8 +314,8 @@
   <main class="glass-scroll task-scroll" aria-label={$t("关注任务")}>
     {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manageSources}>{$t("查看来源与已发现会话")}</button>{/if}</div>
     {:else if view==='tasks'}
-      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/if}{/each}
-    {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t} onViewed={t=>void action(t,'viewed')}/></section>{/each}{/if}
+      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/if}{/each}
+    {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/each}{/if}
   </main>
   {#if selectedTask}
     <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label={$t("任务详情")}>

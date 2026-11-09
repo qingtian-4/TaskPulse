@@ -50,7 +50,7 @@ The scripts select the matching architecture and verify SHA-256. [Installation, 
 
 1. **Choose your sources.** On first launch, confirm agents under Sources → Local and start monitoring. Local data is discovered automatically; add SSH servers when needed.
 2. **Work as usual.** Start a task in your agent. The tray panel keeps running tasks, requests and unread results together. On Windows, press `Ctrl+Shift+A` to open it.
-3. **Come back when needed.** Answer or approve in the original agent. A matching source event clears the request. Mark a result as viewed after reading it.
+3. **Come back when needed.** Answer or approve in the original agent. A matching source event clears the request. After reading the result, mark it as viewed in task details.
 
 Dismissing a reminder, opening details or focusing a host does not mark results as read or approve anything. Adjust notifications, sound, project scopes, text size and updates in Settings.
 
@@ -91,12 +91,12 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 | Doubao | Reads desktop tasks and execution state. |
 | Kimi Code / kimi-cli | Reads local main sessions and explicit requests. Standard Events and MCP are optional. |
 | Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
-| TRAE | Discovers public workspace sessions. Task events can come from Standard Events or MCP. |
+| Trae | Discovers sessions in the workspace catalog. Task progress requires a separately configured sender. |
 | Gemini CLI | Discovers running processes. Task lifecycle requires an event connection. |
 | Other agents | Connect through Standard Events, MCP or compatible status files. |
 | Shell / remote tmux | `tp-run` records the foreground command exit code. An ordinary tmux shell return only provides an inferred result. |
 
-Reminders depend on the events each source provides. See [compatibility and setup details (Chinese)](docs/AGENT_COMPATIBILITY.md).
+Supported local data is detected automatically. Use Advanced connections if an agent or script sends its own task events. See [compatibility and setup details (Chinese)](docs/AGENT_COMPATIBILITY.md).
 
 ## How it works
 

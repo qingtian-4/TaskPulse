@@ -171,7 +171,7 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         source("doubao", "豆包 · 本机", SourceKind::Doubao, ""),
         source("kimi_code", "Kimi Code · 本机", SourceKind::KimiCode, ""),
         source("qoder", "Qoder · 本机", SourceKind::Qoder, ""),
-        source("trae", "TRAE · 本机", SourceKind::Trae, ""),
+        source("trae", "Trae · 本机", SourceKind::Trae, ""),
     ];
     for item in &mut sources {
         item.projects = match item.kind {

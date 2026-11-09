@@ -1,5 +1,6 @@
 <script lang="ts">
   import {t} from '$lib/i18n';
+  import {eventAdapterLabel} from '$lib/source-setup';
   import {emit} from '@tauri-apps/api/event';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
@@ -19,7 +20,10 @@
   const labels:Record<string,string>={session_discovery:'会话发现',title:'原生标题',project:'项目',turn_start:'执行开始',phase:'运行阶段',final_end:'最终本轮结束',failure:'本轮失败',approval_request:'批准请求',approval_resolution:'批准解除',question:'提问',focus:'原生跳转'};
   const supports:Record<string,string>={explicit:'明确事件',inferred:'受限关联',unsupported:'不支持'};
   const grades:Record<string,string>={documented:'文档核验', 'fixture-tested':'合成测试', 'native-tested':'实机验证'};
-  function adapterName(m:Manifest){return ['standard-events','kimi-code-cli','trae-cn-ide','zcode-desktop','workbuddy-candidate'].includes(m.adapter_id)?$t(m.display_name):m.display_name;}
+  function adapterName(m:Manifest){
+    const label=eventAdapterLabel(m.adapter_id,m.display_name);
+    return m.adapter_id==='standard-events'?$t(label):label;
+  }
   async function load(){catalog=await invoke<Manifest[]>('integration_catalog');}
   function select(id:string){
     const m=catalog.find(m=>m.adapter_id===id);if(!m)return;

@@ -35,6 +35,14 @@ export function projectChoices(source:MonitorSource,tasks:TaskSnapshot[],extra:s
 export function sourceStatus(source:MonitorSource|undefined,observed?:SourceSnapshot):string {
   if(!source?.enabled)return '未启用';
   if(!observed||observed.read_state==='waiting')return '等待首次读取';
-  return ({healthy:observed.data_detected?'读取正常':'等待新会话',partial:'部分数据待更新',failed:'读取异常',stale:'数据待更新',disabled:'已暂停',waiting:'等待首次读取'} as const)[observed.read_state];
+  return ({healthy:observed.data_detected?'读取正常':'读取正常 · 暂无近期会话',partial:'部分数据待更新',failed:'读取异常',stale:'数据待更新',disabled:'已暂停',waiting:'等待首次读取'} as const)[observed.read_state];
+}
+export function localSourceStatus(
+  source:MonitorSource|undefined,observed:SourceSnapshot|undefined,locationDetected:boolean|null|undefined,
+):string {
+  if(!source?.enabled && locationDetected===true)return '已检测到 · 未启用';
+  if(locationDetected===false && !observed?.data_detected
+    && (!source?.enabled || observed?.read_state==='healthy'))return '未检测到本机数据';
+  return sourceStatus(source,observed);
 }
 export function scopeLabel(projects:string[]):string{return projects.includes('*')?'全部项目':projects.length?'指定项目':'尚未选择项目';}

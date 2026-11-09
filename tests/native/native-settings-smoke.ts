@@ -496,10 +496,13 @@ poll_interval_ms=3000
   await root.invoke('open_management',{section:'sources'});
   await ui.wait(`!!document.querySelector('.ms-tabs button')`);
   await ui.evaluate(`document.querySelector('.ms-back')?.click();document.querySelector('.ms-tabs button').click()`);
-  await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"]')`);
-  assert.ok(await ui.evaluate(`!!document.querySelector('[data-event-adapter="trae-cn-ide"]')&&document.querySelector('[data-agent-kind="qoder"]')`));
+  await ui.wait(`!!document.querySelector('.event-sources')`);
+  assert.ok(await ui.evaluate(`!document.querySelector('.event-sources').open && !document.querySelector('[data-event-adapter]') && !!document.querySelector('[data-agent-kind="qoder"]')`));
   const beforeEvent=await ui.invoke('get_monitoring_settings');
-  await ui.evaluate(`document.querySelector('[data-event-adapter="kimi-code-cli"] .ms-btn').click()`);
+  await ui.evaluate(`document.querySelector('.event-sources summary').click()`);
+  await ui.evaluate(`(()=>{const select=document.querySelector('[data-event-picker]');select.value='kimi-code-cli';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await ui.wait(`!document.querySelector('[data-event-add]').disabled`);
+  await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
   await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"] [data-integration-editor]')`);
   assert.deepEqual((await ui.invoke('get_monitoring_settings')).sources,beforeEvent.sources,'Opening an event draft must not write configuration or Hooks');
   await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);

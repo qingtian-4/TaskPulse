@@ -1,8 +1,8 @@
 import {scopeOptions} from '../src/lib/project-options';
 import {test,expect} from 'bun:test';
-import {servers,pauseServer,removeServer,projectChoices,sourceStatus,createSource,canRead} from '../src/lib/monitor-sources';
+import {servers,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,createSource,canRead} from '../src/lib/monitor-sources';
 import {reconcileSourceDraft} from '../src/lib/settings-draft';
-import type {DashboardSettings} from '../src/lib/types';
+import type {DashboardSettings,SourceSnapshot} from '../src/lib/types';
 const make=():DashboardSettings=>({version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[
   {...createSource('codex'),id:'local',enabled:true,projects:['local-only']},
   {...createSource('remote_codex','host-a','Host A'),id:'a',enabled:true,projects:['/srv/alpha']},
@@ -27,7 +27,17 @@ test('SSH connectivity is never used as Agent data readiness',()=>{
   expect(canRead({state:'read_error',projects:[],data_detected:false})).toBe(false);expect(canRead({state:'unsupported',projects:[],data_detected:false})).toBe(false);
   expect(canRead({state:'empty',projects:[],data_detected:false})).toBe(true);
   const s=make().sources[1];expect(sourceStatus(s)).toBe('等待首次读取');
-  expect(sourceStatus(s,{id:s.id,kind:s.kind,location:s.location,enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0})).toBe('等待新会话');
+  expect(sourceStatus(s,{id:s.id,kind:s.kind,location:s.location,enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0})).toBe('读取正常 · 暂无近期会话');
+});
+test('local discovery, empty reads and failures are separate statuses',()=>{
+  const enabled={...createSource('claude_code'),enabled:true};
+  const empty:SourceSnapshot={id:enabled.id,kind:enabled.kind,location:'',enabled:true,
+    read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0};
+  expect(localSourceStatus(enabled,empty,true)).toBe('读取正常 · 暂无近期会话');
+  expect(localSourceStatus(enabled,empty,false)).toBe('未检测到本机数据');
+  expect(localSourceStatus(enabled,{...empty,read_state:'failed'},false)).toBe('读取异常');
+  expect(localSourceStatus({...enabled,enabled:false},undefined,true)).toBe('已检测到 · 未启用');
+  expect(localSourceStatus(undefined,undefined,null)).toBe('未启用');
 });
 test('project scopes and preference broadcasts preserve drafts and source identity',()=>{
   const applied=make(),draft=structuredClone(applied);draft.sources[1].projects=['/manual/project'];const incoming=structuredClone(applied);incoming.sound=true;

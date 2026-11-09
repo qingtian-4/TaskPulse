@@ -1,5 +1,5 @@
-//! TRAE's public workspace metadata. Encrypted agent databases are not opened
-//! with extracted keys; discovery is distinct from task lifecycle support.
+//! Trae workspace metadata. The task database is only checked for its file
+//! signature; workspace discovery does not imply task lifecycle support.
 use super::{Provider, ProviderOutput};
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
 use rusqlite::{Connection, OpenFlags};
@@ -26,7 +26,7 @@ impl TraeProvider {
     }
     fn read(&self, now: SystemTime) -> Result<(Vec<TaskSnapshot>, bool), String> {
         let primary = self.root.join("ModularData/ai-agent/database.db");
-        let encrypted = if primary.exists() {
+        let non_sqlite = if primary.exists() {
             let mut magic = [0; 16];
             std::fs::File::open(primary)
                 .map_err(|_| "agent_store_read")?
@@ -95,14 +95,14 @@ impl TraeProvider {
                             session
                                 .get("title")
                                 .and_then(Value::as_str)
-                                .unwrap_or("TRAE"),
+                                .unwrap_or("Trae"),
                             TaskSource::NativeAgent,
                             TaskStatus::Unknown,
                             DetectionConfidence::Inferred,
                             now,
                         );
                         task.agent_id = Some("trae".into());
-                        task.agent_name = Some("TRAE".into());
+                        task.agent_name = Some("Trae".into());
                         task.session_id = Some(id.into());
                         task.stale = true;
                         rows.push(task);
@@ -110,7 +110,7 @@ impl TraeProvider {
                 }
             }
         }
-        Ok((rows, encrypted))
+        Ok((rows, non_sqlite))
     }
 }
 impl Provider for TraeProvider {
@@ -119,16 +119,16 @@ impl Provider for TraeProvider {
     }
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
         match self.read(now) {
-            Ok((rows, encrypted)) => {
+            Ok((rows, non_sqlite)) => {
                 self.last = rows.clone();
                 ProviderOutput {
                     catalog: rows,
                     ..ProviderOutput::degraded(
                         vec![],
-                        if encrypted {
-                            "TRAE 当前会话库格式不可直接读取；仅公开元数据可读，任务状态读取受限"
+                        if non_sqlite {
+                            "Trae 当前会话库格式不可直接读取；仅公开元数据可读，任务状态读取受限"
                         } else {
-                            "TRAE 目前只读取公开会话元数据；任务状态尚未适配"
+                            "Trae 目前只读取公开会话元数据；任务状态尚未适配"
                         },
                     )
                 }
@@ -137,7 +137,7 @@ impl Provider for TraeProvider {
                 catalog: self.last.clone(),
                 ..ProviderOutput::degraded(
                     vec![],
-                    format!("TRAE 公开元数据暂不可读（{code}）；保留上次状态"),
+                    format!("Trae 公开元数据暂不可读（{code}）；保留上次状态"),
                 )
             },
         }
@@ -148,7 +148,7 @@ impl Provider for TraeProvider {
 mod tests {
     use super::*;
     #[test]
-    fn encrypted_store_is_not_healthy_empty_or_a_fake_task() {
+    fn non_sqlite_store_is_not_healthy_empty_or_a_fake_task() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ModularData/ai-agent");
         std::fs::create_dir_all(&path).unwrap();
@@ -163,7 +163,7 @@ mod tests {
     #[ignore = "read-only installed TRAE; no private sessions printed"]
     fn live_trae_storage_probe() {
         let p = TraeProvider::new(default_root());
-        let (rows, encrypted) = p.read(SystemTime::now()).unwrap();
-        println!("TRAE public metadata sessions={} encrypted_primary={encrypted}; no lifecycle acceptance",rows.len());
+        let (rows, non_sqlite) = p.read(SystemTime::now()).unwrap();
+        println!("TRAE public metadata sessions={} primary_not_sqlite={non_sqlite}; no lifecycle acceptance",rows.len());
     }
 }

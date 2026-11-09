@@ -50,7 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 1. **选择来源**：首次启动，在“监控来源 → 本机”确认要关注的 Agent，点击“确认并开始监控”。本机数据自动发现，SSH 服务器按需添加。
 2. **照常工作**：回到 Agent 开始任务，从托盘查看运行、待处理和未读结果。Windows 可按 `Ctrl+Shift+A` 打开面板。
-3. **收到提醒再回来**：在原 Agent 中回答或批准。匹配的来源事件解除请求；看完结果后手动标记已查看。
+3. **收到提醒再回来**：在原 Agent 中回答或批准。匹配的来源事件解除请求；看完结果后，在任务详情中标记已查看。
 
 关闭提醒、打开详情和聚焦窗口都不会标记已读，更不会代你批准。通知、声音、项目范围、字号与更新均可在设置中调整。
 
@@ -91,12 +91,12 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | 豆包 | 读取桌面端任务及执行状态。 |
 | Kimi Code / kimi-cli | 读取本机主会话与明确请求，也可接入标准事件或 MCP。 |
 | Qoder | 读取本机 Desktop 轮次及 IDE / CLI 日志，原生审批和提问尚未支持。 |
-| TRAE | 发现公开工作区会话，任务状态可通过标准事件或 MCP 接入。 |
+| Trae | 可发现会话目录，暂不读取任务进度。手动配置后可接收外部发送的任务通知。 |
 | Gemini CLI | 可发现运行进程，完整任务状态需要事件接入。 |
 | 其他 Agent | 按需接入标准事件、MCP 或兼容状态文件。 |
 | 命令行 / 远程 tmux | 可用 `tp-run` 记录前台命令退出码，普通 tmux shell 返回仅提供推断结果。 |
 
-提醒取决于来源提供的事件。更多配置、限制与验证范围见[兼容说明](docs/AGENT_COMPATIBILITY.md)。
+支持的本机数据会自动检测。需要由 Agent 或脚本主动发送任务通知时，可在“高级接入”中手动添加连接。更多配置、限制与验证范围见[兼容说明](docs/AGENT_COMPATIBILITY.md)。
 
 ## 工作原理
 

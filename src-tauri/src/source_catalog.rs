@@ -280,7 +280,7 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
         definition("workbuddy", "WorkBuddy", Workbuddy, "local", "directory"),
         definition("kimi_code", "Kimi Code", KimiCode, "local", "directory"),
         definition("qoder", "Qoder", Qoder, "local", "directory"),
-        definition("trae", "TRAE", Trae, "local", "directory"),
+        definition("trae", "Trae", Trae, "local", "directory"),
         definition("zcode", "ZCode", Zcode, "local", "file"),
         definition("hermes", "Hermes", Hermes, "local", "file"),
         definition("doubao", "豆包", Doubao, "local", "directory"),

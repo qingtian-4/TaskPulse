@@ -9,7 +9,7 @@
   import {appSettings,savePreference,preferencePending} from '$lib/preferences';
   import {autostart} from '$lib/autostart';
   import {reconcileSourceDraft} from '$lib/settings-draft';
-  import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,scopeLabel,type AgentKind,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
+  import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,scopeLabel,type AgentKind,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
   import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '$lib/types';
   import {formatAgo} from '$lib/types';
   import type {ProjectChoice} from '$lib/project-options';
@@ -45,14 +45,25 @@
   function observation(s?:MonitorSource):SourceSnapshot|undefined{return snapshot?.view.sources.find(v=>v.id===s?.id);}
   function taskCount(s?:MonitorSource){return s?.enabled?(observation(s)?.current_tasks??0):0;}
   function serverTaskCount(group:ServerGroup){return group.sources.reduce((total,source)=>total+taskCount(source),0);}
-  function detected(kind:AgentKind){const rows=localRows.filter(s=>s.kind===kind);return rows.some(s=>observation(s)?.data_detected===true||discovery.some(d=>d.id===s.id&&d.data_location_detected===true));}
+  function localDetection(kind:AgentKind,source?:MonitorSource){
+    return discovery.find(d=>source ? d.id===source.id : d.candidate?.kind===kind)?.data_location_detected;
+  }
   function connection(group:ServerGroup):string {
     const report=reports[group.host];if(report&&Date.now()-report.checked_at<60000)return report.connection;
     const host=snapshot?.hosts.find(h=>h.host===group.host);
     return host?.last_seen&&Date.now()-host.last_seen<30000?host.status:'unknown';
   }
   function sshLabel(group:ServerGroup){return ({connected:'SSH 已连接',disconnected:'SSH 未连接',unknown:'SSH 尚未检测'})[connection(group)]??'SSH 尚未检测';}
-  function rowStatus(source?:MonitorSource){const saved=applied?.sources.find(s=>s.id===source?.id);if(source&&(!saved||source.enabled!==saved.enabled))return '待保存';if(source?.kind==='trae'&&source.enabled&&snapshot?.providers.find(p=>p.provider===source.id)?.message?.includes('TRAE 当前会话库格式不可直接读取'))return '当前存储格式受限';return sourceStatus(source,observation(source));}
+  function rowStatus(kind:AgentKind,source?:MonitorSource){
+    const saved=applied?.sources.find(s=>s.id===source?.id);
+    if(source&&(!saved||source.enabled!==saved.enabled))return '待保存';
+    const message=snapshot?.providers.find(p=>p.provider===source?.id)?.message;
+    if(kind==='trae'&&source?.enabled
+      && (message?.includes('当前会话库格式不可直接读取')||message?.includes('目前只读取公开会话元数据'))){
+      return '已检测到 · 仅支持会话目录';
+    }
+    return localSourceStatus(source,observation(source),localDetection(kind,source));
+  }
   function assign(next:DashboardSettings){settings=next;dirty=true;notice='';}
   function touch(){dirty=true;notice='';}
   function fail(e:unknown){error=String(e);if(error.includes('配置已更新')||error.includes('其他窗口更新'))conflict=true;}
@@ -148,8 +159,10 @@
         {#each localAgents as agent (agent.id)}
           {@const source=localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind)}
           <div class="agent-entry" data-agent-kind={agent.kind}>
-<div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(rowStatus(source))} · {taskCount(source)} {$t('任务')}</small></div>{#if agent.kind==='trae'}<span class="cap-tag planned">{$t('仅会话发现')}</span>{/if}<button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t('启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
+<div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(rowStatus(agent.kind,source))}{#if agent.kind!=='trae'} · {taskCount(source)} {$t('任务')}{/if}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.kind==='trae'?'读取 Trae 会话目录':'启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
             {#if expandedLocal===agent.kind}
+              {#if agent.kind==='trae'}<p class="ms-muted">{$t('Trae 的任务库尚不能直接读取。可在已发现会话中查看目录，任务进度与提醒暂不可用。')}</p>{/if}
+              {#if agent.kind==='claude_code' && observation(source)?.data_detected===false}<p class="ms-muted">{$t('Claude Code 有新活动后会自动更新，旧会话不会当作运行中的任务。')}</p>{/if}
               {#if agent.kind==='scanner'}<p class="ms-muted">{$t('仅发现正在运行的进程；不识别审批、提问或任务结束。')}</p>{/if}
       <section class="agent-config" data-source-id={localEditor?.id??''}><h3>{$t('项目范围')}</h3>{#if localRows.filter(s=>s.kind===activeLocal).length>1}<label class="ms-field">{$t('数据来源实例')}<select value={localEditor?.id} onchange={e=>{activeLocalSource=e.currentTarget.value;void loadProjects(localRows.find(s=>s.id===activeLocalSource));}}>{#each localRows.filter(s=>s.kind===activeLocal) as s}<option value={s.id}>{s.name} · {s.location||$t('默认位置')}</option>{/each}</select></label>{/if}{#key localEditor?.id??activeLocal}<ProjectScope projects={localEditor?.projects??['*']} choices={localEditor?projectChoices(localEditor,snapshot?.tasks??[],projects[localEditor.id]??[]):[]} aliases={localEditor?projectAliases[localEditor.id]??[]:[]} onchange={changeProjects}/>{/key}
         <details class="ms-advanced"><summary><Settings2 size={13}/>{$t('高级设置：路径、排除规则与诊断')}</summary><div class="advanced-inner">{#if localEditor}<label class="ms-field">{$t('数据路径')}<input value={localEditor.kind==='codex'?'CODEX_HOME / ~/.codex':localEditor.location} placeholder={localEditor.kind==='claude_code'?'CLAUDE_CONFIG_DIR / ~/.claude':$t('默认位置')} readonly={localAgents.find(agent=>agent.kind===activeLocal)?.location_kind==='none'} oninput={e=>{if(localEditor){localEditor.location=e.currentTarget.value;touch();}}}/></label><label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="3" value={localEditor.excluded_projects.join('\n')} oninput={e=>{if(localEditor){localEditor.excluded_projects=list(e.currentTarget.value);touch();}}}></textarea></label><button class="ms-btn" onclick={()=>sessionSource=localEditor??null}>{$t('已发现会话')}</button><button class="ms-btn" disabled={!!reading||dirty||!localEditor.enabled} onclick={()=>localEditor&&readLocal(localEditor)}><RefreshCw size={13}/>{$t(reading?'读取中…':'检测数据读取')}</button>{#if activeLocal==='claude_code'}<p class="ms-warning">{$t('本机会话采用只读观测；明确审批需单独确认官方 Hook。原生提问尚未支持。')}</p><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:true}:null}>{$t('配置 Claude 精确事件')}</button><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:false}:null}>{$t('移除 Claude 精确事件')}</button>{/if}<p class="ms-diagnostic">{$t(discovery.find(d=>d.id===localEditor?.id)?.detail??'尚未检测')}</p>{:else}<p class="ms-muted">{$t('启用后可配置数据读取。')}</p>{/if}</div></details>
