@@ -28,6 +28,37 @@ export function assertDigest(bytes: Uint8Array, expected: string) {
   }
 }
 
+// Hosted runners can receive transient errors on GitHub's asset CDN. The
+// bytes are still accepted only after matching the same pinned digest.
+export async function downloadVerifiedTool(
+  url: string,
+  expected: string,
+  fetchAsset: (url: string, init: RequestInit) => Promise<Response> = fetch,
+  pause: (milliseconds: number) => Promise<void> = Bun.sleep,
+): Promise<Uint8Array> {
+  const retryable = new Set([408, 429, 500, 502, 503, 504]);
+  for (let attempt = 1; ; attempt++) {
+    let bytes: Uint8Array | undefined;
+    let status = 0;
+    try {
+      const response = await fetchAsset(url, { signal: AbortSignal.timeout(60000) });
+      status = response.status;
+      if (response.ok) bytes = new Uint8Array(await response.arrayBuffer());
+      else await response.body?.cancel().catch(() => {});
+    } catch {
+      status = 0; // A transport error or a timeout while reading the body.
+    }
+    if (bytes) {
+      assertDigest(bytes, expected);
+      return bytes;
+    }
+    if (attempt === 3 || (status !== 0 && !retryable.has(status))) {
+      throw Error(status ? `Security tool download failed: HTTP ${status}` : 'Security tool download failed: network error or timeout');
+    }
+    await pause(attempt * 1000);
+  }
+}
+
 function parseJson(raw: string): any {
   return JSON.parse(raw.replace(/^\uFEFF/, ''));
 }
@@ -96,10 +127,7 @@ async function withExecutable<T>(name: ToolName,use:(binary:string)=>Promise<T>)
   const archive = join(cache, asset.asset);
   if (!existsSync(archive)) {
     console.error(`Downloading pinned ${name} ${spec.version} from its official release`);
-    const response = await fetch(spec.release + asset.asset, { signal: AbortSignal.timeout(60000) });
-    if (!response.ok) throw Error(`Security tool download failed: HTTP ${response.status}`);
-    const bytes = new Uint8Array(await response.arrayBuffer());
-    assertDigest(bytes, asset.sha256);
+    const bytes = await downloadVerifiedTool(spec.release + asset.asset, asset.sha256);
     writeFileSync(archive, bytes);
   }
   assertDigest(readFileSync(archive), asset.sha256);

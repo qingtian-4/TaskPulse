@@ -3,7 +3,7 @@ import { createHash } from 'node:crypto';
 import { readFileSync,mkdtempSync,writeFileSync,existsSync,rmSync,renameSync,mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import {tmpdir} from 'node:os';
-import { withToolDirectory,assertDigest, summarizeRust, summarizeSecrets, tools } from '../scripts/security';
+import { withToolDirectory,assertDigest,downloadVerifiedTool, summarizeRust, summarizeSecrets, tools } from '../scripts/security';
 
 const cleanRust = { database: { 'last-commit': '1'.repeat(40), 'last-updated': '2026-10-19T00:00:00Z', 'advisory-count': 0 }, vulnerabilities: { found: false, count: 0, list: [] }, warnings: {} };
 test('tool bytes must match a pinned digest before execution', () => {
@@ -15,6 +15,34 @@ test('tool bytes must match a pinned digest before execution', () => {
     for (const platform of ['win32', 'linux'] as const) expect(tool[platform].sha256).toMatch(/^[a-f0-9]{64}$/);
   }
 });
+test('tool downloads retry transient errors and always verify the successful response', async () => {
+  const fixture = 'verified archive';
+  const digest = createHash('sha256').update(fixture).digest('hex');
+  const url = 'https://github.com/example/tool/releases/download/v1/archive.zip';
+  let attempts = 0;
+  const result = await downloadVerifiedTool(url, digest, async () => {
+    attempts++;
+    if (attempts === 1) return new Response(null, {status: 504});
+    if (attempts === 2) throw Error('transport interrupted');
+    return new Response(fixture);
+  }, async () => {});
+  expect(new TextDecoder().decode(result)).toBe(fixture);
+  expect(attempts).toBe(3);
+
+  for (const [status, body, failure, expectedAttempts] of [
+    [403, '', 'HTTP 403', 1],
+    [504, '', 'HTTP 504', 3],
+    [200, 'unverified archive', 'checksum mismatch', 1],
+  ] as const) {
+    attempts = 0;
+    await expect(downloadVerifiedTool(url, digest, async () => {
+      attempts++;
+      return new Response(body, {status});
+    }, async () => {})).rejects.toThrow(failure);
+    expect(attempts).toBe(expectedAttempts);
+  }
+});
+
 test('Rust reports cannot hide a failed process, registry error or inconsistent counts', () => {
   expect(summarizeRust(JSON.stringify(cleanRust), 0).passed).toBe(true);
   for (const status of [null, 1, 2]) expect(summarizeRust(JSON.stringify(cleanRust), status).passed).toBe(false);
