@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "22516abbea4ac3dc968f1e040219c8e9abb87f92",
+  "capture_commit": "1e3a22b0f194658fbc3101face361cb8b52d051a",
   "modified": false,
-  "executable_sha256": "5380051395153d38d4a7f10abe83da102eb420076f98d88d6ea6cae389ddffe3",
+  "executable_sha256": "833c348a0c2a16e93c76d54ba80edf469bbfbf3b05622a75af341e63a3dcc4b5",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -15,12 +15,12 @@
       "language": "zh-CN",
       "kind": "dashboard",
       "width": 736,
-      "height": 1672,
+      "height": 1576,
       "logical_width": 368,
-      "logical_height": 836,
+      "logical_height": 788,
       "dpr": 2,
-      "sha256": "275fb08901cb6563419645f192bd536ee759b2d5f98332e29db6e6c64da5aa95",
-      "bytes": 178581
+      "sha256": "dc6fcbcd1bcd1adf85bf666b9ab3821fcef7b15e07cecc2ab17a79e0a232ae95",
+      "bytes": 161732
     },
     {
       "file": "notice-input.png",
@@ -55,7 +55,7 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
+      "sha256": "17591933e1adcc1634c81736d3e4604afad10920a39cb28b91a7b9ab194396f0",
       "bytes": 25774
     },
     {
@@ -63,12 +63,12 @@
       "language": "en",
       "kind": "dashboard",
       "width": 736,
-      "height": 1714,
+      "height": 1612,
       "logical_width": 368,
-      "logical_height": 857,
+      "logical_height": 806,
       "dpr": 2,
-      "sha256": "7b31b59fc3542ae44c98dd13ea705323b73c9ae773a3368704ef96defe2862f3",
-      "bytes": 160738
+      "sha256": "669c50441320c21a18ae8b9769b9b31012f6077adb2e12477a02bd58a86d71ef",
+      "bytes": 145606
     },
     {
       "file": "notice-input-en.png",
@@ -103,17 +103,17 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
-      "bytes": 23209
+      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
+      "bytes": 23208
     }
   ],
-  "frontend_tree": "813fa925b685a97d78423cfc93942f5a162e59cd",
-  "runtime_tree": "740921567bb7541bb9bfadf8c3fb58da902434fc",
-  "locale_tree": "457b1c77f4fcc99a5c9854f74154c33c0b442f01",
+  "frontend_tree": "4e7f3eba2b91970f85f98e2bb6484b185c7f63fb",
+  "runtime_tree": "cbcc91014b3c973c29c55e4861c651f42b90fd73",
+  "locale_tree": "d56d3e701170c2e32727ed8caa5a0cd10b77848f",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
-    "src-tauri/Cargo.lock": "808e1cd9d124b3bd3f4b1e1c2b6ed13e793ddf17e6063da022f76e5b9639aec1"
+    "src-tauri/Cargo.lock": "c87d909677db9a174f1b80a0935b3b286d4647c86be2c29f17bbe00b5ffe3e4a"
   },
   "capture_timezone": "Asia/Shanghai"
 }
