@@ -367,6 +367,26 @@ pub(crate) fn reported_model(value: &str) -> Option<String> {
 }
 
 #[cfg(test)]
+#[test]
+fn bundled_sqlite_includes_the_wal_page_size_fix() {
+    // Native providers open databases maintained by other applications.
+    // RUSTSEC-2026-0459 is fixed in the bundled SQLite 3.54.0 and later.
+    assert!(rusqlite::version_number() >= 3_054_000);
+}
+
+#[cfg(test)]
+#[test]
+fn sqlite_unsigned_fields_reject_out_of_range_values() {
+    let db = rusqlite::Connection::open_in_memory().unwrap();
+    let read = |value: i64| db.query_row("SELECT ?1", [value], |row| row.get::<_, u64>(0));
+    assert_eq!(read(i64::MAX).unwrap(), i64::MAX as u64);
+    assert!(read(-1).is_err());
+    assert!(db
+        .query_row("SELECT ?1", [u64::MAX], |row| row.get::<_, i64>(0))
+        .is_err());
+}
+
+#[cfg(test)]
 mod model_evidence_tests {
     use super::*;
     #[test]
