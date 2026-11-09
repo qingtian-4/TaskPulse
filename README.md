@@ -143,7 +143,7 @@ rustup target add aarch64-pc-windows-msvc
 bun run build:windows:arm64
 ```
 
-默认输出到 `src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/`。ARM64 安装包仅在对应 Release 实际提供时可下载，不以 x64 包替代。[构建前置条件](https://v2.tauri.app/distribute/windows-installer/#building-for-32-bit-or-arm)
+默认输出到 `src-tauri/target/aarch64-pc-windows-msvc/release/bundle/nsis/`。[构建前置条件](https://v2.tauri.app/distribute/windows-installer/#building-for-32-bit-or-arm)
 
 ## 贡献与许可
 
