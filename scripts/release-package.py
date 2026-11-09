@@ -26,8 +26,9 @@ def package_release(source, output, version, commit, license_file):
     if not re.fullmatch(r'\d+\.\d+\.\d+', version) or not re.fullmatch(r'[a-f0-9]{40}', commit):
         raise ValueError('Exact stable version and full SHA required')
     number = tuple(map(int, version.split('.')))
-    compact = number[:2] == (0, 0) or number > (1, 1, 0)
-    platforms = ['windows-x64', 'macos-arm64', 'macos-x64'] + (['windows-arm64'] if compact else [])
+    full = number == (0, 0, 1)
+    unified_layout = number[:2] == (0, 0) or number > (1, 1, 0)
+    platforms = ['windows-x64', 'macos-arm64', 'macos-x64'] + (['windows-arm64'] if unified_layout else [])
     metadata, payloads, material = {}, {}, {}
 
     def file(name):
@@ -89,13 +90,13 @@ def package_release(source, output, version, commit, license_file):
 
     feed = load('latest.json')
     expected_targets = {'windows-x86_64', 'windows-x86_64-nsis', 'windows-x86_64-msi', 'darwin-aarch64', 'darwin-x86_64'}
-    if compact:
+    if unified_layout:
         expected_targets |= {'windows-aarch64', 'windows-aarch64-nsis'}
     if feed.get('version') != version or set(feed.get('platforms', {})) != expected_targets:
         raise ValueError('Incomplete update feed')
     # The native verifier in each mandatory platform build checks the embedded
     # public key. Here bind its signed bytes and sidecars to the final feed.
-    for lane in ['windows', 'macos-arm64', 'macos-x64'] + (['windows-arm64'] if compact else []):
+    for lane in ['windows', 'macos-arm64', 'macos-x64'] + (['windows-arm64'] if unified_layout else []):
         update = load('updater-' + lane + '.json')
         targets = {'windows-x86_64', 'windows-x86_64-nsis', 'windows-x86_64-msi'} if lane == 'windows' else ({'windows-aarch64', 'windows-aarch64-nsis'} if lane == 'windows-arm64' else {'darwin-aarch64' if lane == 'macos-arm64' else 'darwin-x86_64'})
         if update.get('version') != version or update.get('commit') != commit or set(update.get('platforms', {})) != targets:
@@ -114,7 +115,7 @@ def package_release(source, output, version, commit, license_file):
     if output.exists() and any(output.iterdir()):
         raise ValueError('Output directory must be empty')
     output.mkdir(parents=True, exist_ok=True)
-    if not compact:
+    if not unified_layout:
         # Preserve every legacy public asset, including standalone .sig, MSI,
         # per-platform manifests/checksums and dependency files.
         names = set(payloads) | {p.name for p in material.values()} | {'latest.json'}
@@ -133,6 +134,15 @@ def package_release(source, output, version, commit, license_file):
         bundle.writestr('LICENSE', license_file.read_bytes())
         bundle.writestr('provenance.json', json.dumps({'version': version, 'commit': commit, 'platforms': platforms}, sort_keys=True) + '\n')
     names = sorted(payloads) + ['latest.json', archive]
+    if full:
+        # Keep the standalone files as well as the unified metadata consumed by
+        # the x64/ARM64 bootstrap. Prefix the two old x64 metadata names.
+        for path in sorted(material.values()):
+            name = path.name
+            if name in ('release-manifest.json', 'SHA256SUMS.txt'):
+                name = 'windows-x64-' + name
+            shutil.copyfile(path, output / name)
+            names.append(name)
     assets = {name: digest(output / name) for name in names}
     unified = {'format': 'taskpulse-release-v2', 'version': version, 'tag': 'v' + version,
                'commit': commit, 'build_kind': 'release', 'platforms': {}, 'assets': assets,
@@ -144,8 +154,8 @@ def package_release(source, output, version, commit, license_file):
     names.append('release-manifest.json')
     (output / 'SHA256SUMS.txt').write_text(''.join(f'{digest(output / name)}  {name}\n' for name in sorted(names)), encoding='utf-8')
     names.append('SHA256SUMS.txt')
-    if len(names) != 11:
-        raise ValueError('Unexpected compact asset count')
+    if len(names) != (36 if full else 11) or len(set(names)) != len(names):
+        raise ValueError('Unexpected release asset count')
     return sorted(names)
 
 

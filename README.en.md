@@ -13,7 +13,7 @@ Let your coding agents work in the background. Keep your attention on what you a
 
 [Install](#install) · [Get started](#get-started) · [Supported agents](#supported-agents) · [简体中文](README.md)
 
-Windows 10 / 11 · macOS 13.3+ · [MIT](LICENSE)
+<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS 13.3+ · Apple Silicon / Intel" src="https://img.shields.io/badge/macOS-13.3%2B%20%7C%20Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a> <img alt="Rust / Tauri 2" src="https://img.shields.io/badge/Rust-Tauri%202-CE422B?style=flat-square&amp;logo=rust"></p>
 
 </div>
 
@@ -21,18 +21,16 @@ TaskPulse is a lightweight tray app for local Codex and Claude Code tasks. Come 
 
 ## Install
 
-**v0.0.1 downloads open after installer verification.** You can [build from source](#build-from-source) now.
+Choose an installer for your system in [TaskPulse v0.0.1](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1).
 
-| System | Installation |
+| System | Installer |
 | --- | --- |
-| Windows 10 / 11 · x64 | Installers after verification; source build available |
-| Windows 11 · ARM64 | Build from source |
-| macOS 13.3+ · Apple Silicon / Intel | Installers after verification; source build available |
+| Windows 10 / 11 · x64 | `TaskPulse_0.0.1_windows_x64_setup.exe` |
+| Windows 11 · ARM64 | `TaskPulse_0.0.1_windows_arm64_setup.exe` |
+| macOS 13.3+ · Apple Silicon | `TaskPulse_0.0.1_macos_arm64.dmg` |
+| macOS 13.3+ · Intel | `TaskPulse_0.0.1_macos_x64.dmg` |
 
-<details>
-<summary>Command-line installation once verified packages are available</summary>
-
-The scripts select the corresponding public package and verify its version, architecture and SHA-256. A missing package stops installation; another version is never substituted.
+### Install from the command line
 
 **Windows · PowerShell**
 
@@ -46,9 +44,7 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-Mac installs to `~/Applications` by default. [OS prompts, command options and removal](docs/INSTALL.en.md).
-
-</details>
+The scripts select the matching architecture and verify SHA-256. [Installation, OS prompts and removal (Chinese)](docs/INSTALL.md)
 
 ## Get started
 
@@ -71,11 +67,7 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 
 <p align="center"><a href="assets/screenshots/dashboard-en.png"><img src="assets/screenshots/dashboard-en.png" width="368" alt="TaskPulse v0.0.1 showing running tasks, input, approval and unread results"></a></p>
 
-Native Windows interface with example tasks and no private data. Models, effort and start/end times appear only when supplied by the source.
-
 <p align="center"><img src="assets/promo/teaser-8s.gif" width="768" alt="An eight-second introduction to TaskPulse: return for input, approval or results"></p>
-
-Eight-second promotional animation with Chinese captions and Standard Events examples; not an interaction recording or performance evaluation.
 
 ## Task reminders
 
@@ -85,24 +77,30 @@ Eight-second promotional animation with Chinese captions and Standard Events exa
   <a href="assets/screenshots/notice-completed-en.png"><img src="assets/screenshots/notice-completed-en.png" width="32%" alt="Turn completed"></a>
 </p>
 
-Left to right: input, approval and completion. Click an image to view it at full resolution.
-
 ## Supported agents
 
-| Agent | Local monitoring |
+| Agent or source | Connection and capabilities |
 | --- | --- |
-| Codex | Sessions, turn state and explicit questions. Approval requires an existing explicit host event channel |
-| Claude Code | Session observations; optional official hooks for explicit approval and lifecycle. Native questions are unsupported |
+| Codex | Discover locally or connect a separate WSL or SSH source. Reads sessions, models, turn state and explicit questions. Approvals require an [explicit event](docs/CODEX_APPROVAL_OBSERVER.md). |
+| Claude Code | Discover locally. Optional official hooks provide explicit approvals and lifecycle events. Native questions and SSH are unsupported. |
+| DeepSeek Harness | Read local Desktop or CLI data, or connect WSL. Supports reported models, reasoning effort and explicit requests. |
+| Hermes | Reads local sessions, models and running state. |
+| OpenCode | Reads local sessions, execution phases and explicit turn outcomes. |
+| WorkBuddy | Reads local tasks and turn results. Cloud tasks are outside this source. |
+| ZCode | Reads local tasks, models and turn results. Standard Events and MCP are optional. |
+| Doubao | Reads desktop tasks and execution state. |
+| Kimi Code / kimi-cli | Reads local main sessions and explicit requests. Standard Events and MCP are optional. |
+| Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
+| TRAE | Discovers public workspace sessions. Task events can come from Standard Events or MCP. |
+| Gemini CLI | Discovers running processes. Task lifecycle requires an event connection. |
+| Other agents | Connect through Standard Events, MCP or compatible status files. |
+| Shell / remote tmux | `tp-run` records the foreground command exit code. An ordinary tmux shell return only provides an inferred result. |
 
-Configure multiple SSH servers to monitor remote Codex. **Claude Code over SSH is unsupported.** See [compatibility](docs/AGENT_COMPATIBILITY.md#english) for WSL and other agents, or the [integration guide](docs/AGENT_INTEGRATION_GUIDE.md) for extensions. Missing evidence never becomes a guessed request or turn ending. A turn ending does not mean the whole project is finished.
-
-A host is focused only when its live owner can be verified. This does not guarantee an exact session jump; use details to copy a path or session ID when return is unavailable. See the compatibility guide for platform validation.
+Reminders depend on the events each source provides. See [compatibility and setup details (Chinese)](docs/AGENT_COMPATIBILITY.md).
 
 ## How it works
 
 <p align="center"><a href="assets/architecture/architecture-en.svg"><img src="assets/architecture/architecture-en.svg" width="900" alt="TaskPulse architecture: read-only sources, trusted observations, durable attention and desktop reminders"></a></p>
-
-Rust owns bounded collection, request matching and durable state. Tauri provides native windows and notifications. Svelte renders the same state snapshot. [Architecture and module ownership](docs/ARCHITECTURE.md)
 
 ## Roadmap
 

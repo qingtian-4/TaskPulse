@@ -1,6 +1,6 @@
 import {readFileSync,writeFileSync} from 'node:fs';
 import {join} from 'node:path';
-import {validateRelease} from './release';
+import {releaseLayout,validateRelease} from './release';
 
 export function releaseNotes(body:string,version:string,assets:string[]):string {
   validateRelease(`v${version}`,Array(4).fill(version));
@@ -12,9 +12,10 @@ export function releaseNotes(body:string,version:string,assets:string[]):string 
     ['macOS · Intel',`TaskPulse_${version}_macos_x64.dmg`],
   ];
   const downloads=packages.map(([label,name])=>assets.includes(name)?`[${label}](https://github.com/qingtian-4/TaskPulse/releases/download/v${version}/${name})`:null).filter(Boolean);
-  if(downloads.length<3)throw Error('Release notes require actual Windows and both macOS installers');
+  const required=packages.filter((_,index)=>index!==1||releaseLayout(version)!=='legacy');
+  if(required.some(([,name])=>!assets.includes(name)))throw Error('Release notes require actual installers for every required architecture');
   const withoutTitle=body.replace(/^# TaskPulse v[^\r\n]+\r?\n\s*/,'').trim();
-  return `# TaskPulse v${version}\n\n${downloads.join(' · ')}\n\n${downloads.length===3?'Windows ARM64 安装包待提供 / Windows ARM64 installer not yet available.\n\n':''}${withoutTitle}\n`;
+  return `# TaskPulse v${version}\n\n${downloads.join(' · ')}\n\n${withoutTitle}\n`;
 }
 if(import.meta.main){
   const [version,directory,source,out]=process.argv.slice(2);

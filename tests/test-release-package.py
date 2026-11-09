@@ -28,7 +28,7 @@ class PackageTests(unittest.TestCase):
 
     def fixture(self, version):
         self.version = version
-        compact = tuple(map(int, version.split('.'))) > (1, 1, 0)
+        compact = version.startswith('0.0.') or tuple(map(int, version.split('.'))) > (1, 1, 0)
         feed = {'version': version, 'platforms': {}}
         for platform, triple in package.TARGETS.items():
             if platform == 'windows-arm64' and not compact:
@@ -72,6 +72,22 @@ class PackageTests(unittest.TestCase):
         self.assertEqual(len(names), 26)
         for name in names:
             self.assertEqual((self.out / name).read_bytes(), (self.source / name).read_bytes())
+
+    def test_first_release_keeps_standalone_assets_with_unified_arm64_metadata(self):
+        self.fixture('0.0.1')
+        names = self.run_package()
+        self.assertEqual(len(names), 36)
+        self.assertIn('TaskPulse_0.0.1_windows_arm64_setup.exe', names)
+        self.assertIn('TaskPulse_0.0.1_windows_arm64_setup.exe.sig', names)
+        self.assertIn('TaskPulse_0.0.1_windows_x64.msi', names)
+        self.assertIn('windows-x64-release-manifest.json', names)
+        self.assertIn('macos-x64-THIRD_PARTY_NOTICES.txt', names)
+        manifest = json.loads((self.out / 'release-manifest.json').read_text())
+        self.assertEqual(set(manifest['platforms']['windows']), {'arm64', 'x64'})
+        self.assertEqual(set(manifest['assets']), set(names) - {'release-manifest.json', 'SHA256SUMS.txt'})
+        for line in (self.out / 'SHA256SUMS.txt').read_text().splitlines():
+            digest, name = line.split('  ')
+            self.assertEqual(digest, package.digest(self.out / name))
 
     def test_future_layout_has_four_primary_installers_and_retains_msi_update(self):
         self.fixture('1.1.1')

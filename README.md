@@ -13,7 +13,7 @@
 
 [下载安装](#安装) · [快速上手](#开始使用) · [支持的 Agent](#支持的-agent) · [English](README.en.md)
 
-Windows 10 / 11 · macOS 13.3+ · [MIT](LICENSE)
+<p><img alt="Windows 10 / 11" src="https://img.shields.io/badge/Windows-10%20%2F%2011-0078D4?style=flat-square"> <img alt="macOS 13.3+ · Apple Silicon / Intel" src="https://img.shields.io/badge/macOS-13.3%2B%20%7C%20Apple%20Silicon%20%2F%20Intel-555?style=flat-square"> <a href="LICENSE"><img alt="MIT License" src="https://img.shields.io/badge/License-MIT-76DFCD?style=flat-square"></a> <img alt="Rust / Tauri 2" src="https://img.shields.io/badge/Rust-Tauri%202-CE422B?style=flat-square&amp;logo=rust"></p>
 
 </div>
 
@@ -21,18 +21,16 @@ TaskPulse 是一款轻量级托盘工具，关注 Codex、Claude Code 的本机�
 
 ## 安装
 
-**v0.0.1 安装包通过验证后开放下载。** 当前可[从源码构建](#从源码构建)。
+在 [TaskPulse v0.0.1](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) 选择对应系统的安装包。
 
-| 系统 | 安装方式 |
+| 系统 | 安装包 |
 | --- | --- |
-| Windows 10 / 11 · x64 | 安装包验证后提供；现可源码构建 |
-| Windows 11 · ARM64 | 自行构建 |
-| macOS 13.3+ · Apple Silicon / Intel | 安装包验证后提供；现可源码构建 |
+| Windows 10 / 11 · x64 | `TaskPulse_0.0.1_windows_x64_setup.exe` |
+| Windows 11 · ARM64 | `TaskPulse_0.0.1_windows_arm64_setup.exe` |
+| macOS 13.3+ · Apple Silicon | `TaskPulse_0.0.1_macos_arm64.dmg` |
+| macOS 13.3+ · Intel | `TaskPulse_0.0.1_macos_x64.dmg` |
 
-<details>
-<summary>正式安装包可用后的命令安装</summary>
-
-脚本只选择对应版本的公开安装包，验证版本、架构和 SHA-256；包不存在时停止，不安装其他版本。
+### 命令行安装
 
 **Windows · PowerShell**
 
@@ -46,9 +44,7 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-Mac 默认安装到 `~/Applications`。[系统安全提示、命令参数与卸载](docs/INSTALL.md)
-
-</details>
+脚本会自动选择对应架构并校验 SHA-256。[安装、系统提示与卸载](docs/INSTALL.md)
 
 ## 开始使用
 
@@ -71,11 +67,7 @@ Mac 默认安装到 `~/Applications`。[系统安全提示、命令参数与卸�
 
 <p align="center"><a href="assets/screenshots/dashboard.png"><img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse v0.0.1：运行中、等待输入、请求批准与未读结果"></a></p>
 
-Windows 原生界面，使用不含私人数据的示例任务。模型、推理强度和起止时间仅在来源提供时显示。
-
 <p align="center"><img src="assets/promo/teaser-8s.gif" width="768" alt="8 秒认识 TaskPulse：专注工作，在需要输入、审批或查看结果时回来"></p>
-
-8 秒宣传动画，使用标准事件示例界面；非操作录屏或性能评测。
 
 ## 任务提醒
 
@@ -85,18 +77,26 @@ Windows 原生界面，使用不含私人数据的示例任务。模型、推理
   <a href="assets/screenshots/notice-completed.png"><img src="assets/screenshots/notice-completed.png" width="32%" alt="本轮结束提醒"></a>
 </p>
 
-从左到右：等待输入、请求批准、本轮结束。点击截图查看原图。
-
 ## 支持的 Agent
 
-| Agent | 本机监控 |
+| Agent / 来源 | 接入与能力 |
 | --- | --- |
-| Codex | 会话与本轮状态、明确提问；审批需宿主已有明确事件通道 |
-| Claude Code | 会话观测；可选官方 Hook 提供明确审批与生命周期，原生提问尚未支持 |
+| Codex | 本机自动发现，也可配置独立 WSL 或 SSH 来源。读取会话、模型、本轮状态和明确提问，审批需要[明确事件](docs/CODEX_APPROVAL_OBSERVER.md)。 |
+| Claude Code | 本机自动发现。可选官方 Hook 提供明确审批和生命周期事件，原生提问及 SSH 尚未支持。 |
+| DeepSeek Harness | 读取本机 Desktop / CLI，也可接入 WSL。支持模型、推理强度和明确请求。 |
+| Hermes | 读取本机会话、模型和运行状态。 |
+| OpenCode | 读取本机会话、运行阶段和明确结束记录。 |
+| WorkBuddy | 读取本机任务和本轮结果，不含云端任务。 |
+| ZCode | 读取本机任务、模型和本轮结果，也可接入标准事件或 MCP。 |
+| 豆包 | 读取桌面端任务及执行状态。 |
+| Kimi Code / kimi-cli | 读取本机主会话与明确请求，也可接入标准事件或 MCP。 |
+| Qoder | 读取本机 Desktop 轮次及 IDE / CLI 日志，原生审批和提问尚未支持。 |
+| TRAE | 发现公开工作区会话，任务状态可通过标准事件或 MCP 接入。 |
+| Gemini CLI | 可发现运行进程，完整任务状态需要事件接入。 |
+| 其他 Agent | 按需接入标准事件、MCP 或兼容状态文件。 |
+| 命令行 / 远程 tmux | 可用 `tp-run` 记录前台命令退出码，普通 tmux shell 返回仅提供推断结果。 |
 
-支持配置多个 SSH 服务器监控远端 Codex；**Claude Code SSH 尚未支持**。WSL 与其他 Agent 的细分能力见[兼容说明](docs/AGENT_COMPATIBILITY.md)，扩展接入见[接入指南](docs/AGENT_INTEGRATION_GUIDE.md)。没有证据时不会猜测请求或本轮结束，本轮结束也不代表整个项目完成。
-
-有可靠身份信息时才聚焦所属宿主窗口，不保证切换到精确会话。无法返回时可查看详情并复制路径或会话 ID。各平台的实机验证范围见兼容说明。
+提醒取决于来源提供的事件。更多配置、限制与验证范围见[兼容说明](docs/AGENT_COMPATIBILITY.md)。
 
 ## 工作原理
 

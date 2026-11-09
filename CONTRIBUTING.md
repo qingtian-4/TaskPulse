@@ -111,7 +111,8 @@ as applicable. Describe user-visible changes since the previous public version.
 The draft pipeline puts actual installation links above these sections. Missing
 architectures do not receive download links.
 
-Versions through 1.1.0 retain all legacy attachments. Later versions use four
+The first official release v0.0.1 keeps standalone signatures, manifests, checksums
+and license files alongside the unified metadata. Later releases use four
 primary installers (Windows x64/ARM64 NSIS and macOS Apple Silicon/Intel DMG),
 two Mac updater archives, `latest.json`, a unified `release-manifest.json`,
 `SHA256SUMS.txt` and one dependency/license ZIP. Retain the additional Windows

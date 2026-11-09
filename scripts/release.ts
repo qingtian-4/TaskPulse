@@ -9,10 +9,12 @@ export const ALPHA_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)-(alpha|b
 export const STABLE_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$/;
 
 // Historical releases through 1.1.0 retain their complete legacy assets.
-// The new 0.0.x series and later versions use compact assets, retaining MSI updates.
-export function releaseLayout(version:string):'legacy'|'compact' {
+// The first official release includes ARM64 and the standalone release files.
+// Later 0.0.x releases consolidate metadata and retain the MSI update lane.
+export function releaseLayout(version:string):'legacy'|'full'|'compact' {
   if(!STABLE_VERSION.test(version) && !ALPHA_VERSION.test(version))throw Error('Invalid release version');
   const [major,minor,patch]=version.split('-')[0].split('.').map(Number);
+  if(major===0&&minor===0&&patch===1)return 'full';
   return (major===0&&minor===0) || major>1 || (major===1 && (minor>1 || (minor===1 && patch>0))) ? 'compact' : 'legacy';
 }
 
@@ -164,7 +166,7 @@ if (import.meta.main) {
       validateCandidateCommit(commit,git(root,['rev-parse','HEAD']),git(root,['rev-parse','refs/remotes/origin/main']));
       const version=validateRelease(`v${projectVersions(root)[0]}`,projectVersions(root));
       validateMsiVersion(root,version);
-      if(process.env.GITHUB_OUTPUT)appendFileSync(process.env.GITHUB_OUTPUT,`version=${version}\ntag=\ncommit=${commit}\n`);
+      if(process.env.GITHUB_OUTPUT)appendFileSync(process.env.GITHUB_OUTPUT,`version=${version}\ntag=\ncommit=${commit}\nlayout=${releaseLayout(version)}\n`);
       console.log(`Validated untagged main candidate at ${commit}; CI artifacts only, no Release`);
     } else if (command === 'preflight') {
       const tag = argument('--tag');

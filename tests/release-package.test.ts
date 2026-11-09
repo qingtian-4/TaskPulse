@@ -12,8 +12,8 @@ test('Windows bootstrap validates unified identities and native architecture wit
   expect(result.stdout).toContain('PASS: unified');
 },15000);
 
-test('0.0.x uses ARM64-capable compact assets and historical releases retain MSI compatibility',()=>{
-  expect(releaseLayout('0.0.1')).toBe('compact');
+test('the first official release keeps full ARM64-capable assets and later releases compact them',()=>{
+  expect(releaseLayout('0.0.1')).toBe('full');
   expect(releaseLayout('0.0.2')).toBe('compact');
   expect(releaseLayout('1.0.1')).toBe('legacy');
   for(const version of ['1.0.1','1.1.0','1.1.0-rc.1'])expect(releaseLayout(version)).toBe('legacy');
@@ -47,9 +47,8 @@ test('release notes show actual installation links first and never invent an ARM
   expect([...text.matchAll(/https:\/\/github.com\/[^)]+/g)]).toHaveLength(4);
   expect(text.indexOf('windows_arm64_setup.exe')).toBeLessThan(text.indexOf('## Added'));
   expect(text).not.toContain('.app.tar.gz');
-  const legacy=releaseNotes(body,version,assets.filter(n=>!n.includes('windows_arm64')));
-  expect(legacy).not.toContain('/windows_arm64');
-  expect(legacy).toContain('not yet available');
+  expect(()=>releaseNotes(body,version,assets.filter(n=>!n.includes('windows_arm64')))).toThrow('actual');
+  expect(()=>releaseNotes(body,version,assets.filter(n=>!n.includes('macos_x64')))).toThrow('actual');
   expect(()=>releaseNotes(body,version,[])).toThrow('actual');
   expect(()=>releaseNotes(body,'2.0.0',assets)).toThrow('title');
 });

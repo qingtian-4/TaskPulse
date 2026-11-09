@@ -1,8 +1,6 @@
 # 安装与快速入门
 
-[English](INSTALL.en.md)
-
-TaskPulse v0.0.1 的安装包下载将在验证完成后开放，当前可[从源码构建](../README.md#从源码构建)。Windows ARM64 暂仅提供自行构建入口。
+在 [TaskPulse v0.0.1](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) 下载与你的系统匹配的安装包。
 
 安装包、更新清单、校验和及依赖许可资料随对应版本提供。
 已有 MSI 用户继续使用 MSI 更新包。Windows ARM64 安装包仅在相应版本实际
@@ -10,12 +8,12 @@ TaskPulse v0.0.1 的安装包下载将在验证完成后开放，当前可[从�
 
 ## 下载安装包
 
-安装包可用后，按系统选择对应文件：
+按系统选择对应文件。
 
 | 系统 | 文件 |
 | --- | --- |
 | Windows 10 / 11，x64 | `TaskPulse_<版本>_windows_x64_setup.exe` 或同版本 `.msi` |
-| Windows 11，ARM64 | [自行构建](../README.md#从源码构建) |
+| Windows 11，ARM64 | `TaskPulse_<版本>_windows_arm64_setup.exe` |
 | macOS 13.3+，Apple Silicon | `TaskPulse_<版本>_macos_arm64.dmg` |
 | macOS 13.3+，Intel | `TaskPulse_<版本>_macos_x64.dmg` |
 
@@ -33,7 +31,7 @@ Mac 打开 DMG，将 TaskPulse 拖入 Applications。命令行安装默认使用
 
 ## 命令行安装
 
-以下命令在 v0.0.1 正式安装包可用后使用；包尚未提供时脚本会停止，不会改装其他版本。
+命令会识别系统架构并下载对应版本。
 
 Windows PowerShell：
 
