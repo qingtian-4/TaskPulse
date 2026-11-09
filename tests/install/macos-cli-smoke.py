@@ -45,7 +45,9 @@ def main():
             files = [name, f'macos-{arch}-SHA256SUMS.txt', f'macos-{arch}-manifest.json']
             for file in files:
                 shutil.copy2(assets / file, response / file)
-            release = dict(tag_name=tag, draft=False, prerelease=True, published_at='2026-10-28T00:00:00Z',
+            # Simulate the public metadata that corresponds to this version.
+            # The production bootstrap must reject a stable tag marked prerelease.
+            release = dict(tag_name=tag, draft=False, prerelease='-' in version, published_at='2026-10-28T00:00:00Z',
                            assets=[dict(name=file, browser_download_url=f'https://github.com/qingtian-4/TaskPulse/releases/download/{tag}/{file}') for file in files])
             (response / 'release.json').write_text(json.dumps(release))
             transport = root / 'bin'
