@@ -37,7 +37,7 @@ export function taskAgent(task:TaskSnapshot):string {return task.agent_name ?? S
 // Visual semantics only: never derive an end, approval or read acknowledgement.
 export function taskTone(task:TaskSnapshot):'running'|'action'|'danger'|'unread'|'stale'|'neutral' {
   if(task.stale || task.status==='unknown' || task.status==='disconnected')return 'stale';
-  if(needsAction(task) || task.outcome==='interrupted' && task.finished_at)return 'action';
+  if(needsAction(task))return 'action';
   if(task.status==='failed')return 'danger';
   if(task.status==='running')return 'running';
   if(isEndedResult(task))return 'unread';

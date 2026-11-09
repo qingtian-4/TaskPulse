@@ -92,10 +92,17 @@ fn aggregate(snapshot: &DashboardSnapshot, english: bool) -> TrayPresentation {
         .filter(|h| h.status == HostStatus::Disconnected)
         .count();
     let starting = snapshot.revision == 0;
+    // Show the highest priority confirmed task. An unrelated source
+    // warning remains in the tooltip and takes the icon when no task does.
     let icon = if counts.action > 0 {
         "needs-input"
-    } else if counts.failed > 0
-        || unhealthy > 0
+    } else if counts.failed > 0 {
+        "error"
+    } else if counts.results > 0 {
+        "review"
+    } else if counts.ongoing > 0 {
+        "working"
+    } else if unhealthy > 0
         || disconnected > 0
         || counts.uncertain > 0
         || waiting > 0
@@ -103,10 +110,6 @@ fn aggregate(snapshot: &DashboardSnapshot, english: bool) -> TrayPresentation {
         || enabled == 0
     {
         "error"
-    } else if counts.results > 0 {
-        "review"
-    } else if counts.ongoing > 0 {
-        "working"
     } else {
         "idle"
     };
@@ -1042,6 +1045,7 @@ mod tests {
         let mut state = snapshot(vec![current]);
         state.providers.push(provider);
         let shown = aggregate(&state);
+        assert_eq!(shown.icon, "working");
         assert!(shown.tooltip.contains("进行中 1"));
         assert!(shown.tooltip.contains("来源异常 1"));
         state.tasks[0].turn_key = Some("different-turn".into());
@@ -1113,7 +1117,13 @@ mod tests {
             aggregate(&snapshot(vec![codex.clone(), hermes.clone(), failure])).icon,
             "error"
         );
-        assert_eq!(aggregate(&snapshot(vec![codex, hermes])).icon, "review");
+        let mut mixed = snapshot(vec![codex, hermes]);
+        mixed.hosts.push(crate::providers::HostHealth::disconnected(
+            "unrelated-host",
+            None,
+        ));
+        assert_eq!(aggregate(&mixed).icon, "review");
+        assert!(aggregate(&mixed).tooltip.contains("断连 1"));
     }
 
     #[test]
@@ -1147,13 +1157,16 @@ mod tests {
             "fixture-host",
             None,
         ));
-        assert_eq!(aggregate(&state).icon, "error");
+        assert_eq!(aggregate(&state).icon, "working");
         state.tasks.push(pending());
         assert_eq!(aggregate(&state).icon, "needs-input");
         state.tasks[1].stale = true;
-        assert_eq!(aggregate(&state).icon, "error");
+        assert_eq!(aggregate(&state).icon, "working");
         state.tasks[1].stale = false;
         state.tasks[1].source_instance = Some("not-yet-observed".into());
+        assert_eq!(aggregate(&state).icon, "working");
+        assert!(aggregate(&state).tooltip.contains("断连 1"));
+        state.tasks[0].stale = true;
         assert_eq!(aggregate(&state).icon, "error");
     }
 
@@ -1270,6 +1283,17 @@ mod tests {
             assert!(t_bar[0] > 220 && t_bar[1] > 235 && t_bar[2] > 230);
             assert_eq!(t_bar[3], 255);
             assert!(image.rgba().chunks_exact(4).any(|p| p[3] == 255));
+            let state_color = match state {
+                "working" => [0x8b, 0xb9, 0xfa, 255],
+                "needs-input" => [0xff, 0xc1, 0x5a, 255],
+                "review" => [0x76, 0xdf, 0xcd, 255],
+                "idle" => [0x9e, 0xab, 0xbc, 255],
+                _ => [0xff, 0x70, 0x79, 255],
+            };
+            assert!(
+                image.rgba().chunks_exact(4).any(|p| p == state_color),
+                "{state}"
+            );
             assert!(!pixels.contains(&image.rgba().to_vec()));
             pixels.push(image.rgba().to_vec());
         }

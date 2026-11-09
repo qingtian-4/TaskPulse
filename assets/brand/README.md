@@ -33,7 +33,7 @@ WebView2 策略和用户配置路径保持原样。生成时 Windows 字体枚�
 资源和 Social Preview 的 SHA256。更新时同步清单，`tests/brand.test.ts` 检查混用、
 ICO 目录及 ICNS 的原生/Retina 表示。原始验收截图保存在本地；公开截图从当前原生应用捕获，不后期替换图标。
 
-托盘使用交付包原始 32px RGBA PNG，映射为 `tray-working`、`tray-needs-input`、
+托盘沿用交付包的 32px RGBA PNG 及其几何，按面板语义分配颜色，映射为 `tray-working`、`tray-needs-input`、
 `tray-error`、`tray-idle` 和 `tray-review`，全部编译时嵌入。
 `tray-offline` / `tray-starting` 兼容资源采用红色，启动文字注明状态待更新。
 Windows Shell 负责把 32px 图像适配任务栏尺寸；不新增 DPI 轮询或系统缩放设置修改。
@@ -44,10 +44,11 @@ Windows Shell 负责把 32px 图像适配任务栏尺寸；不新增 DPI 轮询�
 | 顺序 | 图标 | 判定 |
 |---|---|---|
 | 1 | 橙黄 | 新鲜、来源未退化的明确待处理请求（approval/question/quota） |
-| 2 | 红 | 未查看的任务失败、来源异常/断连、stale/unknown/未分类等待、首次采集中 |
-| 3 | 浅蓝 | 已结束且任务结果未查看，包括明确 turn end 和现有非 Agent tmux shell-return 推断 |
-| 4 | 青绿 | 可信进行中；thinking/tool/responding/awaiting model/tool 均保持运行 |
-| 5 | 灰 | 已发布的关注快照没有以上事实；没有启用来源时表示当前无监控工作 |
+| 2 | 红 | 有未查看的任务失败 |
+| 3 | 青绿 | 已结束且结果未查看，包括明确整轮结束与已有的 tmux 结束推断 |
+| 4 | 蓝 | 可信进行中，包括思考、工具执行和等待模型响应 |
+| 5 | 红 | 没有以上任务，且来源异常、断连、状态待更新、尚未首次读取或未启用来源 |
+| 6 | 灰 | 来源健康，暂无任务需要关注 |
 
 所有数量保留在 tooltip；任务失败与来源异常分别计数。橙黄请求优先于其他任务失败，
 但其自身来源退化/过期时转为状态待更新，不能声称仍是新鲜审批。

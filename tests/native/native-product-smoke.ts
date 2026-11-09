@@ -67,7 +67,7 @@ async function connect(tab:Tab){
 
 app=spawn(exe,['--show'],{env,windowsHide:true,stdio:['ignore','ignore','pipe']});
 app.once('error',error=>spawnFailure=error);
-let stderr='';const trayStates:string[]=[];const trayCaptures:unknown[]=[];const capturedTrayStates=new Set<string>();
+let stderr='';const statusAccents:unknown[]=[];const trayStates:string[]=[];const trayCaptures:unknown[]=[];const capturedTrayStates=new Set<string>();
 app.stderr?.on('data',d=>{stderr=(stderr+String(d)).slice(-12000);});
 async function nativeTray(expected:string){
   const end=Date.now()+15000;
@@ -220,6 +220,27 @@ try{
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
   assert.deepEqual(fontSizes,{title:'14px',context:'14px',activity:'14px',number:nativeLayout.width<=350?'23px':'22px'});
+  const originalTheme=await root.evaluate('document.documentElement.dataset.theme');
+  for(const theme of ['light','dark']){
+    await root.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
+    for(const width of [320,368]){
+      await root.send('Emulation.setDeviceMetricsOverride',{width,height:840,deviceScaleFactor:1,mobile:false});
+      const accents=await root.evaluate(`['running','action','unread'].map(tone=>{
+        const card=document.querySelector('.task-item[data-tone="'+tone+'"]:has(.unread)');
+        if(!card)return null;
+        const label=card.querySelector('.location'), dot=card.querySelector('.unread');
+        const counter=document.querySelector('.overview[data-tone="'+tone+'"] b');
+        return {tone,gap:dot.getBoundingClientRect().left-label.getBoundingClientRect().right,
+          marker:getComputedStyle(dot).backgroundColor,counter:getComputedStyle(counter).color};
+      })`);
+      assert.ok(accents.every((a:any)=>a&&a.gap>=4&&a.gap<=6&&a.marker===a.counter),JSON.stringify({theme,width,accents}));
+      assert.equal(new Set(accents.map((a:any)=>a.marker)).size,3);
+      statusAccents.push({theme,width,accents});
+    }
+  }
+  await root.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(originalTheme)}`);
+  checks.push('status markers match counters, with 5px between location and unread dot in light and dark layouts');
+  await Bun.write(join(owned,'status-accents.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   const compactResult=await root.evaluate(`(()=>{const row=document.querySelector('[data-task-id="${done.id}"]');return {floatingAction:!!row.closest('.task-item').querySelector('.viewed'),extraFooter:!!row.querySelector('.result-space'),sharedTime:!!row.querySelector('.elapsed')?.closest('.metadata,.context')};})()`);
   assert.equal(compactResult.floatingAction,false,'Result cards have no floating read action');
   assert.equal(compactResult.extraFooter,false);assert.equal(compactResult.sharedTime,true);
@@ -644,6 +665,13 @@ try{
       await root.wait(`__TAURI_INTERNALS__.invoke('get_task_notice').then(s=>s.current?.task_id==='${id}')`);
       notice??=await page('/notice');
       await notice.wait(`document.querySelector('.heading')?.textContent===${JSON.stringify(title)}&&document.querySelector('.summary')?.textContent.includes(${JSON.stringify(english?({input:'Input required',approval:'Approval required',completed:'Turn ended'} as Record<string,string>)[kind]:label)})`);
+      const tone=kind==='completed'?'unread':'action';
+      assert.equal(await notice.evaluate(`document.querySelector('.notice-window').dataset.tone`),tone);
+      assert.equal(
+        await notice.evaluate(`getComputedStyle(document.querySelector('.summary')).color`),
+        await root.evaluate(`getComputedStyle(document.querySelector('.overview[data-tone="${tone}"] b')).color`),
+        'Reminder accent must match its task counter',
+      );
       const current=(await root.invoke('get_task_notice')).current;
       if(kind!=='completed')assert.equal(current.auto_dismiss_ms,null);
       const unreadBefore=(await root.invoke('get_agents')).find((t:any)=>t.id===id).unread;
@@ -661,7 +689,7 @@ try{
     await Bun.write(join(owned,'capture-media.json'),JSON.stringify({...buildEvidence,language:english?'en':'zh-CN',files:['dashboard','notice-input','notice-approval','notice-completed'].map(name=>name+suffix+'.png')},null,2));
     checks.push('public README native captures at DPR 2: four visible tasks across running/input/approval/unviewed states and input/approval/completed notices; no acknowledgement or fabricated native-agent identities');
   }
-  const report={passed:true,captureOnly,...buildEvidence,checks,layout:captureOnly?null:layout,scaleChecks,trayStates,trayCaptures,nativeTrayEvidence:captureOnly?'Not sampled during image-only capture':'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:captureOnly?'Native WebView2 DPR 2 capture; not OS display-scale acceptance':'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
+  const report={passed:true,captureOnly,...buildEvidence,checks,layout:captureOnly?null:layout,scaleChecks,statusAccents,trayStates,trayCaptures,nativeTrayEvidence:captureOnly?'Not sampled during image-only capture':'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:captureOnly?'Native WebView2 DPR 2 capture; not OS display-scale acceptance':'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));
 }catch(error){const ui=await management?.evaluate(`({read:document.querySelector('.ms-success')?.textContent,buttons:[...document.querySelectorAll('.ms-advanced button')].map(b=>({text:b.textContent,disabled:b.disabled})),errors:[...document.querySelectorAll('[role=alert]')].map(e=>e.textContent)})`).catch(()=>null);const providers=await root?.invoke('get_providers').catch(()=>null);await Bun.write(join(owned,'failure.json'),JSON.stringify({passed:false,error:String(error),stderr,errors,ui,providers},null,2));console.error('Evidence: '+evidenceDir);throw error;}
 });

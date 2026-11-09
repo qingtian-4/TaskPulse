@@ -17,6 +17,7 @@
   let acknowledgedId:number | null=null;
   let acknowledging=false;
   const content=$derived(noticeState.current ? noticeContent(noticeState.current) : null);
+  const accents={attention:'action',success:'unread',interrupted:'unread',info:'running',danger:'danger'} as const;
   function apply(next:NoticeState){
     if(next.current?.id!==currentId){currentId=next.current?.id ?? null;remaining=next.current ? noticeTimeout(next.current) ?? 15000 : 15000;rotationRemaining=15000;error='';busy=false;}
     noticeState=next;
@@ -80,12 +81,12 @@
   });
 </script>
 
-<div class="notice-window tp-theme tp-tone" data-tone={content?.tone==='attention'?'action':content?.tone==='info'?'brand':content?.tone ?? 'neutral'} role="region" aria-label={$t("TaskPulse 任务提醒")} onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
+<div class="notice-window tp-theme tp-tone" data-tone={content ? accents[content.tone] : 'neutral'} role="region" aria-label={$t("TaskPulse 任务提醒")} onpointerenter={()=>hovered=true} onpointerleave={()=>hovered=false}>
   <button class="close tp-icon" aria-label={$t("关闭提醒（保持未查看）")} title={$t("关闭提醒，任务仍未查看")} disabled={busy || !noticeState.current} onclick={()=>void dismiss()}><X size={16} strokeWidth={1.7}/></button>
   {#if noticeState.current && content}
     {#key noticeState.current.id}
       <button class="message" bind:this={messageElement} disabled={busy} aria-label={'查看任务详情：'+content.heading} onclick={()=>void open()}>
-        <span class="avatar" aria-hidden="true">{#if content.tone==='success'}<CircleCheck size={17} strokeWidth={1.7}/>{:else if content.tone==='attention' || content.tone==='danger'}<CircleAlert size={17} strokeWidth={1.7}/>{:else}<Activity size={17} strokeWidth={1.7}/>{/if}<span class={'status-dot '+content.tone}></span></span>
+        <span class="avatar" aria-hidden="true">{#if content.tone==='success'}<CircleCheck size={17} strokeWidth={1.7}/>{:else if content.tone==='attention' || content.tone==='interrupted' || content.tone==='danger'}<CircleAlert size={17} strokeWidth={1.7}/>{:else}<Activity size={17} strokeWidth={1.7}/>{/if}<span class={'status-dot '+content.tone}></span></span>
         <span class="copy">
           <span class="sender-line">
             <span class="sender" title={content.sender}>{content.sender}</span>

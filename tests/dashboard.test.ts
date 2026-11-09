@@ -189,7 +189,7 @@ test('fresh explicit blockers sort first within ongoing; stale approval remains 
 
 test('explicit interruption is a viewable result, never advertised as success',()=>{
   const interrupted={...base,source:'generic_event' as const,status:'waiting_input' as const,waiting_reason:'turn_ended' as const,finished_at:2,outcome:'interrupted'};
-  expect(taskLabel(interrupted)).toBe('已中断');expect(taskSection(interrupted)).toBe('results');expect(isEndedResult(interrupted)).toBe(true);
+  expect(taskLabel(interrupted)).toBe('已中断');expect(taskSection(interrupted)).toBe('results');expect(isEndedResult(interrupted)).toBe(true);expect(taskTone(interrupted)).toBe('unread');
 });
 test('a failed result can be marked viewed without turning it into success',()=>{
   const failed = {...base,status:'failed' as const};

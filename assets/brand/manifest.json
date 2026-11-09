@@ -12,7 +12,7 @@
   "app_icon": "../../src-tauri/icons/icon.ico",
   "tray_palette": {
     "running": {
-      "hex": "#76DFCD",
+      "hex": "#8BB9FA",
       "svg": "tray-running.svg",
       "meaning": "reliably observed active task"
     },
@@ -33,7 +33,7 @@
     }
   },
   "optional_review": {
-    "hex": "#8BB9FA",
+    "hex": "#76DFCD",
     "svg": "tray-review-optional.svg",
     "meaning": "completed result remains unviewed; do not collapse into idle or resolved input",
     "enabled": true
@@ -87,9 +87,9 @@
     "src-tauri/icons/tray-idle.png": "d494ca262cdf4cb4a53e58e19c68fe5f3c87185c2076d467f3f3df9f54c4d9fd",
     "src-tauri/icons/tray-needs-input.png": "8a20312a61f8afefa8a5b66889a3678502fa788bf7e0c5f7e0c91a10fa27bf17",
     "src-tauri/icons/tray-offline.png": "78bd37037c28b2851a0b51b54902dbe4fa9a331684f7a0a4498a7cda8cf7e8b2",
-    "src-tauri/icons/tray-review.png": "ce65aba9f2a88c1ce609546fee773c004d7f2cfb894d612b5fda057a68ab4ffc",
+    "src-tauri/icons/tray-review.png": "b97aa3fee8c48d5e108e93e5b1ca6b3cdfe249f33724dab212c969bb67255337",
     "src-tauri/icons/tray-starting.png": "78bd37037c28b2851a0b51b54902dbe4fa9a331684f7a0a4498a7cda8cf7e8b2",
-    "src-tauri/icons/tray-working.png": "b97aa3fee8c48d5e108e93e5b1ca6b3cdfe249f33724dab212c969bb67255337",
+    "src-tauri/icons/tray-working.png": "ce65aba9f2a88c1ce609546fee773c004d7f2cfb894d612b5fda057a68ab4ffc",
     "assets/brand/social-preview.png": "714837281a8b3eab72ae35a18a720cfd0c926945c6e68cff3f399e9d48fbe165"
   }
 }
