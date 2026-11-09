@@ -15,3 +15,5 @@ html[data-theme=light] .monitor-sources{--ms-accent:#167e6c;--ms-soft:#eff8f4;--
 @media(max-width:800px){.monitor-sources .ms-head{padding:20px 20px 14px}.monitor-sources .ms-tabsbar{padding:0 20px}.monitor-sources .ms-scroll{padding:16px 20px}.monitor-sources .ms-foot{padding:8px 20px}.monitor-sources .server-controls{gap:6px;flex-wrap:wrap;justify-content:flex-end;max-width:190px}.monitor-sources .ms-head h1{font-size:22px}}
 
 .monitor-sources .agent-entry{scroll-margin-top:8px;border-top:1px solid var(--ms-border)}.monitor-sources .agent-entry:first-child{border-top:0}.monitor-sources .agent-entry .agent-row{border:0}.monitor-sources .agent-config{padding:12px;background:var(--tp-card);border-radius:8px;margin-bottom:12px}.monitor-sources .ms-foot.idle{display:none}.monitor-sources .ms-head{min-height:72px;align-items:center}.monitor-sources .ms-head h1{margin:0}
+
+.monitor-sources .process-discovery>summary{cursor:pointer;font-size:13px;font-weight:600}

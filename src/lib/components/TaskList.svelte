@@ -46,7 +46,7 @@
 </ul>
 <style>
   ul{display:flex;flex-direction:column;gap:8px;padding-top:8px}
-  .task-item{position:relative;margin:0;font-size:var(--tp-task-font-size,14px);line-height:1.5}
+  .task-item{position:relative;margin:0;font-size:var(--tp-task-font-size,12px);line-height:1.5}
   .task-row{position:relative;width:100%;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:6px 8px;font-size:inherit;text-align:left;padding:12px 12px 12px 24px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-card);color:var(--tp-text);cursor:pointer;transition:background .12s,border-color .12s}
   .task-row:hover{background:var(--tp-raised);border-color:var(--tp-border-strong)}
   .task-row.selected{background:var(--tp-accent-soft);border-color:var(--tp-accent-line);box-shadow:inset 2px 0 var(--tp-accent)}
@@ -72,7 +72,7 @@
   .fit-four .task-row{padding-top:7px;padding-bottom:7px;row-gap:4px}
   .compact .task-row{padding-top:8px;padding-bottom:8px}.compact .dot{top:16px}
 
-  .task-item{font-size:var(--tp-task-font-size,14px);line-height:1.5}
+  .task-item{font-size:var(--tp-task-font-size,12px);line-height:1.5}
   .task-row{font-size:inherit;row-gap:6px}
   .task-row :is(.row-title,.context,.model,.activity,.freshness,.status-label,.elapsed,.effort){font-size:inherit;line-height:1.5;margin-top:0}
   .task-row .row-title{font-weight:600}

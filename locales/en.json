@@ -823,5 +823,14 @@
   "选择连接类型": "Connection type",
   "请选择": "Select a connection",
   "添加连接": "Add connection",
-  "等待首条任务通知": "Waiting for the first task event"
+  "等待首条任务通知": "Waiting for the first task event",
+  "进程检测": "Process detection",
+  "高级：进程检测": "Advanced: process detection",
+  "通过进程和终端窗口识别 Gemini CLI 等工具的活动。无法确认审批、提问或任务完成。": "Detects activity from processes and terminal windows, including Gemini CLI. It cannot confirm approvals, questions or task completion.",
+  "Hook 连接": "Hook connections",
+  "Hook 是这个 Agent 的可选事件来源，需要单独在宿主中配置。": "Hooks are an optional event source for this agent and require separate setup in the host.",
+  "添加 Hook 连接": "Add Hook connection",
+  "{count} 个 Hook 连接": "Hook connections: {count}",
+  "连接 {number}": "Connection {number}",
+  "通用事件（MCP / 脚本）": "Generic events (MCP / scripts)"
 }

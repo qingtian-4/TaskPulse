@@ -25,7 +25,7 @@ impl Default for Preferences {
             show_model: true,
             show_elapsed: true,
             panel_density: "comfortable".into(),
-            task_font_size: 14,
+            task_font_size: 12,
         }
     }
 }
@@ -216,7 +216,11 @@ mod font_tests {
     fn old_preferences_default_the_font_and_custom_sizes_are_bounded() {
         let value = serde_json::json!({"theme":"light","language":"en","panel_density":"compact"});
         let old: Preferences = serde_json::from_value(value).unwrap();
-        assert_eq!(old.task_font_size, 14);
+        assert_eq!(old.task_font_size, 12);
+        assert_eq!(Preferences::fresh().task_font_size, 12);
+        let saved: Preferences =
+            serde_json::from_value(serde_json::json!({"task_font_size":14})).unwrap();
+        assert_eq!(saved.task_font_size, 14);
         for size in [12, 14, 18, 20] {
             let mut next = old.clone();
             next.task_font_size = size;

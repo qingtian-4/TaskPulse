@@ -7,7 +7,8 @@ export interface Preferences {
   theme:'system'|'light'|'dark'; language:'system'|'zh-CN'|'en'; show_on_start:boolean;
   show_model:boolean; show_elapsed:boolean;task_font_size:number; panel_density:'comfortable'|'compact';
 }
-export const LEGACY_PREFERENCES:Preferences={theme:'dark',language:'zh-CN',show_on_start:false,show_model:true,show_elapsed:true,task_font_size:14,panel_density:'comfortable'};
+export const DEFAULT_TASK_FONT_SIZE=12;
+export const LEGACY_PREFERENCES:Preferences={theme:'dark',language:'zh-CN',show_on_start:false,show_model:true,show_elapsed:true,task_font_size:DEFAULT_TASK_FONT_SIZE,panel_density:'comfortable'};
 export const appSettings=writable<DashboardSettings|null>(null);
 export const preferences=derived(appSettings,s=>s?.preferences??LEGACY_PREFERENCES);
 export const locale=derived(preferences,p=>p.language==='system'?(typeof navigator!=='undefined'&&navigator.language.toLowerCase().startsWith('zh')?'zh-CN':'en'):p.language);
