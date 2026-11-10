@@ -107,6 +107,30 @@ fn title_record(cells: Value) -> Vec<u8> {
 }
 
 #[test]
+fn closed_desktop_does_not_start_an_old_task_or_end_a_followed_one() {
+    use crate::domain::TaskStatus;
+    let (d, path) = db();
+    fs::write(
+        path.join("000003.log"),
+        batch(1, &[(key(1), Some(inline()))]),
+    )
+    .unwrap();
+    let now = SystemTime::UNIX_EPOCH + std::time::Duration::from_millis(1793074433000);
+    let mut provider = super::super::DoubaoProvider::new(d.path().to_owned());
+    let closed = provider.poll_desktop(now, Ok(false));
+    assert!(!closed.authoritative && closed.tasks.is_empty());
+    let running = provider.poll_desktop(now, Ok(true));
+    assert!(running.authoritative);
+    assert_eq!(running.tasks.len(), 1);
+    assert_eq!(running.tasks[0].status, TaskStatus::Running);
+    assert!(!running.tasks[0].stale);
+    let paused = provider.poll_desktop(now, Ok(false));
+    assert!(!paused.authoritative);
+    assert_eq!(paused.tasks[0].id, running.tasks[0].id);
+    assert!(paused.tasks[0].stale && paused.tasks[0].finished_at.is_none());
+}
+
+#[test]
 fn missing_and_ambiguous_execution_records_have_distinct_diagnostics() {
     let (d, p) = db();
     let mut reader = Reader::default();

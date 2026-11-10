@@ -39,6 +39,15 @@ test('local discovery, empty reads and failures are separate statuses',()=>{
   expect(localSourceStatus({...enabled,enabled:false},undefined,true)).toBe('已检测到 · 未启用');
   expect(localSourceStatus(undefined,undefined,null)).toBe('未启用');
 });
+test('Doubao idle or closed has a clear label without treating incomplete data as healthy',()=>{
+  const source={...createSource('doubao'),enabled:true};
+  const failed:SourceSnapshot={id:source.id,kind:'doubao',location:'',enabled:true,
+    read_state:'failed',data_detected:false,discovered_sessions:0,current_tasks:0};
+  expect(localSourceStatus(source,failed,true,'豆包桌面端未运行')).toBe('豆包桌面端未运行');
+  expect(localSourceStatus(source,failed,true,'未找到支持的豆包工作任务记录；普通聊天不在监控范围内')).toBe('暂无可读取的豆包工作任务');
+  expect(localSourceStatus(source,failed,true,'找到多条豆包工作任务记录，无法确认当前记录')).toBe('读取异常');
+  expect(localSourceStatus({...source,enabled:false},failed,true,'豆包桌面端未运行')).toBe('已检测到 · 未启用');
+});
 test('project scopes and preference broadcasts preserve drafts and source identity',()=>{
   const applied=make(),draft=structuredClone(applied);draft.sources[1].projects=['/manual/project'];const incoming=structuredClone(applied);incoming.sound=true;
   expect(reconcileSourceDraft(draft,applied,incoming).settings.sources[1].projects).toEqual(['/manual/project']);

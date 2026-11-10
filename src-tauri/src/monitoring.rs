@@ -39,7 +39,7 @@ pub enum SourceKind {
 
 impl SourceKind {
     pub(crate) fn supported_on(self, platform: &str) -> bool {
-        self != Self::Doubao || platform == "windows"
+        self != Self::Doubao || matches!(platform, "windows" | "macos")
     }
 }
 
@@ -649,8 +649,8 @@ fn apply_settings(
     Ok(settings)
 }
 
-/// Only validated read-only native adapters are eligible. Doubao is manual
-/// because its work-task storage is available only on the verified Windows lane.
+/// Local discovery only enables eligible read-only sources. Doubao stays
+/// manual because finding a chat database does not verify work-task support.
 pub(crate) fn automatic_local(kind: SourceKind) -> bool {
     matches!(
         kind,
