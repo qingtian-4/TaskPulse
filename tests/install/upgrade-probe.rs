@@ -107,6 +107,88 @@ pub fn record_entry(stage: &str) {
     );
 }
 
+// Linked only into the controlled managed-deployment MSI source copy. The
+// production updater must still let Windows present its normal consent prompt.
+#[cfg(windows)]
+#[allow(dead_code)]
+pub fn install_advertised_msi(
+    update: &tauri_plugin_updater::Update,
+    bytes: Vec<u8>,
+) -> tauri_plugin_updater::Result<()> {
+    use sha2::{Digest, Sha256};
+    use std::{
+        io::{Error, ErrorKind, Read},
+        os::windows::process::CommandExt,
+        process::Command,
+    };
+
+    let denied = |message| Error::new(ErrorKind::PermissionDenied, message);
+    let root = PathBuf::from(DIAGNOSTIC_ROOT);
+    if std::env::var("GITHUB_ACTIONS").as_deref() != Ok("true")
+        || std::env::var("RUNNER_ENVIRONMENT").as_deref() != Ok("github-hosted")
+        || std::env::var_os("TASKPULSE_HOME").is_some()
+        || !root.is_absolute()
+        || !root.join("ci-owned.json").is_file()
+    {
+        return Err(denied("Managed MSI acceptance requires an owned hosted fixture").into());
+    }
+    // Keep the real updater's signed, malformed-package rejection case.
+    const MSI_MAGIC: &[u8] = &[0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1];
+    if !bytes.starts_with(MSI_MAGIC) {
+        return update.install(bytes);
+    }
+    let protected = root.join("administrator-packages");
+    let approval: serde_json::Value =
+        serde_json::from_slice(&fs::read(protected.join("approved-update.json"))?)
+            .map_err(|_| denied("Invalid administrator MSI approval"))?;
+    let code = approval["product_code"]
+        .as_str()
+        .filter(|code| {
+            code.len() == 38
+                && code.bytes().enumerate().all(|(i, b)| match i {
+                    0 => b == b'{',
+                    37 => b == b'}',
+                    9 | 14 | 19 | 24 => b == b'-',
+                    _ => b.is_ascii_hexdigit(),
+                })
+        })
+        .ok_or_else(|| denied("Invalid advertised ProductCode"))?;
+    let hash = format!("{:x}", Sha256::digest(&bytes));
+    let mut installed_source = Vec::new();
+    fs::File::open(protected.join("new.msi"))?
+        .take(bytes.len() as u64 + 1)
+        .read_to_end(&mut installed_source)?;
+    if approval["sha256"].as_str() != Some(hash.as_str()) || bytes != installed_source {
+        return Err(denied("Signed download does not match the administrator-approved MSI").into());
+    }
+    let msiexec = PathBuf::from(
+        std::env::var_os("SystemRoot").ok_or_else(|| denied("Missing Windows system directory"))?,
+    )
+    .join("System32/msiexec.exe");
+    let evidence = root.join("diagnostic-msi-update.log");
+    // The root is a Windows filesystem path controlled by the hosted harness;
+    // MSI properties use doubled quotes for quoted executable arguments.
+    let launch = format!(
+        "LAUNCHAPPARGS=\"--show --upgrade-probe-root \"\"{}\"\"\"",
+        root.display()
+    );
+    Command::new(msiexec)
+        .args(["/package", code, "/passive", "/promptrestart", "/L*vx!"])
+        .arg(&evidence)
+        .arg("AUTOLAUNCHAPP=True")
+        .raw_arg(launch)
+        .spawn()?;
+    write(
+        &root,
+        "managed-msi-dispatch.json",
+        json!({"route":"advertised-product-code","download_matches_protected_package":true,
+               "sha256":hash,"product_code":code}),
+    );
+    // Tauri's Windows updater similarly exits the old process after dispatch
+    // so MSI can replace its files and launch the new executable as this user.
+    std::process::exit(0);
+}
+
 pub fn start(app: tauri::AppHandle) {
     record_entry("setup");
     let args: Vec<_> = std::env::args().collect();

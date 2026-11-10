@@ -242,6 +242,11 @@ def prepare(kind, target, evidence):
     replace_once(updates, 'url.host_str() == Some("github.com")', 'url.host_str() == Some("127.0.0.1")')
     replace_once(updates, 'url.port().is_none()', f'url.port() == Some({port})')
     replace_once(updates, '/qingtian-4/TaskPulse/releases/download/v', f'/{route}/v')
+    if kind == "msi":
+        # Production Update::download still verifies the bytes. Only the
+        # disposable managed lane selects the administrator-advertised source.
+        replace_once(updates, "update.install(bytes)",
+                     "crate::upgrade_probe::install_advertised_msi(&update, bytes)")
     main = source / "src-tauri/src/main.rs"
     replace_once(main, 'mod updates;', 'mod updates;\nmod upgrade_probe;')
     replace_once(main, 'fn main() {', 'fn main() {\n    upgrade_probe::record_entry("main");')
@@ -761,6 +766,18 @@ def supervise(plan):
         restarted = NativeProcess(updated["pid"], next_exe)
         assert child.wait(timeout=15) == 0
         assert digest(next_exe) != old_hash and digest(next_exe) == info["new_exe_sha256"]
+        if info["kind"] == "msi":
+            dispatch = json.loads((root / "managed-msi-dispatch.json").read_text(encoding="utf-8"))
+            metadata = json.loads((evidence / "new-msi-metadata.json").read_text(encoding="utf-8"))
+            assert dispatch == {
+                "route": "advertised-product-code",
+                "download_matches_protected_package": True,
+                "sha256": info["new_sha256"],
+                "product_code": metadata["properties"]["ProductCode"],
+            }, dispatch
+            save(evidence / "managed-msi-dispatch.json", dispatch)
+            result["installer_dispatch"] = "administrator-advertised product code after Tauri signature verification"
+            result["checks"].append("verified signed bytes match the administrator-approved MSI; standard user installs its advertised product")
         if next_exe != exe:
             assert exe.is_file() and digest(exe) == info["new_legacy_bridge_sha256"]
             assert digest(exe) != old_hash, "The compatibility path still contains the old application"

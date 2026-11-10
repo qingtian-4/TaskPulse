@@ -76,6 +76,8 @@ function Initialize-ManagedMsiFixture($Info, [string]$Root, [string]$Evidence) {
     $oldState = $installer.ProductState($metadata.old.ProductCode)
     $newState = $installer.ProductState($metadata.new.ProductCode)
     if ($oldState -ne 5 -or $newState -ne 1) { throw "Advertisement must leave N installed and N+1 only advertised: $oldState/$newState" }
+    $approved = @{product_code=$metadata.new.ProductCode;sha256=$Info.new_sha256} | ConvertTo-Json -Compress
+    [IO.File]::WriteAllText((Join-Path $protected 'approved-update.json'), $approved, [Text.UTF8Encoding]::new($false))
     @{mode='managed-msi-standard-user';old_product_state=$oldState;new_product_state=$newState;old_exe_unchanged=$true;packages_hash_checked=$true;uac_interaction_verified=$false} | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $Evidence 'msi-authorization.json') -Encoding UTF8
     $Info | Add-Member -NotePropertyName installed_exe -NotePropertyValue $exe -Force
     $Info | Add-Member -NotePropertyName msi_deployment -NotePropertyValue 'administrator-advertised-package' -Force
