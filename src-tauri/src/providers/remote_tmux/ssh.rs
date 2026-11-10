@@ -60,7 +60,13 @@ impl SshExecutor for SystemSshExecutor {
             timeout,
             16 * 1024 * 1024,
         )
-        .map_err(|error| format!("ssh {host} probe failed: {error:?}"))?;
+        .map_err(|error| {
+            #[cfg(windows)]
+            if let crate::process::windows::ProbeError::Exit(code) = error {
+                return format!("ssh {host} exited Some({code})");
+            }
+            format!("ssh {host} probe failed: {error:?}")
+        })?;
         if !result.status.success() {
             return Err(format!("ssh {host} exited {:?}", result.status.code()));
         }

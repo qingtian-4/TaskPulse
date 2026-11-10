@@ -22,6 +22,7 @@ pub(crate) enum ProbeError {
     Timeout,
     Kill,
     Wait,
+    Exit(u32),
 }
 
 struct Handle(HANDLE);
@@ -277,10 +278,13 @@ impl Probe {
                 match unsafe { WaitForSingleObject(self.process.0, 0) } {
                     WAIT_OBJECT_0 => {
                         let mut code = 0;
-                        if unsafe { GetExitCodeProcess(self.process.0, &mut code) } == 0
-                            || code != 0
-                        {
+                        if unsafe { GetExitCodeProcess(self.process.0, &mut code) } == 0 {
                             return Err(ProbeError::Wait);
+                        }
+                        if code != 0 {
+                            // Retain the real status without exposing partial
+                            // stdout from an unsuccessful or aborted probe.
+                            return Err(ProbeError::Exit(code));
                         }
                         exit = Some(code);
                     }
@@ -414,6 +418,31 @@ mod tests {
     const LEAF: &str = "process::windows::tests::owned_leaf_fixture";
     const TREE: &str = "process::windows::tests::owned_tree_fixture";
     const STRESS: &str = "process::windows::tests::owned_resource_worker";
+
+    #[test]
+    #[ignore = "owned subprocess fixture exits intentionally"]
+    fn owned_nonzero_fixture() {
+        println!("untrusted-fixture-output");
+        std::io::stdout().flush().unwrap();
+        std::process::exit(255);
+    }
+
+    #[test]
+    fn nonzero_process_exit_keeps_its_code_without_authorizing_partial_output() {
+        let exe = std::env::current_exe().unwrap();
+        let result = output(
+            exe.to_str().unwrap(),
+            &[
+                "--ignored",
+                "--exact",
+                "process::windows::tests::owned_nonzero_fixture",
+                "--nocapture",
+            ],
+            Duration::from_secs(3),
+            4096,
+        );
+        assert_eq!(result, Err(ProbeError::Exit(255)));
+    }
 
     #[test]
     #[ignore = "isolated child fixture, never an Agent/model invocation"]
