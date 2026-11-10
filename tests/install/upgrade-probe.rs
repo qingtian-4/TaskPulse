@@ -130,6 +130,7 @@ pub fn start(app: tauri::AppHandle) {
         tauri::async_runtime::block_on(crate::tray::open_management(
             app.clone(),
             Some("updates".into()),
+            None,
         ))
         .unwrap();
         let window = app.get_webview_window("management").unwrap();
