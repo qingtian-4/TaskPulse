@@ -71,7 +71,7 @@ try {
         Write-Host "[$kind] install"
         $installDir = Join-Path $workspace $kind
         New-Item -ItemType Directory -Path $installDir | Out-Null
-        $exe = Join-Path $installDir 'agent-tray.exe'
+        $exe = Join-Path $installDir 'TaskPulse.exe'
         $package = if ($kind -eq 'nsis') { Join-Path $assetRoot "TaskPulse_${Version}_windows_${Architecture}_setup.exe" } else { Join-Path $assetRoot "TaskPulse_${Version}_windows_x64.msi" }
         $arguments = if ($kind -eq 'nsis') { "/S /D=$installDir" } else { "/i `"$package`" /qn /norestart INSTALLDIR=`"$installDir`" /L*v `"$(Join-Path $evidence 'msi-install.log')`"" }
         $installer = if ($kind -eq 'nsis') { $package } else { Join-Path $env:SystemRoot 'System32\msiexec.exe' }

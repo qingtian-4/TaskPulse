@@ -160,9 +160,9 @@ jobs:
           retryAttempts: '2'
           args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
-        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
+        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/TaskPulse.exe --require-gui
       - name: Test MCP in the GUI-subsystem executable
-        run: python tests/native/mcp-smoke.py --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/agent-tray.exe
+        run: python tests/native/mcp-smoke.py --exe src-tauri/target/x86_64-pc-windows-msvc/ci-release/TaskPulse.exe
       - name: Normalize asset names and generate flat checksums
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}
@@ -259,9 +259,9 @@ jobs:
           retryAttempts: '2'
           args: ${{ needs.preflight.outputs.tag != '' && '--config src-tauri/tauri.updater.conf.json' || '' }} --target aarch64-pc-windows-msvc --features custom-protocol --bundles nsis -- --profile ci-release --locked
       - name: Test the actual GUI-subsystem release bridge with redirected stdin
-        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
+        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/TaskPulse.exe --require-gui
       - name: Test MCP in the GUI-subsystem executable
-        run: python tests/native/mcp-smoke.py --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe
+        run: python tests/native/mcp-smoke.py --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/TaskPulse.exe
       - name: Normalize asset names and generate flat checksums
         env:
           RELEASE_VERSION: ${{ needs.preflight.outputs.version }}

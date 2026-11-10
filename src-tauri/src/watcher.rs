@@ -1160,13 +1160,7 @@ fn update_provider_health(
     let task_observations = output
         .tasks
         .iter()
-        .filter(|task| {
-            task.source == TaskSource::Codex
-                && !task.stale
-                && !task.internal
-                && task.confidence != DetectionConfidence::Inferred
-                && (task.status == crate::domain::TaskStatus::Running || task.requires_action())
-        })
+        .filter(|task| crate::providers::can_record_task_observation(task))
         .map(|task| {
             (
                 task.id.clone(),
@@ -2727,6 +2721,67 @@ mod tests {
         assert_eq!(health[0].status, ProviderStatus::Connected);
         assert_eq!(health[0].last_success, Some(recovered));
         assert!(health[0].message.is_none());
+    }
+
+    #[test]
+    fn doubao_partial_checkpoint_keeps_new_running_task_visible() {
+        let now = SystemTime::now();
+        let mut fresh = TaskSnapshot::new(
+            "doubao:new",
+            "Example new work",
+            TaskSource::Doubao,
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            now,
+        );
+        fresh.source_instance = Some("doubao".into());
+        fresh.session_id = Some("new".into());
+        fresh.turn_key = Some("new-turn".into());
+        fresh.evidence_channel = Some("native_metadata".into());
+        let mut stale = fresh.clone();
+        stale.id = "doubao:old".into();
+        stale.session_id = Some("old".into());
+        stale.turn_key = Some("old-turn".into());
+        stale.stale = true;
+        let output = ProviderOutput::degraded(
+            vec![stale.clone(), fresh.clone()],
+            "the previous checkpoint was removed",
+        );
+        let mut health = Vec::new();
+        update_provider_health(&mut health, "doubao", &output, now);
+        let mut settings = crate::monitoring::from_legacy(&Default::default(), false);
+        settings.onboarding_complete = true;
+        settings
+            .sources
+            .retain(|s| s.kind == crate::monitoring::SourceKind::Doubao);
+        settings.sources[0].enabled = true;
+        if !settings.sources[0].enabled_here() {
+            return;
+        }
+        let view = crate::dashboard_view::project(
+            &output.tasks,
+            &health,
+            &settings,
+            &Default::default(),
+            now,
+        );
+        assert_eq!(view.counts.ongoing, 1);
+        assert_eq!(view.counts.uncertain, 1);
+        assert_eq!(view.counts.results, 0);
+        assert_eq!(
+            view.sources[0].read_state,
+            crate::dashboard_view::ReadState::Partial
+        );
+        assert!(!health[0].verifies_task(&stale, now));
+        assert!(view.unconfirmed_task_ids.is_empty());
+        assert!(health[0].verifies_task(&fresh, now));
+        update_provider_health(
+            &mut health,
+            "doubao",
+            &ProviderOutput::degraded(vec![], "read failed"),
+            now + Duration::from_secs(1),
+        );
+        assert!(!health[0].verifies_task(&fresh, now + Duration::from_secs(1)));
     }
 
     #[test]

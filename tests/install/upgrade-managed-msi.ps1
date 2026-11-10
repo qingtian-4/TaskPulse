@@ -64,7 +64,8 @@ function Initialize-ManagedMsiFixture($Info, [string]$Root, [string]$Evidence) {
     $oldLog = Join-Path $Evidence 'msi-initial.log'
     $result = Invoke-InstallerProcess -FilePath $msiexec -Arguments ('/i "'+(Join-Path $protected 'old.msi')+'" /qn /norestart /L*v "'+$oldLog+'" INSTALLDIR="'+$install+'"') -TimeoutMilliseconds 180000
     if ($result.ExitCode -ne 0) { throw "Initial MSI install failed: $($result.ExitCode)" }
-    $exe = Join-Path $install 'agent-tray.exe'
+    if ($Info.old_exe_name -notin @('agent-tray.exe', 'TaskPulse.exe')) { throw 'Unrecognized old executable name' }
+    $exe = Join-Path $install $Info.old_exe_name
     Assert-UpgradePackageHash $exe $Info.old_exe_sha256
     if ($installer.ProductState($metadata.old.ProductCode) -ne 5) { throw 'Old MSI must be installed' }
     $advertiseLog = Join-Path $Evidence 'msi-advertise.log'

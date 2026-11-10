@@ -232,6 +232,28 @@ pub fn task_observation_state(task: &TaskSnapshot) -> String {
     .to_string()
 }
 
+pub(crate) fn can_record_task_observation(task: &TaskSnapshot) -> bool {
+    use crate::domain::{DetectionConfidence, TaskSource, TaskStatus};
+    if task.stale || task.internal {
+        return false;
+    }
+    match task.source {
+        TaskSource::Codex => {
+            task.confidence != DetectionConfidence::Inferred
+                && (task.status == TaskStatus::Running || task.requires_action())
+        }
+        // The Doubao reader marks every carried-over running task stale.
+        // Only an active row from the validated current checkpoint is proof.
+        TaskSource::Doubao => {
+            task.status == TaskStatus::Running
+                && task.evidence_channel.as_deref() == Some("native_metadata")
+                && task.session_id.as_deref().is_some_and(|id| !id.is_empty())
+                && task.turn_key.as_deref().is_some_and(|key| !key.is_empty())
+        }
+        _ => false,
+    }
+}
+
 impl ProviderHealth {
     fn observation_is_current(&self, proof: &TaskObservation, now_ms: u64) -> bool {
         Some(proof.observed_at) == self.last_attempt.map(resources::epoch_ms)
@@ -252,10 +274,7 @@ impl ProviderHealth {
 
     pub fn matches_latest_observation(&self, task: &TaskSnapshot, now: SystemTime) -> bool {
         let now = resources::epoch_ms(now);
-        task.source == crate::domain::TaskSource::Codex
-            && !task.stale
-            && !task.internal
-            && task.confidence != crate::domain::DetectionConfidence::Inferred
+        can_record_task_observation(task)
             && (!task.requires_action()
                 || task.waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted)
                 || task

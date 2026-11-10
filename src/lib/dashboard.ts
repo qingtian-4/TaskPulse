@@ -173,7 +173,7 @@ export function projectKey(task: TaskSnapshot, settings?: DashboardSettings | nu
 export function sourceFreshness(task: TaskSnapshot, settings: DashboardSettings | null, providers: ProviderHealth[], now: number): string {
   const source = taskSource(task, settings);
   const health = providers.find(p => p.provider === (source?.id ?? task.source_instance));
-  if(health?.status==='degraded' && source?.enabled && (source.kind==='codex'||source.kind==='codex_wsl') && !task.stale && (task.status==='running'||needsAction(task)) && health.task_observations?.[task.id])return '该会话已更新；同一来源的其他会话需检查';
+  if(health?.status==='degraded' && source?.enabled && (source.kind==='codex'||source.kind==='codex_wsl'||source.kind==='doubao') && !task.stale && (task.status==='running'||needsAction(task)) && health.task_observations?.[task.id])return '该会话已更新；同一来源的其他会话需检查';
   if (!health?.last_success) return '来源尚未成功采集';
   const age = now - health.last_success;
   const stale = health.status === 'degraded' || age > Math.max(30000, (source?.poll_interval_ms ?? 3000) * 3);

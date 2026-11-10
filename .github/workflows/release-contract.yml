@@ -54,7 +54,7 @@ jobs:
       - name: Build untagged ARM64 installer without release signing keys
         run: bun run tauri build --target aarch64-pc-windows-msvc --features custom-protocol --bundles nsis -- --profile ci-release --locked
       - name: Verify native CLI bridge on ARM64
-        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/agent-tray.exe --require-gui
+        run: bun tests/native/integration-bridge-smoke.ts --exe src-tauri/target/aarch64-pc-windows-msvc/ci-release/TaskPulse.exe --require-gui
       - name: Stage explicitly untagged preview assets
         env:
           SOURCE_COMMIT: ${{ github.event.pull_request.head.sha || github.sha }}

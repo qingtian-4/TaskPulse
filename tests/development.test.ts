@@ -75,8 +75,8 @@ test('development artifacts allowlist runtime files, pin checksums and reject st
     stageDevelopment(exe,out,'a'.repeat(40),'1.0.1');
     const manifest=JSON.parse(readFileSync(join(out,'development-manifest.json'),'utf8'));
     expect(manifest).toMatchObject({tag:null,build_kind:'development',commit:'a'.repeat(40)});
-    expect(manifest.assets).toEqual(['agent-tray.exe','WebView2Loader.dll']);
-    expect(readFileSync(join(out,'SHA256SUMS.txt'),'utf8')).toContain(sha256(bytes)+'  agent-tray.exe');
+    expect(manifest.assets).toEqual(['TaskPulse.exe','WebView2Loader.dll']);
+    expect(readFileSync(join(out,'SHA256SUMS.txt'),'utf8')).toContain(sha256(bytes)+'  TaskPulse.exe');
     expect(()=>readFileSync(join(out,'attention.json'))).toThrow();
     expect(()=>stageDevelopment(exe,out,'a'.repeat(40),'1.0.1')).toThrow('already exists');
     expect(()=>stageDevelopment(exe,join(root,'bad-sha'),'main','1.0.1')).toThrow('full source SHA');

@@ -74,7 +74,7 @@ Windows tray acceptance requires a clean binary for an explicit full commit SHA.
 
 ## Share a temporary test build
 
-Every successful **Windows quality** run uploads an **installation-free Windows development build**. Open its run summary for the download link and ZIP SHA-256, or download the artifact named `taskpulse-dev-windows-x64-<full-SHA>` with the GitHub CLI. Extract the whole ZIP into a new folder and run `agent-tray.exe`. The manifest identifies the exact source SHA, channel and per-file SHA-256 values; keep `WebView2Loader.dll` beside the executable when present. This uses the isolated development profile above, so the installed application can stay open.
+Every successful **Windows quality** run uploads an **installation-free Windows development build**. Open its run summary for the download link and ZIP SHA-256, or download the artifact named `taskpulse-dev-windows-x64-<full-SHA>` with the GitHub CLI. Extract the whole ZIP into a new folder and run `TaskPulse.exe`. The manifest identifies the exact source SHA, channel and per-file SHA-256 values; keep `WebView2Loader.dll` beside the executable when present. This uses the isolated development profile above, so the installed application can stay open.
 
 Temporary development, installer-preview and upgrade-evidence artifacts expire after **7 days**. [GitHub artifact retention](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/remove-workflow-artifacts) applies to new uploads; existing older artifacts keep their previous expiry. Download through the run summary, check the SHA and save the final evidence locally before expiry. No application profiles, captured private sessions or signing keys belong in artifacts.
 

@@ -127,4 +127,4 @@ jobs:
           "### TaskPulse Dev (expires in 7 days)" >> $env:GITHUB_STEP_SUMMARY
           "[Download the portable Windows build]($env:ARTIFACT_URL)" >> $env:GITHUB_STEP_SUMMARY
           "ZIP SHA-256: $env:ARTIFACT_DIGEST" >> $env:GITHUB_STEP_SUMMARY
-          "Extract into a new directory and run agent-tray.exe. No installation or production data migration." >> $env:GITHUB_STEP_SUMMARY
+          "Extract into a new directory and run TaskPulse.exe. No installation or production data migration." >> $env:GITHUB_STEP_SUMMARY
