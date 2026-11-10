@@ -127,6 +127,58 @@ poll_interval_ms=3000
   assert.equal(await ui.evaluate(`document.querySelector('.settings-nav [aria-current="page"]').getAttribute('href')`),'#about');
   await root.invoke('open_management');
   await ui.wait(`document.querySelector('.settings-nav a[href="#general"]').getAttribute('aria-current')==='page'`);
+  // Mock only read-only discovery. The click, native window routing, draft
+  // and settings save still use the owned native application and profile.
+  const discoverSettings=await ui.invoke('get_monitoring_settings');
+  const candidate={...discoverSettings.sources[0],id:'trae',kind:'trae',name:'Trae fixture',location:'',enabled:false,projects:['*']};
+  const discoveredFixture=[
+    {id:'trae',location:'',data_location_detected:true,detail:'fixture',candidate},
+    {id:'codex-wsl:fixture',location:'Fixture',data_location_detected:true,detail:'fixture',
+     candidate:{...candidate,id:'codex-wsl:fixture',kind:'codex_wsl',name:'WSL fixture',location:'Fixture'}},
+  ];
+  const mockDiscovery=async(target:typeof root)=>{
+    target.onRequestPaused(async({requestId,request})=>{
+      await target.send('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[
+        {name:'Content-Type',value:'application/json'},{name:'Tauri-Response',value:'ok'},
+        {name:'Access-Control-Expose-Headers',value:'Tauri-Response'},
+        {name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'},
+        {name:'Access-Control-Allow-Methods',value:'POST, OPTIONS'},
+        {name:'Access-Control-Allow-Headers',value:'Content-Type, Tauri-Callback, Tauri-Error, Tauri-Invoke-Key'}
+      ],body:Buffer.from(JSON.stringify(request.method==='POST'?discoveredFixture:[])).toString('base64')});
+    });
+    await target.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/discover_sources'}]});
+  };
+  await ui.invoke('plugin:window|close',{label:'management'});
+  await mockDiscovery(root);
+  await root.send('Page.reload');
+  await root.wait(`document.querySelector('[data-source-review]')?.textContent.includes('Trae')`);
+  assert.ok(!(await root.evaluate(`document.querySelector('[data-source-review]').textContent`)).includes('WSL fixture'));
+  await root.evaluate(`document.querySelector('[data-source-review] button').click()`);
+  ui=await connect(await tab('/manage'));
+  await ui.wait(`new URLSearchParams(location.search).get('reviewSources')==='1' && !!document.querySelector('.ms-tabs')`);
+  await mockDiscovery(ui);
+  await ui.send('Page.reload');
+  await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
+  assert.equal(await ui.evaluate(`document.querySelectorAll('[data-agent-kind="trae"]').length`),1);
+  await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
+  await ui.wait(`!!document.querySelector('.server-list')`);
+  await root.evaluate(`document.querySelector('[data-source-review] button').click()`);
+  await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
+  assert.equal(await ui.evaluate(`document.querySelector('.ms-scroll').scrollTop`),0);
+  if(captureScreenshots)await Bun.write(join(owned,'settings-discovery-review-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  assert.deepEqual(await ui.invoke('get_monitoring_settings'),discoverSettings,'Opening the review must not enable or save a source');
+  await ui.evaluate(`document.querySelector('[data-discovery-review] [data-agent-kind="trae"] .agent-row button').click()`);
+  await ui.wait(`!!document.querySelector('[data-source-id="trae"]')&&!!document.querySelector('.ms-foot .primary')`);
+  assert.equal(await ui.evaluate(`document.querySelector('[data-agent-kind="trae"] .settings-switch').checked`),false);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  await root.wait(`!document.querySelector('[data-source-review]')`);
+  const discoveredSaved=await ui.invoke('get_monitoring_settings');
+  assert.equal(discoveredSaved.sources.find((s:any)=>s.id==='trae')?.enabled,false);
+  await ui.invoke('save_monitoring_settings',{settings:{...discoveredSaved,sources:discoverSettings.sources},expected:discoveredSaved});
+  await Promise.all([root.send('Fetch.disable'),ui.send('Fetch.disable')]);root.onRequestPaused(undefined);ui.onRequestPaused(undefined);
+  await root.invoke('open_management',{section:'general'});
+  await ui.wait(`document.querySelector('.settings-nav a[href="#general"]').getAttribute('aria-current')==='page'`);
+
   const resourceSamples=[];
   let resourceSampling: {intervalMs:number;durationMs:number;attempts:number;omitted:number}|null=null;
   if(sampleResources){
@@ -591,6 +643,7 @@ poll_interval_ms=3000
   await root.invoke('request_refresh');
   await ui.wait(`document.querySelector('[data-source-id="${hermesId}"] .project-options strong')?.textContent==='No project'`);
   assert.ok(!(await root.invoke('get_agents')).some((task:any)=>task.source_instance===hermesId),'An empty allowlist still excludes the session');
+  assert.match(await ui.evaluate(`document.querySelector('[data-agent-kind="hermes"] .agent-row small').textContent`),/No projects selected/);
   if(captureScreenshots)await Bun.write(join(owned,'settings-hermes-project-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await ui.evaluate(`document.querySelector('[data-source-id="${hermesId}"] .project-options input').click()`);
   await ui.wait(`!!document.querySelector('.ms-foot .primary')`);

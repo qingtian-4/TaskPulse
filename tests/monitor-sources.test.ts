@@ -34,6 +34,8 @@ test('local discovery, empty reads and failures are separate statuses',()=>{
   const empty:SourceSnapshot={id:enabled.id,kind:enabled.kind,location:'',enabled:true,
     read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0};
   expect(localSourceStatus(enabled,empty,true)).toBe('读取正常 · 暂无近期会话');
+  expect(localSourceStatus({...enabled,projects:[]},empty,true)).toBe('未选项目 · 当前不监控');
+  expect(localSourceStatus({...enabled,projects:[]},{...empty,read_state:'failed'},true)).toBe('读取异常');
   expect(localSourceStatus(enabled,empty,false)).toBe('未检测到本机数据');
   expect(localSourceStatus(enabled,{...empty,read_state:'failed'},false)).toBe('读取异常');
   expect(localSourceStatus({...enabled,enabled:false},undefined,true)).toBe('已检测到 · 未启用');

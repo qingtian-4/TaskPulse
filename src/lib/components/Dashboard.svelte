@@ -11,7 +11,7 @@
   import MessageCenter from './MessageCenter.svelte';
   import {projectDashboardTasks} from '$lib/dashboard';
   import {measureDashboard} from '$lib/dashboard-layout';
-  import {summarizeSources} from '$lib/source-setup';
+  import {localDiscoveryCandidates,summarizeSources,type SourceDefinition} from '$lib/source-setup';
   import {acceptMessageState} from '$lib/messages';
   import type {MessageCenterState} from '$lib/types';
   import Settings from '@lucide/svelte/icons/settings';
@@ -44,7 +44,9 @@
   let note = $state('');
   let refreshing = $state(false);
   let pinned = $state(false);
-  let newSources = $state(0);
+  let discovery=$state<SourceDiscovery[]>([]);
+  let sourceCatalog=$state<SourceDefinition[]>([]);
+  const newSources=$derived(localDiscoveryCandidates(sourceCatalog,discovery,settings));
   let pendingPrompts = $state<TaskSnapshot[]>([]);
   let showPrompts = $state(false);
   let messages = $state<MessageCenterState>({revision:0,unread:0,entries:[],error:null});
@@ -153,10 +155,11 @@
   let availableUpdate=$state('');
   function manage(){return openManagement("general");}
   function manageSources(){return openManagement("sources");}
+  function reviewSources(){return openManagement("sources",true);}
   function manageUpdates(){return openManagement("updates");}
-  async function openManagement(section:string) {
+  async function openManagement(section:string,reviewSources=false) {
     if (!isTauri()) { note='浏览器演示：真实设置请在托盘应用中打开'; return; }
-    try { await invoke('open_management',{section}); } catch(e) { error=String(e); }
+    try { await invoke('open_management',{section,reviewSources}); } catch(e) { error=String(e); }
   }
   async function action(task: TaskSnapshot, name: string, value?: boolean) {
     if (!isTauri()) return;
@@ -229,7 +232,7 @@
     const discover=async()=>{
       try {
         const found=await invoke<SourceDiscovery[]>('discover_sources');
-        if(mounted)newSources=found.filter(s=>s.data_location_detected===true && s.candidate && !['hooks','scanner'].includes(s.candidate.kind)).length;
+        if(mounted)discovery=found;
       } catch { /* Candidate hints must not block normal monitoring. */ }
     };
     const discoveryTimer=setInterval(()=>void discover(),30000);
@@ -246,6 +249,7 @@
         await subscribe(listen('popup-opened',()=>{layoutEpoch++;}));
         await subscribe(listen<{phase:string;version:string|null;can_install:boolean}>('application-update',e=>availableUpdate=e.payload.phase==='available'&&e.payload.can_install ? e.payload.version ?? '' : ''));
         void invoke<{phase:string;version:string|null;can_install:boolean}>('get_update_status').then(s=>availableUpdate=s.phase==='available'&&s.can_install?s.version ?? '':'');
+        void invoke<SourceDefinition[]>('get_source_catalog').then(value=>{if(mounted)sourceCatalog=value;}).catch(()=>{});
         await snapshots(); view=settings?.default_view ?? 'tasks';
         void discover();
         error=await invoke<string | null>('get_monitoring_error') ?? '';
@@ -296,7 +300,7 @@
   {#if refreshResult}<p class="notice" role="status">{refreshResult}<button class="dismiss" onclick={()=>refreshSources=[]} aria-label={$t("关闭刷新结果")}>×</button></p>{/if}
   {#if availableUpdate}<p class="notice">TaskPulse {availableUpdate} {$t("可更新")}<button class="link" onclick={manageUpdates}>{$t("查看更新")}</button></p>{/if}
   {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>{$t("选择你要关注的 Agent")}</strong><p>{$t("确认本机来源，或添加远程服务器。新任务会自动出现。")}</p><button onclick={manageSources}>{$t("设置监控来源")}</button></div>{/if}
-  {#if settings?.onboarding_complete && newSources}<p class="notice">{$t("发现")} {newSources} {$t("个可监控来源")}<button class="link" onclick={manageSources}>{$t("选择添加")}</button></p>{/if}
+  {#if newSources.length}<p class="notice" data-source-review><span>{$t("新发现：{names}",{names:newSources.slice(0,2).map(row=>$t(row.definition.name)).join('、')})}{#if newSources.length>2} +{newSources.length-2}{/if}</span><button class="link" onclick={reviewSources}>{$t("选择添加")}</button></p>{/if}
   {#if refreshing}<p class="notice" role="status">{$t("刷新中：")}{progress.total-progress.pending.length} / {progress.total} {$t("个来源已返回")}{#if progress.failed.length} · {progress.failed.length} {$t("个失败")}{/if}</p>{/if}
   {#if showArchive}<p class="notice">{$t("较早关注保留原状态和未读标记，不占近期面板；可重新加入或固定。")}</p>{/if}
   {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?$t('已隐藏本轮'):$t('已停止监控此会话')}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>{$t("撤销")}</button></div>{/if}

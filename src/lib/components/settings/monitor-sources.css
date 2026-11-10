@@ -17,3 +17,4 @@ html[data-theme=light] .monitor-sources{--ms-accent:#167e6c;--ms-soft:#eff8f4;--
 .monitor-sources .agent-entry{scroll-margin-top:8px;border-top:1px solid var(--ms-border)}.monitor-sources .agent-entry:first-child{border-top:0}.monitor-sources .agent-entry .agent-row{border:0}.monitor-sources .agent-config{padding:12px;background:var(--tp-card);border-radius:8px;margin-bottom:12px}.monitor-sources .ms-foot.idle{display:none}.monitor-sources .ms-head{min-height:72px;align-items:center}.monitor-sources .ms-head h1{margin:0}
 
 .monitor-sources .process-discovery>summary{cursor:pointer;font-size:13px;font-weight:600}
+.discovery-review{padding:10px 12px;margin:0 0 9px;border:1px solid var(--ms-border);border-radius:8px;background:var(--ms-soft)}.discovery-review h3{margin:0 0 4px}

@@ -868,5 +868,10 @@
   "豆包桌面端未运行": "Doubao Desktop is not running",
   "无法确认豆包桌面端是否运行": "Could not verify whether Doubao Desktop is running",
   "暂无可读取的豆包工作任务": "No readable Doubao work tasks yet",
-  "手动开启后，只关注兼容的豆包工作任务。普通聊天不在监控范围内。": "Turn this source on manually to monitor compatible Doubao work tasks. Regular chats are outside the monitoring scope."
+  "手动开启后，只关注兼容的豆包工作任务。普通聊天不在监控范围内。": "Turn this source on manually to monitor compatible Doubao work tasks. Regular chats are outside the monitoring scope.",
+  "新发现：{names}": "Newly detected: {names}",
+  "新发现的本机来源": "Newly detected local sources",
+  "可先查看配置，再决定是否启用。": "Review each source before enabling it.",
+  "设置项目范围": "Set project scope",
+  "未选项目 · 当前不监控": "No projects selected · no tasks monitored"
 }
