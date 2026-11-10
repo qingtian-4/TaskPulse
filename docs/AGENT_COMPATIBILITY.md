@@ -10,7 +10,7 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 | --- | --- | --- |
 | Codex | `CODEX_HOME` 或 `~/.codex` 中的元数据与会话日志 | 原生任务、项目、模型和执行阶段；读取宿主留下的明确提问，审批需有明确事件，见[审批观察器](CODEX_APPROVAL_OBSERVER.md)。添加独立发行版来源，需要运行中的 WSL 和 Python 3；不会唤醒停止的发行版。添加你自己的 SSH 主机与项目范围 |
 | Claude Code | `CLAUDE_CONFIG_DIR` 或 `~/.claude` | 原生会话观测；精确生命周期及审批可用可选官方 Hook，原生提问未支持 |
-| Hermes | 原生 SQLite 数据库与运行租约 | 标题、已记录的项目路径、模型及运行状态。没有路径的会话可在项目范围中选「未关联项目」；仅有会话记录时，不判定任务正在运行或已完成 |
+| Hermes | 原生 SQLite 数据库与运行租约 | 标题、已记录的项目路径、模型及运行状态。没有路径的会话可选「未关联项目」；已跟踪的轮次有明确最终回复时可进入待查看，仅有会话记录不会生成任务 |
 | DeepSeek Harness | `DSH_HOME` 或 `~/.dsh`，可用 `TASKPULSE_DSH_HOME` 覆盖 | Desktop / CLI 原生会话，支持旧日志与 v4 日志；明确提问按调用与问题 ID 匹配回答，审批按请求 ID 匹配决定；读取请求中报告的推理强度 |
 | OpenCode | `~/.local/share/opencode/opencode.db`，支持 `XDG_DATA_HOME` | 读取运行阶段、模型与明确结束记录；支持 v2 和旧版会话表；不提供独立提问或审批提醒 |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `projects/*.jsonl` 会话目录 | 数据库与增量日志关联本轮开始/结束；不包含云端任务，不提供独立提问或审批提醒 |

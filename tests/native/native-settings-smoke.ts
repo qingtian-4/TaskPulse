@@ -623,7 +623,11 @@ poll_interval_ms=3000
   hermesFixture.exec(`CREATE TABLE sessions(id TEXT, display_name TEXT, title TEXT, last_activity_at REAL,
     started_at REAL, cwd TEXT, git_repo_root TEXT, ended_at REAL, end_reason TEXT,
     archived INTEGER, hidden INTEGER, pinned INTEGER, last_read_at REAL, last_activity_description TEXT);
-    CREATE TABLE session_turn_leases(conversation_id TEXT, acquired_at REAL, expires_at REAL);`);
+    CREATE TABLE session_turn_leases(conversation_id TEXT, acquired_at REAL, expires_at REAL);
+    CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,timestamp REAL,
+      finish_reason TEXT,tool_calls TEXT,tool_call_id TEXT,active INTEGER DEFAULT 1,
+      compacted INTEGER DEFAULT 0,display_kind TEXT);
+    CREATE INDEX messages_by_session ON messages(session_id,id);`);
   hermesFixture.close();
   const beforeHermes=await ui.invoke('get_monitoring_settings');
   const nativeHermes={id:hermesId,kind:'hermes',name:'Hermes public fixture',location:hermesDb,enabled:true,projects:[],
@@ -638,6 +642,7 @@ poll_interval_ms=3000
   writer.transaction(()=>{
     writer.run(`INSERT INTO sessions VALUES('public-session','Example session',NULL,?1,?1,'','',NULL,NULL,0,0,0,NULL,NULL)`,[now]);
     writer.run(`INSERT INTO session_turn_leases VALUES('public-session',?1,?2)`,[now,now+120]);
+    writer.run(`INSERT INTO messages(session_id,role,timestamp) VALUES('public-session','user',?1)`,[now+0.01]);
   })();
   writer.close();
   await root.invoke('request_refresh');
@@ -651,7 +656,34 @@ poll_interval_ms=3000
   await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(tasks=>tasks.some(t=>t.source_instance==='${hermesId}'&&t.status==='running'&&!t.stale))`);
   const hermesSaved=await ui.invoke('get_monitoring_settings');
   assert.deepEqual(hermesSaved.sources.find((s:any)=>s.id===hermesId).projects,['@unassociated']);
-  await ui.invoke('save_monitoring_settings',{settings:{...hermesSaved,sources:beforeHermes.sources},expected:hermesSaved});
+  // Exercise the real monitor, result projection and native popup from the
+  // exact same followed lease. Hermes leaves ended_at unset for a chat reply.
+  const runningHermes=(await root.invoke('get_agents')).find((t:any)=>t.source_instance===hermesId);
+  const hermesNotify=await ui.invoke('save_monitoring_settings',{settings:{...hermesSaved,notifications:true,notification_mode:'popup'},expected:hermesSaved});
+  const hermesEndDb=new Database(hermesDb), endedAt=Date.now()/1000;
+  hermesEndDb.transaction(()=>{
+    hermesEndDb.run(`INSERT INTO messages(session_id,role,timestamp,finish_reason) VALUES('public-session','assistant',?1,'stop')`,[endedAt]);
+    hermesEndDb.run(`UPDATE sessions SET last_activity_at=?1 WHERE id='public-session'`,[endedAt]);
+    hermesEndDb.run(`DELETE FROM session_turn_leases`);
+  })();
+  hermesEndDb.close();
+  await root.invoke('request_refresh');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(tasks=>tasks.some(t=>t.source_instance==='${hermesId}'&&t.waiting_reason==='turn_ended'&&t.unread&&!t.stale))`);
+  const hermesResult=(await root.invoke('get_agents')).find((t:any)=>t.source_instance===hermesId);
+  assert.equal(hermesResult.turn_key,runningHermes.turn_key);
+  assert.ok(hermesResult.finished_at);
+  const hermesCard=JSON.stringify(`[data-task-id="${hermesResult.id}"]`);
+  await root.wait(`document.querySelector(${hermesCard})?.closest('section')?.querySelector('h2')?.textContent.includes('Unviewed results')`);
+  const hermesNotice=await connect(await tab('/notice'));
+  await hermesNotice.wait(`document.querySelector('.notice-window .heading')?.textContent==='Example session'`);
+  const shownHermes=await hermesNotice.invoke('get_task_notice');
+  assert.equal(shownHermes.current?.task_id,hermesResult.id);
+  assert.equal(shownHermes.current?.test,false);
+  if(captureScreenshots)await Bun.write(join(owned,'hermes-turn-ended-notice.png'),Buffer.from((await hermesNotice.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await hermesNotice.evaluate(`document.querySelector('.notice-window .later').click()`);
+  await root.invoke('request_refresh');
+  assert.ok((await root.invoke('get_agents')).find((t:any)=>t.id===hermesResult.id)?.unread);
+  await ui.invoke('save_monitoring_settings',{settings:{...hermesNotify,notifications:beforeHermes.notifications,sources:beforeHermes.sources},expected:hermesNotify});
   // An old desktop project is a scope choice even if the task database is missing.
   const zcodeRoot=join(owned,'zcode-data'),zcodeDb=join(zcodeRoot,'cli','db','db.sqlite');
   const zcodeProject=join(owned,'Example ZCode project').replaceAll('\\','/'),zcodeId='zcode-native-project-smoke';
