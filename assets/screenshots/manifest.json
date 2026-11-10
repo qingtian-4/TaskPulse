@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "093fc35429bd4e3ce9bc2c8eba6a557041f5f22a",
+  "capture_commit": "a4f98e6edeebe58ad6fa1bb947f5984cba1134f2",
   "modified": false,
-  "executable_sha256": "6371016219f1df3a61dbeb9e71d107979c85604d9606a6345c0c3a949ccb4ba1",
+  "executable_sha256": "5317ff607876375998cce3f58e66cd09af113a620d3da3614e4e8639efa94339",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 788,
       "dpr": 2,
-      "sha256": "370006e147a98f626fc920f08252e3876f6b436c5a46263bc8daaaf0e0f5da8b",
-      "bytes": 161741
+      "sha256": "dc6fcbcd1bcd1adf85bf666b9ab3821fcef7b15e07cecc2ab17a79e0a232ae95",
+      "bytes": 161732
     },
     {
       "file": "notice-input.png",
@@ -67,7 +67,7 @@
       "logical_width": 368,
       "logical_height": 806,
       "dpr": 2,
-      "sha256": "40ea462e3c8ecb80b16bd7e867d77904d79be687c69a6cf15a4a903591d2738e",
+      "sha256": "1dc19070afdd64f513e3ede62c7178e5a34d412ee08562f0b64ef89d322e38d5",
       "bytes": 145606
     },
     {
@@ -103,13 +103,13 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
-      "bytes": 23209
+      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
+      "bytes": 23208
     }
   ],
-  "frontend_tree": "4d22dd5fd506bb0c719510cf3fff5326d5c9c778",
-  "runtime_tree": "2dbd6a994886db3b28354d584549372c2a91f724",
-  "locale_tree": "853f071cde0bd7e0e8c372a9d8c4ce2829ba9c29",
+  "frontend_tree": "87f5ff2ec36f00dffd4895caceee1e933d8def7c",
+  "runtime_tree": "789cd5354e3ff91faa799257706bdb14cb3bd976",
+  "locale_tree": "ffa7e3115dac601df59711bf58a77f7f6dbd828d",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
