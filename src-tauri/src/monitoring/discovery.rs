@@ -59,6 +59,7 @@ pub(super) fn discover_source_rows_with_wsl(
     }
     sources
         .iter()
+        .filter(|source| source.kind.supported_on(std::env::consts::OS))
         .map(|source| {
             let (detected, detail) = match source.kind {
                 SourceKind::KimiCode => {let roots=if source.location.is_empty(){crate::providers::kimi::default_roots()}else{vec![PathBuf::from(&source.location)]};(roots.iter().any(|p|crate::providers::kimi::available(p)),"Kimi Code / kimi-cli 原生 wire 日志；不修改 Hook".into())},

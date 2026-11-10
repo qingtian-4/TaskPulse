@@ -107,6 +107,30 @@ fn title_record(cells: Value) -> Vec<u8> {
 }
 
 #[test]
+fn missing_and_ambiguous_execution_records_have_distinct_diagnostics() {
+    let (d, p) = db();
+    let mut reader = Reader::default();
+    fs::write(p.join("000003.log"), batch(1, &[])).unwrap();
+    assert_eq!(
+        reader.read(d.path()),
+        Err("未找到支持的豆包工作任务记录；普通聊天不在监控范围内")
+    );
+    let mut other = key(1);
+    other[1] = 3;
+    fs::write(
+        p.join("000003.log"),
+        batch(2, &[(key(1), Some(inline())), (other, Some(inline()))]),
+    )
+    .unwrap();
+    assert_eq!(
+        reader.read(d.path()),
+        Err("找到多条豆包工作任务记录，无法确认当前记录")
+    );
+    fs::write(p.join("000003.log"), batch(3, &[(key(1), Some(inline()))])).unwrap();
+    assert_eq!(reader.read(d.path()).unwrap().as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn conversation_metadata_enriches_only_matching_active_tasks_and_tracks_renames() {
     let (d, p) = db();
     // Discover DB/store IDs from metadata, not the developer's account layout.

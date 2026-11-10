@@ -641,7 +641,7 @@ impl LocalProviders {
             .iter()
             .filter(|s| {
                 settings.onboarding_complete
-                    && s.enabled
+                    && s.enabled_here()
                     && !matches!(
                         s.kind,
                         SourceKind::RemoteCodex | SourceKind::Tmux | SourceKind::Hooks
@@ -846,7 +846,9 @@ impl LocalProviders {
         self.configured = settings
             .sources
             .iter()
-            .filter(|s| s.enabled && !matches!(s.kind, SourceKind::RemoteCodex | SourceKind::Tmux))
+            .filter(|s| {
+                s.enabled_here() && !matches!(s.kind, SourceKind::RemoteCodex | SourceKind::Tmux)
+            })
             .cloned()
             .collect();
     }

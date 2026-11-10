@@ -156,7 +156,10 @@ impl Provider for DoubaoProvider {
                         t
                     })
                     .collect(),
-                format!("豆包原生数据暂不可读（{reason}）；不会推断结束或批准请求"),
+                match reason {
+                    storage::MISSING_CHECKPOINT | storage::AMBIGUOUS_CHECKPOINT => reason.into(),
+                    _ => format!("豆包原生数据暂不可读（{reason}）；不会推断结束或批准请求"),
+                },
             ),
         }
     }

@@ -37,6 +37,12 @@ pub enum SourceKind {
     GenericEvent,
 }
 
+impl SourceKind {
+    pub(crate) fn supported_on(self, platform: &str) -> bool {
+        self != Self::Doubao || platform == "windows"
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceConfig {
     pub id: String,
@@ -58,6 +64,12 @@ pub struct SourceConfig {
     #[serde(default = "poll_default")]
     pub poll_interval_ms: u64,
 }
+impl SourceConfig {
+    pub(crate) fn enabled_here(&self) -> bool {
+        self.enabled && self.kind.supported_on(std::env::consts::OS)
+    }
+}
+
 fn all_projects() -> Vec<String> {
     vec!["*".into()]
 }
@@ -637,16 +649,15 @@ fn apply_settings(
     Ok(settings)
 }
 
-/// Only read-only native adapters are eligible. Remote/WSL, hooks and generic
-/// event integrations always remain explicit user choices.
-fn automatic_local(kind: SourceKind) -> bool {
+/// Only validated read-only native adapters are eligible. Doubao is manual
+/// because its work-task storage is available only on the verified Windows lane.
+pub(crate) fn automatic_local(kind: SourceKind) -> bool {
     matches!(
         kind,
         SourceKind::Codex
             | SourceKind::ClaudeCode
             | SourceKind::Hermes
             | SourceKind::DeepseekDesktop
-            | SourceKind::Doubao
             | SourceKind::Zcode
             | SourceKind::Opencode
             | SourceKind::Workbuddy
@@ -871,7 +882,7 @@ pub fn exclusion(settings: &DashboardSettings, task: &TaskSnapshot) -> Option<&'
     let Some(source) = source_for(settings, task) else {
         return Some("来源已移除");
     };
-    if !source.enabled {
+    if !source.enabled_here() {
         return Some("来源未启用");
     }
     if task.id.starts_with("scan:") && !task.remote {
@@ -1339,6 +1350,45 @@ mod tests {
                 .unwrap()
                 .enabled
         );
+    }
+
+    #[test]
+    fn doubao_stays_opt_in_even_when_local_data_is_detected() {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), false);
+        settings.onboarding_complete = true;
+        settings.auto_discover_local = true;
+        let mut detected = settings
+            .sources
+            .iter()
+            .find(|s| s.kind == SourceKind::Doubao)
+            .unwrap()
+            .clone();
+        detected.location = "fixture-index".into();
+        let discovery = |candidate| SourceDiscovery {
+            id: detected.id.clone(),
+            location: detected.location.clone(),
+            data_location_detected: Some(true),
+            detail: String::new(),
+            candidate,
+        };
+        assert!(!merge_discovered(&mut settings, vec![discovery(None)]));
+        assert!(
+            !settings
+                .sources
+                .iter()
+                .find(|s| s.kind == SourceKind::Doubao)
+                .unwrap()
+                .enabled
+        );
+        settings.sources.retain(|s| s.kind != SourceKind::Doubao);
+        assert!(!merge_discovered(
+            &mut settings,
+            vec![discovery(Some(detected.clone()))]
+        ));
+        assert!(!settings
+            .sources
+            .iter()
+            .any(|s| s.kind == SourceKind::Doubao));
     }
 
     #[test]

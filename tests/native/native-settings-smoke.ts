@@ -505,14 +505,19 @@ poll_interval_ms=3000
   const beforeEvent=await ui.invoke('get_monitoring_settings');
   assert.ok(await ui.evaluate(`!document.querySelector('.local-agents [data-agent-kind="scanner"]') && !document.querySelector('[data-process-discovery]').open && !!document.querySelector('[data-process-discovery] [data-agent-kind="scanner"]')`));
   await ui.evaluate(`document.querySelector('.event-sources summary').click()`);
-  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-event-picker] option')].map(option=>option.value).filter(value=>['standard-events','kimi-code-cli','trae-cn-ide','zcode-desktop'].includes(value))`),['standard-events']);
-  await ui.evaluate(`(()=>{const select=document.querySelector('[data-event-picker]');select.value='standard-events';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  assert.match(await ui.evaluate(`document.querySelector('[data-process-discovery] summary').textContent`),/Process detection \(optional\)/);
+  assert.match(await ui.evaluate(`document.querySelector('.event-sources summary').textContent`),/Connect other tools \(optional\)/);
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-event-picker]')&&document.querySelector('[data-event-add]').textContent.includes('Add MCP or script connection')`));
   await ui.wait(`!document.querySelector('[data-event-add]').disabled`);
   await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
   await ui.wait(`document.querySelectorAll('[data-event-adapter="standard-events"]').length===1`);
   await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
   await ui.wait(`document.querySelectorAll('[data-event-adapter="standard-events"]').length===2`);
   assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-event-adapter="standard-events"] .agent-row strong')].map(el=>el.textContent)`),['Connection 1','Connection 2']);
+  const standardSelector='[data-event-adapter="standard-events"]:last-child';
+  await ui.wait(`!!document.querySelector('${standardSelector} .universal li')`);
+  assert.equal(await ui.evaluate(`document.querySelectorAll('${standardSelector} .universal li').length`),3);
+  assert.ok(await ui.evaluate(`document.querySelector('${standardSelector} .universal .actions button').disabled`));
   for(const [kind,adapter] of [['trae','trae-cn-ide'],['zcode','zcode-desktop'],['kimi_code','kimi-code-cli']]){
     const row=`[data-agent-kind="${kind}"]`;
     assert.equal(await ui.evaluate(`document.querySelectorAll(${JSON.stringify(row)}).length`),1);
@@ -535,8 +540,29 @@ poll_interval_ms=3000
   assert.equal(standardSaved.length,2);
   assert.equal(new Set(standardSaved.map((s:any)=>s.id)).size,2);
   assert.ok(standardSaved.every((s:any)=>!s.enabled));
-  if(captureScreenshots)await Bun.write(join(owned,'settings-event-agents-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await ui.invoke('save_monitoring_settings',{settings:{...eventSaved,sources:beforeEvent.sources},expected:eventSaved});
+  // The simplified flow still exports the saved source-bound configuration.
+  const standardId=standardSaved[1].id;
+  const standardRow=`[data-event-source="${standardId}"]`;
+  await ui.evaluate(`document.querySelector('${standardRow} .settings-switch').click()`);
+  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  if(!await ui.evaluate(`!!document.querySelector('${standardRow} .universal')`)){
+    await ui.evaluate(`document.querySelector('${standardRow} .agent-row button').click()`);
+  }
+  await ui.wait(`document.querySelector('${standardRow} .universal .actions button')?.disabled===false`);
+  await ui.evaluate(`document.querySelector('${standardRow} .universal .actions button').click()`);
+  await ui.wait(`!!document.querySelector('${standardRow} .universal pre')`);
+  const config=JSON.parse(await ui.evaluate(`document.querySelector('${standardRow} .universal pre').textContent`));
+  assert.deepEqual(config.mcpServers.taskpulse.args,['--integration-mcp','--source',standardId]);
+  assert.ok(config.mcpServers.taskpulse.env.TASKPULSE_HOME);
+  const enabledEventSaved=await ui.invoke('get_monitoring_settings');
+  assert.ok(enabledEventSaved.sources.find((s:any)=>s.id===standardId).enabled);
+  if(captureScreenshots){
+    await ui.evaluate(`document.querySelector('${standardRow}').scrollIntoView({block:'start',behavior:'instant'})`);
+    await Bun.write(join(owned,'settings-event-agents-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  }
+  await ui.invoke('save_monitoring_settings',{settings:{...enabledEventSaved,sources:beforeEvent.sources},expected:enabledEventSaved});
   // Open the picker before the Hermes worker has a session. The new session
   // is read from an owned SQLite database, not injected through the WebView.
   const hermesDb=join(owned,'hermes-state.db');

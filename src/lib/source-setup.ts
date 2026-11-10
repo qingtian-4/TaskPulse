@@ -9,7 +9,7 @@ export interface SourceCapabilities {
 export interface SourceDefinition {
   description?:string; id:string; name:string; kind:SourceKind; category:string;
   location_kind:string; platforms:string[]; adapter_id?:string; agent_id?:string;
-  multiple_instances?:boolean;
+  multiple_instances?:boolean; auto_enable_on_discovery?:boolean;
   capabilities?:SourceCapabilities; verified_platforms?:string[]; default_source?:MonitorSource;
 }
 export function sourceDefinitionFor(catalog:SourceDefinition[],source:MonitorSource):SourceDefinition {
@@ -37,12 +37,12 @@ export function eventConnections(catalog:SourceDefinition[],sources:MonitorSourc
 export function isDefaultEventName(name:string,definition:SourceDefinition):boolean {
   return name===definition.name||name===eventAdapterLabel(definition.adapter_id??'',definition.name)||
     definition.adapter_id==='standard-events'&&[
-      '其他 Agent','其他 Agent · 通用事件','其他 Agent（标准事件）','Other Agent','Other agents (standard events)','Generic events (MCP / scripts)',
+      '其他 Agent','其他 Agent · 通用事件','其他 Agent（标准事件）','Other Agent','Other agents (standard events)','Generic events (MCP / scripts)','通用事件（MCP / 脚本）','MCP or scripts',
     ].includes(name);
 }
 export function eventAdapterLabel(adapterId:string,displayName:string):string {
   return ({
-    'standard-events':'通用事件（MCP / 脚本）',
+    'standard-events':'MCP 或脚本',
     'kimi-code-cli':'Kimi Code',
     'trae-cn-ide':'Trae',
     'zcode-desktop':'ZCode',

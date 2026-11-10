@@ -88,7 +88,7 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 | OpenCode | Reads local sessions, execution phases and explicit turn outcomes. |
 | WorkBuddy | Reads local tasks and turn results. Cloud tasks are outside this source. |
 | ZCode | Reads local tasks, models and turn results. Standard Events and MCP are optional. |
-| Doubao | Reads desktop tasks and execution state. |
+| Doubao | Opt in on Windows to monitor work tasks. Regular chats are outside its scope. |
 | Kimi Code / kimi-cli | Reads local main sessions and explicit requests. Standard Events and MCP are optional. |
 | Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
 | Trae | Discovers sessions in the workspace catalog. Task progress requires a separately configured sender. |
