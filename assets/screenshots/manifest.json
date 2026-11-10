@@ -1,14 +1,14 @@
 {
   "version": "0.0.1",
-  "capture_commit": "e3f40571d3fdffe94348ea02d027c30cc3b505d7",
+  "capture_commit": "093fc35429bd4e3ce9bc2c8eba6a557041f5f22a",
   "modified": false,
-  "executable_sha256": "43c29034454112c6374aa43ff4da9eb17de8700bbe11c3a9ee079ca942210caa",
+  "executable_sha256": "6371016219f1df3a61dbeb9e71d107979c85604d9606a6345c0c3a949ccb4ba1",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
   "authorization": "Maintainer requested current-interface public screenshots",
   "rendering": "Native WebView capture at DPR 2; no UI or IPC mocks",
-  "captured_on": "2026-11-09",
+  "captured_on": "2026-11-10",
   "assets": [
     {
       "file": "dashboard.png",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 788,
       "dpr": 2,
-      "sha256": "dc6fcbcd1bcd1adf85bf666b9ab3821fcef7b15e07cecc2ab17a79e0a232ae95",
-      "bytes": 161732
+      "sha256": "370006e147a98f626fc920f08252e3876f6b436c5a46263bc8daaaf0e0f5da8b",
+      "bytes": 161741
     },
     {
       "file": "notice-input.png",
@@ -67,7 +67,7 @@
       "logical_width": 368,
       "logical_height": 806,
       "dpr": 2,
-      "sha256": "669c50441320c21a18ae8b9769b9b31012f6077adb2e12477a02bd58a86d71ef",
+      "sha256": "40ea462e3c8ecb80b16bd7e867d77904d79be687c69a6cf15a4a903591d2738e",
       "bytes": 145606
     },
     {
@@ -107,9 +107,9 @@
       "bytes": 23209
     }
   ],
-  "frontend_tree": "4e7f3eba2b91970f85f98e2bb6484b185c7f63fb",
-  "runtime_tree": "f770a2d77765f35a49e0a8606facb9152f6bf6b7",
-  "locale_tree": "d56d3e701170c2e32727ed8caa5a0cd10b77848f",
+  "frontend_tree": "4d22dd5fd506bb0c719510cf3fff5326d5c9c778",
+  "runtime_tree": "2dbd6a994886db3b28354d584549372c2a91f724",
+  "locale_tree": "853f071cde0bd7e0e8c372a9d8c4ce2829ba9c29",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",

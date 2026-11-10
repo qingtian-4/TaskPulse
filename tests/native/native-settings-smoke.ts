@@ -541,12 +541,12 @@ poll_interval_ms=3000
   // is read from an owned SQLite database, not injected through the WebView.
   const hermesDb=join(owned,'hermes-state.db');
   const hermesId='hermes:public-fixture';
-  const hermes=new Database(hermesDb);
-  hermes.exec(`CREATE TABLE sessions(id TEXT, display_name TEXT, title TEXT, last_activity_at REAL,
+  const hermesFixture=new Database(hermesDb);
+  hermesFixture.exec(`CREATE TABLE sessions(id TEXT, display_name TEXT, title TEXT, last_activity_at REAL,
     started_at REAL, cwd TEXT, git_repo_root TEXT, ended_at REAL, end_reason TEXT,
     archived INTEGER, hidden INTEGER, pinned INTEGER, last_read_at REAL, last_activity_description TEXT);
     CREATE TABLE session_turn_leases(conversation_id TEXT, acquired_at REAL, expires_at REAL);`);
-  hermes.close();
+  hermesFixture.close();
   const beforeHermes=await ui.invoke('get_monitoring_settings');
   const nativeHermes={id:hermesId,kind:'hermes',name:'Hermes public fixture',location:hermesDb,enabled:true,projects:[],
     excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
@@ -566,7 +566,9 @@ poll_interval_ms=3000
   await ui.wait(`document.querySelector('[data-source-id="${hermesId}"] .project-options strong')?.textContent==='No project'`);
   assert.ok(!(await root.invoke('get_agents')).some((task:any)=>task.source_instance===hermesId),'An empty allowlist still excludes the session');
   if(captureScreenshots)await Bun.write(join(owned,'settings-hermes-project-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await ui.evaluate(`document.querySelector('[data-source-id="${hermesId}"] .project-options input').click();document.querySelector('.ms-foot .primary').click()`);
+  await ui.evaluate(`document.querySelector('[data-source-id="${hermesId}"] .project-options input').click()`);
+  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
   await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(tasks=>tasks.some(t=>t.source_instance==='${hermesId}'&&t.status==='running'&&!t.stale))`);
   const hermesSaved=await ui.invoke('get_monitoring_settings');
   assert.deepEqual(hermesSaved.sources.find((s:any)=>s.id===hermesId).projects,['@unassociated']);
