@@ -18,7 +18,12 @@
   </div>
   {#if all}<p class="scope-notice"><Check size={15}/>{$t('自动关注此来源后续发现的新项目。')}</p>
   {:else}
-    <div class="project-options">{#each options as option (option.id)}<label><input type="checkbox" checked={option.aliases.some(value=>projects.includes(value))} disabled={disabled} onchange={e=>toggle(option,e.currentTarget.checked)}/><Folder size={14}/><span title={option.path}><strong>{option.path.split(/[\\/]/).filter(Boolean).at(-1)||option.path}</strong><small>{option.path}</small></span></label>{/each}</div>
+    <div class="project-options">
+      {#each options as option (option.id)}
+        {@const unassociated=option.path==='@unassociated'}
+        <label><input type="checkbox" checked={option.aliases.some(value=>projects.includes(value))} disabled={disabled} onchange={e=>toggle(option,e.currentTarget.checked)}/><Folder size={14}/><span title={unassociated?$t('此来源中未记录项目路径的会话'):option.path}><strong>{unassociated?$t('未关联项目'):option.path.split(/[\\/]/).filter(Boolean).at(-1)||option.path}</strong><small>{unassociated?$t('此来源中未记录项目路径的会话'):option.path}</small></span></label>
+      {/each}
+    </div>
     {#if !options.length}<p class="scope-empty">{$t('暂无已发现项目，可以手动添加路径。')}</p>{/if}
     <form class="add-path" onsubmit={e=>{e.preventDefault();add();}}><input bind:value={path} disabled={disabled} aria-label={$t('添加项目路径')} placeholder={$t('输入项目路径，例如 /home/user/project')}/><button class="ms-btn" type="submit" disabled={disabled||!path.trim()}><Plus size={13}/>{$t('添加')}</button></form>
     {#if !projects.length}<p class="scope-empty">{$t('未选择项目，此来源暂不会纳入任务。')}</p>{/if}

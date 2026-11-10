@@ -183,15 +183,20 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
         TaskStatus::Unknown
     };
     let at = row.last_activity_at.and_then(epoch_to_time).unwrap_or(now);
-    let project = row
+    let project_path = row
         .cwd
         .as_deref()
-        .or(row.git_repo_root.as_deref())
-        .and_then(|c| {
-            Path::new(c)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
+        .filter(|path| !path.trim().is_empty())
+        .or_else(|| {
+            row.git_repo_root
+                .as_deref()
+                .filter(|path| !path.trim().is_empty())
         });
+    let project = project_path.and_then(|c| {
+        Path::new(c)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+    });
 
     let mut task = TaskSnapshot::new(
         format!("hermes:{}", row.id),
@@ -208,7 +213,7 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
     task.stale = status == TaskStatus::Unknown;
     task.project = project;
     task.model = row.model.as_deref().and_then(super::reported_model);
-    task.project_path = row.cwd.clone().or_else(|| row.git_repo_root.clone());
+    task.project_path = project_path.map(str::to_owned);
     if task.status == TaskStatus::WaitingInput {
         task.waiting_reason = Some(if waiting_for_user {
             if row
@@ -701,18 +706,24 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a real local Hermes state database"]
+    #[ignore = "requires a real local Hermes state database; read-only, counts only"]
     fn live_hermes_snapshot_against_real_db() {
         let mut provider = HermesProvider::new();
         let out = provider.poll(SystemTime::now());
-        println!("authoritative={} error={:?}", out.authoritative, out.error);
-        for task in &out.tasks {
-            println!(
-                "task: id={} name={:?} status={:?} message={:?}",
-                task.id, task.name, task.status, task.message
-            );
-        }
         assert!(out.authoritative);
-        assert!(out.tasks.iter().all(|task| !task.id.is_empty()));
+        assert!(!out.catalog.is_empty());
+        assert!(out.catalog.iter().all(|task| !task.id.is_empty()));
+        println!(
+            "Hermes native: {} discovered sessions, {} without project paths, {} active leases",
+            out.catalog.len(),
+            out.catalog
+                .iter()
+                .filter(|task| task.project_path.is_none())
+                .count(),
+            out.tasks
+                .iter()
+                .filter(|task| !task.stale && task.status == TaskStatus::Running)
+                .count(),
+        );
     }
 }

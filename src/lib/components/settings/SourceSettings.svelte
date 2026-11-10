@@ -28,6 +28,7 @@
   let removePrompt=$state(false),eventPrompt=$state<{id:string;enabled:boolean}|null>(null),reading=$state('');
   let reports=$state<Record<string,SshProbe>>({}),probing=$state<Record<string,boolean>>({}),projects=$state<Record<string,string[]>>({});
   let projectAliases=$state<Record<string,ProjectChoice[]>>({});
+  const projectRequests=new Map<string,number>();
   let activeLocal=$state<AgentKind>('codex'),activeLocalSource=$state('');
   let expandedLocal=$state<AgentKind|null>(null);
   let localAgents=$state<SourceDefinition[]>([]);
@@ -97,7 +98,7 @@
   async function remove(){if(!settings||!selected)return;const next=removeServer($state.snapshot(settings),selected.host);if(await commit(next)){removePrompt=false;page='home';}}
   function list(value:string){return value.split('\n').map(s=>s.trim()).filter(Boolean);}
   function changeProjects(value:string[]){if(!settings)return;const source=editor??(page==='local'?ensureLocal(activeLocal):selected?ensureRemote(selected):undefined);if(source){source.projects=value;touch();}}
-  async function detect(){try{discovery=await invoke<SourceDiscovery[]>('discover_sources');notice='';}catch(e){fail(e);}}
+  async function detect(){try{discovery=await invoke<SourceDiscovery[]>('discover_sources');notice='';if(expandedLocal)void loadProjects(localEditor);}catch(e){fail(e);}}
   async function probeHost(group:ServerGroup){
     if(probing[group.host])return;probing[group.host]=true;error='';
     try{const result=await invoke<SshProbe>('probe_ssh_source',{host:group.host});if(active&&result.host===group.host)reports[group.host]=result;}
@@ -105,11 +106,15 @@
   }
   async function readLocal(source:MonitorSource){
     if(reading||dirty)return;reading=source.id;error='';
-    try{const since=await invoke<number>('request_refresh');for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,300));if(!active)return;const states=await invoke<DashboardSnapshot>('get_dashboard_snapshot');updateSnapshot(states);const result=states.providers.find(p=>p.provider===source.id);if((result?.last_attempt??0)>=since){notice=result?.status==='connected'?'读取完成，请查看来源状态':'读取失败，已保留上次状态';return;}}notice='读取未完成，已保留上次状态';}
+    try{const since=await invoke<number>('request_refresh');for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,300));if(!active)return;const states=await invoke<DashboardSnapshot>('get_dashboard_snapshot');updateSnapshot(states);const result=states.providers.find(p=>p.provider===source.id);if((result?.last_attempt??0)>=since){if(result?.status==='connected'){await loadProjects(source);notice='读取完成，请查看来源状态';}else notice='读取失败，已保留上次状态';return;}}notice='读取未完成，已保留上次状态';}
     catch(e){fail(e);}finally{if(active)reading='';}
   }
   async function loadProjects(source?:MonitorSource){
-    if(!source)return;try{const choices=await invoke<ProjectChoice[]>('get_project_choices',{sourceId:source.id});if(active){projectAliases[source.id]=choices;projects[source.id]=choices.map(row=>row.path);}}catch(e){fail(e);}
+    if(!source)return;
+    const id=source.id,request=(projectRequests.get(id)??0)+1;
+    projectRequests.set(id,request);
+    try{const choices=await invoke<ProjectChoice[]>('get_project_choices',{sourceId:id});if(active&&projectRequests.get(id)===request){projectAliases[id]=choices;projects[id]=choices.map(row=>row.path);}}
+    catch(e){if(active&&projectRequests.get(id)===request)fail(e);}
   }
   function openServer(group:ServerGroup){page='server';selectedHost=group.host;void loadProjects(group.codex);}
   function openLocal(kind:AgentKind=activeLocal){page='local';activeLocal=kind;if(expandedLocal!==kind)expandedLocal=null;void loadProjects(localEditor);}
@@ -120,7 +125,20 @@
     const next=structuredClone($state.snapshot(settings)),source=createSource('remote_codex',value.host,value.name);source.enabled=value.enabled;source.projects=value.projects;next.sources.push(source);next.onboarding_complete=true;
     if(await commit(next)){reports[value.host]=value.report;wizard=false;selectedHost=value.host;page='server';return true;}return false;
   }
-  function updateSnapshot(value:DashboardSnapshot){if(value.revision<revision)return;revision=value.revision;snapshot=value;}
+  function updateSnapshot(value:DashboardSnapshot){
+    if(value.revision<revision)return;
+    const previous=snapshot;
+    revision=value.revision;snapshot=value;
+    const source=page==='local'&&expandedLocal?localEditor:page==='server'?selected?.codex:undefined;
+    if(!source?.enabled)return;
+    const success=value.providers.find(p=>p.provider===source.id)?.last_success;
+    if(!success)return;
+    const before=previous?.view.sources.find(row=>row.id===source.id);
+    const after=value.view.sources.find(row=>row.id===source.id);
+    if(!previous?.providers.find(p=>p.provider===source.id)?.last_success||
+        before?.data_detected!==after?.data_detected||
+        before?.discovered_sessions!==after?.discovered_sessions)void loadProjects(source);
+  }
   function trap(dialog:HTMLDialogElement){const previous=document.activeElement as HTMLElement|null;dialog.querySelector<HTMLElement>('button')?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'){e.preventDefault();closePrompt=false;removePrompt=false;eventPrompt=null;}if(e.key==='Tab'){const items=[...dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];if(e.shiftKey&&document.activeElement===items[0]){e.preventDefault();items.at(-1)?.focus();}else if(!e.shiftKey&&document.activeElement===items.at(-1)){e.preventDefault();items[0]?.focus();}}};dialog.addEventListener('keydown',key);return{destroy(){dialog.removeEventListener('keydown',key);if(previous?.isConnected)previous.focus();}};}
   async function saveClose(){await save();if(!dirty&&!error){closing=true;await getCurrentWindow().close();}}
   async function discardClose(){closing=true;await getCurrentWindow().close();}
