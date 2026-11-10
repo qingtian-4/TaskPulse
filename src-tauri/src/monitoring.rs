@@ -830,12 +830,25 @@ pub fn collector_for<'a>(
     source_for(settings, task)
 }
 
+const UNASSOCIATED_PROJECT: &str = "@unassociated";
+
+fn recorded_project(task: &TaskSnapshot) -> Option<&str> {
+    task.project_path
+        .as_deref()
+        .filter(|path| !path.trim().is_empty())
+        .or_else(|| {
+            task.project
+                .as_deref()
+                .filter(|name| !name.trim().is_empty())
+        })
+}
+
 fn project_matches(pattern: &str, task: &TaskSnapshot) -> bool {
     if pattern == "*" {
         return true;
     }
-    if pattern == "@unassociated" {
-        return task.project.is_none();
+    if pattern == UNASSOCIATED_PROJECT {
+        return recorded_project(task).is_none();
     }
     if pattern.contains('/') || pattern.contains('\\') {
         return task.project_path.as_deref().is_some_and(|path| {
@@ -1040,6 +1053,32 @@ pub fn refresh_known_metadata(tasks: &mut Vec<TaskSnapshot>) {
     }
 }
 
+fn add_project_path(
+    paths: &mut HashSet<String>,
+    settings: &DashboardSettings,
+    source_id: &str,
+    task: &TaskSnapshot,
+) {
+    if paths.len() < 1024
+        && !task.internal
+        && collector_for(settings, task).is_some_and(|s| s.id == source_id)
+    {
+        if let Some(path) = recorded_project(task) {
+            paths.insert(path.to_owned());
+        } else if task
+            .session_id
+            .as_deref()
+            .is_some_and(|id| !id.trim().is_empty())
+            && !task.id.starts_with("scan:")
+            && !task.id.starts_with("process:")
+        {
+            // Lifecycle uncertainty does not invalidate a real session's
+            // metadata. Allow explicit scope selection without importing it.
+            paths.insert(UNASSOCIATED_PROJECT.to_owned());
+        }
+    }
+}
+
 pub fn project_paths(source_id: &str) -> Vec<String> {
     let settings = get_monitoring_settings();
     let mut paths: HashSet<String> = settings
@@ -1054,23 +1093,13 @@ pub fn project_paths(source_id: &str) -> Vec<String> {
                 .collect()
         })
         .unwrap_or_default();
-    let mut add = |task: &TaskSnapshot| {
-        if paths.len() < 1024
-            && !task.internal
-            && collector_for(&settings, task).is_some_and(|s| s.id == source_id)
-        {
-            if let Some(path) = task.project_path.as_ref().or(task.project.as_ref()) {
-                paths.insert(path.clone());
-            }
-        }
-    };
     for task in crate::watcher::known_sessions() {
-        add(&task);
+        add_project_path(&mut paths, &settings, source_id, &task);
     }
     {
         let state = runtime().lock().unwrap_or_else(|e| e.into_inner());
         for task in state.catalog.values() {
-            add(task);
+            add_project_path(&mut paths, &settings, source_id, task);
         }
     }
     let mut result: Vec<_> = paths.into_iter().collect();
@@ -1654,6 +1683,41 @@ mod tests {
         assert!(exclusion(&settings, &task).is_none());
         settings.sources[0].excluded_projects = vec!["demo".into()];
         assert!(exclusion(&settings, &task).is_some());
+    }
+
+    #[test]
+    fn hermes_catalog_without_paths_can_be_selected_without_broadening_scope() {
+        let mut settings = from_legacy(&TaskPulseConfig::default(), true);
+        let index = settings
+            .sources
+            .iter()
+            .position(|s| s.id == "hermes")
+            .unwrap();
+        settings.sources[index].enabled = true;
+        settings.sources[index].projects.clear();
+        let mut task = TaskSnapshot::new(
+            "hermes:public-session",
+            "Example session",
+            TaskSource::Hermes,
+            TaskStatus::Unknown,
+            DetectionConfidence::Inferred,
+            std::time::SystemTime::now(),
+        );
+        task.session_id = Some("public-session".into());
+        task.stale = true;
+        assert_eq!(exclusion(&settings, &task), Some("项目不在监控范围"));
+        let mut paths = HashSet::new();
+        add_project_path(&mut paths, &settings, "hermes", &task);
+        assert_eq!(paths, HashSet::from(["@unassociated".to_string()]));
+        settings.sources[index].projects = vec!["@unassociated".into()];
+        assert!(exclusion(&settings, &task).is_none());
+        task.project_path = Some("/actual/project".into());
+        assert_eq!(exclusion(&settings, &task), Some("项目不在监控范围"));
+        paths.clear();
+        task.project_path = None;
+        task.internal = true;
+        add_project_path(&mut paths, &settings, "hermes", &task);
+        assert!(paths.is_empty());
     }
 
     #[test]

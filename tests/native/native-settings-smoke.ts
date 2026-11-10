@@ -9,6 +9,7 @@ import {spawn,type ChildProcess} from 'node:child_process';
 import {createServer} from 'node:net';
 import {withSmokeWorkspace,stopOwnedChild} from '../support/smoke-workspace';
 import {fileURLToPath} from 'node:url';
+import {Database} from 'bun:sqlite';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
 const sourcesOnly=process.argv.includes('--sources-only');
@@ -536,6 +537,67 @@ poll_interval_ms=3000
   assert.ok(standardSaved.every((s:any)=>!s.enabled));
   if(captureScreenshots)await Bun.write(join(owned,'settings-event-agents-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await ui.invoke('save_monitoring_settings',{settings:{...eventSaved,sources:beforeEvent.sources},expected:eventSaved});
+  // Open the picker before the Hermes worker has a session. The new session
+  // is read from an owned SQLite database, not injected through the WebView.
+  const hermesDb=join(owned,'hermes-state.db');
+  const hermesId='hermes:public-fixture';
+  const hermesFixture=new Database(hermesDb);
+  hermesFixture.exec(`CREATE TABLE sessions(id TEXT, display_name TEXT, title TEXT, last_activity_at REAL,
+    started_at REAL, cwd TEXT, git_repo_root TEXT, ended_at REAL, end_reason TEXT,
+    archived INTEGER, hidden INTEGER, pinned INTEGER, last_read_at REAL, last_activity_description TEXT);
+    CREATE TABLE session_turn_leases(conversation_id TEXT, acquired_at REAL, expires_at REAL);`);
+  hermesFixture.close();
+  const beforeHermes=await ui.invoke('get_monitoring_settings');
+  const nativeHermes={id:hermesId,kind:'hermes',name:'Hermes public fixture',location:hermesDb,enabled:true,projects:[],
+    excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
+  await ui.invoke('save_monitoring_settings',{settings:{...beforeHermes,sources:[...beforeHermes.sources.filter((s:any)=>s.kind!=='hermes'),nativeHermes]},expected:beforeHermes});
+  await ui.wait(`document.querySelector('[data-agent-kind="hermes"] .settings-switch')?.checked`);
+  await ui.evaluate(`document.querySelector('[data-agent-kind="hermes"] .agent-row button').click()`);
+  await ui.wait(`document.querySelector('[data-source-id="${hermesId}"] .scope-empty')?.textContent.includes('No projects')`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.providers.some(p=>p.provider==='${hermesId}'&&p.last_success))`);
+  const now=Date.now()/1000;
+  const writer=new Database(hermesDb);
+  writer.transaction(()=>{
+    writer.run(`INSERT INTO sessions VALUES('public-session','Example session',NULL,?1,?1,'','',NULL,NULL,0,0,0,NULL,NULL)`,[now]);
+    writer.run(`INSERT INTO session_turn_leases VALUES('public-session',?1,?2)`,[now,now+120]);
+  })();
+  writer.close();
+  await root.invoke('request_refresh');
+  await ui.wait(`document.querySelector('[data-source-id="${hermesId}"] .project-options strong')?.textContent==='No project'`);
+  assert.ok(!(await root.invoke('get_agents')).some((task:any)=>task.source_instance===hermesId),'An empty allowlist still excludes the session');
+  if(captureScreenshots)await Bun.write(join(owned,'settings-hermes-project-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+  await ui.evaluate(`document.querySelector('[data-source-id="${hermesId}"] .project-options input').click()`);
+  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(tasks=>tasks.some(t=>t.source_instance==='${hermesId}'&&t.status==='running'&&!t.stale))`);
+  const hermesSaved=await ui.invoke('get_monitoring_settings');
+  assert.deepEqual(hermesSaved.sources.find((s:any)=>s.id===hermesId).projects,['@unassociated']);
+  await ui.invoke('save_monitoring_settings',{settings:{...hermesSaved,sources:beforeHermes.sources},expected:hermesSaved});
+  // An old desktop project is a scope choice even if the task database is missing.
+  const zcodeRoot=join(owned,'zcode-data'),zcodeDb=join(zcodeRoot,'cli','db','db.sqlite');
+  const zcodeProject=join(owned,'Example ZCode project').replaceAll('\\','/'),zcodeId='zcode-native-project-smoke';
+  await mkdir(join(zcodeRoot,'v2'),{recursive:true});
+  const index=new Database(join(zcodeRoot,'v2','tasks-index.sqlite'));
+  index.run('CREATE TABLE projects(project_id TEXT,host_id TEXT,deleted INTEGER)');
+  index.run('CREATE TABLE project_roots(project_id TEXT,root_path TEXT)');
+  index.run("INSERT INTO projects VALUES('public-project','local',0)");
+  index.run("INSERT INTO project_roots VALUES('public-project',?1)",[zcodeProject]);
+  index.close();
+  const beforeZcode=await ui.invoke('get_monitoring_settings');
+  const nativeZcode={...nativeHermes,id:zcodeId,kind:'zcode',name:'ZCode public fixture',location:zcodeDb};
+  await ui.invoke('save_monitoring_settings',{settings:{...beforeZcode,sources:[...beforeZcode.sources.filter((s:any)=>s.kind!=='zcode'),nativeZcode]},expected:beforeZcode});
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.providers.some(p=>p.provider==='${zcodeId}'&&p.status==='degraded'))`);
+  await ui.wait(`document.querySelector('[data-agent-kind="zcode"] .settings-switch')?.checked`);
+  await ui.evaluate(`document.querySelector('[data-agent-kind="zcode"] .agent-row button').click()`);
+  await ui.wait(`document.querySelector('[data-source-id="${zcodeId}"] .project-options strong')?.textContent==='Example ZCode project'`);
+  await ui.wait(`document.querySelector('[data-agent-kind="zcode"] [data-provider-diagnostic]')?.textContent.includes('ZCode')`);
+  await ui.evaluate(`document.querySelector('[data-source-id="${zcodeId}"] .project-options input').click()`);
+  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  const zcodeSaved=await ui.invoke('get_monitoring_settings');
+  assert.deepEqual(zcodeSaved.sources.find((s:any)=>s.id===zcodeId).projects,[zcodeProject]);
+  assert.ok(!(await root.invoke('get_agents')).some((task:any)=>task.source_instance===zcodeId));
+  await ui.invoke('save_monitoring_settings',{settings:{...zcodeSaved,sources:beforeZcode.sources},expected:zcodeSaved});
   sockets.forEach(ws=>ws.close());await stopOwnedChild(app);start();
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.equal(restored.preferences.task_font_size,14);assert.deepEqual(restored.sources[0].projects,['protected-project']);

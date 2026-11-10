@@ -9,8 +9,9 @@
 //!
 //! DB discovery order:
 //!   1. `$HERMES_STATE_DB` env override
-//!   2. `~/.hermes/state.db`
-//!   3. `$LOCALAPPDATA/hermes/state.db`   (this machine)
+//!   2. `$HERMES_HOME/state.db`
+//!   3. `~/.hermes/state.db`
+//!   4. `$LOCALAPPDATA/hermes/state.db`
 //!
 //! Adapter boundary lives here; a Hermes schema change only touches this file.
 
@@ -99,6 +100,10 @@ pub fn discover_db() -> Option<PathBuf> {
             return Some(p);
         }
     }
+    if let Some(home) = std::env::var_os("HERMES_HOME").filter(|value| !value.is_empty()) {
+        let path = PathBuf::from(home).join("state.db");
+        return path.exists().then_some(path);
+    }
     if let Some(home) = dirs_next::home_dir() {
         let p = home.join(".hermes/state.db");
         if p.exists() {
@@ -183,15 +188,20 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
         TaskStatus::Unknown
     };
     let at = row.last_activity_at.and_then(epoch_to_time).unwrap_or(now);
-    let project = row
+    let project_path = row
         .cwd
         .as_deref()
-        .or(row.git_repo_root.as_deref())
-        .and_then(|c| {
-            Path::new(c)
-                .file_name()
-                .map(|n| n.to_string_lossy().into_owned())
+        .filter(|path| !path.trim().is_empty())
+        .or_else(|| {
+            row.git_repo_root
+                .as_deref()
+                .filter(|path| !path.trim().is_empty())
         });
+    let project = project_path.and_then(|c| {
+        Path::new(c)
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+    });
 
     let mut task = TaskSnapshot::new(
         format!("hermes:{}", row.id),
@@ -208,7 +218,7 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
     task.stale = status == TaskStatus::Unknown;
     task.project = project;
     task.model = row.model.as_deref().and_then(super::reported_model);
-    task.project_path = row.cwd.clone().or_else(|| row.git_repo_root.clone());
+    task.project_path = project_path.map(str::to_owned);
     if task.status == TaskStatus::WaitingInput {
         task.waiting_reason = Some(if waiting_for_user {
             if row
@@ -289,6 +299,65 @@ fn epoch_to_time(secs: f64) -> Option<SystemTime> {
     }
 }
 
+fn session_columns(
+    conn: &rusqlite::Connection,
+) -> rusqlite::Result<std::collections::HashSet<String>> {
+    let mut stmt = conn.prepare("SELECT name FROM pragma_table_info('sessions')")?;
+    let names = stmt.query_map([], |row| row.get(0))?.collect();
+    names
+}
+
+/// The older CLI schema tracks session creation/end, not the current turn.
+fn legacy_session_catalog(
+    conn: &rusqlite::Connection,
+    columns: &std::collections::HashSet<String>,
+    now: SystemTime,
+) -> rusqlite::Result<Option<Vec<TaskSnapshot>>> {
+    if columns.contains("last_activity_at")
+        || ![
+            "id",
+            "source",
+            "model",
+            "title",
+            "started_at",
+            "message_count",
+        ]
+        .iter()
+        .all(|name| columns.contains(*name))
+    {
+        return Ok(None);
+    }
+    let mut stmt = conn.prepare(
+        "SELECT id, substr(title, 1, 256), substr(model, 1, 128), started_at
+         FROM sessions WHERE typeof(id) = 'text' AND length(id) BETWEEN 1 AND 256
+         ORDER BY started_at DESC LIMIT 400",
+    )?;
+    let catalog = stmt
+        .query_map([], |row| {
+            let id: String = row.get(0)?;
+            let title: Option<String> = row.get(1)?;
+            let model: Option<String> = row.get(2)?;
+            let started_at = row.get::<_, Option<f64>>(3)?.and_then(epoch_to_time);
+            let mut task = TaskSnapshot::new(
+                format!("hermes:{id}"),
+                title.unwrap_or_else(|| {
+                    format!("未命名任务 · {}", id.chars().take(8).collect::<String>())
+                }),
+                TaskSource::Hermes,
+                TaskStatus::Unknown,
+                DetectionConfidence::Inferred,
+                started_at.unwrap_or(now),
+            );
+            task.stale = true;
+            task.session_id = Some(id);
+            task.started_at = started_at;
+            task.model = model.as_deref().and_then(super::reported_model);
+            Ok(task)
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(Some(catalog))
+}
+
 fn read_turn_leases(
     conn: &rusqlite::Connection,
     now: SystemTime,
@@ -366,17 +435,34 @@ impl Provider for HermesProvider {
             }
         };
 
-        // Older Hermes schemas have no model column; preserve their support.
-        let has_model = conn.prepare("SELECT model FROM sessions LIMIT 0").is_ok();
-        let model_column = if has_model { "model" } else { "NULL" };
+        let columns = match session_columns(&conn) {
+            Ok(columns) => columns,
+            Err(error) => return self.degraded(format!("read Hermes schema failed: {error}")),
+        };
+        let optional = |column: &'static str, missing| {
+            if columns.contains(column) {
+                column
+            } else {
+                missing
+            }
+        };
+        let model_column = optional("model", "NULL");
+        let hidden_column = optional("hidden", "0");
+        let read_column = optional("last_read_at", "NULL");
         // Active sessions, newest activity first.
         let mut stmt = match conn.prepare(&format!(
             "SELECT id, display_name, title, last_activity_at, started_at, cwd, git_repo_root, \
-             ended_at, end_reason, archived, hidden, pinned, last_read_at, \
+             ended_at, end_reason, archived, {hidden_column}, pinned, {read_column}, \
              last_activity_description, {model_column} FROM sessions ORDER BY last_activity_at DESC",
         )) {
             Ok(stmt) => stmt,
             Err(error) => {
+                if let Ok(Some(catalog)) = legacy_session_catalog(&conn, &columns, now) {
+                    return ProviderOutput {
+                        catalog,
+                        ..self.degraded("Hermes 旧版数据库仅提供会话信息，无法确认当前执行状态")
+                    };
+                }
                 let error = format!("query sessions failed: {error}");
                 log::warn!("hermes: session query failed");
                 return self.degraded(error);
@@ -686,6 +772,45 @@ mod tests {
     }
 
     #[test]
+    fn desktop_schema_without_hidden_or_read_time_still_reads_sessions() {
+        let (_dir, path) = make_db(
+            &[("old-desktop", "Example", 5000.0, "/example", false, 0.0)],
+            &[],
+        );
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch("ALTER TABLE sessions DROP COLUMN hidden; ALTER TABLE sessions DROP COLUMN last_read_at; DROP TABLE session_turn_leases;").unwrap();
+        let mut provider = HermesProvider::with_db_path(path);
+        let result = provider.poll(UNIX_EPOCH + Duration::from_secs(5001));
+        assert!(result.authoritative);
+        assert_eq!(result.catalog.len(), 1);
+        let task = &result.catalog[0];
+        assert_eq!(task.id, "hermes:old-desktop");
+        assert_eq!(task.status, TaskStatus::Unknown);
+        assert_eq!(task.native_unread, None);
+        assert!(task.stale && task.finished_at.is_none());
+    }
+    #[test]
+    fn legacy_cli_sessions_are_discovered_without_runtime_or_completion_evidence() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("state.db");
+        let db = rusqlite::Connection::open(&path).unwrap();
+        db.execute_batch(
+            "CREATE TABLE sessions(id TEXT, source TEXT, model TEXT, title TEXT,
+             started_at REAL, ended_at REAL, end_reason TEXT, message_count INTEGER);
+             INSERT INTO sessions VALUES('cli','cli','model-a','Old session',5000,6000,'error',2);",
+        )
+        .unwrap();
+        let mut provider = HermesProvider::with_db_path(path);
+        let result = provider.poll(UNIX_EPOCH + Duration::from_secs(6001));
+        assert!(!result.authoritative);
+        assert!(result.tasks.is_empty());
+        assert_eq!(result.catalog.len(), 1);
+        let session = &result.catalog[0];
+        assert_eq!(session.id, "hermes:cli");
+        assert_eq!(session.status, TaskStatus::Unknown);
+        assert!(session.stale && !session.new_execution && session.finished_at.is_none());
+    }
+    #[test]
     fn schema_error_is_degraded_not_authoritative_empty() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("state.db");
@@ -701,18 +826,24 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires a real local Hermes state database"]
+    #[ignore = "requires a real local Hermes state database; read-only, counts only"]
     fn live_hermes_snapshot_against_real_db() {
         let mut provider = HermesProvider::new();
         let out = provider.poll(SystemTime::now());
-        println!("authoritative={} error={:?}", out.authoritative, out.error);
-        for task in &out.tasks {
-            println!(
-                "task: id={} name={:?} status={:?} message={:?}",
-                task.id, task.name, task.status, task.message
-            );
-        }
         assert!(out.authoritative);
-        assert!(out.tasks.iter().all(|task| !task.id.is_empty()));
+        assert!(!out.catalog.is_empty());
+        assert!(out.catalog.iter().all(|task| !task.id.is_empty()));
+        println!(
+            "Hermes native: {} discovered sessions, {} without project paths, {} active leases",
+            out.catalog.len(),
+            out.catalog
+                .iter()
+                .filter(|task| task.project_path.is_none())
+                .count(),
+            out.tasks
+                .iter()
+                .filter(|task| !task.stale && task.status == TaskStatus::Running)
+                .count(),
+        );
     }
 }

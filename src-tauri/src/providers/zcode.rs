@@ -17,6 +17,67 @@ pub fn default_db() -> PathBuf {
         .join(".zcode/cli/db/db.sqlite")
 }
 
+/// The desktop index is a sibling of the native CLI DB in ZCode's standard layout.
+pub fn desktop_index(runtime_db: &Path) -> Option<PathBuf> {
+    if !runtime_db.ends_with("cli/db/db.sqlite") {
+        return None;
+    }
+    let root = runtime_db.parent()?.parent()?.parent()?;
+    Some(root.join("v2/tasks-index.sqlite"))
+}
+
+/// Read project paths only. A desktop project may have no readable runtime turn.
+pub fn local_project_roots(runtime_db: &Path) -> Vec<String> {
+    fn read(path: &Path) -> rusqlite::Result<Vec<String>> {
+        let db = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        db.busy_timeout(Duration::from_millis(200))?;
+        let project_tables: u32 = db.query_row(
+            "SELECT count(*) FROM sqlite_schema WHERE type='table' AND name IN ('projects','project_roots')",
+            [],
+            |row| row.get(0),
+        )?;
+        let sql = if project_tables == 0 {
+            // Earlier ZCode desktops attach tasks directly to local workspaces.
+            // Legacy remote rows can lack workspace_identity; check the key too.
+            "SELECT DISTINCT workspace_path FROM tasks
+             WHERE deleted=0 AND typeof(workspace_path)='text'
+               AND length(workspace_path) BETWEEN 1 AND 4096
+               AND typeof(workspace_key)='text' AND workspace_key NOT GLOB 'remote:*'
+               AND coalesce(workspace_identity,'') NOT GLOB 'remote:*'
+             ORDER BY workspace_path LIMIT 1024"
+        } else {
+            "SELECT DISTINCT r.root_path FROM project_roots r JOIN projects p USING(project_id)
+             WHERE p.host_id='local' AND p.deleted=0 AND typeof(r.root_path)='text'
+               AND length(r.root_path) BETWEEN 1 AND 4096
+             ORDER BY r.root_path LIMIT 1024"
+        };
+        let mut stmt = db.prepare(sql)?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+        rows.collect()
+    }
+
+    desktop_index(runtime_db)
+        .and_then(|path| read(&path).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|path| {
+            let path = path.as_str();
+            let windows = cfg!(windows);
+            let literal = if windows {
+                path.strip_prefix(r"\\?\").unwrap_or(path)
+            } else {
+                path
+            };
+            Path::new(path).is_absolute()
+                && !literal.contains(['*', '?', '\0', '\r', '\n'])
+                && !Path::new(path).ends_with(".zcode/workspace/default")
+        })
+        .collect()
+}
+
 pub struct ZcodeProvider {
     path: PathBuf,
     previous: HashMap<String, TaskSnapshot>,
@@ -49,9 +110,23 @@ impl ZcodeProvider {
         )?;
         db.busy_timeout(Duration::from_millis(250))?;
         let tx = db.transaction()?;
-        let mut sessions = tx.prepare(
-            "SELECT id, title, directory, last_outcome FROM session WHERE time_deleted IS NULL AND time_archived IS NULL ORDER BY time_updated DESC LIMIT 400"
+        let (has_outcome, has_deleted): (bool, bool) = tx.query_row(
+            "SELECT count(*) FILTER (WHERE name='last_outcome')>0,
+                    count(*) FILTER (WHERE name='time_deleted')>0 FROM pragma_table_info('session')",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
+        // Older desktops do not expose these two fields. Their absence
+        // is not lifecycle evidence.
+        let outcome_column = if has_outcome { "last_outcome" } else { "NULL" };
+        let deleted = if has_deleted {
+            "time_deleted IS NULL AND "
+        } else {
+            ""
+        };
+        let mut sessions = tx.prepare(&format!(
+            "SELECT id, title, directory, {outcome_column} FROM session WHERE {deleted}time_archived IS NULL ORDER BY time_updated DESC LIMIT 400"
+        ))?;
         let rows = sessions.query_map([], |r| {
             Ok((
                 r.get::<_, String>(0)?,
@@ -134,6 +209,10 @@ impl ZcodeProvider {
                 && latest["finish"] == "stop"
             {
                 task.status = TaskStatus::Succeeded;
+            } else if !has_outcome && current_assistant && latest["finish"] == "stop" {
+                // Older storage has no native outcome to corroborate a stop.
+                task.status = TaskStatus::Unknown;
+                task.stale = true;
             }
             if task.status == TaskStatus::Running {
                 let mut parts = tx.prepare("SELECT json_extract(data,'$.type'), json_extract(data,'$.state.status') FROM part WHERE message_id=?1 ORDER BY sequence DESC LIMIT 64")?;
@@ -160,7 +239,7 @@ impl ZcodeProvider {
                         ExecutionPhase::AwaitingModel
                     },
                 );
-            } else {
+            } else if task.status != TaskStatus::Unknown {
                 task.finished_at = Some(task.updated_at);
             }
             out.push(task);
@@ -189,7 +268,7 @@ impl ZcodeProvider {
                 self.followed.insert(task.id.clone());
             }
             // Silence affects freshness only, never lifecycle or turn identity.
-            task.stale = task.status == TaskStatus::Running && !fresh;
+            task.stale |= task.status == TaskStatus::Running && !fresh;
             current.insert(task.id.clone(), task);
         }
         for (id, old) in &self.previous {
@@ -242,7 +321,7 @@ impl Provider for ZcodeProvider {
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
         match Self::read(&self.path) {
             Ok(rows) => self.observe(rows, now),
-            Err(_) => ProviderOutput::degraded(
+            Err(error) => ProviderOutput::degraded(
                 self.previous
                     .values()
                     .filter(|t| self.followed.contains(&t.id))
@@ -253,7 +332,20 @@ impl Provider for ZcodeProvider {
                         t
                     })
                     .collect(),
-                "ZCode 原生数据库暂不可读；保留上次任务状态",
+                match error.sqlite_error_code() {
+                    Some(rusqlite::ErrorCode::CannotOpen)
+                        if self
+                            .path
+                            .metadata()
+                            .is_err_and(|error| error.kind() == std::io::ErrorKind::NotFound) =>
+                    {
+                        "未找到 ZCode 任务数据库；桌面项目可单独读取，保留上次任务状态"
+                    }
+                    Some(
+                        rusqlite::ErrorCode::DatabaseBusy | rusqlite::ErrorCode::DatabaseLocked,
+                    ) => "ZCode 任务数据库暂被占用；保留上次任务状态",
+                    _ => "ZCode 任务数据库无法读取或格式不兼容；保留上次任务状态",
+                },
             ),
         }
     }
@@ -281,6 +373,119 @@ mod tests {
             rusqlite::params![id, seq, v.to_string()],
         )
         .unwrap();
+    }
+    #[test]
+    fn desktop_projects_are_independent_of_runtime_read_health() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("cli/db/db.sqlite");
+        let index = dir.path().join("v2/tasks-index.sqlite");
+        std::fs::create_dir(index.parent().unwrap()).unwrap();
+        let db = Connection::open(index).unwrap();
+        db.execute_batch(
+            "CREATE TABLE projects(project_id TEXT, host_id TEXT, deleted INTEGER);
+             CREATE TABLE project_roots(project_id TEXT, root_path TEXT);
+             INSERT INTO projects VALUES('active','local',0),('removed','local',1),('remote','ssh',0);
+             INSERT INTO project_roots VALUES('active','relative-path');",
+        )
+        .unwrap();
+        let local = dir.path().join("local-project");
+        for (id, path) in [
+            ("active", local.clone()),
+            ("active", local.clone()),
+            ("removed", dir.path().join("removed-project")),
+            ("remote", dir.path().join("remote-project")),
+        ] {
+            db.execute(
+                "INSERT INTO project_roots VALUES(?1,?2)",
+                rusqlite::params![id, path.to_str().unwrap()],
+            )
+            .unwrap();
+        }
+        let tasks = ZcodeProvider::new(runtime.clone()).poll(SystemTime::now());
+        assert!(!tasks.authoritative);
+        assert!(tasks.tasks.is_empty() && tasks.catalog.is_empty());
+        assert_eq!(local_project_roots(&runtime), [local.to_str().unwrap()]);
+        assert!(local_project_roots(&dir.path().join("custom.sqlite")).is_empty());
+    }
+    #[test]
+    fn legacy_desktop_index_keeps_only_local_project_paths() {
+        let dir = tempfile::tempdir().unwrap();
+        let runtime = dir.path().join("cli/db/db.sqlite");
+        let index = dir.path().join("v2/tasks-index.sqlite");
+        std::fs::create_dir(index.parent().unwrap()).unwrap();
+        let db = Connection::open(index).unwrap();
+        db.execute_batch(
+            "CREATE TABLE tasks(workspace_key TEXT, workspace_path TEXT, workspace_identity TEXT, deleted INTEGER);",
+        )
+        .unwrap();
+        let project = dir.path().join("local-project");
+        for (key, identity, deleted, path) in [
+            ("local", None, 0, project.clone()),
+            (
+                "remote:ssh:example:22:user:/tmp",
+                None,
+                0,
+                dir.path().join("remote-a"),
+            ),
+            (
+                "legacy-remote",
+                Some("remote:docker:example:/tmp"),
+                0,
+                dir.path().join("remote-b"),
+            ),
+            ("deleted", None, 1, dir.path().join("deleted")),
+            (
+                "default",
+                None,
+                0,
+                dir.path().join(".zcode/workspace/default"),
+            ),
+        ] {
+            db.execute(
+                "INSERT INTO tasks VALUES(?1,?2,?3,?4)",
+                rusqlite::params![key, path.to_str().unwrap(), identity, deleted],
+            )
+            .unwrap();
+        }
+        assert_eq!(local_project_roots(&runtime), [project.to_str().unwrap()]);
+    }
+    #[test]
+    #[ignore = "requires real local ZCode Desktop project metadata; read-only, counts only"]
+    fn live_desktop_project_roots() {
+        let path = default_db();
+        let roots = local_project_roots(&path);
+        assert!(
+            !roots.is_empty(),
+            "Expected at least one real local ZCode project"
+        );
+        println!("ZCode Desktop: {} local project roots", roots.len());
+    }
+    #[test]
+    fn legacy_runtime_schema_reads_new_turn_without_inventing_old_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let db = fixture(&path);
+        db.execute_batch("ALTER TABLE session DROP COLUMN time_deleted; ALTER TABLE session DROP COLUMN last_outcome;").unwrap();
+        let now = UNIX_EPOCH + Duration::from_secs(10);
+        let mut provider = ZcodeProvider::new(path);
+        let first = provider.poll(now);
+        assert!(first.authoritative);
+        assert!(first.tasks.is_empty());
+        assert_eq!(first.catalog[0].id, "zcode:s");
+        assert_eq!(first.catalog[0].status, TaskStatus::Unknown);
+        assert!(first.catalog[0].stale && first.catalog[0].finished_at.is_none());
+
+        message(
+            &db,
+            "u2",
+            3,
+            json!({"role":"user","time":{"created":10_001}}),
+        );
+        let next = provider.poll(now + Duration::from_millis(2));
+        assert!(next.authoritative);
+        assert_eq!(next.tasks[0].id, "zcode:s");
+        assert_eq!(next.tasks[0].status, TaskStatus::Running);
+        assert!(next.tasks[0].new_execution && !next.tasks[0].stale);
     }
     #[test]
     fn completed_cache_entries_expire_without_inventing_running_completion() {

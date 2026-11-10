@@ -74,7 +74,11 @@ pub(super) fn discover_source_rows_with_wsl(
                 }
                 SourceKind::Zcode => {
                     let path=if source.location.is_empty() {crate::providers::zcode::default_db()} else {PathBuf::from(&source.location)};
-                    (path.is_file(), path.display().to_string())
+                    let index = crate::providers::zcode::desktop_index(&path).filter(|index| index.is_file());
+                    (path.is_file() || index.is_some(), match index {
+                        Some(index) => format!("{} · 桌面项目：{}", path.display(), index.display()),
+                        None => path.display().to_string(),
+                    })
                 }
                 SourceKind::Doubao => {
                     let root=if source.location.is_empty() {crate::providers::doubao::default_root()} else {PathBuf::from(&source.location)};
