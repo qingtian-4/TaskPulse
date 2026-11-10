@@ -41,6 +41,7 @@ export function localSourceStatus(
   source:MonitorSource|undefined,observed:SourceSnapshot|undefined,locationDetected:boolean|null|undefined,
   diagnostic?:string|null,
 ):string {
+  if(source?.enabled&&source.projects.length===0&&observed?.read_state==='healthy')return '未选项目 · 当前不监控';
   if(source?.kind==='doubao'&&source.enabled&&observed?.read_state==='failed'){
     if(diagnostic==='豆包桌面端未运行')return diagnostic;
     if(diagnostic==='未找到支持的豆包工作任务记录；普通聊天不在监控范围内')return '暂无可读取的豆包工作任务';

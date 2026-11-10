@@ -13,13 +13,13 @@
   import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '$lib/types';
   import {formatAgo} from '$lib/types';
   import type {ProjectChoice} from '$lib/project-options';
-  import {localHookKind,type SourceDefinition} from '$lib/source-setup';
+  import {localDiscoveryCandidates,localHookKind,type SourceDefinition} from '$lib/source-setup';
   import SshSourceWizard from './SshSourceWizard.svelte';
   import ProjectScope from './ProjectScope.svelte';
   import SourceSessions from './SourceSessions.svelte';
   import EventSources from './EventSources.svelte';
   import './monitor-sources.css';
-  let {onDirtyChange,onAttention}:{onDirtyChange:(value:boolean)=>void;onAttention:()=>void}=$props();
+  let {reviewRequest,onDirtyChange,onAttention}:{reviewRequest:number;onDirtyChange:(value:boolean)=>void;onAttention:()=>void}=$props();
   let settings=$state<DashboardSettings|null>(null),applied=$state<DashboardSettings|null>(null);
   let snapshot=$state<DashboardSnapshot|null>(null),discovery=$state<SourceDiscovery[]>([]);
   let page=$state<'home'|'local'|'server'>('local'),tab=$state<'local'|'ssh'>('local'),selectedHost=$state(''),query=$state('');
@@ -33,6 +33,17 @@
   let expandedLocal=$state<AgentKind|null>(null);
   let localAgents=$state<SourceDefinition[]>([]);
   let eventAgents=$state<SourceDefinition[]>([]);
+  const discoveredLocal=$derived(localDiscoveryCandidates(localAgents,discovery,applied));
+  const knownLocal=$derived(localAgents.filter(agent=>agent.kind!=='scanner'&&!discoveredLocal.some(row=>row.definition.kind===agent.kind)));
+  let sourceScroll:HTMLDivElement;
+  let handledReview=0, detectionRequest=0;
+  $effect(()=>{
+    if(reviewRequest===handledReview)return;
+    handledReview=reviewRequest;
+    page='local';tab='local';
+    void tick().then(()=>sourceScroll?.scrollTo({top:0}));
+    if(detectionSettled)void detect();
+  });
   const processAgent=$derived(localAgents.find(agent=>agent.kind==='scanner'));
   const manualEventAgents=$derived(eventAgents.filter(agent=>!localHookKind(agent.adapter_id)));
   function hookCatalog(kind:AgentKind){return eventAgents.filter(agent=>localHookKind(agent.adapter_id)===kind);}
@@ -61,7 +72,7 @@
   function sshLabel(group:ServerGroup){return ({connected:'SSH 已连接',disconnected:'SSH 未连接',unknown:'SSH 尚未检测'})[connection(group)]??'SSH 尚未检测';}
   function rowStatus(kind:AgentKind,source?:MonitorSource){
     const saved=applied?.sources.find(s=>s.id===source?.id);
-    if(source&&(!saved||source.enabled!==saved.enabled))return '待保存';
+    if(source&&(!saved||source.enabled!==saved.enabled||source.enabled&&JSON.stringify(source.projects)!==JSON.stringify(saved.projects)))return '待保存';
     const message=snapshot?.providers.find(p=>p.provider===source?.id)?.message;
     if(kind==='trae'&&source?.enabled
       && (message?.includes('当前会话库格式不可直接读取')||message?.includes('目前只读取公开会话元数据'))){
@@ -79,7 +90,7 @@
   }
   async function save(){if(settings)await commit({...$state.snapshot(settings),onboarding_complete:true});}
   async function reload(){try{settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));dirty=false;conflict=false;error='';notice='';}catch(e){fail(e);}}
-  function ensureLocal(kind:AgentKind){if(!settings)return;let s=localRows.find(s=>s.kind===kind&&s.id===activeLocalSource)??settings.sources.find(s=>s.kind===kind);if(!s){s=createSource(kind,'',localAgents.find(agent=>agent.kind===kind)?.name);settings.sources.push(s);}return s;}
+  function ensureLocal(kind:AgentKind){if(!settings)return;let s=localRows.find(s=>s.kind===kind&&s.id===activeLocalSource)??settings.sources.find(s=>s.kind===kind);if(!s){const candidate=discoveredLocal.find(row=>row.definition.kind===kind)?.candidate;s=candidate?{...structuredClone($state.snapshot(candidate)),enabled:false}:createSource(kind,'',localAgents.find(agent=>agent.kind===kind)?.name);settings.sources.push(s);}return s;}
   function ensureRemote(group:ServerGroup){if(!settings)return;let s=group.codex;if(!s){s=createSource('remote_codex',group.host,group.name);settings.sources.push(s);}return s;}
   function editable(){if(dirty){error='请先应用或取消当前编辑。';return false;}return !saving&&!conflict;}
   async function toggleLocal(kind:AgentKind,enabled:boolean){
@@ -98,7 +109,7 @@
   async function remove(){if(!settings||!selected)return;const next=removeServer($state.snapshot(settings),selected.host);if(await commit(next)){removePrompt=false;page='home';}}
   function list(value:string){return value.split('\n').map(s=>s.trim()).filter(Boolean);}
   function changeProjects(value:string[]){if(!settings)return;const source=editor??(page==='local'?ensureLocal(activeLocal):selected?ensureRemote(selected):undefined);if(source){source.projects=value;touch();}}
-  async function detect(){try{discovery=await invoke<SourceDiscovery[]>('discover_sources');notice='';if(expandedLocal)void loadProjects(localEditor);}catch(e){fail(e);}}
+  async function detect(){const request=++detectionRequest;try{const found=await invoke<SourceDiscovery[]>('discover_sources');if(!active||request!==detectionRequest)return;discovery=found;notice='';if(expandedLocal)void loadProjects(localEditor);}catch(e){if(active&&request===detectionRequest)fail(e);}}
   async function probeHost(group:ServerGroup){
     if(probing[group.host])return;probing[group.host]=true;error='';
     try{const result=await invoke<SshProbe>('probe_ssh_source',{host:group.host});if(active&&result.host===group.host)reports[group.host]=result;}
@@ -168,7 +179,7 @@
 <div class="monitor-sources">
   <header class="ms-head"><h1>{$t(page==='server'?'服务器设置':'监控来源')}</h1>{#if page!=='local'}<button class="ms-btn" class:primary={page==='home'} disabled={saving||updating} onclick={addWizard}><Plus size={14}/>{$t('添加 SSH 服务器')}</button>{/if}</header>
   <div class="ms-tabsbar">{#if page!=='server'}<div class="ms-tabs">{#each [['local','本机'],['ssh','SSH 服务器']] as [id,label]}<button class:active={page==='local'?id==='local':tab===id} onclick={()=>{tab=id as typeof tab;if(id==='local')openLocal();else page='home';}} aria-pressed={page==='local'?id==='local':tab===id}>{$t(label)}{#if id==='ssh'}<small>{groups.length}</small>{/if}</button>{/each}</div>{:else}<button class="ms-back" onclick={()=>{page='home';tab='ssh';}}><ArrowLeft size={13}/>{$t('返回来源列表')}</button>{/if}</div>
-  <div class="ms-scroll glass-scroll">
+  <div class="ms-scroll glass-scroll" bind:this={sourceScroll}>
     {#if error}<div class="ms-error" role="alert">{$t(error)}{#if conflict}<button class="ms-btn small" onclick={reload}>{$t('加载最新配置')}</button>{:else}<button class="ms-btn icon-only ghost" aria-label={$t('关闭错误')} onclick={()=>error=''}><X size={13}/></button>{/if}</div>{/if}
     {#if notice}<p class="ms-success" role="status">{$t(notice)}</p>{/if}
     {#if !settings}<p class="ms-muted">{$t('正在读取设置…')}</p>
@@ -177,10 +188,10 @@
       {#if tab!=='local'}<div class="section-top"><h2><Server size={16}/>{$t('SSH 服务器')}<span class="count-badge">{groups.length}</span></h2></div><div class="tool-row"><label class="server-search"><Search size={15}/><input bind:value={query} aria-label={$t('搜索服务器')} placeholder={$t('搜索服务器名称或 SSH Host')}/></label><button class="ms-btn small" disabled={saving} onclick={()=>void invoke('request_refresh')}><RefreshCw size={13}/>{$t('刷新状态')}</button></div><div class="server-list">{#each shown as group (group.host)}<article class="server-card" data-host={group.host}><span class="source-symbol remote"><Server size={19}/></span><div class="source-grow"><div class="server-head"><strong>{group.name}</strong><small>{group.host}</small></div><p class="server-description">{$t(group.paused?'采集已暂停，原启用状态已保留':sourceStatus(group.codex,observation(group.codex)))}</p><div class="agent-tags"><span class="mini-tag">Codex · {$t(group.codex?.enabled?'已启用':'未启用')}</span><span class="mini-tag pending">Claude Code · {$t('待适配')}</span><span class="mini-tag">{$t(scopeLabel(group.codex?.projects??[]))}{#if group.codex&&!group.codex.projects.includes('*')} {group.codex.projects.length}{/if}</span></div></div><div class="server-controls"><span class="ms-pill" class:warning={connection(group)==='disconnected'} class:neutral={connection(group)==='unknown'}><i></i>{$t(sshLabel(group))}</span><span class="metric"><b>{serverTaskCount(group)}</b> {$t('任务')}</span><button class="ms-btn small" onclick={()=>openServer(group)}>{$t('管理')}<ChevronRight size={13}/></button></div></article>{/each}{#if !shown.length}<div class="ms-empty"><Server size={25}/><strong>{$t(groups.length?'没有符合条件的服务器':'还没有添加 SSH 服务器')}</strong><button class="ms-btn" onclick={addWizard}><Plus size={13}/>{$t('添加服务器')}</button></div>{/if}</div>{/if}
     {:else if page==='local'}
       <div class="section-top"><h2>{$t('本机 Agent')}</h2><button class="ms-btn small" onclick={detect}><RefreshCw size={13}/>{$t('重新检测')}</button></div>
-      {#snippet localAgentRow(agent:SourceDefinition)}
+      {#snippet localAgentRow(agent:SourceDefinition, newlyFound=false)}
           {@const source=localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind)}
           <div class="agent-entry" data-agent-kind={agent.kind}>
-<div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(rowStatus(agent.kind,source))}{#if agent.kind!=='trae'} · {taskCount(source)} {$t('任务')}{/if}{#if hookCount(agent.kind)} · {$t('{count} 个 Hook 连接',{count:hookCount(agent.kind)})}{/if}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.kind==='trae'?'读取 Trae 会话目录':'启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
+<div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(newlyFound&&!source?(agent.kind==='trae'?'已检测到 · 仅支持会话目录':'已检测到 · 未启用'):rowStatus(agent.kind,source))}{#if source?.enabled&&source.projects.length&&agent.kind!=='trae'} · {taskCount(source)} {$t('任务')}{/if}{#if hookCount(agent.kind)} · {$t('{count} 个 Hook 连接',{count:hookCount(agent.kind)})}{/if}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':newlyFound&&!source?'选择添加':source?.enabled&&!source.projects.length?'设置项目范围':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.kind==='trae'?'读取 Trae 会话目录':'启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
             {#if expandedLocal===agent.kind}
               {#if agent.kind==='doubao'}<p class="ms-muted">{$t('手动开启后，只关注兼容的豆包工作任务。普通聊天不在监控范围内。')}</p>{/if}
               {#if agent.kind==='trae'}<p class="ms-muted">{$t('Trae 的任务库尚不能直接读取。可在已发现会话中查看目录，任务进度与提醒暂不可用。')}</p>{/if}
@@ -193,7 +204,16 @@
           </div>
       {/snippet}
       <section class="detail-card local-agents">
-        {#each localAgents.filter(agent=>agent.kind!=='scanner') as agent (agent.id)}
+        {#if discoveredLocal.length}
+          <section class="discovery-review" data-discovery-review aria-label={$t('新发现的本机来源')}>
+            <h3>{$t('新发现的本机来源')}</h3>
+            <p class="ms-muted">{$t('可先查看配置，再决定是否启用。')}</p>
+            {#each discoveredLocal as {definition} (definition.id)}
+              {@render localAgentRow(definition,true)}
+            {/each}
+          </section>
+        {/if}
+        {#each knownLocal as agent (agent.id)}
           {@render localAgentRow(agent)}
         {/each}
 <div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>void savePreference({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>

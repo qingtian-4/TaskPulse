@@ -184,7 +184,8 @@ fn main() {
                         "settings" => {
                             let handle = app.clone();
                             tauri::async_runtime::spawn(async move {
-                                if let Err(error) = tray::open_management(handle, None).await {
+                                if let Err(error) = tray::open_management(handle, None, None).await
+                                {
                                     log::error!("Cannot open settings: {error}");
                                 }
                             });

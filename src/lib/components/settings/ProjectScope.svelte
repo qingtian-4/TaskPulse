@@ -18,6 +18,7 @@
   </div>
   {#if all}<p class="scope-notice"><Check size={15}/>{$t('自动关注此来源后续发现的新项目。')}</p>
   {:else}
+    {#if !projects.length}<p class="scope-notice">{$t('未选择项目，此来源暂不会纳入任务。')}</p>{/if}
     <div class="project-options">
       {#each options as option (option.id)}
         {@const unassociated=option.path==='@unassociated'}
@@ -26,7 +27,6 @@
     </div>
     {#if !options.length}<p class="scope-empty">{$t('暂无已发现项目，可以手动添加路径。')}</p>{/if}
     <form class="add-path" onsubmit={e=>{e.preventDefault();add();}}><input bind:value={path} disabled={disabled} aria-label={$t('添加项目路径')} placeholder={$t('输入项目路径，例如 /home/user/project')}/><button class="ms-btn" type="submit" disabled={disabled||!path.trim()}><Plus size={13}/>{$t('添加')}</button></form>
-    {#if !projects.length}<p class="scope-empty">{$t('未选择项目，此来源暂不会纳入任务。')}</p>{/if}
   {/if}
 </div>
 <style>

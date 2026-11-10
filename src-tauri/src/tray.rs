@@ -450,19 +450,31 @@ fn create_popup(app: &AppHandle) {
 }
 
 #[tauri::command]
-pub async fn open_management(app: AppHandle, section: Option<String>) -> Result<(), String> {
+pub async fn open_management(
+    app: AppHandle,
+    section: Option<String>,
+    review_sources: Option<bool>,
+) -> Result<(), String> {
     dispatch_popup(&app, PopupEvent::Intent(Input::Management(true)));
-    let result = open_management_window(app.clone(), section).await;
+    let result = open_management_window(app.clone(), section, review_sources).await;
     if result.is_err() && app.get_webview_window("management").is_none() {
         dispatch_popup(&app, PopupEvent::Intent(Input::Management(false)));
     }
     result
 }
 
-async fn open_management_window(app: AppHandle, section: Option<String>) -> Result<(), String> {
+async fn open_management_window(
+    app: AppHandle,
+    section: Option<String>,
+    review_sources: Option<bool>,
+) -> Result<(), String> {
     let section = management_section(section.as_deref());
+    let review_sources = section == Some("sources") && review_sources == Some(true);
     if let Some(win) = app.get_webview_window("management") {
-        if let Some(section) = section {
+        if review_sources {
+            app.emit_to("management", "management-source-review", ())
+                .map_err(|e| e.to_string())?;
+        } else if let Some(section) = section {
             app.emit_to("management", "management-section", section)
                 .map_err(|e| e.to_string())?;
         }
@@ -508,7 +520,19 @@ async fn open_management_window(app: AppHandle, section: Option<String>) -> Resu
         "management",
         WebviewUrl::App(
             section
-                .map_or_else(|| "manage/".into(), |s| format!("manage/?section={s}"))
+                .map_or_else(
+                    || "manage/".into(),
+                    |s| {
+                        format!(
+                            "manage/?section={s}{}",
+                            if review_sources {
+                                "&reviewSources=1"
+                            } else {
+                                ""
+                            }
+                        )
+                    },
+                )
                 .into(),
         ),
     );

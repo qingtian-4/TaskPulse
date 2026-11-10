@@ -16,6 +16,17 @@ export function sourceDefinitionFor(catalog:SourceDefinition[],source:MonitorSou
   return catalog.find(d=>d.kind===source.kind&&(d.kind!=='generic_event'||d.adapter_id===source.integration?.adapter_id))
     ??{id:source.id,name:source.name,kind:source.kind,category:'custom',location_kind:'none',platforms:[]};
 }
+// Use the same reviewable rows on the panel and on the settings landing page.
+export function localDiscoveryCandidates(catalog:SourceDefinition[], found:SourceDiscovery[], settings:DashboardSettings|null){
+  if(!settings?.onboarding_complete)return [];
+  const seen=new Set(settings.auto_discovery_seen??[]);
+  return catalog.filter(d=>d.category==='local'&&d.kind!=='scanner').flatMap(definition=>{
+    if(settings.sources.some(s=>s.kind===definition.kind))return [];
+    const row=found.find(d=>d.data_location_detected===true && d.candidate?.kind===definition.kind
+      && !seen.has(d.candidate.id) && !settings.sources.some(s=>s.id===d.candidate?.id));
+    return row?.candidate?[{definition,candidate:row.candidate}]:[];
+  });
+}
 export interface SourceCatalogRow {
   definition:SourceDefinition; source?:MonitorSource; candidate?:MonitorSource; observation?:SourceSnapshot;
   supported:boolean; locationDetected:boolean|null; dataDetected:boolean|null;

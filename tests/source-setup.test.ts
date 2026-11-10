@@ -1,9 +1,18 @@
 import {test,expect} from 'bun:test';
-import {createEventSource,sourceSections,sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summarizeSources,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
+import {localDiscoveryCandidates,createEventSource,sourceSections,sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summarizeSources,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
 import type {DashboardSettings,MonitorSource,ProviderHealth,SourceSnapshot} from '../src/lib/types';
 
 const s:MonitorSource={id:'one',kind:'remote_codex',name:'test',enabled:true,location:'public-test',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
 const empty:SourceSnapshot={id:s.id,kind:s.kind,location:s.location,enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0};
+
+test('the review list contains only new local sources the user can add',()=>{
+  const definition=(kind:SourceDefinition['kind'],category='local'):SourceDefinition=>({id:kind,kind,category,name:kind,location_kind:'none',platforms:[]});
+  const catalog=[definition('trae'),definition('doubao'),definition('hermes'),definition('codex_wsl','remote'),definition('scanner')];
+  const candidates=catalog.map(d=>({id:d.id,location:'',data_location_detected:true,detail:'',candidate:{...s,id:d.id,kind:d.kind,enabled:false,location:''}}));
+  const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[{...s,id:'saved-hermes',kind:'hermes'}],auto_discovery_seen:['doubao']};
+  expect(localDiscoveryCandidates(catalog,candidates,settings).map(row=>row.candidate.id)).toEqual(['trae']);
+  expect(localDiscoveryCandidates(catalog,candidates,{...settings,sources:[...settings.sources,candidates[0].candidate]})).toEqual([]);
+});
 
 test('event source drafts keep manifest identity, require opt-in and support multiple instances',()=>{
   for(const adapter of ['kimi-code-cli','trae-cn-ide','standard-events']){

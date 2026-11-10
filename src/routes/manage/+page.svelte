@@ -17,18 +17,19 @@
   import type {DashboardSettings} from '$lib/types';
   type Section='general'|'panel'|'sources'|'notifications'|'updates'|'about';
   let section=$state<Section>('general'),sourceDirty=$state(false),scroll:HTMLDivElement;
-  let busy=$state(false),loadError=$state('');
+  let busy=$state(false),loadError=$state(''),sourceReviewRequest=$state(0);
   const positions:Partial<Record<Section,number>>={};
   const sections=[['general','通用','让 TaskPulse 按你的习惯工作。',SlidersHorizontal],['panel','任务面板','只保留此刻值得关注的任务信息。',PanelsTopLeft],['sources','监控来源','选择要关注的 Agent，以及它们的项目范围。',RadioTower],['notifications','通知提醒','在任务需要你时提醒，而不是打断你。',Bell],['updates','应用更新','自动发现新版本，由你决定何时安装。',RefreshCw],['about','关于','TaskPulse，你的 Agent 任务关注中心。',Info]] as const;
   const current=$derived(sections.find(item=>item[0]===section)!);
-  async function navigate(next:Section){if(scroll)positions[section]=scroll.scrollTop;section=next;await tick();if(scroll)scroll.scrollTop=positions[next]??0;}
+  async function navigate(next:Section,review=false){if(scroll)positions[section]=scroll.scrollTop;section=next;if(review)sourceReviewRequest++;await tick();if(scroll)scroll.scrollTop=review?0:positions[next]??0;}
   async function reload(){try{appSettings.set(await invoke<DashboardSettings>('get_monitoring_settings'));preferenceError.set('');loadError='';}catch(e){loadError=String(e);}}
   onMount(()=>{
-    const requested=new URLSearchParams(location.search).get('section');if(sections.some(s=>s[0]===requested))section=requested as Section;
+    const url=new URLSearchParams(location.search),requested=url.get('section');if(sections.some(s=>s[0]===requested))section=requested as Section;if(section==='sources'&&url.get('reviewSources')==='1')sourceReviewRequest++;
     if(!isTauri())return;
     let active=true;const cleanups:Array<()=>void>=[];
     void(async()=>{
       const stopSection=await listen<string>('management-section',e=>{if(sections.some(s=>s[0]===e.payload))void navigate(e.payload as Section);});if(active)cleanups.push(stopSection);else stopSection();
+      const stopReview=await listen('management-source-review',()=>void navigate('sources',true));if(active)cleanups.push(stopReview);else stopReview();
       const stopUpdate=await listen<{phase:string}>('application-update',e=>busy=['downloading','verifying','installing'].includes(e.payload.phase));if(active)cleanups.push(stopUpdate);else stopUpdate();
       const status=await invoke<{phase:string}>('get_update_status');busy=['downloading','verifying','installing'].includes(status.phase);
 
@@ -46,7 +47,7 @@
       {#if !$appSettings}<p role="status">{$t(isTauri()?'正在读取设置…':'请在 TaskPulse 应用中打开设置。')}</p>{:else}
         <fieldset disabled={busy} class:source-pane={section==='sources'}>
           {#if section==='general'}<GeneralSettings/>{:else if section==='panel'}<PanelSettings/>{:else if section==='notifications'}<NotificationSettings/>{:else if section==='updates'}<UpdateSettings blocked={sourceDirty}/>{:else if section==='about'}<AboutSettings/>{/if}
-          <div class:source-host={section==='sources'} hidden={section!=='sources'}><SourceSettings onDirtyChange={value=>sourceDirty=value} onAttention={()=>void navigate('sources')}/></div>
+          <div class:source-host={section==='sources'} hidden={section!=='sources'}><SourceSettings reviewRequest={sourceReviewRequest} onDirtyChange={value=>sourceDirty=value} onAttention={()=>void navigate('sources')}/></div>
         </fieldset>
       {/if}
     </div>
