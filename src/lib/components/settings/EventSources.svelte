@@ -28,11 +28,13 @@
 </script>
 
 <details class="detail-card event-sources" class:local-hook={localHook}>
-  <summary>{$t(localHook?'Hook 连接':'高级接入：手动连接')}{#if count} · {count}{/if}</summary>
-  <p class="ms-muted">{$t(localHook?'Hook 是这个 Agent 的可选事件来源，需要单独在宿主中配置。':'用于让 Agent 或脚本主动发送任务开始、结束或请求等通知。需要在发送端单独配置。')}</p>
+  <summary>{$t(localHook?'Hook 连接':'连接其他工具（可选）')}{#if count} · {count}{/if}</summary>
+  <p class="ms-muted">{$t(localHook?'Hook 是这个 Agent 的可选事件来源，需要单独在宿主中配置。':'上方的本机工具不用再连接。只有能主动发送任务状态的其他工具，才需要在这里添加。')}</p>
   {#if localHook}
     {#each catalog as definition (definition.id)}<button class="ms-btn" type="button" disabled={disabled} data-event-add onclick={()=>add(definition)}>{$t('添加 Hook 连接')}</button>{/each}
-  {:else}
+  {:else if catalog.length===1 && catalog[0].adapter_id==='standard-events'}
+    <button class="ms-btn" type="button" disabled={disabled} data-event-add onclick={()=>add(catalog[0])}>{$t('添加 MCP 或脚本连接')}</button>
+  {:else if catalog.length}
   <div class="event-picker">
     <label class="ms-field">{$t('选择连接类型')}
       <select bind:value={adapterId} disabled={disabled} data-event-picker>

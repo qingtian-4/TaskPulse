@@ -18,6 +18,7 @@ pub struct SourceDefinition {
     pub capabilities: Capabilities,
     pub verified_platforms: Vec<String>,
     pub default_source: Option<SourceConfig>,
+    pub auto_enable_on_discovery: bool,
 }
 /// Catalog claims describe what a reader can observe, never authorize action.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
@@ -234,7 +235,7 @@ fn definition(
             SourceKind::Opencode => "只读本机 OpenCode 会话、模型和运行记录；明确本轮结束才提醒，不从工具返回推断完成。提问与审批事件尚不提供。",
             SourceKind::Workbuddy => "只读 WorkBuddy 本地数据库与会话记录；关注新执行，不导入空闲历史，不包含云端任务。提问与审批事件尚不提供。",
             SourceKind::Zcode => "自动读取本机 ZCode 会话、项目和模型；工具执行完成不会当作整轮结束。",
-            SourceKind::Doubao => "读取豆包原生执行检查点；已验证 Windows 2.26.10。检查点移除只标为待更新，不推断完成；审批提醒尚未适配。",
+            SourceKind::Doubao => "仅在 Windows 手动开启。读取豆包工作任务，不监控普通聊天，也不提供审批提醒。已验证 Windows 2.26.10。",
             SourceKind::Codex => "原生标题、项目与 rollout 执行阶段；仅明确结束事件提醒。命令审批需可选的官方观察 Hook，安装后还需在 Codex /hooks 中信任。",
             SourceKind::CodexWsl => "独立读取已运行发行版的 Codex 数据；不唤醒 WSL，不借用 Windows 额度。命令审批需在该发行版安装并信任观察 Hook。",
             SourceKind::RemoteCodex => "读取已配置 SSH 主机的 Codex 会话；依赖主机可达、权限与远端数据格式。",
@@ -249,12 +250,16 @@ fn definition(
         }.into(),
         location_kind: location.into(),
         multiple_instances: matches!(kind, SourceKind::CodexWsl | SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::Tmux | SourceKind::GenericEvent),
-        platforms: vec!["windows".into(), "macos".into(), "linux".into()],
+        platforms: ["windows", "macos", "linux"].into_iter()
+            .filter(|platform| kind.supported_on(platform))
+            .map(str::to_owned)
+            .collect(),
         adapter_id: None,
         agent_id: None,
         capabilities: native_capabilities(kind),
         verified_platforms: if kind == SourceKind::Doubao { vec!["windows".into()] } else { vec![] },
         default_source: None,
+        auto_enable_on_discovery: crate::monitoring::automatic_local(kind),
     }
 }
 #[tauri::command]
@@ -324,6 +329,7 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
             capabilities,
             verified_platforms: vec![],
             default_source: None,
+            auto_enable_on_discovery: false,
         });
     }
     entries
@@ -340,6 +346,13 @@ mod tests {
             .unwrap();
         assert_eq!(process.capabilities.turn_end, Evidence::Unsupported);
         assert_eq!(process.capabilities.approval, Evidence::Unsupported);
+        let doubao = entries
+            .iter()
+            .find(|e| e.kind == SourceKind::Doubao)
+            .unwrap();
+        assert_eq!(doubao.platforms, ["windows"]);
+        assert!(!doubao.auto_enable_on_discovery);
+        assert!(!doubao.default_source.as_ref().unwrap().enabled);
         assert!(entries
             .iter()
             .all(|e| e.verified_platforms.iter().all(|p| e.platforms.contains(p))));

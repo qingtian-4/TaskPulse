@@ -176,7 +176,7 @@ pub fn project(
     let mut view = DashboardView::default();
     let mut indices = HashMap::new();
     for source in &settings.sources {
-        let enabled = settings.onboarding_complete && source.enabled;
+        let enabled = settings.onboarding_complete && source.enabled_here();
         let provider = health.get(source.id.as_str()).copied();
         let (data_seen, discovered_sessions) =
             evidence.get(&source.id).copied().unwrap_or_default();

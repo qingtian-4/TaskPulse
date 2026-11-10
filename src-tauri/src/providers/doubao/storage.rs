@@ -16,6 +16,8 @@ mod tests;
 pub type Result<T> = std::result::Result<T, &'static str>;
 const LIMIT: usize = 32 * 1024 * 1024;
 const CURRENT_LIMIT: u64 = 64;
+pub(super) const MISSING_CHECKPOINT: &str = "未找到支持的豆包工作任务记录；普通聊天不在监控范围内";
+pub(super) const AMBIGUOUS_CHECKPOINT: &str = "找到多条豆包工作任务记录，无法确认当前记录";
 const RECORD: &str = "default-chat-im-protocol-store";
 pub const DATABASE: &str = "chrome_doubao-chat_0.indexeddb.leveldb";
 type Records = BTreeMap<Vec<u8>, (u64, Option<Vec<u8>>)>;
@@ -380,11 +382,12 @@ impl Reader {
                 key[3] == 1 && v.is_some() && checkpoint_key(key).unwrap_or(false)
             })
             .collect();
-        if active.len() != 1 {
-            return Err("checkpoint unavailable/ambiguous");
-        }
-        let (key, (_, Some(value))) = active[0] else {
-            return Err("checkpoint unavailable");
+        let (key, (_, Some(value))) = (match active.as_slice() {
+            [(key, record)] => (*key, *record),
+            [] => return Err(MISSING_CHECKPOINT),
+            _ => return Err(AMBIGUOUS_CHECKPOINT),
+        }) else {
+            return Err(MISSING_CHECKPOINT);
         };
         let bytes = record_bytes(root, key, value, &records, &mut files)?;
         let value = decode(&bytes)?;
