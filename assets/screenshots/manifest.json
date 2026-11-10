@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "227411c29ca2a71ab23b9f58d7754fd861fb8231",
+  "capture_commit": "dabf9c82a7e757d696abdabc21c9d8476912cf8f",
   "modified": false,
-  "executable_sha256": "f51cbddcc620fa1ac2ca592c70636b4f7211773c00faeec70b07fc042d4c149d",
+  "executable_sha256": "edd7f0f48ee2213476b1f58b4085b14555586a3f3b240b849ce540daea08fa9e",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 788,
       "dpr": 2,
-      "sha256": "66e3af340f9d4651c5f9f18a925ef4a4f37e0616151be13b3d6b00b2e7775254",
-      "bytes": 161740
+      "sha256": "dc6fcbcd1bcd1adf85bf666b9ab3821fcef7b15e07cecc2ab17a79e0a232ae95",
+      "bytes": 161732
     },
     {
       "file": "notice-input.png",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
-      "bytes": 25774
+      "sha256": "5a10f8106040a2d2f3beca8a2b1d7d69eda11240774719014b38e3b008a958a7",
+      "bytes": 25775
     },
     {
       "file": "dashboard-en.png",
@@ -103,13 +103,13 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
-      "bytes": 23209
+      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
+      "bytes": 23208
     }
   ],
-  "frontend_tree": "8a5ae59a0a7e3fe6704e68db8272d28140e569e4",
-  "runtime_tree": "641c45a246f9a5bad298e89bb7fbee71c92228de",
-  "locale_tree": "a78300ed47a28f71cfd87a02d41a43544b8bada9",
+  "frontend_tree": "9297939d14200c033a11ba322d8263780d3fcb81",
+  "runtime_tree": "3e06b4370680556a691b7aa48c6b43a7f6a48348",
+  "locale_tree": "d03467cc054c9b3b85d1cea46fd829ccfa1b6ddd",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
