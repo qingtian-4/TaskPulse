@@ -83,7 +83,7 @@ The **macOS compile** workflow checks shared Rust changes and their build inputs
 | `test:installers` | Windows EXE/MSI fresh installs plus both macOS architectures and CLI packaging |
 | `test:upgrade` | Runner-local Windows NSIS/MSI fresh installs and cross-version upgrades on Windows and both Mac architectures; only evidence is uploaded |
 
-The managed MSI upgrade uses a standard account and an administrator-advertised source after signature verification; interactive UAC is a separate manual check. Adding the label starts its workflow; subsequent PR commits rerun it with the new exact head. Removing the label stops future package runs. These workflows use read-only permissions and never publish a Release. Installer previews exercise release identity: use a clean VM/test account, rather than installing them over daily production data. Use the portable development artifact for ordinary same-machine testing.
+The managed MSI upgrade verifies the signed download from a standard account, then the CI administrator services only the approved advertised package. The harness relaunches the app as the same standard user. This is separate from interactive MSI UAC and installer-driven relaunch. Adding the label starts its workflow; subsequent PR commits rerun it with the new exact head. Removing the label stops future package runs. These workflows use read-only permissions and never publish a Release. Installer previews exercise release identity: use a clean VM/test account, rather than installing them over daily production data. Use the portable development artifact for ordinary same-machine testing.
 
 ## Add an Agent
 

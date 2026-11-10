@@ -44,8 +44,10 @@ try {
     if ($info.kind -eq 'msi') {
         # MSI source resolution impersonates the caller even for an assigned
         # product. Permit reading the approved source, never modifying it.
-        & icacls.exe (Join-Path $root 'administrator-packages') /grant ('*'+$account.SID.Value+':(OI)(CI)RX') | Out-Null
-        if ($LASTEXITCODE -ne 0) { throw 'Could not grant read-only MSI source access' }
+        foreach ($protected in @('administrator-packages','Applications')) {
+            & icacls.exe (Join-Path $root $protected) /grant ('*'+$account.SID.Value+':(OI)(CI)RX') | Out-Null
+            if ($LASTEXITCODE -ne 0) { throw 'Could not grant read-only managed MSI source/install access' }
+        }
     }
     # A new interactive logon needs access to this CI window station/desktop.
     # Grant only its SID, retain original DACLs, and restore them on exit.
@@ -118,7 +120,24 @@ public sealed class TaskPulseDesktopAccess : IDisposable {
     if (-not $started) { throw 'Could not start standard-user acceptance' }
     $stdout = $child.StandardOutput.ReadToEndAsync()
     $stderr = $child.StandardError.ReadToEndAsync()
-    if (-not $child.WaitForExit(600000)) { throw 'Standard-user acceptance timed out' }
+    if ($info.kind -eq 'msi') {
+        $watch = [Diagnostics.Stopwatch]::StartNew()
+        $serviced = $false
+        $dispatchPath = Join-Path $root 'managed-msi-ready.json'
+        while (-not $child.WaitForExit(250)) {
+            if ($watch.ElapsedMilliseconds -ge 600000) { throw 'Standard-user acceptance timed out' }
+            if (-not $serviced -and (Test-Path -LiteralPath $dispatchPath -PathType Leaf)) {
+                $dispatchFile = Get-Item -LiteralPath $dispatchPath
+                if (($dispatchFile.Attributes -band [IO.FileAttributes]::ReparsePoint) -or $dispatchFile.Length -gt 4096) {
+                    throw 'Invalid managed MSI dispatch receipt'
+                }
+                $dispatch = Get-Content -Raw -LiteralPath $dispatchPath | ConvertFrom-Json
+                Invoke-ApprovedMsiServicing $info $root $evidence $dispatch
+                $serviced = $true
+            }
+        }
+        if ($child.ExitCode -eq 0 -and -not $serviced) { throw 'Missing administrator-managed MSI transaction' }
+    } elseif (-not $child.WaitForExit(600000)) { throw 'Standard-user acceptance timed out' }
     $child.WaitForExit()
     [IO.File]::WriteAllText((Join-Path $evidence 'standard-user.stdout.log'), $stdout.GetAwaiter().GetResult())
     [IO.File]::WriteAllText((Join-Path $evidence 'standard-user.stderr.log'), $stderr.GetAwaiter().GetResult())

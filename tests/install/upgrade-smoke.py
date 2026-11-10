@@ -246,7 +246,7 @@ def prepare(kind, target, evidence):
         # Production Update::download still verifies the bytes. Only the
         # disposable managed lane selects the administrator-advertised source.
         replace_once(updates, "update.install(bytes)",
-                     "crate::upgrade_probe::install_advertised_msi(&update, bytes)")
+                     "crate::upgrade_probe::request_approved_msi_servicing(&update, bytes)")
     main = source / "src-tauri/src/main.rs"
     replace_once(main, 'mod updates;', 'mod updates;\nmod upgrade_probe;')
     replace_once(main, 'fn main() {', 'fn main() {\n    upgrade_probe::record_entry("main");')
@@ -674,6 +674,7 @@ def supervise(plan):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     serial = 0
     child = None
+    managed_child = None
     restarted = None
 
     def command(action, version="", wait=True):
@@ -756,9 +757,27 @@ def supervise(plan):
         shared["scenario"] = "good"
         assert command("check")["status"]["phase"] == "available"
         command("install", info["new"], wait=False)
+        if info["kind"] == "msi":
+            assert child.wait(timeout=30) == 0, "The old app must exit after requesting managed servicing"
+            dispatch = json.loads((root / "managed-msi-dispatch.json").read_text(encoding="utf-8"))
+            save(root / "managed-msi-ready.json", dispatch)
+            receipt_path = root / "administrator-packages" / "managed-msi-installed.json"
+            # The admin servicing lane never asks the elevated MSI process
+            # to open the app. Re-launch it under this same standard token.
+            wait_for(receipt_path.exists, timeout=240)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            assert receipt["route"] == "administrator-approved-servicing"
+            assert receipt["sha256"] == info["new_sha256"]
+            assert receipt["installed_exe_sha256"] == digest(next_exe) == info["new_exe_sha256"]
+            save(evidence / "managed-msi-installed.json", receipt)
+            managed_child = subprocess.Popen(
+                [str(next_exe), "--show", "--upgrade-probe-root", str(root)], stdout=stdout, stderr=stderr,
+            )
         updated = wait_for(lambda: boot(info["new"]), timeout=180)
         save(evidence / "new-boot.json", updated)
         assert updated["pid"] != initial["pid"] and not updated["elevated"]
+        if managed_child is not None:
+            assert updated["pid"] == managed_child.pid
         if info["kind"] in ("nsis", "msi"):
             assert updated["token"]["sid"] == info["standard_user_sid"] and not updated["token"]["elevated"]
         assert updated["status"]["can_install"] and updated["bundle"] == initial["bundle"]
@@ -770,14 +789,14 @@ def supervise(plan):
             dispatch = json.loads((root / "managed-msi-dispatch.json").read_text(encoding="utf-8"))
             metadata = json.loads((evidence / "new-msi-metadata.json").read_text(encoding="utf-8"))
             assert dispatch == {
-                "route": "advertised-product-code",
+                "route": "approved-msi-servicing",
                 "download_matches_protected_package": True,
                 "sha256": info["new_sha256"],
                 "product_code": metadata["properties"]["ProductCode"],
             }, dispatch
             save(evidence / "managed-msi-dispatch.json", dispatch)
-            result["installer_dispatch"] = "administrator-advertised product code after Tauri signature verification"
-            result["checks"].append("verified signed bytes match the administrator-approved MSI; standard user installs its advertised product")
+            result["installer_dispatch"] = "administrator-approved protected package after Tauri signature verification"
+            result["checks"].append("verified signed bytes match the administrator-approved MSI; administrator installs the approved package; standard account owns app lifecycle")
         if next_exe != exe:
             assert exe.is_file() and digest(exe) == info["new_legacy_bridge_sha256"]
             assert digest(exe) != old_hash, "The compatibility path still contains the old application"
@@ -808,7 +827,8 @@ def supervise(plan):
         result["new_exe_sha256"] = digest(next_exe)
         result["checks"].extend(["check-only did not download", "popup/stale version rejected",
                                 "real installed N→N+1 replacement", "same installation directory and bundle format",
-                                "automatic restart without elevation", "settings/unread/pin/dedup preserved"])
+                                "same standard account relaunch after approved servicing" if info["kind"] == "msi"
+                                else "automatic restart without elevation", "settings/unread/pin/dedup preserved"])
         # A second check must see current; no repeated install after automatic restart.
         current = command("check")
         assert current["status"]["phase"] == "current" and current["pid"] == updated["pid"], current
@@ -894,6 +914,9 @@ def supervise(plan):
                     restarted = NativeProcess(observed["pid"], next_exe)
             if restarted is not None:
                 restarted.close()
+            if managed_child is not None and managed_child.poll() is None:
+                managed_child.terminate()
+                managed_child.wait(timeout=10)
             if child is not None and child.poll() is None:
                 command("exit", wait=False)
                 try:
@@ -916,6 +939,9 @@ def supervise(plan):
                 shutil.copy2(path, evidence / path.name)
             if (root / "events.jsonl").exists():
                 shutil.copy2(root / "events.jsonl", evidence / "events.jsonl")
+            dispatch_path = root / "managed-msi-dispatch.json"
+            if info["kind"] == "msi" and dispatch_path.is_file() and dispatch_path.stat().st_size <= 4096:
+                shutil.copy2(dispatch_path, evidence / dispatch_path.name)
             if cleanup_errors:
                 result["passed"] = False
                 result["cleanup_errors"] = cleanup_errors
@@ -949,6 +975,15 @@ def install_and_test(plan, standard_user=False):
                 or not exe.is_file() or digest(exe) != info["old_exe_sha256"]):
             raise RuntimeError("Missing verified managed MSI installation")
         verify_managed_msi_sources(info)
+        denied_probe = install / "standard-account-write-test"
+        try:
+            with denied_probe.open("xb"):
+                pass
+        except PermissionError:
+            pass
+        else:
+            denied_probe.unlink()
+            raise RuntimeError("Standard account must not be able to modify the managed installation")
         # WiX stores the directory in HKCU. In this fixture an administrator did
         # the initial machine install, so transfer ONLY that directory preference
         # to this disposable user's hive; no real user settings are touched.
@@ -958,7 +993,7 @@ def install_and_test(plan, standard_user=False):
             winreg.SetValueEx(key, "InstallDir", 0, winreg.REG_SZ, str(install) + "\\")
         save(Path(info["evidence"]) / "msi-user-precondition.json",
              {"directory_preference_in_disposable_hkcu": True, "managed_sources_readable": True,
-              "managed_sources_not_writable": True, "uac_interaction_verified": False})
+              "managed_sources_not_writable": True, "managed_install_not_writable": True, "uac_interaction_verified": False})
         supervise(plan)
         return
     install.mkdir(parents=True)

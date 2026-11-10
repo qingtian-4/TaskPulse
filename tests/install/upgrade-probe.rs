@@ -111,16 +111,12 @@ pub fn record_entry(stage: &str) {
 // production updater must still let Windows present its normal consent prompt.
 #[cfg(windows)]
 #[allow(dead_code)]
-pub fn install_advertised_msi(
+pub fn request_approved_msi_servicing(
     update: &tauri_plugin_updater::Update,
     bytes: Vec<u8>,
 ) -> tauri_plugin_updater::Result<()> {
     use sha2::{Digest, Sha256};
-    use std::{
-        io::{Error, ErrorKind, Read},
-        os::windows::process::CommandExt,
-        process::Command,
-    };
+    use std::io::{Error, ErrorKind, Read};
 
     let denied = |message| Error::new(ErrorKind::PermissionDenied, message);
     let root = PathBuf::from(DIAGNOSTIC_ROOT);
@@ -161,31 +157,17 @@ pub fn install_advertised_msi(
     if approval["sha256"].as_str() != Some(hash.as_str()) || bytes != installed_source {
         return Err(denied("Signed download does not match the administrator-approved MSI").into());
     }
-    let msiexec = PathBuf::from(
-        std::env::var_os("SystemRoot").ok_or_else(|| denied("Missing Windows system directory"))?,
-    )
-    .join("System32/msiexec.exe");
-    let evidence = root.join("diagnostic-msi-update.log");
-    // The root is a Windows filesystem path controlled by the hosted harness;
-    // MSI properties use doubled quotes for quoted executable arguments.
-    let launch = format!(
-        "LAUNCHAPPARGS=\"--show --upgrade-probe-root \"\"{}\"\"\"",
-        root.display()
-    );
-    Command::new(msiexec)
-        .args(["/package", code, "/passive", "/promptrestart", "/L*vx!"])
-        .arg(&evidence)
-        .arg("AUTOLAUNCHAPP=True")
-        .raw_arg(launch)
-        .spawn()?;
+    // Major upgrades can require an administrator for the nested uninstall
+    // even when the new product is advertised. Request only this exact
+    // protected deployment; never approve a Windows consent prompt.
     write(
         &root,
         "managed-msi-dispatch.json",
-        json!({"route":"advertised-product-code","download_matches_protected_package":true,
+        json!({"route":"approved-msi-servicing","download_matches_protected_package":true,
                "sha256":hash,"product_code":code}),
     );
-    // Tauri's Windows updater similarly exits the old process after dispatch
-    // so MSI can replace its files and launch the new executable as this user.
+    // As with Tauri's Windows updater, release the old application's files
+    // before servicing. The standard account will launch the replacement.
     std::process::exit(0);
 }
 
