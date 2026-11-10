@@ -156,7 +156,7 @@ export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | nu
     : task.source === 'claude_code' && task.id.startsWith('claude:') ? 'claude_code'
     : task.source === 'claude_code' || task.source === 'gemini' ? 'scanner' : task.source;
   return (task.remote
-    ? settings?.sources.find(s => s.location === task.host && s.kind === (task.source === 'codex' ? 'remote_codex' : 'tmux'))
+    ? settings?.sources.find(s => s.location === task.host && s.kind === (task.source === 'codex' ? 'remote_codex' : task.source === 'claude_code' ? 'remote_claude_code' : 'tmux'))
     : settings?.sources.find(s => s.id === nativeId));
 }
 export function taskProjectLabel(task: TaskSnapshot): string {
@@ -173,15 +173,21 @@ export function projectKey(task: TaskSnapshot, settings?: DashboardSettings | nu
 export function sourceFreshness(task: TaskSnapshot, settings: DashboardSettings | null, providers: ProviderHealth[], now: number): string {
   const source = taskSource(task, settings);
   const health = providers.find(p => p.provider === (source?.id ?? task.source_instance));
-  if(health?.status==='degraded' && source?.enabled && (source.kind==='codex'||source.kind==='codex_wsl') && !task.stale && (task.status==='running'||needsAction(task)) && health.task_observations?.[task.id])return '该会话已更新；同一来源的其他会话需检查';
+  if(health?.status==='degraded' && source?.enabled && (source.kind==='codex'||source.kind==='codex_wsl'||source.kind==='remote_claude_code'||source.kind==='kimi_code'||source.kind==='qoder') && !task.stale && (task.status==='running'||needsAction(task)) && health.task_observations?.[task.id])return '该会话已更新；同一来源的其他会话需检查';
   if (!health?.last_success) return '来源尚未成功采集';
   const age = now - health.last_success;
   const stale = health.status === 'degraded' || age > Math.max(30000, (source?.poll_interval_ms ?? 3000) * 3);
   return `${stale ? '来源数据待更新' : '来源采集'} · ${formatAgo(health.last_success, now)}${health.message ? ' · '+health.message : ''}`;
 }
 
+export function enabledDashboardSources(settings: DashboardSettings | null) {
+  // Retired adapters may still be enabled in saved profiles. Keep the setting
+  // but don't show them in source filters or wait for a poll that cannot occur.
+  return settings?.sources.filter(s => s.enabled && s.kind !== 'doubao') ?? [];
+}
+
 export function refreshProgress(settings: DashboardSettings | null, providers: ProviderHealth[], since: number) {
-  const enabled = settings?.sources.filter(s => s.enabled) ?? [];
+  const enabled = enabledDashboardSources(settings);
   const pending = enabled.filter(s => (providers.find(p => p.provider === s.id)?.last_attempt ?? 0) < since);
   const failed = enabled.filter(s => { const p=providers.find(p=>p.provider===s.id); return p && (p.last_attempt ?? 0) >= since && p.status==='degraded'; });
   return { total: enabled.length, pending, failed };

@@ -307,7 +307,7 @@ test('source freshness does not borrow another provider success or task activity
 
 test('refresh waits for actual attempts, failures count as returned, disabled sources do not',()=>{
   const common={name:'source',enabled:true,kind:'codex' as const,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
-  const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[{...common,id:'codex'},{...common,id:'remote'},{...common,id:'off',enabled:false}]};
+  const settings:DashboardSettings={version:2,onboarding_complete:true,notifications:true,sound:false,default_view:'tasks',sources:[{...common,id:'codex'},{...common,id:'remote'},{...common,id:'off',enabled:false},{...common,id:'doubao-legacy',kind:'doubao'}]};
   const providers=[{provider:'codex',status:'connected' as const,last_success:101,last_attempt:101},{provider:'remote',status:'degraded' as const,last_success:20,last_attempt:99}];
   expect(refreshProgress(settings,providers,100).pending.map(s=>s.id)).toEqual(['remote']);
   providers[1].last_attempt=102;

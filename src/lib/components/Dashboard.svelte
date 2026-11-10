@@ -6,7 +6,7 @@
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery, type DashboardView, type DashboardSnapshot } from '$lib/types';
-  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, taskElapsed, projectKey, sourceFreshness, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
+  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, taskElapsed, projectKey, sourceFreshness, enabledDashboardSources, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import MessageCenter from './MessageCenter.svelte';
   import {projectDashboardTasks} from '$lib/dashboard';
@@ -146,7 +146,7 @@
       for(let i=0;i<100;i++) {
         await new Promise(r=>setTimeout(r,300)); await snapshots();
         const result=refreshProgress(settings,providers,refreshSince);
-        if(!result.pending.length) {refreshSources=settings?.sources.filter(s=>s.enabled).map(s=>s.id)??[];return;}
+        if(!result.pending.length) {refreshSources=enabledDashboardSources(settings).map(s=>s.id);return;}
       }
       error='刷新超时，未返回：'+progress.pending.map(s=>s.name).join('、')+'。保留原状态，不视为已完成。';
     }
@@ -306,7 +306,7 @@
   {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?$t('已隐藏本轮'):$t('已停止监控此会话')}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>{$t("撤销")}</button></div>{/if}
   {#if showFilters}
   <div class="filters">
-    <select bind:value={filterSource} aria-label={$t("筛选来源")}><option value="">{$t("全部来源")}</option>{#each settings?.sources.filter(s=>s.enabled) ?? [] as s}<option value={s.id}>{s.name}</option>{/each}</select>
+    <select bind:value={filterSource} aria-label={$t("筛选来源")}><option value="">{$t("全部来源")}</option>{#each enabledDashboardSources(settings) as s}<option value={s.id}>{s.name}</option>{/each}</select>
     <select bind:value={filterProject} aria-label={$t("筛选项目")}><option value="">{$t("全部项目")}</option>{#each projects as p}<option value={p.key}>{p.label}</option>{/each}</select>
     {#if locations.length>1}<select bind:value={filterLocation} aria-label={$t("筛选位置")}><option value="">{$t("全部位置")}</option>{#each locations as location}<option>{location}</option>{/each}</select>{/if}
     <button class="view-toggle" onclick={()=>view=view==='tasks'?'projects':'tasks'} title={$t("切换任务/项目视图")}>{view==='tasks'?$t('按项目'):$t('按任务')}</button>

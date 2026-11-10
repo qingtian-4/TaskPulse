@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<?if $(sys.BUILDARCH)="x86"?>
+  <?define LegacyBridgeWin64 = "no" ?>
+<?else?>
+  <?define LegacyBridgeWin64 = "yes" ?>
+<?endif?>
+<Wix xmlns="http://schemas.microsoft.com/wix/2006/wi">
+  <Fragment>
+    <DirectoryRef Id="INSTALLDIR">
+      <Component Id="TaskPulseLegacyBridge" Guid="*" Win64="$(var.LegacyBridgeWin64)">
+        <File Id="TaskPulseLegacyBridgeExe" Name="agent-tray.exe" KeyPath="yes"
+              Source="$(sys.SOURCEFILEDIR)..\target\taskpulse-legacy-$(sys.BUILDARCH).exe" />
+      </Component>
+    </DirectoryRef>
+  </Fragment>
+</Wix>

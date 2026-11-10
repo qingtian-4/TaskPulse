@@ -98,6 +98,15 @@ fn native_capabilities(kind: SourceKind) -> Capabilities {
             Explicit,
             ReturnTarget::Details,
         ),
+        RemoteClaudeCode => (
+            Explicit,
+            Explicit,
+            Inferred,
+            Explicit,
+            Unsupported,
+            Unsupported,
+            ReturnTarget::Details,
+        ),
         ClaudeCode => (
             Explicit,
             Explicit,
@@ -235,10 +244,11 @@ fn definition(
             SourceKind::Opencode => "只读本机 OpenCode 会话、模型和运行记录；明确本轮结束才提醒，不从工具返回推断完成。提问与审批事件尚不提供。",
             SourceKind::Workbuddy => "只读 WorkBuddy 本地数据库与会话记录；关注新执行，不导入空闲历史，不包含云端任务。提问与审批事件尚不提供。",
             SourceKind::Zcode => "自动读取本机 ZCode 会话、项目和模型；工具执行完成不会当作整轮结束。",
-            SourceKind::Doubao => "在 Windows 和 macOS 手动开启，读取兼容的豆包工作任务，不监控普通聊天，也不提供审批提醒。",
+            SourceKind::Doubao => "暂停支持。",
             SourceKind::Codex => "原生标题、项目与 rollout 执行阶段；仅明确结束事件提醒。命令审批需可选的官方观察 Hook，安装后还需在 Codex /hooks 中信任。",
             SourceKind::CodexWsl => "独立读取已运行发行版的 Codex 数据；不唤醒 WSL，不借用 Windows 额度。命令审批需在该发行版安装并信任观察 Hook。",
             SourceKind::RemoteCodex => "读取已配置 SSH 主机的 Codex 会话；依赖主机可达、权限与远端数据格式。",
+            SourceKind::RemoteClaudeCode => "只读 SSH 账号的 Claude Code 会话记录；明确结束才提醒，不读取审批或提问。",
             SourceKind::ClaudeCode => "原生会话读取为尽力推断。自愿接入 Hook 后可观察审批；提问接口目前无法同时确认对话框和匹配解除。",
             SourceKind::Hermes => "原生标题、项目和运行租约；没有明确结束证据时不猜测任务完成。",
             SourceKind::DeepseekDesktop => "读取原生 Desktop / CLI 存储，支持旧版与 v4 日志；状态能力取决于宿主记录。",
@@ -249,7 +259,7 @@ fn definition(
             SourceKind::GenericEvent => "通过已连接的 Agent 事件跟踪任务；具体支持的状态见接入说明。",
         }.into(),
         location_kind: location.into(),
-        multiple_instances: matches!(kind, SourceKind::CodexWsl | SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::Tmux | SourceKind::GenericEvent),
+        multiple_instances: matches!(kind, SourceKind::CodexWsl | SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::RemoteClaudeCode | SourceKind::Tmux | SourceKind::GenericEvent),
         platforms: ["windows", "macos", "linux"].into_iter()
             .filter(|platform| kind.supported_on(platform))
             .map(str::to_owned)
@@ -257,7 +267,7 @@ fn definition(
         adapter_id: None,
         agent_id: None,
         capabilities: native_capabilities(kind),
-        verified_platforms: if kind == SourceKind::Doubao { vec!["windows".into()] } else { vec![] },
+        verified_platforms: vec![],
         default_source: None,
         auto_enable_on_discovery: crate::monitoring::automatic_local(kind),
     }
@@ -288,7 +298,6 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
         definition("trae", "Trae", Trae, "local", "directory"),
         definition("zcode", "ZCode", Zcode, "local", "file"),
         definition("hermes", "Hermes", Hermes, "local", "file"),
-        definition("doubao", "豆包", Doubao, "local", "directory"),
         definition("scanner", "进程检测", Scanner, "local", "none"),
         definition("codex_wsl", "Codex · WSL", CodexWsl, "remote", "distro"),
         definition(
@@ -299,6 +308,13 @@ pub fn get_source_catalog() -> Vec<SourceDefinition> {
             "distro",
         ),
         definition("remote_codex", "Codex · SSH", RemoteCodex, "remote", "host"),
+        definition(
+            "remote_claude_code",
+            "Claude Code · SSH",
+            RemoteClaudeCode,
+            "remote",
+            "host",
+        ),
         definition("tmux", "tmux · SSH", Tmux, "remote", "host"),
         definition("local_file", "兼容状态文件", Hooks, "custom", "none"),
     ];
@@ -346,14 +362,7 @@ mod tests {
             .unwrap();
         assert_eq!(process.capabilities.turn_end, Evidence::Unsupported);
         assert_eq!(process.capabilities.approval, Evidence::Unsupported);
-        let doubao = entries
-            .iter()
-            .find(|e| e.kind == SourceKind::Doubao)
-            .unwrap();
-        assert_eq!(doubao.platforms, ["windows", "macos"]);
-        assert_eq!(doubao.verified_platforms, ["windows"]);
-        assert!(!doubao.auto_enable_on_discovery);
-        assert!(!doubao.default_source.as_ref().unwrap().enabled);
+        assert!(!entries.iter().any(|e| e.kind == SourceKind::Doubao));
         assert!(entries
             .iter()
             .all(|e| e.verified_platforms.iter().all(|p| e.platforms.contains(p))));
@@ -364,7 +373,7 @@ mod tests {
         assert_eq!(event.capabilities.approval, Evidence::Producer);
         assert_eq!(event.capabilities.return_target, ReturnTarget::Details);
         assert!(event.verified_platforms.is_empty());
-        assert_eq!(entries.iter().filter(|e| e.category == "local").count(), 12);
+        assert_eq!(entries.iter().filter(|e| e.category == "local").count(), 11);
         assert!(entries
             .iter()
             .filter(|e| e.category == "local")

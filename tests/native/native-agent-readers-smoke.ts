@@ -68,7 +68,7 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
   const ended=await root.invoke('get_agents');assert.ok(ended.every((t:any)=>t.unread&&t.finished_at));
   await root.invoke('update_task_attention',{id:k.id,action:'pin'});
   await Bun.write(join(owned,'native-reader-results.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await root.invoke('open_management',{section:'sources'});const manage=await connect('/manage');await manage.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
+  await root.invoke('open_management',{section:'sources'});const manage=await connect('/manage');await manage.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
   await manage.wait(`document.querySelector('[data-agent-kind="trae"]').textContent.includes('已检测到 · 仅支持会话目录')`);
   await manage.wait(`document.querySelector('[data-agent-kind="claude_code"]').textContent.includes('读取正常 · 暂无近期会话')`);
   assert.equal(await manage.evaluate(`document.querySelector('[data-agent-kind="trae"] strong').textContent`),'Trae');

@@ -232,8 +232,11 @@ impl AttentionTracker {
                         || record.last_status == TaskStatus::Running);
                 let resumed =
                     task.status == TaskStatus::Running && record.last_status != TaskStatus::Running;
-                let completed =
-                    record.last_status == TaskStatus::Running && task.status != TaskStatus::Running;
+                let completed = record.last_status == TaskStatus::Running
+                    && task.status != TaskStatus::Running
+                    || record.task.requires_action()
+                        && !task.requires_action()
+                        && task.finished_at.is_some();
                 task.new_execution = !task.stale && (changed_turn || resumed || completed);
                 if task.new_execution {
                     record.last_execution_at = now;

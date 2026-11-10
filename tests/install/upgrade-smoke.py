@@ -122,17 +122,24 @@ def overlay(source, public, endpoint, version, original_version, msi_log=None):
     replace_once(source / "src-tauri/Cargo.lock", f'name = "agent-tray"\nversion = "{original_version}"', f'name = "agent-tray"\nversion = "{version}"')
 
 
-def windows_payload_exe(package, output, kind):
+def windows_payload_exe(package, output, kind, expected_name):
     output.mkdir()
     if kind == "nsis":
         sevenzip = Path(os.environ["ProgramFiles"]) / "7-Zip/7z.exe"
         run(sevenzip, "x", package, "-o" + str(output), "-y")
     else:
         run_msi(["/a", str(package), "/qn"], {"TARGETDIR": str(output)})
-    executables = list(output.rglob("agent-tray.exe"))
+    executables = list(output.rglob(expected_name))
     if len(executables) != 1:
-        raise RuntimeError("Expected one actual packaged executable")
+        raise RuntimeError("Expected one actual packaged TaskPulse executable")
     return executables[0]
+
+
+def windows_exe_name(info, label):
+    name = info[label + "_exe_name"]
+    if name not in ("agent-tray.exe", "TaskPulse.exe"):
+        raise RuntimeError("Unrecognized installed executable name")
+    return name
 
 
 def msi_command(arguments, properties):
@@ -235,6 +242,11 @@ def prepare(kind, target, evidence):
     replace_once(updates, 'url.host_str() == Some("github.com")', 'url.host_str() == Some("127.0.0.1")')
     replace_once(updates, 'url.port().is_none()', f'url.port() == Some({port})')
     replace_once(updates, '/qingtian-4/TaskPulse/releases/download/v', f'/{route}/v')
+    if kind == "msi":
+        # Production Update::download still verifies the bytes. Only the
+        # disposable managed lane selects the administrator-advertised source.
+        replace_once(updates, "update.install(bytes)",
+                     "crate::upgrade_probe::request_approved_msi_servicing(&update, bytes)")
     main = source / "src-tauri/src/main.rs"
     replace_once(main, 'mod updates;', 'mod updates;\nmod upgrade_probe;')
     replace_once(main, 'fn main() {', 'fn main() {\n    upgrade_probe::record_entry("main");')
@@ -253,12 +265,27 @@ def prepare(kind, target, evidence):
     env = dict(os.environ, TAURI_SIGNING_PRIVATE_KEY=str(key), TAURI_SIGNING_PRIVATE_KEY_PASSWORD="",
                CARGO_TARGET_DIR=str(REPO / "src-tauri/target"), APPLE_SIGNING_IDENTITY="-")
     env.pop("TAURI_CONFIG", None)
+    windows_config = source / "src-tauri/tauri.windows.conf.json"
+    windows_bytes = windows_config.read_bytes() if kind in ("nsis", "msi") else None
     for label, version, previous in [("old", old, old), ("new", new, old)]:
+        if windows_bytes is not None:
+            if label == "old":
+                # Exercise the historical installed filename in the existing
+                # controlled-feed matrix, even when both builds share source.
+                legacy = json.loads(windows_bytes)
+                assert legacy.pop("mainBinaryName") == "TaskPulse"
+                legacy["bundle"]["windows"]["nsis"].pop("installerHooks")
+                legacy["bundle"]["windows"].pop("wix")
+                windows_config.write_text(json.dumps(legacy, indent=2) + "\n", encoding="utf-8")
+            else:
+                windows_config.write_bytes(windows_bytes)
         overlay(source, public, endpoint, version, previous,
                 evidence.resolve() / "msi-update.log" if kind == "msi" else None)
         # Save exact overlays as reviewable evidence; public key only.
         changed = []
         allowed = {"package.json", "src-tauri/Cargo.toml", "src-tauri/Cargo.lock", "src-tauri/tauri.conf.json", "src-tauri/src/main.rs", "src-tauri/src/updates.rs"}
+        if windows_bytes is not None and label == "old":
+            allowed.add("src-tauri/tauri.windows.conf.json")
         for name, original_hash in hashes.items():
             path = source / name
             if digest(path) != original_hash:
@@ -290,7 +317,17 @@ def prepare(kind, target, evidence):
         shutil.copy2(candidates[0], payload)
         shutil.copy2(str(candidates[0]) + ".sig", str(payload) + ".sig")
         if kind != "macos":
-            info[label + "_exe_sha256"] = digest(windows_payload_exe(payload, output / "extracted", kind))
+            expected_name = "agent-tray.exe" if label == "old" else "TaskPulse.exe"
+            packaged_exe = windows_payload_exe(payload, output / "extracted", kind, expected_name)
+            if packaged_exe.name != expected_name:
+                raise RuntimeError(f"Unexpected {label} installed executable name")
+            info[label + "_exe_name"] = packaged_exe.name
+            info[label + "_exe_sha256"] = digest(packaged_exe)
+            if label == "new":
+                legacy = packaged_exe.with_name("agent-tray.exe")
+                if not legacy.is_file() or digest(legacy) == digest(packaged_exe):
+                    raise RuntimeError("Expected an independent packaged compatibility bridge")
+                info["new_legacy_bridge_sha256"] = digest(legacy)
         if kind == "msi":
             metadata = run(windows_powershell(), "-NoProfile", "-Command", r'''
 $ErrorActionPreference='Stop'
@@ -341,7 +378,7 @@ $view.Close()
     save(root / "ci-owned.json", {"purpose": "TaskPulse isolated installed upgrade acceptance", "commit": info["commit"]})
     save(root / "plan.json", info)
     # Upload manifest deliberately excludes local key paths/signatures and generated binaries.
-    save(evidence / "build.json", {k: v for k, v in info.items() if k in ("kind", "target", "old", "new", "commit", "old_sha256", "new_sha256", "old_exe_sha256", "new_exe_sha256")})
+    save(evidence / "build.json", {k: v for k, v in info.items() if k in ("kind", "target", "old", "new", "commit", "old_sha256", "new_sha256", "old_exe_sha256", "new_exe_sha256", "old_exe_name", "new_exe_name", "new_legacy_bridge_sha256")})
     return root / "plan.json"
 
 
@@ -624,6 +661,7 @@ def supervise(plan):
     require_ci()
     info = owned_plan(plan)
     root, evidence, exe = Path(info["root"]), Path(info["evidence"]), Path(info["installed_exe"])
+    next_exe = exe if info["kind"] == "macos" else exe.with_name(windows_exe_name(info, "new"))
     state, config = seed_profile()
     result = {"passed": False, "checks": [], "kind": info["kind"], "source_commit": info["commit"],
               "old": info["old"], "new": info["new"], "os": platform.platform(),
@@ -636,6 +674,7 @@ def supervise(plan):
     threading.Thread(target=server.serve_forever, daemon=True).start()
     serial = 0
     child = None
+    managed_child = None
     restarted = None
 
     def command(action, version="", wait=True):
@@ -653,6 +692,17 @@ def supervise(plan):
         return automatic_boot(root, version)
 
     try:
+        if next_exe != exe:
+            # Windows uses a disposable standard account in this harness.
+            # Seed a real, OS-disabled old startup value before replacement.
+            import winreg
+            run_key = r"Software\Microsoft\Windows\CurrentVersion\Run"
+            approval_key = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run"
+            disabled = bytes([3]) + bytes(11)
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, run_key) as run_registration:
+                winreg.SetValueEx(run_registration, "TaskPulse", 0, winreg.REG_SZ, f'"{exe}"')
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, approval_key) as approval:
+                winreg.SetValueEx(approval, "TaskPulse", 0, winreg.REG_BINARY, disabled)
         old_hash = digest(exe)
         assert old_hash == info["old_exe_sha256"], "Installed old payload differs from bundled executable"
         result["old_exe_sha256"] = old_hash
@@ -707,16 +757,60 @@ def supervise(plan):
         shared["scenario"] = "good"
         assert command("check")["status"]["phase"] == "available"
         command("install", info["new"], wait=False)
+        if info["kind"] == "msi":
+            assert child.wait(timeout=30) == 0, "The old app must exit after requesting managed servicing"
+            dispatch = json.loads((root / "managed-msi-dispatch.json").read_text(encoding="utf-8"))
+            save(root / "managed-msi-ready.json", dispatch)
+            receipt_path = root / "administrator-packages" / "managed-msi-installed.json"
+            # The admin servicing lane never asks the elevated MSI process
+            # to open the app. Re-launch it under this same standard token.
+            wait_for(receipt_path.exists, timeout=240)
+            receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+            assert receipt["route"] == "administrator-approved-servicing"
+            assert receipt["sha256"] == info["new_sha256"]
+            assert receipt["installed_exe_sha256"] == digest(next_exe) == info["new_exe_sha256"]
+            save(evidence / "managed-msi-installed.json", receipt)
+            managed_child = subprocess.Popen(
+                [str(next_exe), "--show", "--upgrade-probe-root", str(root)], stdout=stdout, stderr=stderr,
+            )
         updated = wait_for(lambda: boot(info["new"]), timeout=180)
         save(evidence / "new-boot.json", updated)
         assert updated["pid"] != initial["pid"] and not updated["elevated"]
+        if managed_child is not None:
+            assert updated["pid"] == managed_child.pid
         if info["kind"] in ("nsis", "msi"):
             assert updated["token"]["sid"] == info["standard_user_sid"] and not updated["token"]["elevated"]
         assert updated["status"]["can_install"] and updated["bundle"] == initial["bundle"]
-        assert os.path.samefile(updated["exe"], exe)
-        restarted = NativeProcess(updated["pid"], exe)
+        assert os.path.samefile(updated["exe"], next_exe)
+        restarted = NativeProcess(updated["pid"], next_exe)
         assert child.wait(timeout=15) == 0
-        assert digest(exe) != old_hash and digest(exe) == info["new_exe_sha256"]
+        assert digest(next_exe) != old_hash and digest(next_exe) == info["new_exe_sha256"]
+        if info["kind"] == "msi":
+            dispatch = json.loads((root / "managed-msi-dispatch.json").read_text(encoding="utf-8"))
+            metadata = json.loads((evidence / "new-msi-metadata.json").read_text(encoding="utf-8"))
+            assert dispatch == {
+                "route": "approved-msi-servicing",
+                "download_matches_protected_package": True,
+                "sha256": info["new_sha256"],
+                "product_code": metadata["properties"]["ProductCode"],
+            }, dispatch
+            save(evidence / "managed-msi-dispatch.json", dispatch)
+            result["installer_dispatch"] = "administrator-approved protected package after Tauri signature verification"
+            result["checks"].append("verified signed bytes match the administrator-approved MSI; administrator installs the approved package; standard account owns app lifecycle")
+        if next_exe != exe:
+            assert exe.is_file() and digest(exe) == info["new_legacy_bridge_sha256"]
+            assert digest(exe) != old_hash, "The compatibility path still contains the old application"
+            sample = REPO / "integrations/examples/start.json"
+            check = subprocess.run([str(exe), "--integration-validate"], input=sample.read_bytes(),
+                                   capture_output=True, timeout=10, check=True)
+            assert json.loads(check.stdout)["valid"], check.stdout
+            denied = subprocess.run([str(exe), "--show"], capture_output=True, timeout=10)
+            assert denied.returncode == 2, "The compatibility bridge must reject GUI arguments"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key) as run_registration:
+                assert winreg.QueryValueEx(run_registration, "TaskPulse")[0] == f'"{next_exe}"'
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, approval_key) as approval:
+                assert winreg.QueryValueEx(approval, "TaskPulse")[0] == disabled
+            result["checks"].append("new executable launched, old path forwards integration stdin only, disabled startup preserved")
         if info["kind"] == "macos":
             assert digest(exe) == info["new_exe_sha256"]
             run("codesign", "--verify", "--deep", "--strict", exe.parents[2])
@@ -727,13 +821,14 @@ def supervise(plan):
             if info["kind"] == "msi":
                 assert products[0]["installer"] == 1 and products[0]["key"] != old_products[0]["key"]
             result["checks"].append("one updated product registration; no old MSI product retained")
-        actual = run(exe, "--version").stdout.decode().strip()
+        actual = run(next_exe, "--version").stdout.decode().strip()
         assert actual == "TaskPulse " + info["new"], actual
         assert_state(state, config)
-        result["new_exe_sha256"] = digest(exe)
+        result["new_exe_sha256"] = digest(next_exe)
         result["checks"].extend(["check-only did not download", "popup/stale version rejected",
-                                "real installed N→N+1 replacement", "same path and bundle format",
-                                "automatic restart without elevation", "settings/unread/pin/dedup preserved"])
+                                "real installed N→N+1 replacement", "same installation directory and bundle format",
+                                "same standard account relaunch after approved servicing" if info["kind"] == "msi"
+                                else "automatic restart without elevation", "settings/unread/pin/dedup preserved"])
         # A second check must see current; no repeated install after automatic restart.
         current = command("check")
         assert current["status"]["phase"] == "current" and current["pid"] == updated["pid"], current
@@ -750,18 +845,19 @@ def supervise(plan):
     except Exception as error:
         result["error"] = repr(error)
         result["old_process_exit"] = child.poll() if child else None
+        installed_after_failure = next_exe if next_exe.is_file() else exe
         try:
-            result["installed_exe_sha256_after_failure"] = digest(exe) if exe.is_file() else None
+            result["installed_exe_sha256_after_failure"] = digest(installed_after_failure) if installed_after_failure.is_file() else None
         except OSError as probe_error:
             result["installed_hash_probe_error"] = str(probe_error)
         try:
-            result["installed_version_after_failure"] = run(exe, "--version", timeout=15).stdout.decode().strip()
+            result["installed_version_after_failure"] = run(installed_after_failure, "--version", timeout=15).stdout.decode().strip()
         except Exception as probe_error:
             result["installed_version_probe_error"] = str(probe_error)
         if platform.system() == "Windows":
             save(evidence / "failure-products.json", installed_products())
             diagnostic = run(windows_powershell(), "-NoProfile", "-Command",
-                "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|msiexec|consent|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
+                "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); Get-CimInstance Win32_Process | Where-Object { $_.Name -match 'agent-tray|TaskPulse\.exe|msiexec|consent|TaskPulse.*installer|TaskPulse.*setup' } | Select-Object ProcessId,ParentProcessId,Name,ExecutablePath,CommandLine | ConvertTo-Json -Depth 3")
             (evidence / "failure-processes.json").write_bytes(diagnostic.stdout)
             processes = json.loads(diagnostic.stdout.decode("utf-8-sig") or "[]")
             if isinstance(processes, dict):
@@ -778,12 +874,12 @@ def supervise(plan):
                         arguments = ["--show", "--upgrade-probe-root", str(root), "--diagnostic-launch=" + method]
                         if method == "direct":
                             with (evidence / "diagnostic-direct.stderr.log").open("wb") as errors:
-                                launched = subprocess.Popen([str(exe), *arguments], stdout=subprocess.DEVNULL, stderr=errors)
+                                launched = subprocess.Popen([str(next_exe), *arguments], stdout=subprocess.DEVNULL, stderr=errors)
                             pid = launched.pid
                         elif method == "shell":
-                            pid = diagnostic_shell_launch(exe, arguments)
+                            pid = diagnostic_shell_launch(next_exe, arguments)
                         else:
-                            diagnostic_nsis_launch(root, exe, arguments, evidence)
+                            diagnostic_nsis_launch(root, next_exe, arguments, evidence)
                             def plugin_entry():
                                 for path in root.glob(f"entry-{info['new']}-*-main.json"):
                                     value = json.loads(path.read_text(encoding="utf-8"))
@@ -792,7 +888,7 @@ def supervise(plan):
                                 return None
                             pid = wait_for(plugin_entry, timeout=30)
                         record["pid"] = pid
-                        diagnostic_process = NativeProcess(pid, exe)
+                        diagnostic_process = NativeProcess(pid, next_exe)
                         observed = root / f"boot-{info['new']}-{pid}.json"
                         wait_for(observed.exists, timeout=30)
                         record["boot_observed"] = True
@@ -815,9 +911,12 @@ def supervise(plan):
             if restarted is None:
                 observed = boot(info["new"])
                 if observed:
-                    restarted = NativeProcess(observed["pid"], exe)
+                    restarted = NativeProcess(observed["pid"], next_exe)
             if restarted is not None:
                 restarted.close()
+            if managed_child is not None and managed_child.poll() is None:
+                managed_child.terminate()
+                managed_child.wait(timeout=10)
             if child is not None and child.poll() is None:
                 command("exit", wait=False)
                 try:
@@ -840,6 +939,9 @@ def supervise(plan):
                 shutil.copy2(path, evidence / path.name)
             if (root / "events.jsonl").exists():
                 shutil.copy2(root / "events.jsonl", evidence / "events.jsonl")
+            dispatch_path = root / "managed-msi-dispatch.json"
+            if info["kind"] == "msi" and dispatch_path.is_file() and dispatch_path.stat().st_size <= 4096:
+                shutil.copy2(dispatch_path, evidence / dispatch_path.name)
             if cleanup_errors:
                 result["passed"] = False
                 result["cleanup_errors"] = cleanup_errors
@@ -868,11 +970,20 @@ def install_and_test(plan, standard_user=False):
     if info["kind"] == "msi":
         # The CI administrator installed N and advertised only the hash-checked
         # N+1 package. This is managed deployment, not interactive UAC coverage.
-        exe = install / "agent-tray.exe"
+        exe = install / windows_exe_name(info, "old")
         if (not standard_user or info.get("msi_deployment") != "administrator-advertised-package"
                 or not exe.is_file() or digest(exe) != info["old_exe_sha256"]):
             raise RuntimeError("Missing verified managed MSI installation")
         verify_managed_msi_sources(info)
+        denied_probe = install / "standard-account-write-test"
+        try:
+            with denied_probe.open("xb"):
+                pass
+        except PermissionError:
+            pass
+        else:
+            denied_probe.unlink()
+            raise RuntimeError("Standard account must not be able to modify the managed installation")
         # WiX stores the directory in HKCU. In this fixture an administrator did
         # the initial machine install, so transfer ONLY that directory preference
         # to this disposable user's hive; no real user settings are touched.
@@ -882,7 +993,7 @@ def install_and_test(plan, standard_user=False):
             winreg.SetValueEx(key, "InstallDir", 0, winreg.REG_SZ, str(install) + "\\")
         save(Path(info["evidence"]) / "msi-user-precondition.json",
              {"directory_preference_in_disposable_hkcu": True, "managed_sources_readable": True,
-              "managed_sources_not_writable": True, "uac_interaction_verified": False})
+              "managed_sources_not_writable": True, "managed_install_not_writable": True, "uac_interaction_verified": False})
         supervise(plan)
         return
     install.mkdir(parents=True)
@@ -901,7 +1012,7 @@ def install_and_test(plan, standard_user=False):
         # NSIS /D is a raw, final tail; quoting the whole /D=argument changes parsing.
         subprocess.run(subprocess.list2cmdline([package, "/S"]) + " /D=" + str(install),
                        check=True, timeout=180)
-        exe = install / "agent-tray.exe"
+        exe = install / windows_exe_name(info, "old")
     assert exe.is_file(), str(exe)
     if info["kind"] != "macos":
         (Path(info["evidence"]) / "installed-acl.txt").write_bytes(run("icacls.exe", exe).stdout)

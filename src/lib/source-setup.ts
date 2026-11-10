@@ -87,15 +87,20 @@ export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSour
   return [...saved,...additions].filter(r=>!foundOnly||r.dataDetected===true||r.locationDetected===true);
 }
 
+export function configuredSource(source:MonitorSource, definition:SourceDefinition|undefined, seen:string[]=[]):boolean {
+  const seed=definition?.default_source;
+  return source.enabled || seen.includes(source.id) || !seed || source.id!==seed.id
+    || source.name!==seed.name || source.location!==seed.location || source.poll_interval_ms!==seed.poll_interval_ms
+    || JSON.stringify(source.projects)!==JSON.stringify(seed.projects)
+    || !!(source.excluded_projects.length||source.tmux_sessions.length||source.tmux_panes.length||source.integration);
+}
+
 export function sourceSections(catalog:SourceDefinition[],settings:DashboardSettings,discovery:SourceDiscovery[],platform:string,live:SourceSnapshot[],selected:string) {
   const result:{primary:SourceCatalogRow[];supported:SourceCatalogRow[];advanced:SourceCatalogRow[]}={primary:[],supported:[],advanced:[]};
   for(const category of ['local','remote','custom']){
     for(const row of sourceCatalogRows(catalog,settings.sources,discovery,category,platform,false,live)){
-      const source=row.source, seed=row.definition.default_source;
-      const configured=source && (source.id===selected || source.enabled || settings.auto_discovery_seen?.includes(source.id) ||
-        !seed || source.id!==seed.id || source.name!==seed.name || source.location!==seed.location ||
-        source.poll_interval_ms!==seed.poll_interval_ms || JSON.stringify(source.projects)!==JSON.stringify(seed.projects) ||
-        !!(source.excluded_projects.length||source.tmux_sessions.length||source.tmux_panes.length||source.integration));
+      const source=row.source;
+      const configured=source&&(source.id===selected||configuredSource(source,row.definition,settings.auto_discovery_seen));
       if(configured || category==='local'&&(row.locationDetected===true||row.dataDetected===true))result.primary.push(row);
       else if(category==='local')result.supported.push(row);
       else result.advanced.push(row);
@@ -142,9 +147,10 @@ const notes:Record<SourceKind,string>={
   opencode:'只读本机 OpenCode 会话、模型和运行记录；明确本轮结束才提醒，不从工具返回推断完成。提问与审批事件尚不提供。',
   workbuddy:'只读 WorkBuddy 本地数据库与会话记录；关注新执行，不导入空闲历史，不包含云端任务。提问与审批事件尚不提供。',
   zcode:'自动读取本机 ZCode 会话、项目和模型；工具执行完成不会当作整轮结束。',
-  doubao:'读取豆包原生执行检查点；已验证 Windows 2.26.10。检查点移除只标为待更新，不推断完成；审批提醒尚未适配。',
+  doubao:'暂停支持。',
   codex:'原生标题、项目与 rollout 执行阶段；仅明确结束事件提醒。命令审批需可选的官方观察 Hook，安装后还需在 Codex /hooks 中信任。',
   codex_wsl:'独立读取已运行发行版的 Codex 数据；不唤醒 WSL，不借用 Windows 额度。命令审批需在该发行版安装并信任观察 Hook。',
+  remote_claude_code:'只读 SSH 账号的 Claude Code 会话记录；明确结束才提醒，不读取审批或提问。',
   remote_codex:'读取已配置 SSH 主机的 Codex 会话；依赖主机可达、权限与远端数据格式。',
   claude_code:'原生会话读取为尽力推断；精确生命周期需自愿配置官方 Hook，与代理模型无关。',
   hermes:'原生标题、项目和运行租约；没有明确结束证据时不猜测任务完成。',

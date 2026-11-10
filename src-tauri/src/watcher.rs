@@ -97,6 +97,7 @@ impl From<AgentStatus> for TaskSnapshot {
             agent_id: None,
             agent_name: None,
             evidence_channel: None,
+            native_storage: None,
             outcome: None,
             pending_confirmed_at: None,
             id: a.id,
@@ -614,7 +615,25 @@ fn same_collector(
         && old.kind == next.kind
         && old.location == next.location
         && old.integration == next.integration
+        && (old.kind != crate::monitoring::SourceKind::RemoteClaudeCode
+            || old.poll_interval_ms == next.poll_interval_ms)
         && (old.kind != crate::monitoring::SourceKind::GenericEvent || old.name == next.name)
+}
+
+pub(crate) fn bind_provider_identity(
+    task: &mut TaskSnapshot,
+    source: &crate::monitoring::SourceConfig,
+) {
+    use crate::monitoring::SourceKind;
+    task.source_instance = Some(source.id.clone());
+    if !matches!(source.kind, SourceKind::CodexWsl | SourceKind::GenericEvent)
+        && !matches!(
+            source.id.as_str(),
+            "codex" | "claude_code" | "hermes" | "deepseek_harness" | "deepseek_harness_desktop"
+        )
+    {
+        task.id = format!("{}:{}", source.id, task.id);
+    }
 }
 
 impl LocalProviders {
@@ -743,6 +762,18 @@ impl LocalProviders {
                 SourceKind::GenericEvent => Box::new(
                     crate::providers::generic_event::GenericEventProvider::new(source.clone()),
                 ),
+                SourceKind::RemoteClaudeCode => {
+                    let mut provider =
+                        crate::providers::claude_code::ssh::RemoteClaudeProvider::new(
+                            source.location.clone(),
+                        );
+                    provider.resume(known_sessions().into_iter().filter(|t| {
+                        t.remote
+                            && t.host.as_deref() == Some(source.location.as_str())
+                            && t.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
                 SourceKind::ClaudeCode => {
                     Box::new(crate::providers::claude_code::ClaudeCodeProvider::new(
                         if source.location.is_empty() {
@@ -812,31 +843,18 @@ impl LocalProviders {
             };
             let source = source.clone();
             let id = source.id.clone();
-            let interval = if matches!(source.kind, SourceKind::DeepseekWsl | SourceKind::CodexWsl)
-            {
-                2
-            } else {
-                1
+            let interval = match source.kind {
+                SourceKind::DeepseekWsl | SourceKind::CodexWsl => Duration::from_secs(2),
+                SourceKind::RemoteClaudeCode => Duration::from_millis(source.poll_interval_ms),
+                _ => Duration::from_secs(1),
             };
             self.workers.push((
                 id.clone(),
                 vec![],
-                Worker::spawn(Duration::from_secs(interval), move |_| {
+                Worker::spawn(interval, move |_| {
                     let mut output = provider.poll(SystemTime::now());
                     for task in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
-                        task.source_instance = Some(source.id.clone());
-                        if !matches!(source.kind, SourceKind::CodexWsl | SourceKind::GenericEvent)
-                            && !matches!(
-                                source.id.as_str(),
-                                "codex"
-                                    | "claude_code"
-                                    | "hermes"
-                                    | "deepseek_harness"
-                                    | "deepseek_harness_desktop"
-                            )
-                        {
-                            task.id = format!("{}:{}", source.id, task.id);
-                        }
+                        bind_provider_identity(task, &source);
                     }
                     output
                 }),
@@ -1160,13 +1178,7 @@ fn update_provider_health(
     let task_observations = output
         .tasks
         .iter()
-        .filter(|task| {
-            task.source == TaskSource::Codex
-                && !task.stale
-                && !task.internal
-                && task.confidence != DetectionConfidence::Inferred
-                && (task.status == crate::domain::TaskStatus::Running || task.requires_action())
-        })
+        .filter(|task| crate::providers::can_record_task_observation(task))
         .map(|task| {
             (
                 task.id.clone(),
@@ -1628,9 +1640,10 @@ pub fn watch(app: AppHandle) {
                     .iter()
                     .filter(|task| {
                         task.finished_at.is_some()
-                            && batch
+                            && (batch
                                 .authoritative_instances
                                 .contains(&crate::monitoring::collector_id(task))
+                                || crate::providers::paged_native_evidence(task))
                     })
                     .cloned(),
             );
@@ -2727,6 +2740,68 @@ mod tests {
         assert_eq!(health[0].status, ProviderStatus::Connected);
         assert_eq!(health[0].last_success, Some(recovered));
         assert!(health[0].message.is_none());
+    }
+
+    #[test]
+    fn remote_claude_partial_read_keeps_new_running_task_visible() {
+        let now = SystemTime::now();
+        let mut fresh = TaskSnapshot::new(
+            "remote_claude:new",
+            "Example new work",
+            TaskSource::ClaudeCode,
+            TaskStatus::Running,
+            DetectionConfidence::Inferred,
+            now,
+        );
+        fresh.source_instance = Some("remote_claude".into());
+        fresh.session_id = Some("new".into());
+        fresh.turn_key = Some("new-turn".into());
+        fresh.remote = true;
+        fresh.host = Some("fixture".into());
+        fresh.evidence_channel = Some("native_transcript".into());
+        let mut stale = fresh.clone();
+        stale.id = "remote_claude:old".into();
+        stale.session_id = Some("old".into());
+        stale.turn_key = Some("old-turn".into());
+        stale.stale = true;
+        let output = ProviderOutput::degraded(
+            vec![stale.clone(), fresh.clone()],
+            "the previous checkpoint was removed",
+        );
+        let mut health = Vec::new();
+        update_provider_health(&mut health, "remote_claude", &output, now);
+        let mut settings = crate::monitoring::from_legacy(&Default::default(), false);
+        settings.onboarding_complete = true;
+        settings.sources.truncate(1);
+        let source = &mut settings.sources[0];
+        source.kind = crate::monitoring::SourceKind::RemoteClaudeCode;
+        source.id = "remote_claude".into();
+        source.location = "fixture".into();
+        source.enabled = true;
+        let view = crate::dashboard_view::project(
+            &output.tasks,
+            &health,
+            &settings,
+            &Default::default(),
+            now,
+        );
+        assert_eq!(view.counts.ongoing, 1);
+        assert_eq!(view.counts.uncertain, 1);
+        assert_eq!(view.counts.results, 0);
+        assert_eq!(
+            view.sources[0].read_state,
+            crate::dashboard_view::ReadState::Partial
+        );
+        assert!(!health[0].verifies_task(&stale, now));
+        assert!(view.unconfirmed_task_ids.is_empty());
+        assert!(health[0].verifies_task(&fresh, now));
+        update_provider_health(
+            &mut health,
+            "remote_claude",
+            &ProviderOutput::degraded(vec![], "read failed"),
+            now + Duration::from_secs(1),
+        );
+        assert!(!health[0].verifies_task(&fresh, now + Duration::from_secs(1)));
     }
 
     #[test]

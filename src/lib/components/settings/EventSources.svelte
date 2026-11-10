@@ -1,18 +1,23 @@
 <script lang="ts">
   import {t} from '$lib/i18n';
   import {tick} from 'svelte';
-  import {createEventSource,eventAdapterLabel,eventConnections,isDefaultEventName,type SourceDefinition} from '$lib/source-setup';
+  import {createEventSource,eventAdapterLabel,eventConnections,localHookKind,isDefaultEventName,sourceDefinitionFor,type SourceDefinition} from '$lib/source-setup';
   import {sourceStatus} from '$lib/monitor-sources';
   import type {DashboardSettings,MonitorSource,SourceSnapshot} from '$lib/types';
   import IntegrationEditor from '../IntegrationEditor.svelte';
   import ProjectScope from './ProjectScope.svelte';
-  let {settings,catalog,observations,dirty,disabled,changed,localHook=false}:{settings:DashboardSettings;catalog:SourceDefinition[];observations:SourceSnapshot[];dirty:boolean;disabled:boolean;changed:()=>void;localHook?:boolean}=$props();
+  let {settings,catalog,observations,dirty,disabled,changed,localHook=false,allowAdd=true,sources,maintenance=false}:{settings:DashboardSettings;catalog:SourceDefinition[];observations:SourceSnapshot[];dirty:boolean;disabled:boolean;changed:()=>void;localHook?:boolean;allowAdd?:boolean;sources?:MonitorSource[];maintenance?:boolean}=$props();
   let expanded=$state(''),removing=$state(''),adapterId=$state('');
   function agentName(definition:SourceDefinition){
     const label=eventAdapterLabel(definition.adapter_id??'',definition.name);
     return definition.adapter_id==='standard-events'?$t(label):label;
   }
-  const groups=$derived(eventConnections(catalog,settings.sources));
+  const existing=$derived(sources??settings.sources);
+  const groups=$derived(sources===undefined?eventConnections(catalog,existing):[
+    ...eventConnections(catalog,existing),
+    ...existing.filter(source=>!catalog.some(d=>d.adapter_id===source.integration?.adapter_id))
+      .map(source=>({definition:sourceDefinitionFor(catalog,source),connections:[source]})),
+  ]);
   const count=$derived(groups.reduce((total,group)=>total+group.connections.length,0));
   function status(source:MonitorSource){
     const observation=observations.find(item=>item.id===source.id);
@@ -21,31 +26,42 @@
     }
     return sourceStatus(source,observation);
   }
-  const selected=$derived(catalog.find(definition=>definition.adapter_id===adapterId));
+  const additions=$derived(catalog.filter(definition=>localHook||!localHookKind(definition.adapter_id)));
+  const selected=$derived(additions.find(definition=>definition.adapter_id===adapterId));
   async function reveal(id:string){await tick();document.querySelector(`[data-event-source="${CSS.escape(id)}"]`)?.scrollIntoView({block:'start'});}
-  async function add(definition:SourceDefinition){const source=createEventSource(definition,agentName(definition));settings.sources.push(source);expanded=source.id;changed();await reveal(source.id);}
-  function remove(id:string){settings.sources=settings.sources.filter(s=>s.id!==id);removing='';expanded='';changed();}
+  async function add(definition:SourceDefinition){if(disabled||!allowAdd)return;const source=createEventSource(definition,agentName(definition));settings.sources.push(source);expanded=source.id;changed();await reveal(source.id);}
+  function remove(id:string){if(disabled)return;settings.sources=settings.sources.filter(s=>s.id!==id);removing='';expanded='';changed();}
 </script>
 
 <details class="detail-card event-sources" class:local-hook={localHook}>
-  <summary>{$t(localHook?'Hook 连接':'连接其他工具（可选）')}{#if count} · {count}{/if}</summary>
+  <summary>{$t(localHook?'启用更准确的提醒':maintenance||!allowAdd?'已有事件连接':'连接其他工具（可选）')}{#if count} · {count}{/if}</summary>
   <p class="ms-muted">{$t(localHook?'Hook 是这个 Agent 的可选事件来源，需要单独在宿主中配置。':'上方的本机工具不用再连接。只有能主动发送任务状态的其他工具，才需要在这里添加。')}</p>
-  {#if localHook}
-    {#each catalog as definition (definition.id)}<button class="ms-btn" type="button" disabled={disabled} data-event-add onclick={()=>add(definition)}>{$t('添加 Hook 连接')}</button>{/each}
-  {:else if catalog.length===1 && catalog[0].adapter_id==='standard-events'}
-    <button class="ms-btn" type="button" disabled={disabled} data-event-add onclick={()=>add(catalog[0])}>{$t('添加 MCP 或脚本连接')}</button>
-  {:else if catalog.length}
+  {#snippet addControls()}
+  {#if allowAdd&&localHook}
+    {#each additions as definition (definition.id)}<button class="ms-btn" type="button" disabled={disabled} data-event-add onclick={()=>add(definition)}>{$t('添加 Hook 连接')}</button>{/each}
+  {:else if allowAdd&&additions.length===1 && additions[0].adapter_id==='standard-events'}
+    <button class="ms-btn" type="button" disabled={disabled} data-event-add onclick={()=>add(additions[0])}>{$t('添加 MCP 或脚本连接')}</button>
+  {:else if allowAdd&&additions.length}
   <div class="event-picker">
     <label class="ms-field">{$t('选择连接类型')}
       <select bind:value={adapterId} disabled={disabled} data-event-picker>
         <option value="">{$t('请选择')}</option>
-        {#each catalog as definition (definition.id)}
+        {#each additions as definition (definition.id)}
           <option value={definition.adapter_id}>{agentName(definition)}</option>
         {/each}
       </select>
     </label>
     <button class="ms-btn" type="button" disabled={disabled||!selected} data-event-add onclick={()=>selected&&add(selected)}>{$t('添加连接')}</button>
   </div>
+  {/if}
+  {/snippet}
+  {#if maintenance}
+    <details class="ms-advanced" data-maintenance-tools>
+      <summary>{$t('维护工具')}</summary>
+      {@render addControls()}
+    </details>
+  {:else}
+    {@render addControls()}
   {/if}
   {#each groups as {definition,connections} (definition.id)}
     {@const grouped=localHook||definition.adapter_id==='standard-events'||connections.length>1}
@@ -64,7 +80,7 @@
           <label class="ms-field">{$t('来源名称')}<input value={source.name} disabled={disabled} oninput={e=>{source.name=e.currentTarget.value;changed();}}/></label>
           <IntegrationEditor {source} {dirty} {changed} {localHook}/>
           <h3>{$t('项目范围')}</h3><ProjectScope projects={source.projects} choices={[]} {disabled} onchange={projects=>{source.projects=projects;changed();}}/>
-          <div class="inline-actions"><button class="ms-btn" disabled={disabled} onclick={()=>add(definition)}>{$t('添加数据来源实例')}</button><button class="ms-btn danger" disabled={disabled} onclick={()=>removing=source.id}>{$t('移除来源')}</button></div>
+          <div class="inline-actions">{#if allowAdd&&definition.adapter_id&&definition.agent_id}<button class="ms-btn" disabled={disabled} onclick={()=>add(definition)}>{$t('添加数据来源实例')}</button>{/if}<button class="ms-btn danger" disabled={disabled} onclick={()=>removing=source.id}>{$t('移除来源')}</button></div>
           {#if removing===source.id}<div class="ms-warning">{$t('移除会停止采集，不会修改 Agent 配置。')} <button class="ms-btn" onclick={()=>removing=''}>{$t('取消')}</button> <button class="ms-btn danger" disabled={disabled} onclick={()=>remove(source.id)}>{$t('确认移除')}</button></div>{/if}
         </div>
       {/if}

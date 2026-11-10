@@ -32,6 +32,7 @@ struct Registration<'a> {
     machine: &'a Key,
     name: &'a str,
     quoted: String,
+    legacy_quoted: Option<String>,
 }
 
 impl Registration<'_> {
@@ -42,13 +43,13 @@ impl Registration<'_> {
         let Some(value) = optional(key.get_string(self.name))? else {
             return Ok(None);
         };
-        // Both forms were written by TaskPulse. Other commands are not ours to
-        // silently rewrite or delete merely because the value name matches.
-        if !value.trim().eq_ignore_ascii_case(&self.quoted)
-            && !value
-                .trim()
-                .eq_ignore_ascii_case(self.quoted.trim_matches('"'))
-        {
+        // A renamed installation may still own the exact old sibling command.
+        // Never rewrite another directory, extra arguments, or another app.
+        let matches = |quoted: &str| {
+            value.trim().eq_ignore_ascii_case(quoted)
+                || value.trim().eq_ignore_ascii_case(quoted.trim_matches('"'))
+        };
+        if !matches(&self.quoted) && !self.legacy_quoted.as_deref().is_some_and(matches) {
             return Err("Login startup entry points to a different command".into());
         }
         Ok(Some(value))
@@ -171,32 +172,30 @@ impl Registration<'_> {
     }
 }
 
-pub fn repair(name: &str, exe: &Path) -> Result<(), String> {
-    Registration {
+fn registration<'a>(name: &'a str, exe: &Path) -> Result<Registration<'a>, String> {
+    let quoted = command(exe)?;
+    let legacy_quoted = exe
+        .file_name()
+        .and_then(|name| name.to_str())
+        .filter(|name| name.eq_ignore_ascii_case("TaskPulse.exe"))
+        .and_then(|_| command(&exe.with_file_name("agent-tray.exe")).ok());
+    Ok(Registration {
         user: CURRENT_USER,
         machine: LOCAL_MACHINE,
         name,
-        quoted: command(exe)?,
-    }
-    .repair_quoting()
+        quoted,
+        legacy_quoted,
+    })
+}
+
+pub fn repair(name: &str, exe: &Path) -> Result<(), String> {
+    registration(name, exe)?.repair_quoting()
 }
 pub fn enabled(name: &str, exe: &Path) -> Result<bool, String> {
-    Registration {
-        user: CURRENT_USER,
-        machine: LOCAL_MACHINE,
-        name,
-        quoted: command(exe)?,
-    }
-    .enabled()
+    registration(name, exe)?.enabled()
 }
 pub fn set_enabled(name: &str, exe: &Path, enabled: bool) -> Result<(), String> {
-    Registration {
-        user: CURRENT_USER,
-        machine: LOCAL_MACHINE,
-        name,
-        quoted: command(exe)?,
-    }
-    .set_enabled(enabled)
+    registration(name, exe)?.set_enabled(enabled)
 }
 
 #[cfg(test)]
@@ -319,6 +318,7 @@ mod tests {
             machine: &machine,
             name: "agent-tray",
             quoted: command(Path::new(r"C:\Test App\agent-tray.exe")).unwrap(),
+            legacy_quoted: None,
         };
         let result = std::panic::catch_unwind(|| {
             assert!(!registration.enabled().unwrap());
@@ -343,6 +343,34 @@ mod tests {
             registration.repair_quoting().unwrap();
             assert!(!registration.enabled().unwrap());
             assert_eq!(&*approved.get_value("agent-tray").unwrap(), &disabled);
+
+            let installed = Registration {
+                user: &user,
+                machine: &machine,
+                name: "TaskPulse",
+                quoted: command(Path::new(r"C:\Test App\TaskPulse.exe")).unwrap(),
+                legacy_quoted: Some(registration.quoted.clone()),
+            };
+            let run = user.options().read().write().open(RUN).unwrap();
+            run.set_string(installed.name, r"C:\Test App\agent-tray.exe")
+                .unwrap();
+            approved
+                .set_bytes(installed.name, windows_registry::Type::Bytes, &disabled)
+                .unwrap();
+            installed.repair_quoting().unwrap();
+            assert_eq!(run.get_string(installed.name).unwrap(), installed.quoted);
+            assert!(!installed.enabled().unwrap());
+            assert_eq!(&*approved.get_value(installed.name).unwrap(), &disabled);
+            run.set_string(installed.name, r"C:\Other App\agent-tray.exe")
+                .unwrap();
+            assert!(installed.repair_quoting().is_err());
+            assert_eq!(
+                run.get_string(installed.name).unwrap(),
+                r"C:\Other App\agent-tray.exe"
+            );
+            run.remove_value(installed.name).unwrap();
+            approved.remove_value(installed.name).unwrap();
+
             registration.set_enabled(true).unwrap();
             assert!(registration.enabled().unwrap());
             for state in [258u32, 8] {

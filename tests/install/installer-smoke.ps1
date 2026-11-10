@@ -3,7 +3,8 @@ param(
     [Parameter(Mandatory=$true)][string]$Version,
     [Parameter(Mandatory=$true)][string]$Gsudo,
     [Parameter(Mandatory=$true)][ValidateSet('nsis','msi')][string]$InstallerKind,
-    [ValidateSet('x64','arm64')][string]$Architecture='x64'
+    [ValidateSet('x64','arm64')][string]$Architecture='x64',
+    [switch]$VerifyRenamedExecutable
 )
 $ErrorActionPreference = 'Stop'
 # This installs/uninstalls software. Never run it against a developer's real profile.
@@ -71,7 +72,7 @@ try {
         Write-Host "[$kind] install"
         $installDir = Join-Path $workspace $kind
         New-Item -ItemType Directory -Path $installDir | Out-Null
-        $exe = Join-Path $installDir 'agent-tray.exe'
+        $exe = Join-Path $installDir 'TaskPulse.exe'
         $package = if ($kind -eq 'nsis') { Join-Path $assetRoot "TaskPulse_${Version}_windows_${Architecture}_setup.exe" } else { Join-Path $assetRoot "TaskPulse_${Version}_windows_x64.msi" }
         $arguments = if ($kind -eq 'nsis') { "/S /D=$installDir" } else { "/i `"$package`" /qn /norestart INSTALLDIR=`"$installDir`" /L*v `"$(Join-Path $evidence 'msi-install.log')`"" }
         $installer = if ($kind -eq 'nsis') { $package } else { Join-Path $env:SystemRoot 'System32\msiexec.exe' }
@@ -100,6 +101,17 @@ try {
         $versionProcess.StdOut | Set-Content -LiteralPath $versionOutput -Encoding UTF8
         $versionProcess | ConvertTo-Json | Set-Content -LiteralPath (Join-Path $evidence "$kind-version-process.json") -Encoding UTF8
         if ($versionProcess.ExitCode -ne 0 -or $versionProcess.StdOut.Trim() -ne "TaskPulse $Version") { throw "Installed version check failed (exit $($versionProcess.ExitCode)): $($versionProcess.StdOut.Trim())" }
+        $legacy = Join-Path $installDir 'agent-tray.exe'
+        $bridgeHash = $null
+        if ($VerifyRenamedExecutable) {
+            $identityProcess = Invoke-InstallerProcess -FilePath $exe -Arguments '--profile-info' -TimeoutMilliseconds 15000
+            if ($identityProcess.ExitCode -ne 0) { throw 'Installed build identity probe failed' }
+            $identity = $identityProcess.StdOut | ConvertFrom-Json
+            if ($identity.commit -ne $manifest.commit -or $identity.modified -ne $false -or $identity.channel -ne 'release' -or $identity.version -ne $Version) { throw 'Installed build identity mismatch' }
+            $legacyLaunch = Invoke-InstallerProcess -FilePath $legacy -Arguments '--show' -TimeoutMilliseconds 15000
+            if ($legacyLaunch.ExitCode -ne 2) { throw 'The old path must reject GUI launches' }
+            $bridgeHash = (Get-FileHash -LiteralPath $legacy -Algorithm SHA256).Hash.ToLowerInvariant()
+        }
         $phase = "$kind-native"
         # WebView2 >=150 ignores environment debug switches in elevated hosts.
         # Install with normal installer permissions, but drive the app as a user.
@@ -127,8 +139,9 @@ try {
         }
         for($n=0;$n -lt 50 -and (Test-Path -LiteralPath $exe);$n++){Start-Sleep -Milliseconds 200}
         if (Test-Path -LiteralPath $exe) { throw 'Uninstall left the application executable installed' }
+        if ($VerifyRenamedExecutable -and (Test-Path -LiteralPath $legacy)) { throw 'Uninstall left the legacy bridge installed' }
         if (-not (Test-Path -LiteralPath $marker)) { throw 'Uninstall removed user state without permission' }
-        $results += @{kind=$kind;version=$Version;source_commit=$manifest.commit;os=[Environment]::OSVersion.VersionString;architecture=$Architecture;installation_method=$kind;script_sha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();package_sha256=$packageHash;application_sha256=$applicationHash;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';format_migration='not_verified';focus='not_verified'}
+        $results += @{kind=$kind;version=$Version;source_commit=$manifest.commit;os=[Environment]::OSVersion.VersionString;architecture=$Architecture;installation_method=$kind;script_sha256=(Get-FileHash -LiteralPath $PSCommandPath -Algorithm SHA256).Hash.ToLowerInvariant();package_sha256=$packageHash;application_sha256=$applicationHash;legacy_bridge_sha256=$bridgeHash;signature=$signature;native_ipc=$native.native_ipc;restart=$native.restart;reinstall=$true;uninstall=$true;cross_version_upgrade='not_verified';format_migration='not_verified';focus='not_verified'}
     }
     $phase = 'passed'
 } catch {

@@ -229,3 +229,43 @@ fn modern_wire_modes_and_end_survive_tool_step_completion() {
         Duration::from_secs(61)
     );
 }
+
+#[test]
+fn kimi_capacity_keeps_protected_pending_and_reads_later_pages() {
+    let root = tempfile::tempdir().unwrap();
+    let write = |id: &str, records: &[Value]| {
+        let dir = root.path().join("sessions/work").join(id);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("wire.jsonl"),
+            records.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap();
+    };
+    let at = 1794000000000u64;
+    let start = json!({"type":"turn.started","time":at,"turnId":"turn"});
+    let pending =
+        json!({"type":"event.question.requested","time":at+1,"payload":{"question_id":"q"}});
+    write("current", &[start.clone(), pending]);
+    let mut provider = KimiProvider::new(Some(root.path().into()));
+    let now = native_sessions::time(at + 2000).unwrap();
+    assert_eq!(
+        provider.poll(now).tasks[0].input_request_id.as_deref(),
+        Some("q")
+    );
+    let old_start = json!({"type":"turn.started","time":at-86400000,"turnId":"turn"});
+    for n in 0..513 {
+        write(&format!("old-{n:04}"), std::slice::from_ref(&old_start));
+    }
+    let mut observed = HashSet::new();
+    for _ in 0..8 {
+        let out = provider.poll(now);
+        assert_eq!(out.tasks.len(), 1);
+        assert!(!out.tasks[0].stale);
+        observed.extend(out.catalog.into_iter().filter_map(|t| t.session_id));
+        if observed.len() == 514 {
+            break;
+        }
+    }
+    assert_eq!(observed.len(), 514);
+}

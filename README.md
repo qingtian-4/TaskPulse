@@ -82,13 +82,12 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | Agent / 来源 | 接入与能力 |
 | --- | --- |
 | Codex | 本机自动发现，也可配置独立 WSL 或 SSH 来源。读取会话、模型、本轮状态和明确提问，审批需要[明确事件](docs/CODEX_APPROVAL_OBSERVER.md)。 |
-| Claude Code | 本机自动发现。可选官方 Hook 提供明确审批和生命周期事件，原生提问及 SSH 尚未支持。 |
+| Claude Code | 本机自动发现，也可用 SSH 读取服务器上的运行和结束状态。明确审批需在本机配置可选官方 Hook；原生提问未支持。 |
 | DeepSeek Harness | 读取本机 Desktop / CLI，也可接入 WSL。支持模型、推理强度和明确请求。 |
 | Hermes | 读取本机会话、模型和运行状态。 |
 | OpenCode | 读取本机会话、运行阶段和明确结束记录。 |
 | WorkBuddy | 读取本机任务和本轮结果，不含云端任务。 |
 | ZCode | 读取本机任务、模型和本轮结果，也可接入标准事件或 MCP。 |
-| 豆包 | Windows 和 macOS 手动开启，只监控兼容的工作任务。 |
 | Kimi Code / kimi-cli | 读取本机主会话与明确请求，也可接入标准事件或 MCP。 |
 | Qoder | 读取本机 Desktop 轮次及 IDE / CLI 日志，原生审批和提问尚未支持。 |
 | Trae | 可发现会话目录，暂不读取任务进度。手动配置后可接收外部发送的任务通知。 |

@@ -9,6 +9,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// OpenSSH reserves exit 255 for a transport/configuration failure. A
+/// timeout or a different remote exit cannot prove whether the host answered.
+pub(crate) fn connection_failed(error: &str) -> bool {
+    error.ends_with(" exited Some(255)")
+}
+
 pub trait SshExecutor: Send + Sync {
     /// Run one remote command.  `Err` on spawn failure, timeout, or
     /// non-zero exit — callers must treat any `Err` as "no data this round",
@@ -54,7 +60,13 @@ impl SshExecutor for SystemSshExecutor {
             timeout,
             16 * 1024 * 1024,
         )
-        .map_err(|error| format!("ssh {host} probe failed: {error:?}"))?;
+        .map_err(|error| {
+            #[cfg(windows)]
+            if let crate::process::windows::ProbeError::Exit(code) = error {
+                return format!("ssh {host} exited Some({code})");
+            }
+            format!("ssh {host} probe failed: {error:?}")
+        })?;
         if !result.status.success() {
             return Err(format!("ssh {host} exited {:?}", result.status.code()));
         }

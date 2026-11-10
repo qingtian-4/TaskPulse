@@ -52,7 +52,7 @@ impl HermesProvider {
             .into_iter()
             .filter(|task| {
                 lease_turn_start(task).is_some()
-                    && (task.status == TaskStatus::Running || confirmed_turn_end(task))
+                    && (followed_turn(task) || confirmed_turn_end(task))
             })
             .collect();
     }
@@ -197,6 +197,10 @@ fn lease_matches(task: &TaskSnapshot, lease: Option<TurnLease>) -> bool {
     lease.is_none_or(|lease| {
         !lease.live && task.turn_key.as_deref() == Some(&format!("lease:{:.6}", lease.acquired_at))
     })
+}
+
+fn followed_turn(task: &TaskSnapshot) -> bool {
+    task.status == TaskStatus::Running || task.requires_action()
 }
 
 fn confirmed_turn_end(task: &TaskSnapshot) -> bool {
@@ -636,7 +640,7 @@ impl Provider for HermesProvider {
             let reply_end = previous
                 .filter(|task| {
                     remaining > 0
-                        && task.status == TaskStatus::Running
+                        && followed_turn(task)
                         && row.ended_at.and_then(epoch_to_time).is_none()
                         && lease_matches(task, lease)
                 })
@@ -658,7 +662,7 @@ impl Provider for HermesProvider {
                 continue;
             }
             let age = now.duration_since(at).unwrap_or_default();
-            let known_running = previous.is_some_and(|task| task.status == TaskStatus::Running);
+            let known_running = previous.is_some_and(followed_turn);
             if !running && !known_running && age > DISCOVERY_TTL && !row.pinned {
                 continue;
             }
@@ -942,6 +946,52 @@ mod tests {
         assert_eq!(again[0].finished_at, end[0].finished_at);
         assert!(!again[0].stale);
         assert!(engine.apply(&again, &[], start).is_empty());
+    }
+
+    #[test]
+    fn hermes_p1_tracked_pending_completes_across_restart() {
+        use crate::domain::WaitingReason;
+        for (description, reason) in [
+            ("Waiting for user approval", WaitingReason::Approval),
+            ("Waiting for user input", WaitingReason::Question),
+        ] {
+            let seconds = now_secs();
+            let start = UNIX_EPOCH + Duration::from_secs_f64(seconds);
+            let (_dir, db, conn) = turn_fixture(seconds);
+            conn.execute(
+                "UPDATE sessions SET last_activity_description=?1",
+                [description],
+            )
+            .unwrap();
+            let mut provider = HermesProvider::with_db_path(db.clone());
+            let first = provider
+                .poll(start + Duration::from_secs(1))
+                .tasks
+                .remove(0);
+            assert_eq!(first.waiting_reason, Some(reason));
+            assert!(first.input_request_id.is_some());
+            conn.execute(
+                "INSERT INTO messages(session_id,role,timestamp,finish_reason) VALUES('s','assistant',?1,'stop')",
+                [seconds + 2.0],
+            ).unwrap();
+            assert_eq!(
+                provider.poll(start + Duration::from_secs(3)).tasks[0].waiting_reason,
+                Some(reason)
+            );
+            conn.execute("DELETE FROM session_turn_leases", []).unwrap();
+            let mut restarted = HermesProvider::with_db_path(db);
+            restarted.resume([first.clone()]);
+            for provider in [&mut provider, &mut restarted] {
+                let done = provider
+                    .poll(start + Duration::from_secs(4))
+                    .tasks
+                    .remove(0);
+                assert_eq!(done.waiting_reason, Some(WaitingReason::TurnEnded));
+                assert_eq!(done.turn_key, first.turn_key);
+                assert!(done.input_request_id.is_none() && !done.stale);
+                assert_eq!(done.finished_at, Some(start + Duration::from_secs(2)));
+            }
+        }
     }
 
     #[test]

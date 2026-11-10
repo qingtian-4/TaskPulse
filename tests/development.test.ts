@@ -75,8 +75,8 @@ test('development artifacts allowlist runtime files, pin checksums and reject st
     stageDevelopment(exe,out,'a'.repeat(40),'1.0.1');
     const manifest=JSON.parse(readFileSync(join(out,'development-manifest.json'),'utf8'));
     expect(manifest).toMatchObject({tag:null,build_kind:'development',commit:'a'.repeat(40)});
-    expect(manifest.assets).toEqual(['agent-tray.exe','WebView2Loader.dll']);
-    expect(readFileSync(join(out,'SHA256SUMS.txt'),'utf8')).toContain(sha256(bytes)+'  agent-tray.exe');
+    expect(manifest.assets).toEqual(['TaskPulse.exe','WebView2Loader.dll']);
+    expect(readFileSync(join(out,'SHA256SUMS.txt'),'utf8')).toContain(sha256(bytes)+'  TaskPulse.exe');
     expect(()=>readFileSync(join(out,'attention.json'))).toThrow();
     expect(()=>stageDevelopment(exe,out,'a'.repeat(40),'1.0.1')).toThrow('already exists');
     expect(()=>stageDevelopment(exe,join(root,'bad-sha'),'main','1.0.1')).toThrow('full source SHA');
@@ -88,12 +88,15 @@ test('development artifacts allowlist runtime files, pin checksums and reject st
     }
   }finally{rmSync(root,{recursive:true,force:true});}
 });
-test('fast CI produces expiring SHA-bound development artifacts; installer and upgrade suites require explicit opt-in',()=>{
+test('fast CI retains expiring SHA-bound evidence and keeps binaries on the runner; installer and upgrade suites require explicit opt-in',()=>{
   const quality=Bun.YAML.parse(read('.github/workflows/quality.yml')) as any;
   expect(quality.jobs.quality.steps.some((s:any)=>s.run==='bun run test:workflow')).toBe(true);
-  const artifact=quality.jobs.quality.steps.find((s:any)=>s.id==='development');
-  expect(artifact.with['retention-days']).toBe(7);expect(artifact.with.name).toContain('head.sha || github.sha');
-  expect(artifact.with.path).toBe('dist/development/');
+  const uploads=quality.jobs.quality.steps.filter((s:any)=>s.uses?.startsWith('actions/upload-artifact'));
+  expect(uploads).toHaveLength(1);
+  expect(uploads[0].with['retention-days']).toBe(7);
+  expect(uploads[0].with.name).toContain('head.sha || github.sha');
+  expect(uploads[0].with.path).not.toMatch(/dist|exe|dll/i);
+  expect(quality.jobs.quality.steps.some((s:any)=>s.run==='python -B tests/ssh-claude.test.py')).toBe(true);
   for(const [file,job,label] of [['installation-preview.yml','prepare','test:installers'],['upgrade-acceptance.yml','security','test:upgrade']]){
     const w=Bun.YAML.parse(read('.github/workflows/'+file)) as any;
     expect(w.on.pull_request.types).toContain('labeled');expect(w.jobs[job].if).toContain(label);
@@ -129,5 +132,6 @@ test('shared Rust changes get exact-head macOS compilation without packaging',()
     'python3 tests/test-cli-install.py',
     'python3 tests/test-release-package.py',
     'python3 tests/test-public-install.py',
+    'python3 -B tests/ssh-claude.test.py',
   ]);
 });

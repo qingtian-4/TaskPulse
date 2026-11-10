@@ -241,6 +241,9 @@ pub struct TaskSnapshot {
     pub agent_name: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub evidence_channel: Option<String>,
+    /// Local storage identity for paged native readers; never a raw path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub native_storage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     /// Refreshed only by an explicit matching pending-request observation.
@@ -458,6 +461,7 @@ impl TaskSnapshot {
             agent_id: None,
             agent_name: None,
             evidence_channel: None,
+            native_storage: None,
             outcome: None,
             pending_confirmed_at: None,
             integration_epoch: None,

@@ -1,0 +1,18 @@
+{
+  "mainBinaryName": "TaskPulse",
+  "bundle": {
+    "windows": {
+      "nsis": {
+        "installerHooks": "windows-startup-migration.nsh"
+      },
+      "wix": {
+        "fragmentPaths": [
+          "windows/legacy-bridge.wxs"
+        ],
+        "componentRefs": [
+          "TaskPulseLegacyBridge"
+        ]
+      }
+    }
+  }
+}

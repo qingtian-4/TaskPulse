@@ -1,6 +1,8 @@
 //! Non-invasive Claude Code discovery. Native session/log formats are optional,
 //! version-tolerant evidence; documented hooks supply precise lifecycle events.
 //! Only sessions/*.json is read. Credentials (*.key) are never opened.
+pub(crate) mod ssh;
+
 use super::jsonl_tail::JsonlTail;
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus, WaitingReason};
 use crate::providers::{Provider, ProviderOutput};
