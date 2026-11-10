@@ -39,7 +39,12 @@ export function sourceStatus(source:MonitorSource|undefined,observed?:SourceSnap
 }
 export function localSourceStatus(
   source:MonitorSource|undefined,observed:SourceSnapshot|undefined,locationDetected:boolean|null|undefined,
+  diagnostic?:string|null,
 ):string {
+  if(source?.kind==='doubao'&&source.enabled&&observed?.read_state==='failed'){
+    if(diagnostic==='豆包桌面端未运行')return diagnostic;
+    if(diagnostic==='未找到支持的豆包工作任务记录；普通聊天不在监控范围内')return '暂无可读取的豆包工作任务';
+  }
   if(!source?.enabled && locationDetected===true)return '已检测到 · 未启用';
   if(locationDetected===false && !observed?.data_detected
     && (!source?.enabled || observed?.read_state==='healthy'))return '未检测到本机数据';

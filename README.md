@@ -88,7 +88,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | OpenCode | 读取本机会话、运行阶段和明确结束记录。 |
 | WorkBuddy | 读取本机任务和本轮结果，不含云端任务。 |
 | ZCode | 读取本机任务、模型和本轮结果，也可接入标准事件或 MCP。 |
-| 豆包 | Windows 手动开启，读取工作任务，不监控普通聊天。 |
+| 豆包 | Windows 和 macOS 手动开启，只监控兼容的工作任务。 |
 | Kimi Code / kimi-cli | 读取本机主会话与明确请求，也可接入标准事件或 MCP。 |
 | Qoder | 读取本机 Desktop 轮次及 IDE / CLI 日志，原生审批和提问尚未支持。 |
 | Trae | 可发现会话目录，暂不读取任务进度。手动配置后可接收外部发送的任务通知。 |

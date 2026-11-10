@@ -864,5 +864,9 @@
   "；本平台不提供新增 Hook 操作。可尝试通过 MCP 或脚本连接。": ". Adding Hooks is unavailable here. You can try connecting through MCP or a script.",
   "未找到支持的豆包工作任务记录；普通聊天不在监控范围内": "No supported Doubao work-task record was found. Regular chat is outside the monitoring scope.",
   "找到多条豆包工作任务记录，无法确认当前记录": "Multiple Doubao work-task records were found. The current record could not be verified.",
-  "移除来源": "Remove source"
+  "移除来源": "Remove source",
+  "豆包桌面端未运行": "Doubao Desktop is not running",
+  "无法确认豆包桌面端是否运行": "Could not verify whether Doubao Desktop is running",
+  "暂无可读取的豆包工作任务": "No readable Doubao work tasks yet",
+  "手动开启后，只关注兼容的豆包工作任务。普通聊天不在监控范围内。": "Turn this source on manually to monitor compatible Doubao work tasks. Regular chats are outside the monitoring scope."
 }

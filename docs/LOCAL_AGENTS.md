@@ -11,12 +11,12 @@ TaskPulse 自动发现受支持的本机 Agent。首次确认后，来源中的�
 | OpenCode | `~/.local/share/opencode/opencode.db` | `XDG_DATA_HOME` 或来源中填写数据库路径 |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `~/.workbuddy/projects` | 来源中填写 `.workbuddy` 数据目录 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` | 来源中填写数据库路径 |
-| 豆包 | Windows，手动开启 | 来源中填写 IndexedDB 目录 |
+| 豆包 | Windows 和 macOS，手动开启 | 来源中填写 IndexedDB 目录 |
 | Kimi Code / kimi-cli | `~/.kimi-code`，旧版 `~/.kimi` | `KIMI_CODE_HOME` / `KIMI_SHARE_DIR` 或来源目录 |
 | Qoder | 系统配置目录的 `com.qodercn.app.stable` / `com.qoder.app.stable`；CLI / IDE 的 `~/.qoder/projects` | `QODER_HOME` 指定 CLI / IDE 根目录，或来源中指定数据根目录 |
 | TRAE | 系统配置目录的 `Trae` | 来源中指定数据根目录；当前只读公开会话元数据 |
 
-豆包的 Windows 默认目录为 `%LOCALAPPDATA%\Doubao\User Data\Default\IndexedDB`；只读取工作任务，不读取普通聊天，也不提供审批提醒。macOS 暂不采集豆包数据。
+豆包只监控兼容的工作任务，不监控普通聊天，也不提供审批提醒。Windows 默认目录为 `%LOCALAPPDATA%\Doubao\User Data\Default\IndexedDB`；macOS 默认目录为 `~/Library/Application Support/Doubao/Default/IndexedDB`。保持豆包桌面端运行，并在「本机」列表手动开启豆包。
 
 `~` 表示运行 TaskPulse 的用户主目录。设置环境变量后，需要重新启动 TaskPulse，使其读取新环境。
 

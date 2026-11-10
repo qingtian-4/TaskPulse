@@ -33,6 +33,9 @@ pub fn available(root: &std::path::Path) -> bool {
     root.join(storage::DATABASE).join("CURRENT").is_file()
 }
 
+const DESKTOP_STOPPED: &str = "豆包桌面端未运行";
+const DESKTOP_UNKNOWN: &str = "无法确认豆包桌面端是否运行";
+
 pub struct DoubaoProvider {
     root: PathBuf,
     reader: storage::Reader,
@@ -123,17 +126,19 @@ impl DoubaoProvider {
             ProviderOutput::tasks(tasks)
         })
     }
-}
-impl Provider for DoubaoProvider {
-    fn name(&self) -> &'static str {
-        "doubao"
-    }
-    fn poll(&mut self, now: SystemTime) -> ProviderOutput {
-        let rows = if desktop_open() {
-            self.reader.read(&self.root)
-        } else {
-            Err("desktop not running")
-        };
+
+    fn poll_desktop(
+        &mut self,
+        now: SystemTime,
+        desktop: Result<bool, &'static str>,
+    ) -> ProviderOutput {
+        let rows = desktop.and_then(|open| {
+            if open {
+                self.reader.read(&self.root)
+            } else {
+                Err(DESKTOP_STOPPED)
+            }
+        });
         if rows.is_ok() {
             for task in self.last.values_mut() {
                 if let Some(title) = task
@@ -157,7 +162,10 @@ impl Provider for DoubaoProvider {
                     })
                     .collect(),
                 match reason {
-                    storage::MISSING_CHECKPOINT | storage::AMBIGUOUS_CHECKPOINT => reason.into(),
+                    storage::MISSING_CHECKPOINT
+                    | storage::AMBIGUOUS_CHECKPOINT
+                    | DESKTOP_STOPPED
+                    | DESKTOP_UNKNOWN => reason.into(),
                     _ => format!("豆包原生数据暂不可读（{reason}）；不会推断结束或批准请求"),
                 },
             ),
@@ -165,11 +173,20 @@ impl Provider for DoubaoProvider {
     }
 }
 
+impl Provider for DoubaoProvider {
+    fn name(&self) -> &'static str {
+        "doubao"
+    }
+    fn poll(&mut self, now: SystemTime) -> ProviderOutput {
+        self.poll_desktop(now, desktop_open())
+    }
+}
+
 // Process presence is only source health. It never creates or finishes a task.
 #[cfg(target_os = "windows")]
-fn desktop_open() -> bool {
+fn desktop_open() -> Result<bool, &'static str> {
     use windows_sys::Win32::{
-        Foundation::{CloseHandle, INVALID_HANDLE_VALUE},
+        Foundation::{CloseHandle, GetLastError, ERROR_NO_MORE_FILES, INVALID_HANDLE_VALUE},
         System::Diagnostics::ToolHelp::{
             CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W,
             TH32CS_SNAPPROCESS,
@@ -180,11 +197,15 @@ fn desktop_open() -> bool {
     unsafe {
         let handle = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
         if handle == INVALID_HANDLE_VALUE {
-            return false;
+            return Err(DESKTOP_UNKNOWN);
         }
         let mut row: PROCESSENTRY32W = std::mem::zeroed();
         row.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
         let mut ok = Process32FirstW(handle, &mut row);
+        if ok == 0 {
+            CloseHandle(handle);
+            return Err(DESKTOP_UNKNOWN);
+        }
         let mut found = false;
         while ok != 0 {
             let length = row
@@ -199,13 +220,37 @@ fn desktop_open() -> bool {
             }
             ok = Process32NextW(handle, &mut row);
         }
+        let complete = found || GetLastError() == ERROR_NO_MORE_FILES;
         CloseHandle(handle);
-        found
+        if complete {
+            Ok(found)
+        } else {
+            Err(DESKTOP_UNKNOWN)
+        }
     }
 }
-#[cfg(not(target_os = "windows"))]
-fn desktop_open() -> bool {
-    true
+#[cfg(target_os = "macos")]
+fn desktop_open() -> Result<bool, &'static str> {
+    // SAFETY: geteuid has no arguments or memory access in the caller.
+    let user = unsafe { libc::geteuid() }.to_string();
+    // Require the main desktop process for this user, not an Electron helper
+    // or an unrelated process with Doubao in its command line.
+    let output = crate::process::output(
+        "/usr/bin/pgrep",
+        &["-i", "-x", "-u", &user, "Doubao"],
+        Duration::from_secs(2),
+        4096,
+    )
+    .map_err(|_| DESKTOP_UNKNOWN)?;
+    match output.status.code() {
+        Some(0) => Ok(true),
+        Some(1) => Ok(false),
+        _ => Err(DESKTOP_UNKNOWN),
+    }
+}
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
+fn desktop_open() -> Result<bool, &'static str> {
+    Ok(false)
 }
 
 fn text(v: &Value) -> Option<&str> {

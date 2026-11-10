@@ -67,7 +67,7 @@
       && (message?.includes('当前会话库格式不可直接读取')||message?.includes('目前只读取公开会话元数据'))){
       return '已检测到 · 仅支持会话目录';
     }
-    return localSourceStatus(source,observation(source),localDetection(kind,source));
+    return localSourceStatus(source,observation(source),localDetection(kind,source),message);
   }
   function assign(next:DashboardSettings){settings=next;dirty=true;notice='';}
   function touch(){dirty=true;notice='';}
@@ -182,6 +182,7 @@
           <div class="agent-entry" data-agent-kind={agent.kind}>
 <div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(rowStatus(agent.kind,source))}{#if agent.kind!=='trae'} · {taskCount(source)} {$t('任务')}{/if}{#if hookCount(agent.kind)} · {$t('{count} 个 Hook 连接',{count:hookCount(agent.kind)})}{/if}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.kind==='trae'?'读取 Trae 会话目录':'启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
             {#if expandedLocal===agent.kind}
+              {#if agent.kind==='doubao'}<p class="ms-muted">{$t('手动开启后，只关注兼容的豆包工作任务。普通聊天不在监控范围内。')}</p>{/if}
               {#if agent.kind==='trae'}<p class="ms-muted">{$t('Trae 的任务库尚不能直接读取。可在已发现会话中查看目录，任务进度与提醒暂不可用。')}</p>{/if}
               {#if agent.kind==='claude_code' && observation(source)?.data_detected===false}<p class="ms-muted">{$t('Claude Code 有新活动后会自动更新，旧会话不会当作运行中的任务。')}</p>{/if}
                     <section class="agent-config" data-source-id={localEditor?.id??''}><h3>{$t('项目范围')}</h3>{#if localRows.filter(s=>s.kind===activeLocal).length>1}<label class="ms-field">{$t('数据来源实例')}<select value={localEditor?.id} onchange={e=>{activeLocalSource=e.currentTarget.value;void loadProjects(localRows.find(s=>s.id===activeLocalSource));}}>{#each localRows.filter(s=>s.kind===activeLocal) as s}<option value={s.id}>{s.name} · {s.location||$t('默认位置')}</option>{/each}</select></label>{/if}{#key localEditor?.id??activeLocal}<ProjectScope projects={localEditor?.projects??['*']} choices={localEditor?projectChoices(localEditor,snapshot?.tasks??[],projects[localEditor.id]??[]):[]} aliases={localEditor?projectAliases[localEditor.id]??[]:[]} onchange={changeProjects}/>{/key}
