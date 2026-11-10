@@ -47,24 +47,48 @@ impl HermesProvider {
         }
     }
 
+    pub fn resume(&mut self, tasks: impl IntoIterator<Item = TaskSnapshot>) {
+        self.last_tasks = tasks
+            .into_iter()
+            .filter(|task| {
+                lease_turn_start(task).is_some()
+                    && (task.status == TaskStatus::Running || confirmed_turn_end(task))
+            })
+            .collect();
+    }
+
     fn snapshot(
-        &self,
         row: &SessionRow,
         lease: Option<TurnLease>,
         now: SystemTime,
+        previous: Option<&TaskSnapshot>,
+        reply_end: Option<SystemTime>,
     ) -> TaskSnapshot {
         let mut task = row_to_snapshot(row, lease, now);
-        if task.finished_at.is_some() && lease.is_none() {
-            if let Some(previous) = self.last_tasks.iter().find(|t| t.id == task.id) {
-                // Releasing the lease must not change the identity of the
-                // execution that the native ended_at just finished.
+        if let Some(previous) = previous {
+            let known_reply = previous.finished_at.filter(|_| {
+                previous.confidence == DetectionConfidence::Exact
+                    && confirmed_turn_end(previous)
+                    && lease_matches(previous, lease)
+            });
+            if let Some(ended_at) = reply_end.or(known_reply) {
+                // The native transcript proves the reply was finished without
+                // closing the chat session. Keep the already-observed lease ID.
+                task.status = TaskStatus::WaitingInput;
+                task.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+                task.finished_at = Some(ended_at);
+                task.updated_at = ended_at.max(previous.updated_at);
+                task.confidence = DetectionConfidence::Exact;
                 task.turn_key = previous.turn_key.clone();
                 task.started_at = previous.started_at;
-            }
-        }
-        if task.status == TaskStatus::Unknown {
-            if let Some(previous) = self.last_tasks.iter().find(|t| t.id == task.id) {
-                // Metadata refresh/rename and lease expiry are not lifecycle events.
+                task.native_unread = None; // TaskPulse owns the result's viewed state.
+                task.stale = false;
+            } else if task.finished_at.is_some() && lease.is_none() {
+                // A native session close must not change the observed turn ID.
+                task.turn_key = previous.turn_key.clone();
+                task.started_at = previous.started_at;
+            } else if task.status == TaskStatus::Unknown {
+                // Lease loss and metadata updates cannot create a lifecycle event.
                 task.status = previous.status;
                 task.waiting_reason = previous.waiting_reason;
                 task.input_request_id = previous.input_request_id.clone();
@@ -74,6 +98,11 @@ impl HermesProvider {
                 task.phase = previous.phase;
                 task.activity = previous.activity.clone();
                 task.updated_at = previous.updated_at;
+                if confirmed_turn_end(previous) && lease_matches(previous, lease) {
+                    task.stale = previous.stale;
+                    task.confidence = previous.confidence;
+                    task.native_unread = None;
+                }
             }
         }
         task
@@ -142,6 +171,90 @@ struct SessionRow {
 struct TurnLease {
     acquired_at: f64,
     live: bool,
+}
+
+// Read only metadata, and only for turns we already observed running.
+const TURN_TAIL_ROWS: usize = 256;
+const TURN_END_PROBES_PER_POLL: usize = 32;
+const TURN_TAIL_SQL: &str = "SELECT role, timestamp, finish_reason,
+    CASE WHEN role='assistant' AND finish_reason='stop' THEN tool_call_id IS NULL AND
+        (tool_calls IS NULL OR (length(tool_calls) <= 16 AND trim(tool_calls)='[]'))
+        ELSE 0 END,
+    display_kind IS NULL, coalesce(active,1)=1 AND coalesce(compacted,0)=0
+    FROM messages WHERE session_id=?1 ORDER BY id DESC LIMIT ?2";
+
+fn lease_turn_start(task: &TaskSnapshot) -> Option<SystemTime> {
+    let start = task
+        .turn_key
+        .as_deref()?
+        .strip_prefix("lease:")?
+        .parse()
+        .ok()?;
+    epoch_to_time(start)
+}
+
+fn lease_matches(task: &TaskSnapshot, lease: Option<TurnLease>) -> bool {
+    lease.is_none_or(|lease| {
+        !lease.live && task.turn_key.as_deref() == Some(&format!("lease:{:.6}", lease.acquired_at))
+    })
+}
+
+fn confirmed_turn_end(task: &TaskSnapshot) -> bool {
+    task.status == TaskStatus::WaitingInput
+        && task.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded)
+        && task.finished_at.is_some()
+}
+
+fn final_reply_at(
+    statement: &mut rusqlite::Statement<'_>,
+    session_id: &str,
+    start: SystemTime,
+    now: SystemTime,
+) -> rusqlite::Result<Option<SystemTime>> {
+    let mut rows = statement.query(rusqlite::params![session_id, TURN_TAIL_ROWS])?;
+    let mut count = 0;
+    let end = loop {
+        let Some(tail) = rows.next()? else {
+            return Ok(None);
+        };
+        count += 1;
+        if !tail.get::<_, bool>(5)? {
+            continue;
+        }
+        let Some(end) = tail.get::<_, Option<f64>>(1)?.and_then(epoch_to_time) else {
+            return Ok(None);
+        };
+        if end < start || end > now || !tail.get::<_, bool>(3)? || !tail.get::<_, bool>(4)? {
+            return Ok(None);
+        }
+        break end;
+    };
+
+    // Require exactly one ordinary user message in the observed lease window.
+    // A newer turn or a clipped tail cannot supply this turn's completion.
+    let mut user_seen = false;
+    while let Some(row) = rows.next()? {
+        count += 1;
+        if !row.get::<_, bool>(5)? {
+            continue;
+        }
+        let Some(at) = row.get::<_, Option<f64>>(1)?.and_then(epoch_to_time) else {
+            return Ok(None);
+        };
+        if at < start {
+            return Ok(user_seen.then_some(end));
+        }
+        if at > end {
+            return Ok(None);
+        }
+        if row.get::<_, String>(0)? == "user" && row.get::<_, bool>(4)? {
+            if user_seen {
+                return Ok(None);
+            }
+            user_seen = true;
+        }
+    }
+    Ok((user_seen && count < TURN_TAIL_ROWS).then_some(end))
 }
 
 fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) -> TaskSnapshot {
@@ -426,7 +539,12 @@ impl Provider for HermesProvider {
             return self.degraded(error.to_string());
         }
 
-        // Turn leases → the set of conversation_ids currently in-flight.
+        // Read the lease, session, and transcript in one SQLite snapshot so
+        // a new turn cannot appear between the ownership and reply checks.
+        let conn = match conn.unchecked_transaction() {
+            Ok(snapshot) => snapshot,
+            Err(error) => return self.degraded(error.to_string()),
+        };
         let leases = match read_turn_leases(&conn, now) {
             Ok(leases) => leases,
             Err(error) => {
@@ -502,33 +620,49 @@ impl Provider for HermesProvider {
             }
         };
 
-        let catalog = rows
-            .iter()
-            .filter(|row| !row.archived)
-            .map(|row| self.snapshot(row, leases.get(&row.id).copied(), now))
-            .collect();
+        let mut transcript = conn.prepare(TURN_TAIL_SQL).ok();
+        let mut remaining = TURN_END_PROBES_PER_POLL;
+        let mut catalog = Vec::new();
         let mut tasks = Vec::new();
         for row in rows {
             if row.archived {
                 continue;
             }
+            let lease = leases.get(&row.id).copied();
+            let previous = self
+                .last_tasks
+                .iter()
+                .find(|task| task.session_id.as_deref() == Some(row.id.as_str()));
+            let reply_end = previous
+                .filter(|task| {
+                    remaining > 0
+                        && task.status == TaskStatus::Running
+                        && row.ended_at.and_then(epoch_to_time).is_none()
+                        && lease_matches(task, lease)
+                })
+                .and_then(lease_turn_start)
+                .and_then(|start| {
+                    let statement = transcript.as_mut()?;
+                    remaining -= 1;
+                    final_reply_at(statement, &row.id, start, now).unwrap_or(None)
+                });
+            let task = Self::snapshot(&row, lease, now, previous, reply_end);
+            catalog.push(task.clone());
+
             let Some(at) = row.last_activity_at.and_then(epoch_to_time) else {
                 continue;
             };
-            let lease = leases.get(&row.id).copied();
             let running = lease.is_some_and(|lease| lease.live);
             // A native-hidden session stays hidden until a new turn starts.
             if row.hidden && !running {
                 continue;
             }
             let age = now.duration_since(at).unwrap_or_default();
-            let known_running = self.last_tasks.iter().any(|t| {
-                t.session_id.as_deref() == Some(&row.id) && t.status == TaskStatus::Running
-            });
+            let known_running = previous.is_some_and(|task| task.status == TaskStatus::Running);
             if !running && !known_running && age > DISCOVERY_TTL && !row.pinned {
                 continue;
             }
-            tasks.push(self.snapshot(&row, lease, now));
+            tasks.push(task);
         }
 
         self.last_tasks = tasks.clone();
@@ -748,6 +882,131 @@ mod tests {
         // Removing the lease must not split the same execution identity.
         assert_eq!(engine.apply(&ended, &[], start).len(), 1);
         assert!(engine.apply(&ended, &[], start).is_empty());
+    }
+
+    fn turn_fixture(seconds: f64) -> (tempfile::TempDir, PathBuf, rusqlite::Connection) {
+        let (dir, db) = make_db(
+            &[("s", "Working session", seconds, "/project", false, 0.0)],
+            &[("s", seconds + 30.0)],
+        );
+        let conn = rusqlite::Connection::open(&db).unwrap();
+        conn.execute_batch(
+            "CREATE TABLE messages(id INTEGER PRIMARY KEY, session_id TEXT, role TEXT,
+             timestamp REAL, finish_reason TEXT, tool_calls TEXT, tool_call_id TEXT,
+             active INTEGER DEFAULT 1, compacted INTEGER DEFAULT 0, display_kind TEXT);
+             CREATE INDEX messages_by_session ON messages(session_id, id);",
+        )
+        .unwrap();
+        conn.execute("UPDATE session_turn_leases SET acquired_at=?1", [seconds])
+            .unwrap();
+        conn.execute(
+            "INSERT INTO messages(session_id,role,timestamp) VALUES('s','user',?1)",
+            [seconds + 0.01],
+        )
+        .unwrap();
+        (dir, db, conn)
+    }
+
+    #[test]
+    fn explicit_final_reply_completes_a_turn_without_closing_the_session() {
+        let seconds = now_secs();
+        let start = UNIX_EPOCH + Duration::from_secs_f64(seconds);
+        let (_dir, db, conn) = turn_fixture(seconds);
+        let mut provider = HermesProvider::with_db_path(db);
+        let mut engine = crate::transition::TransitionEngine::new();
+        let first = provider.poll(start + Duration::from_secs(1)).tasks;
+        assert_eq!(first[0].status, TaskStatus::Running);
+        assert!(engine.apply(&first, &[], start).is_empty());
+        conn.execute(
+            "INSERT INTO messages(session_id,role,timestamp,finish_reason)
+             VALUES('s','assistant',?1,'stop')",
+            [seconds + 2.0],
+        )
+        .unwrap();
+        // Hermes writes the answer just before leaving the turn loop. Do not
+        // end a task while its turn lease is still live.
+        let live = provider.poll(start + Duration::from_secs(3)).tasks;
+        assert_eq!(live[0].status, TaskStatus::Running);
+        assert!(engine.apply(&live, &[], start).is_empty());
+        conn.execute("DELETE FROM session_turn_leases", []).unwrap();
+        let end = provider.poll(start + Duration::from_secs(4)).tasks;
+        assert_eq!(
+            end[0].waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+        assert_eq!(end[0].finished_at, Some(start + Duration::from_secs(2)));
+        assert_eq!(end[0].turn_key, first[0].turn_key);
+        assert!(!end[0].stale);
+        assert_eq!(engine.apply(&end, &[], start).len(), 1);
+        let again = provider.poll(start + Duration::from_secs(5)).tasks;
+        assert_eq!(again[0].finished_at, end[0].finished_at);
+        assert!(!again[0].stale);
+        assert!(engine.apply(&again, &[], start).is_empty());
+    }
+
+    #[test]
+    fn only_the_observed_turn_can_supply_a_final_reply() {
+        for (role, finish, offset, calls, extra_user) in [
+            ("assistant", "stop", -1.0, None, false),
+            ("tool", "stop", 2.0, None, false),
+            ("assistant", "stop", 2.0, Some("[{}]"), false),
+            ("assistant", "verification_required", 2.0, None, false),
+            ("assistant", "stop", 2.0, None, true),
+        ] {
+            let seconds = now_secs();
+            let start = UNIX_EPOCH + Duration::from_secs_f64(seconds);
+            let (_dir, db, conn) = turn_fixture(seconds);
+            let mut provider = HermesProvider::with_db_path(db);
+            let first = provider.poll(start + Duration::from_secs(1)).tasks;
+            if extra_user {
+                conn.execute(
+                    "INSERT INTO messages(session_id,role,timestamp) VALUES('s','user',?1)",
+                    [seconds + 1.0],
+                )
+                .unwrap();
+            }
+            conn.execute(
+                "INSERT INTO messages(session_id,role,timestamp,finish_reason,tool_calls)
+                 VALUES('s',?1,?2,?3,?4)",
+                rusqlite::params![role, seconds + offset, finish, calls],
+            )
+            .unwrap();
+            conn.execute("DELETE FROM session_turn_leases", []).unwrap();
+            let latest = provider.poll(start + Duration::from_secs(4)).tasks;
+            assert_eq!(latest[0].turn_key, first[0].turn_key);
+            assert_eq!(latest[0].status, TaskStatus::Running);
+            assert!(latest[0].stale && latest[0].finished_at.is_none());
+        }
+    }
+
+    #[test]
+    fn restored_followed_turn_can_finish_but_idle_history_is_not_imported() {
+        let seconds = now_secs();
+        let start = UNIX_EPOCH + Duration::from_secs_f64(seconds);
+        let (_dir, db, conn) = turn_fixture(seconds);
+        let mut provider = HermesProvider::with_db_path(db.clone());
+        let first = provider.poll(start + Duration::from_secs(1)).tasks;
+        conn.execute(
+            "INSERT INTO messages(session_id,role,timestamp,finish_reason)
+             VALUES('s','assistant',?1,'stop')",
+            [seconds + 2.0],
+        )
+        .unwrap();
+        conn.execute("DELETE FROM session_turn_leases", []).unwrap();
+
+        let mut cold = HermesProvider::with_db_path(db.clone());
+        let idle = cold.poll(start + Duration::from_secs(3));
+        assert!(idle.tasks[0].finished_at.is_none());
+
+        let mut resumed = HermesProvider::with_db_path(db);
+        resumed.resume(first.clone());
+        let end = resumed.poll(start + Duration::from_secs(3)).tasks;
+        assert_eq!(
+            end[0].waiting_reason,
+            Some(crate::domain::WaitingReason::TurnEnded)
+        );
+        assert_eq!(end[0].turn_key, first[0].turn_key);
+        assert!(!end[0].stale);
     }
 
     #[test]

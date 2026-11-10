@@ -759,11 +759,18 @@ impl LocalProviders {
                         source.id.clone(),
                     ))
                 }
-                SourceKind::Hermes => Box::new(if source.location.is_empty() {
-                    HermesProvider::new()
-                } else {
-                    HermesProvider::with_db_path(PathBuf::from(&source.location))
-                }),
+                SourceKind::Hermes => {
+                    let mut provider = if source.location.is_empty() {
+                        HermesProvider::new()
+                    } else {
+                        HermesProvider::with_db_path(PathBuf::from(&source.location))
+                    };
+                    provider.resume(known_sessions().into_iter().filter(|task| {
+                        task.source == TaskSource::Hermes
+                            && task.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
                 SourceKind::DeepseekDesktop => Box::new(if source.location.is_empty() {
                     DeepSeekHarnessProvider::desktop()
                 } else {
