@@ -223,7 +223,13 @@ struct Stamp {
     modified: SystemTime,
 }
 fn stamp(p: &Path) -> Result<Stamp> {
-    let m = fs::symlink_metadata(p).map_err(|_| "read metadata")?;
+    let m = fs::symlink_metadata(p).map_err(|error| match error.kind() {
+        std::io::ErrorKind::NotFound if p.file_name().is_some_and(|name| name == "CURRENT") => {
+            "未找到本版本支持的执行数据，请检查数据目录或豆包版本"
+        }
+        std::io::ErrorKind::PermissionDenied => "没有权限读取执行数据",
+        _ => "read metadata",
+    })?;
     if !m.is_file() || m.file_type().is_symlink() || m.len() > LIMIT as u64 {
         return Err("file budget/type");
     }

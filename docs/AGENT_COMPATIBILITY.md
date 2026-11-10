@@ -14,7 +14,7 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 | DeepSeek Harness | `DSH_HOME` 或 `~/.dsh`，可用 `TASKPULSE_DSH_HOME` 覆盖 | Desktop / CLI 原生会话，支持旧日志与 v4 日志；明确提问按调用与问题 ID 匹配回答，审批按请求 ID 匹配决定；读取请求中报告的推理强度 |
 | OpenCode | `~/.local/share/opencode/opencode.db`，支持 `XDG_DATA_HOME` | 读取运行阶段、模型与明确结束记录；支持 v2 和旧版会话表；不提供独立提问或审批提醒 |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `projects/*.jsonl` 会话目录 | 数据库与增量日志关联本轮开始/结束；不包含云端任务，不提供独立提问或审批提醒 |
-| ZCode | `~/.zcode/cli/db/db.sqlite` | 原生标题、项目、模型、工具阶段与整轮结果；不提供独立审批事件。除原生读取外，可按需使用标准事件 / MCP |
+| ZCode | `~/.zcode/cli/db/db.sqlite` 与桌面项目索引 | 原生标题、项目、模型、工具阶段与整轮结果；桌面项目可独立发现，不导入旧任务；不提供独立审批事件。除原生读取外，可按需使用标准事件 / MCP |
 | 豆包 | 桌面端原生执行存储 | 当前工作任务与执行状态；不提供审批提醒；目录设置见[本机来源](LOCAL_AGENTS.md) |
 | Kimi Code / kimi-cli | `~/.kimi-code` / `KIMI_CODE_HOME`；旧版 `~/.kimi` / `KIMI_SHARE_DIR` | 只读主会话 wire；明确轮次结束、审批、提问按原生请求 ID 匹配。仅显示日志报告的模型与推理强度；后台子 Agent 暂不单独导入。宿主版本的实机验证仍待完成。原生读取外的可选接入；旧事件来源及其 ID 保留，不会自动安装 Hook |
 | Qoder | Desktop 的 `main.sqlite`，以及 `~/.qoder/projects` 转录 | Desktop 完整轮次投影提供结束与时长；IDE/CLI 需要实际存在的顶层 `result`，不把 Stop Hook 或模型回复结束当作整轮结束。原生审批和提问尚未支持。原生读取外可选标准事件；IDE 与 CLI Hook 不等同 |

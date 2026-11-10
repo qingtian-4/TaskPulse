@@ -126,27 +126,49 @@ fn local_directory(path: &str) -> Option<String> {
 pub async fn get_project_choices(source_id: String) -> Vec<ProjectChoice> {
     tauri::async_runtime::spawn_blocking(move || {
         let settings = monitoring::get_monitoring_settings();
-        let Some(source) = settings.sources.iter().find(|s| s.id == source_id) else {
+        let source = settings.sources.iter().find(|s| s.id == source_id);
+        // The settings editor can show the default ZCode picker before saving
+        // its draft. Only an existing source can select a custom database.
+        let zcode_draft =
+            source.is_none() && (source_id == "zcode" || source_id.starts_with("zcode:"));
+        if source.is_none() && !zcode_draft {
             return Vec::new();
-        };
-        let local = matches!(
-            source.kind,
-            SourceKind::Codex
-                | SourceKind::ClaudeCode
-                | SourceKind::DeepseekDesktop
-                | SourceKind::Opencode
-                | SourceKind::Workbuddy
-                | SourceKind::Zcode
-                | SourceKind::Hermes
-                | SourceKind::Doubao
-                | SourceKind::Scanner
-        );
-        group(
-            &source_id,
-            monitoring::project_paths(&source_id),
-            local && cfg!(windows),
-            |path| local.then(|| local_directory(path)).flatten(),
-        )
+        }
+        let local = zcode_draft
+            || source.is_some_and(|s| {
+                matches!(
+                    s.kind,
+                    SourceKind::Codex
+                        | SourceKind::ClaudeCode
+                        | SourceKind::DeepseekDesktop
+                        | SourceKind::Opencode
+                        | SourceKind::Workbuddy
+                        | SourceKind::Zcode
+                        | SourceKind::Hermes
+                        | SourceKind::Doubao
+                        | SourceKind::Scanner
+                )
+            });
+        let mut paths = monitoring::project_paths(&source_id);
+        if zcode_draft || source.is_some_and(|s| s.kind == SourceKind::Zcode) {
+            // An isolated profile can read its explicitly configured fixture, but
+            // must not fall back to the real user's ZCode index.
+            let db = if let Some(source) = source.filter(|s| !s.location.is_empty()) {
+                Some(std::path::PathBuf::from(&source.location))
+            } else if std::env::var_os("TASKPULSE_HOME").is_none() {
+                Some(crate::providers::zcode::default_db())
+            } else {
+                None
+            };
+            if let Some(db) = db {
+                paths.extend(crate::providers::zcode::local_project_roots(&db));
+                paths.sort_unstable();
+                paths.dedup();
+            }
+        }
+        group(&source_id, paths, local && cfg!(windows), |path| {
+            local.then(|| local_directory(path)).flatten()
+        })
     })
     .await
     .unwrap_or_default()
