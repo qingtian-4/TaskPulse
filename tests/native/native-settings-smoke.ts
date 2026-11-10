@@ -51,6 +51,13 @@ excluded_projects=[]
 tmux_sessions=[]
 tmux_panes=[]
 poll_interval_ms=3000
+[[dashboard.sources]]
+id="doubao-legacy"
+name="Doubao legacy"
+kind="doubao"
+enabled=true
+location="fixture-doubao"
+projects=["legacy-project"]
 `);
   const reserve=createServer();await new Promise<void>(ok=>reserve.listen(0,'127.0.0.1',ok));
   const port=(reserve.address() as {port:number}).port;await new Promise<void>((ok,fail)=>reserve.close(e=>e?fail(e):ok()));
@@ -261,11 +268,20 @@ poll_interval_ms=3000
   }
   await move(initialPosition.x,initialPosition.y);
   }
-  const catalog:any[]=await ui.invoke('get_source_catalog');assert.equal(catalog.filter(s=>s.category==='local').length,12);
+  const catalog:any[]=await ui.invoke('get_source_catalog');assert.equal(catalog.filter(s=>s.category==='local').length,11);
+  assert.ok(!catalog.some(s=>s.kind==='doubao'));
+  const savedDoubao=(await ui.invoke('get_monitoring_settings')).sources.find((s:any)=>s.id==='doubao-legacy');
+  assert.equal(savedDoubao.enabled,true);
+  assert.deepEqual(savedDoubao.projects,['legacy-project']);
+  assert.ok(!(await ui.invoke('discover_sources')).some((s:any)=>s.id==='doubao-legacy'));
+  const dashboard=await ui.invoke('get_dashboard_snapshot');
+  assert.ok(!dashboard.providers.some((s:any)=>s.provider==='doubao-legacy'));
+  assert.equal(dashboard.view.sources.find((s:any)=>s.id==='doubao-legacy')?.read_state,'disabled');
+  assert.equal(catalog.find(s=>s.kind==='remote_claude_code').capabilities.approval,'unsupported');
   assert.equal(catalog.find(s=>s.kind==='scanner').capabilities.turn_end,'unsupported');
   assert.match(await root.evaluate(`__TAURI_INTERNALS__.invoke('probe_ssh_source',{host:'taskpulse-unreachable.invalid'}).then(()=>'',e=>String(e))`),/not allowed|denied/i,'SSH probing is restricted to management');
   const unreachable=await ui.invoke('probe_ssh_source',{host:'taskpulse-unreachable.invalid'});
-  assert.equal(unreachable.connection,'disconnected');assert.equal(unreachable.codex.state,'not_checked');assert.equal(unreachable.claude_code.state,'unsupported');
+  assert.equal(unreachable.connection,'disconnected');assert.equal(unreachable.codex.state,'not_checked');assert.equal(unreachable.claude_code.state,'not_checked');
   console.log('settings smoke: fixed layout and catalog passed');const startup=await ui.invoke('get_autostart');assert.equal(startup.available,false);
   assert.match(await ui.evaluate(`__TAURI_INTERNALS__.invoke('set_autostart',{enabled:true}).then(()=>'',e=>String(e))`),/installed TaskPulse/);
   if(!sourcesOnly){
@@ -347,7 +363,7 @@ poll_interval_ms=3000
   assert.equal((await ui.invoke('get_autostart')).available,false);
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  await ui.wait(`document.querySelectorAll('.local-agents > [data-agent-kind]').length===11`);
+  await ui.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('.ms-tabs button').length`),2);
   assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false);
   assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-agents').textContent)&&/OpenCode/.test(document.querySelector('.local-agents').textContent)`),true);
@@ -471,29 +487,32 @@ poll_interval_ms=3000
   ui.onRequestPaused(async({requestId,request})=>{
     const command=new URL(request.url).pathname.slice(1);
     const host=request.method==='POST'&&request.postData?JSON.parse(request.postData).host:'';
-    const body=command==='discover_ssh_hosts'?['fixture-one','fixture-two']:{host,checked_at:Date.now(),connection:'connected',codex:{state:probeCase,data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/alpha','/srv/public/beta']:[]},claude_code:{state:'unsupported',data_detected:false,projects:[]},message:'SSH 已连接；Agent 数据读取能力单独检测'};
+    const body=command==='discover_ssh_hosts'?['taskpulse-claude-fixture.invalid','taskpulse-empty-fixture.invalid']:{host,checked_at:Date.now(),connection:'connected',codex:{state:probeCase,data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/alpha','/srv/public/beta']:[]},claude_code:{state:probeCase==='readable'?'readable':'missing',data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/claude']:[]},message:'SSH 已连接；Agent 数据读取能力单独检测'};
     await ui.send('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/json'},{name:'Tauri-Response',value:'ok'},{name:'Access-Control-Expose-Headers',value:'Tauri-Response'},{name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'},{name:'Access-Control-Allow-Methods',value:'POST, OPTIONS'},{name:'Access-Control-Allow-Headers',value:'Content-Type, Tauri-Callback, Tauri-Error, Tauri-Invoke-Key'}],body:Buffer.from(JSON.stringify(body)).toString('base64')});
   });
   try{
     await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/discover_ssh_hosts'},{urlPattern:'http://ipc.localhost/probe_ssh_source'}]});
-    for(const host of ['fixture-one','fixture-two']){
-      probeCase=host==='fixture-one'?'readable':'read_error';
+    for(const host of ['taskpulse-claude-fixture.invalid','taskpulse-empty-fixture.invalid']){
+      probeCase=host==='taskpulse-claude-fixture.invalid'?'readable':'read_error';
       await ui.evaluate(`document.querySelector('.ms-head .ms-btn').click()`);
       await ui.wait(`document.querySelectorAll('.alias-choice').length===2`);
-      if(captureScreenshots&&host==='fixture-one')await Bun.write(join(owned,'settings-wizard-host-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      if(captureScreenshots&&host==='taskpulse-claude-fixture.invalid')await Bun.write(join(owned,'settings-wizard-host-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
       await ui.evaluate(`(()=>{const input=document.querySelector('.ssh-wizard [aria-label="SSH Host"]');input.value=${JSON.stringify(host)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
       assert.equal(await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').disabled`),true,'Detection is required before project selection');
       await ui.evaluate(`document.querySelector('.test-action button').click()`);
       await ui.wait(`document.querySelector('.test-action button').textContent==='Detect again'`);
-      if(captureScreenshots&&host==='fixture-two')await Bun.write(join(owned,'settings-wizard-detection-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      if(captureScreenshots&&host==='taskpulse-empty-fixture.invalid')await Bun.write(join(owned,'settings-wizard-detection-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
       await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
       await ui.wait(`!!document.querySelector('.wizard-agents')`);
-      if(captureScreenshots)await Bun.write(join(owned,`settings-wizard-${host==='fixture-one'?'projects':'read-error'}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-      assert.equal(await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].disabled`),true,'Claude SSH cannot be enabled');
-      if(host==='fixture-one'){
+      if(captureScreenshots)await Bun.write(join(owned,`settings-wizard-${host==='taskpulse-claude-fixture.invalid'?'projects':'read-error'}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      assert.equal(await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].disabled`),host==='taskpulse-empty-fixture.invalid');
+      if(host==='taskpulse-claude-fixture.invalid'){
         assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked`),true);
+        await ui.evaluate(`document.querySelectorAll('.ssh-wizard .scope-modes input')[1].click()`);
+        await ui.evaluate(`document.querySelector('.ssh-wizard .project-options input').click()`);
         await ui.evaluate(`document.querySelector('.wizard-agents input').click()`);
+        await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].click()`);
         await ui.evaluate(`document.querySelectorAll('.ssh-wizard .scope-modes input')[1].click()`);
         await ui.evaluate(`document.querySelector('.ssh-wizard .project-options input').click()`);
       }else{
@@ -502,13 +521,23 @@ poll_interval_ms=3000
       }
       await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
       await ui.wait(`!document.querySelector('.ssh-wizard') && !!document.querySelector('.detail-content')`);
+      if(host==='taskpulse-claude-fixture.invalid'){
+        await ui.wait(`document.querySelector('[data-remote-agent="claude_code"] input').checked`);
+        assert.equal(await ui.evaluate(`document.querySelector('.detail-content select').value`),'claude_code');
+        assert.ok(await ui.evaluate(`document.querySelector('.detail-content .project-options').textContent.includes('/srv/public/claude')`));
+        await ui.evaluate(`[...document.querySelectorAll('.inline-actions button')].find(b=>b.textContent.includes('Pause collection')).click()`);
+        await ui.wait(`[...document.querySelectorAll('.inline-actions button')].some(b=>b.textContent.includes('Resume collection')&&!b.disabled)`);
+        assert.ok(await ui.evaluate(`document.querySelector('[data-remote-agent="claude_code"] input').disabled`));
+        await ui.evaluate(`[...document.querySelectorAll('.inline-actions button')].find(b=>b.textContent.includes('Resume collection')).click()`);
+        await ui.wait(`document.querySelector('[data-remote-agent="claude_code"] input').checked`);
+      }
     }
   }finally{await ui.send('Fetch.disable');ui.onRequestPaused(undefined);}
   if(captureScreenshots){
     // Reset ephemeral fixture reports before capturing the home/detail page:
     // persisted configuration alone must never paint a successful SSH badge.
     await ui.send('Page.reload');
-    await ui.wait(`document.querySelectorAll('.local-agents > [data-agent-kind]').length===11`);
+    await ui.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
     await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
     await ui.wait(`document.querySelectorAll('.server-card').length===2`);
     assert.equal(await ui.evaluate(`document.querySelector('.server-controls .ms-pill').textContent.includes('not checked')`),true);
@@ -536,12 +565,17 @@ poll_interval_ms=3000
   }
   const multiple=await ui.invoke('get_monitoring_settings');
   const hosts=multiple.sources.filter((s:any)=>s.kind==='remote_codex');
-  assert.deepEqual(hosts.map((s:any)=>s.location),['fixture-one','fixture-two']);
+  assert.deepEqual(hosts.map((s:any)=>s.location),['taskpulse-claude-fixture.invalid','taskpulse-empty-fixture.invalid']);
   assert.equal(new Set(hosts.map((s:any)=>s.id)).size,2);assert.ok(hosts.every((s:any)=>!s.enabled));
-  const duplicate=structuredClone(multiple);duplicate.sources.push({...hosts[0],id:'duplicate-fixture'});
+  const claude=multiple.sources.find((s:any)=>s.kind==='remote_claude_code');
+  assert.equal(claude?.location,'taskpulse-claude-fixture.invalid');
+  assert.equal(claude?.enabled,true);
+  assert.deepEqual(claude?.projects,['/srv/public/claude']);
+  assert.deepEqual(hosts[0].projects,['/srv/public/alpha']);
+  const duplicate=structuredClone(multiple);duplicate.sources.push({...claude,id:'duplicate-fixture'});
   assert.match(await ui.evaluate(`__TAURI_INTERNALS__.invoke('save_monitoring_settings',{settings:${JSON.stringify(duplicate)},expected:${JSON.stringify(multiple)}}).then(()=>'',e=>String(e))`),/同类来源/);
   // Restore the isolated source configuration, preserving current preferences.
-  await ui.invoke('save_monitoring_settings',{settings:{...multiple,sources:multiple.sources.filter((s:any)=>s.kind!=='remote_codex')},expected:multiple});
+  await ui.invoke('save_monitoring_settings',{settings:{...multiple,sources:multiple.sources.filter((s:any)=>s.kind!=='remote_codex'&&s.kind!=='remote_claude_code')},expected:multiple});
   if(captureScreenshots){
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await Bun.write(join(owned,'settings-general-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));

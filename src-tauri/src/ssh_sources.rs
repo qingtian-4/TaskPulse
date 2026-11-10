@@ -7,7 +7,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-fn valid_host(host: &str) -> bool {
+pub(crate) fn valid_host(host: &str) -> bool {
     !host.is_empty()
         && host.len() <= 255
         && !host.starts_with('-')
@@ -132,10 +132,7 @@ fn probe(executor: &dyn SshExecutor, host: &str) -> Result<SshProbe, String> {
         checked_at: crate::integrations::now_ms(),
         connection: "disconnected".into(),
         codex: empty(),
-        claude_code: AgentProbe {
-            state: "unsupported".into(),
-            ..empty()
-        },
+        claude_code: empty(),
         message: "SSH 未连接，请检查 Host、密钥和系统终端连接".into(),
     };
     if executor
@@ -179,6 +176,7 @@ fn probe(executor: &dyn SshExecutor, host: &str) -> Result<SshProbe, String> {
             }
         }
     }
+    report.claude_code = crate::providers::claude_code::ssh::probe(executor, host);
     Ok(report)
 }
 
@@ -223,14 +221,14 @@ mod tests {
         assert_eq!(read_hosts(dir.path()), ["a", "b"]);
     }
     #[test]
-    fn connection_is_not_agent_readability_and_claude_is_not_simulated() {
+    fn connection_is_not_agent_readability() {
         let ssh = FakeSshExecutor::new()
             .with("host", "TASKPULSE_SSH_READY")
             .script("host", Err("no python"));
         let result = probe(&ssh, "host").unwrap();
         assert_eq!(result.connection, "connected");
         assert_eq!(result.codex.state, "read_error");
-        assert_eq!(result.claude_code.state, "unsupported");
+        assert_eq!(result.claude_code.state, "read_error");
         let failed = probe(&FakeSshExecutor::new().failing("host"), "host").unwrap();
         assert_eq!(failed.codex.state, "not_checked");
         assert!(probe(&ssh, "-oProxyCommand=bad").is_err());

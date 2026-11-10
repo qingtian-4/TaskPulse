@@ -82,13 +82,12 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 | Agent or source | Connection and capabilities |
 | --- | --- |
 | Codex | Discover locally or connect a separate WSL or SSH source. Reads sessions, models, turn state and explicit questions. Approvals require an [explicit event](docs/CODEX_APPROVAL_OBSERVER.md). |
-| Claude Code | Discover locally. Optional official hooks provide explicit approvals and lifecycle events. Native questions and SSH are unsupported. |
+| Claude Code | Discover locally or monitor running and completed turns over SSH. Explicit approvals require optional local hooks; native questions are unsupported. |
 | DeepSeek Harness | Read local Desktop or CLI data, or connect WSL. Supports reported models, reasoning effort and explicit requests. |
 | Hermes | Reads local sessions, models and running state. |
 | OpenCode | Reads local sessions, execution phases and explicit turn outcomes. |
 | WorkBuddy | Reads local tasks and turn results. Cloud tasks are outside this source. |
 | ZCode | Reads local tasks, models and turn results. Standard Events and MCP are optional. |
-| Doubao | Opt in on Windows or macOS to monitor compatible work tasks. |
 | Kimi Code / kimi-cli | Reads local main sessions and explicit requests. Standard Events and MCP are optional. |
 | Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
 | Trae | Discovers sessions in the workspace catalog. Task progress requires a separately configured sender. |

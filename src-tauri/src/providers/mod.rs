@@ -250,6 +250,13 @@ pub(crate) fn can_record_task_observation(task: &TaskSnapshot) -> bool {
                 && task.session_id.as_deref().is_some_and(|id| !id.is_empty())
                 && task.turn_key.as_deref().is_some_and(|key| !key.is_empty())
         }
+        TaskSource::ClaudeCode => {
+            task.remote
+                && task.status == TaskStatus::Running
+                && task.evidence_channel.as_deref() == Some("native_transcript")
+                && task.session_id.as_deref().is_some_and(|id| !id.is_empty())
+                && task.turn_key.as_deref().is_some_and(|key| !key.is_empty())
+        }
         _ => false,
     }
 }

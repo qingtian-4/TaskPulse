@@ -330,7 +330,7 @@ try{
   await root.invoke('open_management');management=await page('/manage');
   await management.wait(`document.querySelector('.settings-nav [aria-current="page"]')?.getAttribute('href')==='#general'`);
   await root.invoke('open_management',{section:'sources'});
-  await management.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
+  await management.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
   const currentSettings=await management.invoke('get_monitoring_settings');
   const sourceSettings=structuredClone(currentSettings);sourceSettings.sources.find((s:any)=>s.id===source.id).name='标准事件 · 公开合成示例';
   await management.invoke('save_monitoring_settings',{settings:sourceSettings,expected:currentSettings});
@@ -350,7 +350,7 @@ try{
   assert.equal((await root.invoke('get_agents')).length,count,'Export must not create a task');
   checks.push('native management IPC preserves hidden generic-source save, fresh read attempt, connection-only test and source/profile-bound MCP export without host writes or fake tasks');
   await click(management,'.ms-tabs button:nth-child(1)');
-  await management.wait(`document.querySelectorAll('.local-agents .agent-row').length===12`);
+  await management.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
   await checkScales(management,'sources',960,704);
   await management.send('Emulation.setDeviceMetricsOverride',{width:640,height:600,deviceScaleFactor:2,mobile:false});
   await management.evaluate('document.fonts.ready.then(()=>true)');

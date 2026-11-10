@@ -20,6 +20,7 @@ pub(super) fn discover_source_rows() -> Vec<SourceDiscovery> {
         return settings
             .sources
             .iter()
+            .filter(|s| s.kind.supported_on(std::env::consts::OS))
             .map(|s| SourceDiscovery {
                 id: s.id.clone(),
                 location: s.location.clone(),
@@ -132,7 +133,7 @@ pub(super) fn discover_source_rows_with_wsl(
                 SourceKind::DeepseekWsl => {
                     (false, format!("WSL {} · 启用后验证连接", source.location))
                 }
-                SourceKind::RemoteCodex | SourceKind::Tmux => {
+                SourceKind::RemoteCodex | SourceKind::RemoteClaudeCode | SourceKind::Tmux => {
                     (false, format!("SSH {} · 启用后验证连接", source.location))
                 }
                 SourceKind::GenericEvent | SourceKind::Hooks | SourceKind::Scanner => (false, "启用后读取数据".into()),
@@ -141,7 +142,7 @@ pub(super) fn discover_source_rows_with_wsl(
                 id: source.id.clone(),
                 location: source.location.clone(),
                 data_location_detected: if matches!(source.kind,
-                    SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::Tmux
+                    SourceKind::DeepseekWsl | SourceKind::RemoteCodex | SourceKind::RemoteClaudeCode | SourceKind::Tmux
                     | SourceKind::GenericEvent | SourceKind::Hooks | SourceKind::Scanner
                 ) { None } else { Some(detected) },
                 detail,

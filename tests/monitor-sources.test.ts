@@ -9,13 +9,14 @@ const make=():DashboardSettings=>({version:2,onboarding_complete:true,notificati
   {...createSource('remote_codex','host-a'),id:'tmux-a',kind:'tmux',enabled:false,tmux_sessions:['preserve']},
   {...createSource('remote_codex','host-b'),id:'b',enabled:true},
   {...createSource('codex'),id:'other',kind:'hermes',enabled:true},
+  {...createSource('remote_claude_code','host-a'),id:'claude-a',enabled:true,projects:['/srv/claude']},
 ]});
 test('host grouping preserves source IDs, hidden providers and tmux as transport',()=>{
-  const s=make(),groups=servers(s);expect(groups.map(g=>g.host)).toEqual(['host-a','host-b']);expect(groups[0].sources.map(s=>s.id)).toEqual(['a','tmux-a']);expect(groups[0].name).toBe('Host A');expect(s.sources[4].enabled).toBe(true);
+  const s=make(),groups=servers(s);expect(groups.map(g=>g.host)).toEqual(['host-a','host-b']);expect(groups[0].sources.map(s=>s.id)).toEqual(['a','tmux-a','claude-a']);expect(groups[0].agents.claude_code?.projects).toEqual(['/srv/claude']);expect(groups[0].name).toBe('Host A');expect(s.sources[4].enabled).toBe(true);
 });
 test('pause/resume is restart-safe and restores only previously enabled sources',()=>{
   const original=make();const paused=pauseServer(original,'host-a',true);
-  expect(paused.sources[1].enabled).toBe(false);expect(paused.sources[2].enabled).toBe(false);expect(paused.sources[3].enabled).toBe(true);
+  expect(paused.sources[1].enabled).toBe(false);expect(paused.sources[2].enabled).toBe(false);expect(paused.sources[3].enabled).toBe(true);expect(paused.sources[5].enabled).toBe(false);
   const resumed=pauseServer(JSON.parse(JSON.stringify(paused)),'host-a',false);
   expect(resumed.sources).toEqual(original.sources);expect(resumed.ssh_paused_sources).toEqual([]);expect(original.sources[1].enabled).toBe(true);
 });
@@ -24,7 +25,7 @@ test('removing one server preserves other servers, local configuration and disab
   expect(next.sources.map(s=>s.id)).toEqual(['local','b','other']);expect(next.sources[0].projects).toEqual(['local-only']);expect(next.ssh_paused_sources).toEqual([]);
 });
 test('SSH connectivity is never used as Agent data readiness',()=>{
-  expect(canRead({state:'read_error',projects:[],data_detected:false})).toBe(false);expect(canRead({state:'unsupported',projects:[],data_detected:false})).toBe(false);
+  expect(canRead({state:'read_error',projects:[],data_detected:false})).toBe(false);expect(canRead({state:'unsupported_format',projects:[],data_detected:false})).toBe(false);
   expect(canRead({state:'empty',projects:[],data_detected:false})).toBe(true);
   const s=make().sources[1];expect(sourceStatus(s)).toBe('等待首次读取');
   expect(sourceStatus(s,{id:s.id,kind:s.kind,location:s.location,enabled:true,read_state:'healthy',data_detected:false,discovered_sessions:0,current_tasks:0})).toBe('读取正常 · 暂无近期会话');
@@ -40,15 +41,6 @@ test('local discovery, empty reads and failures are separate statuses',()=>{
   expect(localSourceStatus(enabled,{...empty,read_state:'failed'},false)).toBe('读取异常');
   expect(localSourceStatus({...enabled,enabled:false},undefined,true)).toBe('已检测到 · 未启用');
   expect(localSourceStatus(undefined,undefined,null)).toBe('未启用');
-});
-test('Doubao idle or closed has a clear label without treating incomplete data as healthy',()=>{
-  const source={...createSource('doubao'),enabled:true};
-  const failed:SourceSnapshot={id:source.id,kind:'doubao',location:'',enabled:true,
-    read_state:'failed',data_detected:false,discovered_sessions:0,current_tasks:0};
-  expect(localSourceStatus(source,failed,true,'豆包桌面端未运行')).toBe('豆包桌面端未运行');
-  expect(localSourceStatus(source,failed,true,'未找到支持的豆包工作任务记录；普通聊天不在监控范围内')).toBe('暂无可读取的豆包工作任务');
-  expect(localSourceStatus(source,failed,true,'找到多条豆包工作任务记录，无法确认当前记录')).toBe('读取异常');
-  expect(localSourceStatus({...source,enabled:false},failed,true,'豆包桌面端未运行')).toBe('已检测到 · 未启用');
 });
 test('project scopes and preference broadcasts preserve drafts and source identity',()=>{
   const applied=make(),draft=structuredClone(applied);draft.sources[1].projects=['/manual/project'];const incoming=structuredClone(applied);incoming.sound=true;

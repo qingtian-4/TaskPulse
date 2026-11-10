@@ -133,8 +133,10 @@ pub fn task_read_fresh(
         })
     } else {
         read_fresh(provider, now, interval)
-            || source_kind == SourceKind::Doubao
-                && provider.is_some_and(|h| h.verifies_task(task, now))
+            || matches!(
+                source_kind,
+                SourceKind::Doubao | SourceKind::RemoteClaudeCode
+            ) && provider.is_some_and(|h| h.verifies_task(task, now))
     }
 }
 
@@ -194,7 +196,10 @@ pub fn project(
             Some(h) if h.status == ProviderStatus::Degraded => {
                 if matches!(
                     source.kind,
-                    SourceKind::Codex | SourceKind::CodexWsl | SourceKind::Doubao
+                    SourceKind::Codex
+                        | SourceKind::CodexWsl
+                        | SourceKind::Doubao
+                        | SourceKind::RemoteClaudeCode
                 ) && h.has_fresh_observations(now)
                 {
                     ReadState::Partial

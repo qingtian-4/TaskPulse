@@ -31,6 +31,7 @@ pub enum SourceKind {
     DeepseekDesktop,
     DeepseekWsl,
     RemoteCodex,
+    RemoteClaudeCode,
     Tmux,
     Hooks,
     Scanner,
@@ -38,8 +39,9 @@ pub enum SourceKind {
 }
 
 impl SourceKind {
-    pub(crate) fn supported_on(self, platform: &str) -> bool {
-        self != Self::Doubao || matches!(platform, "windows" | "macos")
+    pub(crate) fn supported_on(self, _platform: &str) -> bool {
+        // Keep old serialized sources readable while the adapter is suspended.
+        self != Self::Doubao
     }
 }
 
@@ -180,7 +182,6 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
         source("zcode", "ZCode · 本机", SourceKind::Zcode, ""),
         source("opencode", "OpenCode · 本机", SourceKind::Opencode, ""),
         source("workbuddy", "WorkBuddy · 本机", SourceKind::Workbuddy, ""),
-        source("doubao", "豆包 · 本机", SourceKind::Doubao, ""),
         source("kimi_code", "Kimi Code · 本机", SourceKind::KimiCode, ""),
         source("qoder", "Qoder · 本机", SourceKind::Qoder, ""),
         source("trae", "Trae · 本机", SourceKind::Trae, ""),
@@ -200,7 +201,6 @@ pub fn from_legacy(cfg: &TaskPulseConfig, existing: bool) -> DashboardSettings {
                 item.kind,
                 SourceKind::ClaudeCode
                     | SourceKind::CodexWsl
-                    | SourceKind::Doubao
                     | SourceKind::Zcode
                     | SourceKind::Opencode
                     | SourceKind::Workbuddy
@@ -386,10 +386,10 @@ fn validate(settings: &DashboardSettings) -> Result<(), String> {
                 return Err("通用事件只支持本机且 Agent 身份必须匹配描述文件".into());
             }
         }
-        if matches!(source.kind, SourceKind::RemoteCodex | SourceKind::Tmux)
-            && (source.location.trim().is_empty()
-                || source.location.starts_with('-')
-                || source.location.chars().any(char::is_whitespace))
+        if matches!(
+            source.kind,
+            SourceKind::RemoteCodex | SourceKind::RemoteClaudeCode | SourceKind::Tmux
+        ) && !crate::ssh_sources::valid_host(&source.location)
         {
             return Err("请输入有效的 SSH 别名".into());
         }
@@ -649,7 +649,7 @@ fn apply_settings(
     Ok(settings)
 }
 
-/// Local discovery only enables eligible read-only sources. Doubao stays
+/// Local discovery only enables eligible read-only sources. Other sources stay
 /// manual because finding a chat database does not verify work-task support.
 pub(crate) fn automatic_local(kind: SourceKind) -> bool {
     matches!(
@@ -806,6 +806,7 @@ pub fn source_for<'a>(
                 && matches!(
                     (s.kind, task.source),
                     (SourceKind::RemoteCodex, TaskSource::Codex)
+                        | (SourceKind::RemoteClaudeCode, TaskSource::ClaudeCode)
                         | (SourceKind::Tmux, TaskSource::RemoteTmux)
                 )
         } else {
@@ -1353,42 +1354,23 @@ mod tests {
     }
 
     #[test]
-    fn doubao_stays_opt_in_even_when_local_data_is_detected() {
+    fn saved_doubao_config_stays_readable_but_never_collects() {
         let mut settings = from_legacy(&TaskPulseConfig::default(), false);
-        settings.onboarding_complete = true;
-        settings.auto_discover_local = true;
-        let mut detected = settings
-            .sources
-            .iter()
-            .find(|s| s.kind == SourceKind::Doubao)
-            .unwrap()
-            .clone();
-        detected.location = "fixture-index".into();
-        let discovery = |candidate| SourceDiscovery {
-            id: detected.id.clone(),
-            location: detected.location.clone(),
-            data_location_detected: Some(true),
-            detail: String::new(),
-            candidate,
-        };
-        assert!(!merge_discovered(&mut settings, vec![discovery(None)]));
-        assert!(
-            !settings
-                .sources
-                .iter()
-                .find(|s| s.kind == SourceKind::Doubao)
-                .unwrap()
-                .enabled
-        );
-        settings.sources.retain(|s| s.kind != SourceKind::Doubao);
-        assert!(!merge_discovered(
-            &mut settings,
-            vec![discovery(Some(detected.clone()))]
-        ));
         assert!(!settings
             .sources
             .iter()
             .any(|s| s.kind == SourceKind::Doubao));
+        let mut saved = source("doubao", "豆包", SourceKind::Doubao, "legacy-directory");
+        saved.enabled = true;
+        saved.projects = vec!["legacy-project".into()];
+        settings.sources.push(saved.clone());
+        let stored: DashboardSettings =
+            serde_json::from_str(&serde_json::to_string(&settings).unwrap()).unwrap();
+        assert_eq!(stored.sources.last(), Some(&saved));
+        assert!(!saved.enabled_here());
+        for platform in ["windows", "macos", "linux"] {
+            assert!(!SourceKind::Doubao.supported_on(platform));
+        }
     }
 
     #[test]

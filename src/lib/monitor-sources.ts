@@ -1,21 +1,29 @@
 import type {DashboardSettings,MonitorSource,SourceSnapshot,TaskSnapshot,SourceKind} from './types';
 
 export type AgentKind=SourceKind;
-export interface AgentProbe {state:'readable'|'empty'|'missing'|'read_error'|'unsupported_format'|'not_checked'|'unsupported';data_detected:boolean;projects:string[]}
+export interface AgentProbe {state:'readable'|'empty'|'missing'|'read_error'|'unsupported_format'|'not_checked'|'partial';data_detected:boolean;projects:string[]}
 export interface SshProbe {host:string;checked_at:number;connection:'connected'|'disconnected';codex:AgentProbe;claude_code:AgentProbe;message:string}
-export interface ServerGroup {host:string;name:string;sources:MonitorSource[];codex?:MonitorSource;paused:boolean}
-export const remoteSource=(s:MonitorSource)=>s.kind==='remote_codex'||s.kind==='tmux';
-export const canRead=(p?:AgentProbe)=>p?.state==='readable'||p?.state==='empty';
+export const sshAgents = [
+  {key:'codex',kind:'remote_codex',name:'Codex',toggle:'启用远端 Codex'},
+  {key:'claude_code',kind:'remote_claude_code',name:'Claude Code',toggle:'启用远端 Claude Code'},
+] as const;
+export type SshAgent=(typeof sshAgents)[number]['key'];
+export type SshSelections=Record<SshAgent,{enabled:boolean;projects:string[]}>;
+export interface NewServer {host:string;name:string;agents:SshSelections;report:SshProbe}
+export interface ServerGroup {host:string;name:string;sources:MonitorSource[];agents:Partial<Record<SshAgent,MonitorSource>>;paused:boolean}
+export const remoteSource=(s:MonitorSource)=>sshAgents.some(agent=>s.kind===agent.kind)||s.kind==='tmux';
+export const canRead=(p?:AgentProbe)=>p?.state==='readable'||p?.state==='empty'||p?.state==='partial'&&p.data_detected;
+export const readLabel=(state?:AgentProbe['state'])=>state?({readable:'数据可读取',empty:'目录可读取，暂无会话',missing:'未发现数据目录',read_error:'数据读取失败',unsupported_format:'数据格式尚未支持',partial:'部分数据待更新',not_checked:'尚未检测'}[state]):'尚未检测';
 export function servers(settings:DashboardSettings):ServerGroup[]{
   const rows=new Map<string,MonitorSource[]>();
   for(const s of settings.sources.filter(remoteSource)){const list=rows.get(s.location)??[];list.push(s);rows.set(s.location,list);}
   return [...rows].map(([host,sources])=>{
-    const codex=sources.find(s=>s.kind==='remote_codex');
-    return {host,sources,codex,name:codex?.name.replace(/^Codex · /,'')||host,paused:sources.some(s=>(settings.ssh_paused_sources??[]).includes(s.id))};
+    const agents=Object.fromEntries(sshAgents.map(agent=>[agent.key,sources.find(s=>s.kind===agent.kind)]));
+    return {host,sources,agents,name:(agents.codex??agents.claude_code)?.name.replace(/^Codex · /,'')||host,paused:sources.some(s=>(settings.ssh_paused_sources??[]).includes(s.id))};
   });
 }
-export function createSource(kind:AgentKind|'remote_codex',location='',name?:string):MonitorSource {
-  return {id:kind==='codex'?'codex':kind==='scanner'?'scanner':kind==='hooks'?'local_file':['kimi_code','qoder','trae'].includes(kind)?kind:`${kind}:${crypto.randomUUID()}`,kind,name:name??(kind==='remote_codex'?location:kind==='codex'?'Codex':kind==='claude_code'?'Claude Code':kind),location,enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
+export function createSource(kind:AgentKind,location='',name?:string):MonitorSource {
+  return {id:kind==='codex'?'codex':kind==='scanner'?'scanner':kind==='hooks'?'local_file':['kimi_code','qoder','trae'].includes(kind)?kind:`${kind}:${crypto.randomUUID()}`,kind,name:name??(sshAgents.some(agent=>kind===agent.kind)?location:kind==='codex'?'Codex':kind==='claude_code'?'Claude Code':kind),location,enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
 }
 export function pauseServer(settings:DashboardSettings,host:string,pause:boolean):DashboardSettings {
   const next=structuredClone(settings);const restore=new Set(next.ssh_paused_sources??[]);
@@ -39,13 +47,8 @@ export function sourceStatus(source:MonitorSource|undefined,observed?:SourceSnap
 }
 export function localSourceStatus(
   source:MonitorSource|undefined,observed:SourceSnapshot|undefined,locationDetected:boolean|null|undefined,
-  diagnostic?:string|null,
 ):string {
   if(source?.enabled&&source.projects.length===0&&observed?.read_state==='healthy')return '未选项目 · 当前不监控';
-  if(source?.kind==='doubao'&&source.enabled&&observed?.read_state==='failed'){
-    if(diagnostic==='豆包桌面端未运行')return diagnostic;
-    if(diagnostic==='未找到支持的豆包工作任务记录；普通聊天不在监控范围内')return '暂无可读取的豆包工作任务';
-  }
   if(!source?.enabled && locationDetected===true)return '已检测到 · 未启用';
   if(locationDetected===false && !observed?.data_detected
     && (!source?.enabled || observed?.read_state==='healthy'))return '未检测到本机数据';

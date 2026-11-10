@@ -9,7 +9,7 @@
   import {appSettings,savePreference,preferencePending} from '$lib/preferences';
   import {autostart} from '$lib/autostart';
   import {reconcileSourceDraft} from '$lib/settings-draft';
-  import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,scopeLabel,type AgentKind,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
+  import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,sshAgents,readLabel,canRead,type AgentKind,type NewServer,type SshAgent,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
   import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '$lib/types';
   import {formatAgo} from '$lib/types';
   import type {ProjectChoice} from '$lib/project-options';
@@ -29,6 +29,7 @@
   let reports=$state<Record<string,SshProbe>>({}),probing=$state<Record<string,boolean>>({}),projects=$state<Record<string,string[]>>({});
   let projectAliases=$state<Record<string,ProjectChoice[]>>({});
   const projectRequests=new Map<string,number>();
+  let activeRemote=$state<SshAgent>('codex');
   let activeLocal=$state<AgentKind>('codex'),activeLocalSource=$state('');
   let expandedLocal=$state<AgentKind|null>(null);
   let localAgents=$state<SourceDefinition[]>([]);
@@ -52,10 +53,15 @@
   let sessionSource=$state<MonitorSource|null>(null);
   const groups=$derived(settings?servers(settings):[]);
   const selected=$derived(groups.find(s=>s.host===selectedHost));
+  $effect(()=>{
+    if(settings&&page==='server'&&!selected){
+      page='home';tab='ssh';
+    }
+  });
   const shown=$derived(groups.filter(s=>`${s.host} ${s.name}`.toLowerCase().includes(query.toLowerCase())));
   const localRows=$derived(settings?.sources.filter(s=>localAgents.some(agent=>agent.kind===s.kind))??[]);
   const localEditor=$derived(localRows.find(s=>s.kind===activeLocal&&s.id===activeLocalSource)??localRows.find(s=>s.kind===activeLocal));
-  const editor=$derived(page==='server'?selected?.codex:localEditor);
+  const editor=$derived(page==='server'?selected?.agents[activeRemote]:localEditor);
   const changed=$derived(dirty||saving||conflict||wizard);
   $effect(()=>onDirtyChange(changed));
   function observation(s?:MonitorSource):SourceSnapshot|undefined{return snapshot?.view.sources.find(v=>v.id===s?.id);}
@@ -66,6 +72,8 @@
   }
   function connection(group:ServerGroup):string {
     const report=reports[group.host];if(report&&Date.now()-report.checked_at<60000)return report.connection;
+    const claude=snapshot?.providers.find(p=>p.provider===group.agents.claude_code?.id);
+    if(claude?.status==='connected'&&claude.last_success&&Date.now()-claude.last_success<30000)return 'connected';
     const host=snapshot?.hosts.find(h=>h.host===group.host);
     return host?.last_seen&&Date.now()-host.last_seen<30000?host.status:'unknown';
   }
@@ -78,7 +86,7 @@
       && (message?.includes('当前会话库格式不可直接读取')||message?.includes('目前只读取公开会话元数据'))){
       return '已检测到 · 仅支持会话目录';
     }
-    return localSourceStatus(source,observation(source),localDetection(kind,source),message);
+    return localSourceStatus(source,observation(source),localDetection(kind,source));
   }
   function assign(next:DashboardSettings){settings=next;dirty=true;notice='';}
   function touch(){dirty=true;notice='';}
@@ -91,7 +99,21 @@
   async function save(){if(settings)await commit({...$state.snapshot(settings),onboarding_complete:true});}
   async function reload(){try{settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));dirty=false;conflict=false;error='';notice='';}catch(e){fail(e);}}
   function ensureLocal(kind:AgentKind){if(!settings)return;let s=localRows.find(s=>s.kind===kind&&s.id===activeLocalSource)??settings.sources.find(s=>s.kind===kind);if(!s){const candidate=discoveredLocal.find(row=>row.definition.kind===kind)?.candidate;s=candidate?{...structuredClone($state.snapshot(candidate)),enabled:false}:createSource(kind,'',localAgents.find(agent=>agent.kind===kind)?.name);settings.sources.push(s);}return s;}
-  function ensureRemote(group:ServerGroup){if(!settings)return;let s=group.codex;if(!s){s=createSource('remote_codex',group.host,group.name);settings.sources.push(s);}return s;}
+  function ensureRemote(group:ServerGroup,key=activeRemote){
+    if(!settings)return;
+    let source=group.agents[key];
+    if(!source){
+      const agent=sshAgents.find(agent=>agent.key===key)!;
+      source=createSource(agent.kind,group.host,group.name);
+      settings.sources.push(source);
+      return settings.sources[settings.sources.length-1];
+    }
+    return source;
+  }
+  function remoteStatus(group:ServerGroup,key:SshAgent){
+    const source=group.agents[key],probe=reports[group.host]?.[key];
+    return source?.enabled?sourceStatus(source,observation(source)):probe?readLabel(probe.state):'未启用';
+  }
   function editable(){if(dirty){error='请先应用或取消当前编辑。';return false;}return !saving&&!conflict;}
   async function toggleLocal(kind:AgentKind,enabled:boolean){
     if(!settings||saving||conflict)return;const source=ensureLocal(kind);if(!source)return;
@@ -101,11 +123,14 @@
       const next=await invoke<DashboardSettings>('save_monitoring_settings',{settings:proposal,expected});applied=structuredClone(next);source.enabled=enabled;if(!dirty)settings=structuredClone(next);notice='';
     }catch(e){source.enabled=previous;fail(e);}finally{saving=false;}
   }
-  async function toggleCodex(group:ServerGroup,enabled:boolean){
-    if(!settings||group.paused||saving||conflict)return;const source=ensureRemote(group);if(!source)return;
-    source.enabled=enabled;settings.ssh_paused_sources=(settings.ssh_paused_sources??[]).filter(id=>id!==source.id);touch();
+  function toggleRemote(group:ServerGroup,key:SshAgent,enabled:boolean){
+    if(!settings||group.paused||saving||conflict)return;const source=ensureRemote(group,key);if(!source)return;
+    activeRemote=key;void loadProjects(source);source.enabled=enabled;settings.ssh_paused_sources=(settings.ssh_paused_sources??[]).filter(id=>id!==source.id);touch();
   }
-  async function pause(group:ServerGroup){if(!settings||!editable())return;if(group.paused||group.sources.some(s=>s.enabled)){await commit(pauseServer($state.snapshot(settings),group.host,!group.paused));}else{const source=ensureRemote(group);if(source){source.enabled=true;touch();await save();}}}
+  async function pause(group:ServerGroup){
+    if(!settings||!editable())return;
+    await commit(pauseServer($state.snapshot(settings),group.host,!group.paused));
+  }
   async function remove(){if(!settings||!selected)return;const next=removeServer($state.snapshot(settings),selected.host);if(await commit(next)){removePrompt=false;page='home';}}
   function list(value:string){return value.split('\n').map(s=>s.trim()).filter(Boolean);}
   function changeProjects(value:string[]){if(!settings)return;const source=editor??(page==='local'?ensureLocal(activeLocal):selected?ensureRemote(selected):undefined);if(source){source.projects=value;touch();}}
@@ -127,20 +152,37 @@
     try{const choices=await invoke<ProjectChoice[]>('get_project_choices',{sourceId:id});if(active&&projectRequests.get(id)===request){projectAliases[id]=choices;projects[id]=choices.map(row=>row.path);}}
     catch(e){if(active&&projectRequests.get(id)===request)fail(e);}
   }
-  function openServer(group:ServerGroup){page='server';selectedHost=group.host;void loadProjects(group.codex);}
+  function openServer(group:ServerGroup){
+    page='server';selectedHost=group.host;
+    selectRemote(group,group.agents.claude_code?.enabled&&!group.agents.codex?.enabled?'claude_code':group.agents.codex?'codex':'claude_code');
+  }
+  function selectRemote(group:ServerGroup,key:SshAgent){activeRemote=key;void loadProjects(group.agents[key]);}
   function openLocal(kind:AgentKind=activeLocal){page='local';activeLocal=kind;if(expandedLocal!==kind)expandedLocal=null;void loadProjects(localEditor);}
   async function configureLocal(kind:AgentKind,id:string){activeLocal=kind;activeLocalSource=id;const existing=localEditor;const source=ensureLocal(kind);if(!source)return;activeLocalSource=source.id;if(!existing)touch();expandedLocal=kind;void loadProjects(source);await tick();document.querySelector(`[data-agent-kind="${kind}"]`)?.scrollIntoView({block:'start'});}
   function addWizard(){if(!editable())return;wizard=true;error='';}
-  async function addServer(value:{host:string;name:string;enabled:boolean;projects:string[];report:SshProbe}){
+  async function addServer(value:NewServer){
     if(!settings||groups.some(s=>s.host===value.host))return false;
-    const next=structuredClone($state.snapshot(settings)),source=createSource('remote_codex',value.host,value.name);source.enabled=value.enabled;source.projects=value.projects;next.sources.push(source);next.onboarding_complete=true;
-    if(await commit(next)){reports[value.host]=value.report;wizard=false;selectedHost=value.host;page='server';return true;}return false;
+    const next=structuredClone($state.snapshot(settings));
+    for(const agent of sshAgents){
+      const entry=value.agents[agent.key],enabled=entry.enabled&&canRead(value.report[agent.key]);
+      if(agent.key!=='codex'&&!enabled)continue;
+      const source=createSource(agent.kind,value.host,value.name);
+      source.enabled=enabled;source.projects=entry.projects;next.sources.push(source);
+    }
+    next.onboarding_complete=true;
+    if(await commit(next)){
+      reports[value.host]=value.report;wizard=false;
+      const group=groups.find(group=>group.host===value.host);
+      if(group)openServer(group);
+      return true;
+    }
+    return false;
   }
   function updateSnapshot(value:DashboardSnapshot){
     if(value.revision<revision)return;
     const previous=snapshot;
     revision=value.revision;snapshot=value;
-    const source=page==='local'&&expandedLocal?localEditor:page==='server'?selected?.codex:undefined;
+    const source=page==='local'&&expandedLocal?localEditor:page==='server'?editor:undefined;
     if(!source?.enabled)return;
     const success=value.providers.find(p=>p.provider===source.id)?.last_success;
     if(!success)return;
@@ -185,7 +227,7 @@
     {#if !settings}<p class="ms-muted">{$t('正在读取设置…')}</p>
     {:else if page==='home'}
       {#if tab==='ssh'}<div class="summary-grid"><div><small><Server size={13}/>{$t('已添加服务器')}</small><strong>{groups.length}<span>{$t('台 SSH 主机')}</span></strong></div><div><small><Link size={13}/>{$t('SSH 在线')}</small><strong>{groups.filter(g=>connection(g)==='connected').length}<span>{$t('台最近连接正常')}</span></strong></div><div class="warn"><small><Info size={13}/>{$t('需要处理')}</small><strong>{groups.filter(g=>connection(g)==='disconnected').length}<span>{$t('台连接异常')}</span></strong></div></div>{/if}
-      {#if tab!=='local'}<div class="section-top"><h2><Server size={16}/>{$t('SSH 服务器')}<span class="count-badge">{groups.length}</span></h2></div><div class="tool-row"><label class="server-search"><Search size={15}/><input bind:value={query} aria-label={$t('搜索服务器')} placeholder={$t('搜索服务器名称或 SSH Host')}/></label><button class="ms-btn small" disabled={saving} onclick={()=>void invoke('request_refresh')}><RefreshCw size={13}/>{$t('刷新状态')}</button></div><div class="server-list">{#each shown as group (group.host)}<article class="server-card" data-host={group.host}><span class="source-symbol remote"><Server size={19}/></span><div class="source-grow"><div class="server-head"><strong>{group.name}</strong><small>{group.host}</small></div><p class="server-description">{$t(group.paused?'采集已暂停，原启用状态已保留':sourceStatus(group.codex,observation(group.codex)))}</p><div class="agent-tags"><span class="mini-tag">Codex · {$t(group.codex?.enabled?'已启用':'未启用')}</span><span class="mini-tag pending">Claude Code · {$t('待适配')}</span><span class="mini-tag">{$t(scopeLabel(group.codex?.projects??[]))}{#if group.codex&&!group.codex.projects.includes('*')} {group.codex.projects.length}{/if}</span></div></div><div class="server-controls"><span class="ms-pill" class:warning={connection(group)==='disconnected'} class:neutral={connection(group)==='unknown'}><i></i>{$t(sshLabel(group))}</span><span class="metric"><b>{serverTaskCount(group)}</b> {$t('任务')}</span><button class="ms-btn small" onclick={()=>openServer(group)}>{$t('管理')}<ChevronRight size={13}/></button></div></article>{/each}{#if !shown.length}<div class="ms-empty"><Server size={25}/><strong>{$t(groups.length?'没有符合条件的服务器':'还没有添加 SSH 服务器')}</strong><button class="ms-btn" onclick={addWizard}><Plus size={13}/>{$t('添加服务器')}</button></div>{/if}</div>{/if}
+      {#if tab!=='local'}<div class="section-top"><h2><Server size={16}/>{$t('SSH 服务器')}<span class="count-badge">{groups.length}</span></h2></div><div class="tool-row"><label class="server-search"><Search size={15}/><input bind:value={query} aria-label={$t('搜索服务器')} placeholder={$t('搜索服务器名称或 SSH Host')}/></label><button class="ms-btn small" disabled={saving} onclick={()=>void invoke('request_refresh')}><RefreshCw size={13}/>{$t('刷新状态')}</button></div><div class="server-list">{#each shown as group (group.host)}<article class="server-card" data-host={group.host}><span class="source-symbol remote"><Server size={19}/></span><div class="source-grow"><div class="server-head"><strong>{group.name}</strong><small>{group.host}</small></div><p class="server-description">{$t(group.paused?'采集已暂停，原启用状态已保留':group.sources.some(s=>s.enabled)?'已启用':'未启用')}</p><div class="agent-tags">{#each sshAgents as agent (agent.key)}<span class="mini-tag">{agent.name} · {$t(group.agents[agent.key]?.enabled?'已启用':'未启用')}</span>{/each}</div></div><div class="server-controls"><span class="ms-pill" class:warning={connection(group)==='disconnected'} class:neutral={connection(group)==='unknown'}><i></i>{$t(sshLabel(group))}</span><span class="metric"><b>{serverTaskCount(group)}</b> {$t('任务')}</span><button class="ms-btn small" onclick={()=>openServer(group)}>{$t('管理')}<ChevronRight size={13}/></button></div></article>{/each}{#if !shown.length}<div class="ms-empty"><Server size={25}/><strong>{$t(groups.length?'没有符合条件的服务器':'还没有添加 SSH 服务器')}</strong><button class="ms-btn" onclick={addWizard}><Plus size={13}/>{$t('添加服务器')}</button></div>{/if}</div>{/if}
     {:else if page==='local'}
       <div class="section-top"><h2>{$t('本机 Agent')}</h2><button class="ms-btn small" onclick={detect}><RefreshCw size={13}/>{$t('重新检测')}</button></div>
       {#snippet localAgentRow(agent:SourceDefinition, newlyFound=false)}
@@ -227,11 +269,58 @@
       {/if}
       <EventSources {settings} catalog={manualEventAgents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch}/>
     {:else if selected}
-      {@const source=selected.codex}
+      {@const source=selected.agents[activeRemote]}
+      {@const report=reports[selected.host]}
       <div class="detail-heading"><div><h2>{selected.name}</h2><p>SSH · {selected.host}</p></div><span class="ms-pill" class:neutral={connection(selected)==='unknown'} class:warning={connection(selected)==='disconnected'}>{$t(sshLabel(selected))}</span></div>
-      <div class="detail-content"><section class="detail-card soft"><h3>{$t('SSH 连接')}</h3><div class="connection-facts"><div><span>{$t('SSH Host')}</span><strong>{selected.host}</strong></div><div><span>{$t('最近检测')}</span><strong>{reports[selected.host]?$t(formatAgo(reports[selected.host].checked_at)):$t('尚未检测')}</strong></div><div><span>{$t('数据读取')}</span><strong>{$t(sourceStatus(selected.codex,observation(selected.codex)))}</strong></div><div><span>{$t('当前任务')}</span><strong>{serverTaskCount(selected)}</strong></div></div><div class="inline-actions"><button class="ms-btn" disabled={probing[selected.host]} onclick={()=>selected&&probeHost(selected)}><RefreshCw size={13}/>{$t(probing[selected.host]?'检测中…':'检测 SSH 与数据')}</button><button class="ms-btn" disabled={saving||dirty||conflict} onclick={()=>selected&&pause(selected)}>{#if selected.paused||!selected.sources.some(s=>s.enabled)}<Play size={13}/>{:else}<Pause size={13}/>{/if}{$t(selected.paused?'恢复采集':selected.sources.some(s=>s.enabled)?'暂停采集':'启用采集')}</button></div>{#if reports[selected.host]}<p class="ms-muted">{$t(reports[selected.host].message)} · Codex: {$t(reports[selected.host].codex.state==='readable'?'数据可读取':reports[selected.host].codex.state==='empty'?'目录可读取，暂无会话':reports[selected.host].codex.state==='missing'?'未发现数据目录':'数据读取失败')}</p>{/if}</section>
-      <section class="detail-card"><h3>{$t('Agent')}</h3><div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>Codex</strong><small>{$t(sourceStatus(selected.codex,observation(selected.codex)))}</small></div><span class="cap-tag">{$t('SSH 已支持')}</span><input class="settings-switch" type="checkbox" role="switch" aria-label={$t('启用远端 Codex')} checked={selected.codex?.enabled??false} disabled={selected.paused||saving||conflict} onchange={e=>selected&&toggleCodex(selected,e.currentTarget.checked)}/></div><div class="agent-row unsupported"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>Claude Code</strong><small>{$t('当前尚不能读取远端 Claude 会话')}</small></div><span class="cap-tag planned">{$t('SSH 待适配')}</span><input class="settings-switch" type="checkbox" role="switch" aria-label={$t('启用远端 Claude Code')} disabled/></div></section>
-      <section class="detail-card"><h3>{$t('项目范围')}<small>Codex</small></h3>{#key selected.host}<ProjectScope projects={selected.codex?.projects??['*']} choices={selected.codex?projectChoices(selected.codex,snapshot?.tasks??[],[...(projects[selected.codex.id]??[]),...(reports[selected.host]?.codex.projects??[])]):reports[selected.host]?.codex.projects??[]} aliases={source?projectAliases[source.id]??[]:[]} onchange={changeProjects}/>{/key}<details class="ms-advanced"><summary><Settings2 size={13}/>{$t('高级设置：轮询、路径与诊断')}</summary><div class="advanced-inner"><label class="ms-field">{$t('服务器名称')}<input value={source?.name??selected.name} oninput={e=>{if(selected){const s=ensureRemote(selected);if(s){s.name=e.currentTarget.value;touch();}}}}/></label><label class="ms-field">{$t('轮询间隔（毫秒）')}<input type="number" min="500" max="60000" value={source?.poll_interval_ms??3000} oninput={e=>{if(selected){const s=ensureRemote(selected);if(s){s.poll_interval_ms=Number(e.currentTarget.value);touch();}}}}/></label><label class="ms-field">{$t('远端数据路径')}<input value="~/.codex" readonly/></label><p class="ms-muted">{$t('沿用现有远端采集路径；当前不提供路径覆盖。')}</p><label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="3" value={source?.excluded_projects.join('\n')??''} oninput={e=>{if(selected){const s=ensureRemote(selected);if(s){s.excluded_projects=list(e.currentTarget.value);touch();}}}}></textarea></label>{#if selected.sources.some(s=>s.kind==='tmux')}<p class="ms-muted">{$t('已有任务运行方式过滤规则已保留，暂停会同时暂停该服务器的兼容采集。')}</p>{/if}{#if source}<button class="ms-btn" onclick={()=>sessionSource=source}>{$t('已发现会话')}</button>{/if}<p class="ms-diagnostic">{snapshot?.providers.find(p=>p.provider===source?.id)?.message??$t('尚无采集诊断')} · {$t('读取异常会保留上次状态，不会当作任务结束。')}</p></div></details></section></div>
+      <div class="detail-content">
+        <section class="detail-card soft">
+          <h3>{$t('SSH 连接')}</h3>
+          <div class="connection-facts">
+            <div><span>{$t('SSH Host')}</span><strong>{selected.host}</strong></div>
+            <div><span>{$t('最近检测')}</span><strong>{report?$t(formatAgo(report.checked_at)):$t('尚未检测')}</strong></div>
+            <div><span>{$t('当前任务')}</span><strong>{serverTaskCount(selected)}</strong></div>
+          </div>
+          <div class="inline-actions">
+            <button class="ms-btn" disabled={probing[selected.host]} onclick={()=>selected&&probeHost(selected)}><RefreshCw size={13}/>{$t(probing[selected.host]?'检测中…':'检测 SSH 与数据')}</button>
+            {#if selected.paused||selected.sources.some(s=>s.enabled)}
+              <button class="ms-btn" disabled={saving||dirty||conflict} onclick={()=>selected&&pause(selected)}>{#if selected.paused}<Play size={13}/>{:else}<Pause size={13}/>{/if}{$t(selected.paused?'恢复采集':'暂停采集')}</button>
+            {/if}
+          </div>
+          {#if report}<p class="ms-muted">{$t(report.message)}</p>{/if}
+        </section>
+        <section class="detail-card">
+          <h3>Agent</h3>
+          {#each sshAgents as agent (agent.key)}
+            {@const entry=selected.agents[agent.key]}
+            <div class="agent-row" data-remote-agent={agent.key}>
+              <span class="agent-icon"><Terminal size={18}/></span>
+              <div class="source-grow"><strong>{agent.name}</strong><small>{$t(remoteStatus(selected,agent.key))}{#if entry?.enabled&&report} · {$t(readLabel(report[agent.key].state))}{/if}</small></div>
+              <input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.toggle)} checked={entry?.enabled??false} disabled={selected.paused||saving||conflict} onchange={e=>selected&&toggleRemote(selected,agent.key,e.currentTarget.checked)}/>
+            </div>
+          {/each}
+          <p class="ms-muted">{$t('Claude Code 只读取运行和结束记录，不提供审批或提问提醒。')}</p>
+        </section>
+        <section class="detail-card">
+          <h3>{$t('项目范围')}</h3>
+          <label class="ms-field">{$t('选择 Agent')}<select value={activeRemote} onchange={e=>selected&&selectRemote(selected,e.currentTarget.value as SshAgent)}>{#each sshAgents as agent (agent.key)}<option value={agent.key}>{agent.name}</option>{/each}</select></label>
+          {#key selected.host+':'+activeRemote}
+            <ProjectScope projects={source?.projects??['*']} choices={source?projectChoices(source,snapshot?.tasks??[],[...(projects[source.id]??[]),...(report?.[activeRemote].projects??[])]):report?.[activeRemote].projects??[]} aliases={source?projectAliases[source.id]??[]:[]} onchange={changeProjects}/>
+          {/key}
+          <details class="ms-advanced">
+            <summary><Settings2 size={13}/>{$t('高级设置：轮询、路径与诊断')}</summary>
+            <div class="advanced-inner">
+              <label class="ms-field">{$t('服务器名称')}<input value={selected.name} oninput={e=>{if(selected){const entries=Object.values(selected.agents).filter(entry=>entry!==undefined);if(!entries.length){const entry=ensureRemote(selected);if(entry)entries.push(entry);}for(const entry of entries)entry.name=e.currentTarget.value;touch();}}}/></label>
+              <label class="ms-field">{$t('轮询间隔（毫秒）')}<input type="number" min="500" max="60000" value={source?.poll_interval_ms??3000} oninput={e=>{if(selected){const s=ensureRemote(selected);if(s){s.poll_interval_ms=Number(e.currentTarget.value);touch();}}}}/></label>
+              <label class="ms-field">{$t('远端数据路径')}<input value={activeRemote==='codex'?'~/.codex':'CLAUDE_CONFIG_DIR / ~/.claude'} readonly/></label>
+              <p class="ms-muted">{$t('沿用现有远端采集路径；当前不提供路径覆盖。')}</p>
+              <label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="3" value={source?.excluded_projects.join('\n')??''} oninput={e=>{if(selected){const s=ensureRemote(selected);if(s){s.excluded_projects=list(e.currentTarget.value);touch();}}}}></textarea></label>
+              {#if selected.sources.some(s=>s.kind==='tmux')}<p class="ms-muted">{$t('已有任务运行方式过滤规则已保留，暂停会同时暂停该服务器的兼容采集。')}</p>{/if}
+              {#if source}<button class="ms-btn" onclick={()=>sessionSource=source}>{$t('已发现会话')}</button>{/if}
+              <p class="ms-diagnostic">{$t(snapshot?.providers.find(p=>p.provider===source?.id)?.message??'尚无采集诊断')} · {$t('读取异常会保留上次状态，不会当作任务结束。')}</p>
+            </div>
+          </details>
+        </section>
+      </div>
     {/if}
   </div>
   <footer class="ms-foot" class:idle={!dirty&&page!=='server'}><span>{#if dirty}<ShieldCheck size={14}/>{$t('有未保存的配置更改')}{/if}</span><div>{#if dirty}<button class="ms-btn ghost" disabled={saving} onclick={reload}>{$t('取消更改')}</button><button class="ms-btn primary" disabled={saving||conflict||updating||!detectionSettled} onclick={save}><Save size={13}/>{$t(saving?'正在保存…':settings&&!settings.onboarding_complete?'确认并开始监控':'应用更改')}</button>{:else if page==='server'}<button class="ms-btn danger" disabled={saving} onclick={()=>removePrompt=true}><Trash2 size={13}/>{$t('移除服务器')}</button>{/if}</div></footer>

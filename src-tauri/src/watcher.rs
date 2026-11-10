@@ -743,6 +743,18 @@ impl LocalProviders {
                 SourceKind::GenericEvent => Box::new(
                     crate::providers::generic_event::GenericEventProvider::new(source.clone()),
                 ),
+                SourceKind::RemoteClaudeCode => {
+                    let mut provider =
+                        crate::providers::claude_code::ssh::RemoteClaudeProvider::new(
+                            source.location.clone(),
+                        );
+                    provider.resume(known_sessions().into_iter().filter(|t| {
+                        t.remote
+                            && t.host.as_deref() == Some(source.location.as_str())
+                            && t.source_instance.as_deref() == Some(source.id.as_str())
+                    }));
+                    Box::new(provider)
+                }
                 SourceKind::ClaudeCode => {
                     Box::new(crate::providers::claude_code::ClaudeCodeProvider::new(
                         if source.location.is_empty() {
@@ -812,16 +824,15 @@ impl LocalProviders {
             };
             let source = source.clone();
             let id = source.id.clone();
-            let interval = if matches!(source.kind, SourceKind::DeepseekWsl | SourceKind::CodexWsl)
-            {
-                2
-            } else {
-                1
+            let interval = match source.kind {
+                SourceKind::DeepseekWsl | SourceKind::CodexWsl => Duration::from_secs(2),
+                SourceKind::RemoteClaudeCode => Duration::from_millis(source.poll_interval_ms),
+                _ => Duration::from_secs(1),
             };
             self.workers.push((
                 id.clone(),
                 vec![],
-                Worker::spawn(Duration::from_secs(interval), move |_| {
+                Worker::spawn(interval, move |_| {
                     let mut output = provider.poll(SystemTime::now());
                     for task in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
                         task.source_instance = Some(source.id.clone());
@@ -2724,22 +2735,24 @@ mod tests {
     }
 
     #[test]
-    fn doubao_partial_checkpoint_keeps_new_running_task_visible() {
+    fn remote_claude_partial_read_keeps_new_running_task_visible() {
         let now = SystemTime::now();
         let mut fresh = TaskSnapshot::new(
-            "doubao:new",
+            "remote_claude:new",
             "Example new work",
-            TaskSource::Doubao,
+            TaskSource::ClaudeCode,
             TaskStatus::Running,
             DetectionConfidence::Inferred,
             now,
         );
-        fresh.source_instance = Some("doubao".into());
+        fresh.source_instance = Some("remote_claude".into());
         fresh.session_id = Some("new".into());
         fresh.turn_key = Some("new-turn".into());
-        fresh.evidence_channel = Some("native_metadata".into());
+        fresh.remote = true;
+        fresh.host = Some("fixture".into());
+        fresh.evidence_channel = Some("native_transcript".into());
         let mut stale = fresh.clone();
-        stale.id = "doubao:old".into();
+        stale.id = "remote_claude:old".into();
         stale.session_id = Some("old".into());
         stale.turn_key = Some("old-turn".into());
         stale.stale = true;
@@ -2748,16 +2761,15 @@ mod tests {
             "the previous checkpoint was removed",
         );
         let mut health = Vec::new();
-        update_provider_health(&mut health, "doubao", &output, now);
+        update_provider_health(&mut health, "remote_claude", &output, now);
         let mut settings = crate::monitoring::from_legacy(&Default::default(), false);
         settings.onboarding_complete = true;
-        settings
-            .sources
-            .retain(|s| s.kind == crate::monitoring::SourceKind::Doubao);
-        settings.sources[0].enabled = true;
-        if !settings.sources[0].enabled_here() {
-            return;
-        }
+        settings.sources.truncate(1);
+        let source = &mut settings.sources[0];
+        source.kind = crate::monitoring::SourceKind::RemoteClaudeCode;
+        source.id = "remote_claude".into();
+        source.location = "fixture".into();
+        source.enabled = true;
         let view = crate::dashboard_view::project(
             &output.tasks,
             &health,
@@ -2777,7 +2789,7 @@ mod tests {
         assert!(health[0].verifies_task(&fresh, now));
         update_provider_health(
             &mut health,
-            "doubao",
+            "remote_claude",
             &ProviderOutput::degraded(vec![], "read failed"),
             now + Duration::from_secs(1),
         );
