@@ -4,6 +4,8 @@ on:
   pull_request:
     paths:
       - 'src-tauri/**/*.rs'
+      - 'src-tauri/**/*.py'
+      - 'tests/ssh-claude.test.py'
       - 'src-tauri/.cargo/**'
       - 'src-tauri/capabilities/**'
       - 'src-tauri/permissions/**'
@@ -26,6 +28,8 @@ on:
     branches: [main, 'codex/**']
     paths:
       - 'src-tauri/**/*.rs'
+      - 'src-tauri/**/*.py'
+      - 'tests/ssh-claude.test.py'
       - 'src-tauri/.cargo/**'
       - 'src-tauri/capabilities/**'
       - 'src-tauri/permissions/**'
@@ -72,4 +76,5 @@ jobs:
       - run: python3 tests/test-cli-install.py
       - run: python3 tests/test-release-package.py
       - run: python3 tests/test-public-install.py
+      - run: python3 -B tests/ssh-claude.test.py
       # No bundles, signing, application launch, or macOS support claim.

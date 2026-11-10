@@ -97,6 +97,7 @@ impl From<AgentStatus> for TaskSnapshot {
             agent_id: None,
             agent_name: None,
             evidence_channel: None,
+            native_storage: None,
             outcome: None,
             pending_confirmed_at: None,
             id: a.id,
@@ -614,7 +615,25 @@ fn same_collector(
         && old.kind == next.kind
         && old.location == next.location
         && old.integration == next.integration
+        && (old.kind != crate::monitoring::SourceKind::RemoteClaudeCode
+            || old.poll_interval_ms == next.poll_interval_ms)
         && (old.kind != crate::monitoring::SourceKind::GenericEvent || old.name == next.name)
+}
+
+pub(crate) fn bind_provider_identity(
+    task: &mut TaskSnapshot,
+    source: &crate::monitoring::SourceConfig,
+) {
+    use crate::monitoring::SourceKind;
+    task.source_instance = Some(source.id.clone());
+    if !matches!(source.kind, SourceKind::CodexWsl | SourceKind::GenericEvent)
+        && !matches!(
+            source.id.as_str(),
+            "codex" | "claude_code" | "hermes" | "deepseek_harness" | "deepseek_harness_desktop"
+        )
+    {
+        task.id = format!("{}:{}", source.id, task.id);
+    }
 }
 
 impl LocalProviders {
@@ -835,19 +854,7 @@ impl LocalProviders {
                 Worker::spawn(interval, move |_| {
                     let mut output = provider.poll(SystemTime::now());
                     for task in output.tasks.iter_mut().chain(output.catalog.iter_mut()) {
-                        task.source_instance = Some(source.id.clone());
-                        if !matches!(source.kind, SourceKind::CodexWsl | SourceKind::GenericEvent)
-                            && !matches!(
-                                source.id.as_str(),
-                                "codex"
-                                    | "claude_code"
-                                    | "hermes"
-                                    | "deepseek_harness"
-                                    | "deepseek_harness_desktop"
-                            )
-                        {
-                            task.id = format!("{}:{}", source.id, task.id);
-                        }
+                        bind_provider_identity(task, &source);
                     }
                     output
                 }),
@@ -1633,9 +1640,10 @@ pub fn watch(app: AppHandle) {
                     .iter()
                     .filter(|task| {
                         task.finished_at.is_some()
-                            && batch
+                            && (batch
                                 .authoritative_instances
                                 .contains(&crate::monitoring::collector_id(task))
+                                || crate::providers::paged_native_evidence(task))
                     })
                     .cloned(),
             );

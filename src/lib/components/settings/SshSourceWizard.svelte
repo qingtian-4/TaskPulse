@@ -46,7 +46,7 @@
         <div class="test-steps">
           <div><Link size={16}/><span><strong>{$t('SSH 连接')}</strong><small>{$t('系统密钥、Host 和连接权限')}</small></span><b class:ok={report?.connection==='connected'}>{$t(report?report.connection==='connected'?'连接通过':'连接失败':testing?'检测中…':'待检测')}</b></div>
           {#each sshAgents as agent (agent.key)}
-            <div><Terminal size={16}/><span><strong>{agent.name}</strong><small>{$t('Python 3 与只读会话数据')}</small></span><b class:ok={canRead(report?.[agent.key])}>{$t(readLabel(report?.[agent.key].state))}</b></div>
+            <div><Terminal size={16}/><span><strong>{agent.name}</strong><small>{$t('Python 3 与只读会话数据')}</small></span><b class:ok={canRead(report?.[agent.key])}>{$t(report?.[agent.key].state==='partial'?'项目列表不完整':readLabel(report?.[agent.key].state))}</b></div>
           {/each}
         </div>
         {#if report}<p class="ms-info"><Info size={15}/>{$t(report.message)}</p>{/if}
@@ -58,7 +58,7 @@
           {#each sshAgents as agent (agent.key)}
             <label class:checked={agents[agent.key].enabled}>
               <input type="checkbox" bind:checked={agents[agent.key].enabled} disabled={!canRead(report?.[agent.key])}/>
-              <span><strong>{agent.name}</strong><small>{$t(readLabel(report?.[agent.key].state))}</small></span>
+              <span><strong>{agent.name}</strong><small>{$t(report?.[agent.key].state==='partial'?'项目列表不完整':readLabel(report?.[agent.key].state))}</small></span>
             </label>
           {/each}
         </div>
@@ -66,6 +66,9 @@
           <h3>{agent.name} · {$t('选择监控项目')}</h3>
           <ProjectScope projects={agents[agent.key].projects} choices={report?.[agent.key].projects??[]} onchange={value=>agents[agent.key].projects=value}/>
         {/each}
+        {#if sshAgents.some(agent=>report?.[agent.key].state==='partial')}
+          <p class="ms-warning">{$t('项目列表不完整，未列出的项目可以手动添加路径。')}</p>
+        {/if}
         <p class="ms-info"><Folder size={15}/>{$t('项目列表来自可读取的会话工作目录，也可手动添加路径。')}</p>
       {/if}
     </div>

@@ -58,6 +58,19 @@ kind="doubao"
 enabled=true
 location="fixture-doubao"
 projects=["legacy-project"]
+[[dashboard.sources]]
+id="local_file"
+name="Legacy status files"
+kind="hooks"
+enabled=false
+projects=["legacy-files"]
+[[dashboard.sources]]
+id="wsl-legacy"
+name="Legacy WSL"
+kind="codex_wsl"
+location="TaskPulse-Fixture-Not-Running"
+enabled=false
+projects=["/srv/legacy"]
 `);
   const reserve=createServer();await new Promise<void>(ok=>reserve.listen(0,'127.0.0.1',ok));
   const port=(reserve.address() as {port:number}).port;await new Promise<void>((ok,fail)=>reserve.close(e=>e?fail(e):ok()));
@@ -366,6 +379,8 @@ projects=["legacy-project"]
   await ui.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('.ms-tabs button').length`),2);
   assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false);
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-supported-sources]').open && !document.querySelector('[data-existing-advanced]').open && !document.querySelector('[data-agent-kind="scanner"]')`));
+  await ui.evaluate(`document.querySelector('[data-supported-sources]').open=true`);
   assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-agents').textContent)&&/OpenCode/.test(document.querySelector('.local-agents').textContent)`),true);
   assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
   await ui.evaluate(`document.querySelector('[data-agent-kind="codex"] .agent-row button').click()`);
@@ -417,11 +432,41 @@ projects=["legacy-project"]
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   for(const project of ['applied-project','protected-project']){
     await setProject(project);
-    await ui.evaluate(`[...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent==='Apply changes').click()`);
-    await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
+    let pausedId='';
+    if(project==='applied-project'){
+      ui.onRequestPaused(async({requestId,request})=>{
+        if(request.method==='POST')pausedId=requestId;
+        else await ui.send('Fetch.continueRequest',{requestId});
+      });
+      await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/save_monitoring_settings'}]});
+    }
+    try{
+      await ui.evaluate(`[...document.querySelectorAll('.ms-foot button')].find(b=>b.textContent==='Apply changes').click()`);
+      if(project==='applied-project'){
+        for(let n=0;!pausedId&&n<100;n++)await Bun.sleep(25);
+        assert.ok(pausedId,'Wait for the real settings save request before attempting a second edit');
+        const locked=await ui.evaluate(`(()=>{const scope=document.querySelector('[data-source-id="codex"] .project-scope');const input=scope.querySelector('.add-path input');input.value='must-not-be-lost';input.dispatchEvent(new Event('input',{bubbles:true}));const button=scope.querySelector('.add-path button');button.click();return input.matches(':disabled')&&button.matches(':disabled')&&!scope.textContent.includes('must-not-be-lost');})()`);
+        assert.ok(locked,'Project controls must be frozen before the native save responds');
+        await ui.send('Fetch.continueRequest',{requestId:pausedId});pausedId='';
+      }
+      await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+    }finally{
+      if(project==='applied-project'){if(pausedId)await ui.send('Fetch.continueRequest',{requestId:pausedId});await ui.send('Fetch.disable');ui.onRequestPaused(undefined);}
+    }
     assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.ms-success')?.textContent??'')`),false,'Application save feedback must follow the selected language');
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
+  // Preserved WSL and legacy file sources can be edited by their exact IDs.
+  await ui.evaluate(`document.querySelector('[data-wsl-sources]').open=true;document.querySelector('[data-existing-advanced]').open=true;document.querySelector('[data-saved-source="wsl-legacy"]').open=true;document.querySelector('[data-saved-source="local_file"]').open=true;`);
+  assert.ok(await ui.evaluate(`document.querySelector('[data-saved-source="wsl-legacy"]').textContent.includes('TaskPulse-Fixture-Not-Running')&&document.querySelector('[data-saved-source="local_file"] .project-options').textContent.includes('legacy-files')`));
+  await ui.evaluate(`(()=>{const node=document.querySelector('[data-saved-source="wsl-legacy"] .add-path input');node.value='/srv/additional';node.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await ui.evaluate(`document.querySelector('[data-saved-source="wsl-legacy"] .add-path button').click();`);
+  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click();`);
+  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  const legacySaved=(await ui.invoke('get_monitoring_settings')).sources;
+  assert.deepEqual(legacySaved.find((source:any)=>source.id==='wsl-legacy').projects,['/srv/legacy','/srv/additional']);
+  assert.deepEqual(legacySaved.find((source:any)=>source.id==='local_file').projects,['legacy-files']);
   // Actual filesystem aliases produce one picker row without rewriting scopes.
   const aliasProject=join(owned,'public-project');await mkdir(aliasProject);
   const drive=aliasProject[0].toLowerCase(),relative=aliasProject.slice(3).split(String.fromCharCode(92)).join('/');
@@ -586,13 +631,10 @@ projects=["legacy-project"]
   await root.invoke('open_management',{section:'sources'});
   await ui.wait(`!!document.querySelector('.ms-tabs button')`);
   await ui.evaluate(`document.querySelector('.ms-back')?.click();document.querySelector('.ms-tabs button').click()`);
-  await ui.wait(`!!document.querySelector('.event-sources')`);
-  assert.ok(await ui.evaluate(`!document.querySelector('.event-sources').open && !document.querySelector('[data-event-adapter]') && !!document.querySelector('[data-agent-kind="qoder"]')`));
+  await ui.wait(`!!document.querySelector('[data-existing-advanced] .event-sources')`);
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-event-adapter]') && !!document.querySelector('[data-agent-kind="qoder"]') && !document.querySelector('[data-agent-kind="scanner"]')`));
   const beforeEvent=await ui.invoke('get_monitoring_settings');
-  assert.ok(await ui.evaluate(`!document.querySelector('.local-agents [data-agent-kind="scanner"]') && !document.querySelector('[data-process-discovery]').open && !!document.querySelector('[data-process-discovery] [data-agent-kind="scanner"]')`));
-  await ui.evaluate(`document.querySelector('.event-sources summary').click()`);
-  assert.match(await ui.evaluate(`document.querySelector('[data-process-discovery] summary').textContent`),/Process detection \(optional\)/);
-  assert.match(await ui.evaluate(`document.querySelector('.event-sources summary').textContent`),/Connect other tools \(optional\)/);
+  await ui.evaluate(`document.querySelector('[data-supported-sources]').open=true;document.querySelector('[data-existing-advanced]').open=true;document.querySelector('[data-existing-advanced] .event-sources').open=true;document.querySelector('[data-maintenance-tools]').open=true;`);
   assert.ok(await ui.evaluate(`!document.querySelector('[data-event-picker]')&&document.querySelector('[data-event-add]').textContent.includes('Add MCP or script connection')`));
   await ui.wait(`!document.querySelector('[data-event-add]').disabled`);
   await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
@@ -604,6 +646,14 @@ projects=["legacy-project"]
   await ui.wait(`!!document.querySelector('${standardSelector} .universal li')`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('${standardSelector} .universal li').length`),3);
   assert.ok(await ui.evaluate(`document.querySelector('${standardSelector} .universal .actions button').disabled`));
+  // A real import in the owned profile refreshes maintenance choices without
+  // applying or dropping the two current connection drafts.
+  const manifest=await Bun.file(resolve('integrations/community-template.json')).json();
+  manifest.adapter_id='taskpulse-native-fixture';manifest.agent_id='taskpulse-native-fixture';manifest.display_name='Native fixture manifest';
+  await ui.evaluate(`(()=>{const area=document.querySelector('[data-event-adapter="standard-events"]:last-child .manifest');area.open=true;const input=area.querySelector('textarea');input.value=${JSON.stringify(JSON.stringify(manifest))};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await ui.evaluate(`document.querySelector('[data-event-adapter="standard-events"]:last-child .manifest button').click()`);
+  await ui.wait(`!!document.querySelector('[data-event-picker] option[value="taskpulse-native-fixture"]')`);
+  assert.equal(await ui.evaluate(`document.querySelectorAll('[data-event-adapter="standard-events"]').length`),2);
   for(const [kind,adapter] of [['trae','trae-cn-ide'],['zcode','zcode-desktop'],['kimi_code','kimi-code-cli']]){
     const row=`[data-agent-kind="${kind}"]`;
     assert.equal(await ui.evaluate(`document.querySelectorAll(${JSON.stringify(row)}).length`),1);

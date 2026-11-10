@@ -14,6 +14,7 @@ use std::time::{Duration, SystemTime};
 const CAPACITY: usize = 128;
 const INCOMPLETE: &str = "远端 Claude Code 记录未读完整，已保留上次状态";
 const UNREADABLE: &str = "无法读取远端 Claude Code；请检查 SSH、Python 3.8 和数据目录权限";
+const SSH_FAILED: &str = "远端 Claude Code 的 SSH 连接失败";
 const MISSING: &str = "未找到远端 Claude Code 会话目录";
 
 #[derive(Debug, Deserialize)]
@@ -55,9 +56,9 @@ fn snapshot(
     host: &str,
     probe: bool,
     tracked: impl Iterator<Item = String>,
-) -> Result<Snapshot, ()> {
+) -> Result<Snapshot, &'static str> {
     if !crate::ssh_sources::valid_host(host) {
-        return Err(());
+        return Err(UNREADABLE);
     }
     let payload =
         base64::engine::general_purpose::STANDARD.encode(include_str!("../ssh_claude.py"));
@@ -72,11 +73,17 @@ fn snapshot(
     );
     let output = executor
         .run(host, &command, Duration::from_secs(8))
-        .map_err(|_| ())?;
+        .map_err(|error| {
+            if crate::providers::remote_tmux::ssh::connection_failed(&error) {
+                SSH_FAILED
+            } else {
+                UNREADABLE
+            }
+        })?;
     if output.len() > 2_200_000 {
-        return Err(());
+        return Err(UNREADABLE);
     }
-    let result: Snapshot = serde_json::from_str(&output).map_err(|_| ())?;
+    let result: Snapshot = serde_json::from_str(&output).map_err(|_| UNREADABLE)?;
     let mut ids = BTreeSet::new();
     if result.schema_version != 1
         || result.sessions.len() > 64
@@ -86,7 +93,7 @@ fn snapshot(
         || matches!(result.state, ReadState::Missing | ReadState::Empty)
             && !result.sessions.is_empty()
     {
-        return Err(());
+        return Err(UNREADABLE);
     }
     Ok(result)
 }
@@ -137,8 +144,9 @@ impl RemoteClaudeProvider {
     }
 
     pub fn resume(&mut self, previous: impl Iterator<Item = TaskSnapshot>) {
-        for task in previous.take(CAPACITY) {
+        for mut task in previous.take(CAPACITY) {
             if let Some(id) = task.session_id.clone().filter(|id| valid_id(id)) {
+                task.id = format!("claude:{id}");
                 self.last.insert(id, task);
             }
         }
@@ -164,7 +172,7 @@ impl RemoteClaudeProvider {
                 },
                 snapshot.sessions,
             ),
-            Err(()) => (Some(UNREADABLE), vec![]),
+            Err(error) => (Some(error), vec![]),
         };
         let mut tasks = Vec::new();
         let mut catalog = Vec::new();
@@ -394,6 +402,74 @@ mod tests {
         let tail_only = data(false, "readable", &[final_row]);
         p.ssh = Box::new(FakeSshExecutor::new().with("server", &tail_only));
         assert!(p.poll(at(END)).tasks.is_empty());
+    }
+
+    #[test]
+    fn remote_claude_p1_resume_uses_native_identity_on_first_failure() {
+        use crate::{
+            attention::AttentionTracker, monitoring::SourceConfig, transition::TransitionEngine,
+        };
+        let source: SourceConfig = serde_json::from_value(json!({
+            "id":"remote-claude","name":"SSH fixture","kind":"remote_claude_code",
+            "location":"server","enabled":true
+        }))
+        .unwrap();
+        let open = data(true, "readable", &[start()]);
+        let end = data(
+            false,
+            "readable",
+            &[
+                start(),
+                assistant(END, json!({"stop_reason":"end_turn","content":[]})),
+            ],
+        );
+        let mut provider = RemoteClaudeProvider::new("server".into());
+        provider.ssh = Box::new(FakeSshExecutor::new().with("server", &open));
+        let state = tempfile::tempdir().unwrap();
+        let attention_path = state.path().join("attention.json");
+        let notification_path = state.path().join("notifications.json");
+        let mut tracker = AttentionTracker::open(attention_path.clone());
+        let mut engine = TransitionEngine::open(notification_path.clone());
+        let collect = |provider: &mut RemoteClaudeProvider, tracker: &mut AttentionTracker| {
+            let mut tasks = provider.poll(at(END)).tasks;
+            for task in &mut tasks {
+                crate::watcher::bind_provider_identity(task, &source);
+            }
+            tracker.reconcile(tasks)
+        };
+        let first = collect(&mut provider, &mut tracker);
+        let id = format!("remote-claude:claude:{ID}");
+        assert_eq!(first[0].id, id);
+        assert!(engine.apply_snapshots(&first, &[], at(END)).is_empty());
+        tracker.set_pinned(&id, true).unwrap();
+        tracker.flush().unwrap();
+        assert!(engine.flush());
+        let mut tracker = AttentionTracker::open(attention_path);
+        let mut engine = TransitionEngine::open(notification_path);
+        let mut restarted = RemoteClaudeProvider::new("server".into());
+        restarted.ssh = Box::new(
+            FakeSshExecutor::new()
+                .failing("server")
+                .with("server", &open)
+                .with("server", &end)
+                .with("server", &end),
+        );
+        restarted.resume(tracker.known().into_iter());
+        let stale = collect(&mut restarted, &mut tracker);
+        assert_eq!(stale.len(), 1);
+        assert_eq!(stale[0].id, id);
+        assert!(stale[0].pinned && stale[0].stale);
+        assert!(engine.apply_snapshots(&stale, &[], at(END)).is_empty());
+        let fresh = collect(&mut restarted, &mut tracker);
+        assert_eq!(fresh.len(), 1);
+        assert_eq!(fresh[0].id, id);
+        assert!(fresh[0].pinned && !fresh[0].stale);
+        assert!(engine.apply_snapshots(&fresh, &[], at(END)).is_empty());
+        let finished = collect(&mut restarted, &mut tracker);
+        assert!(finished[0].pinned && finished[0].unread);
+        assert_eq!(engine.apply_snapshots(&finished, &[], at(END)).len(), 1);
+        let repeated = collect(&mut restarted, &mut tracker);
+        assert!(engine.apply_snapshots(&repeated, &[], at(END)).is_empty());
     }
 
     #[test]

@@ -13,7 +13,7 @@
   import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '$lib/types';
   import {formatAgo} from '$lib/types';
   import type {ProjectChoice} from '$lib/project-options';
-  import {localDiscoveryCandidates,localHookKind,type SourceDefinition} from '$lib/source-setup';
+  import {configuredSource,localDiscoveryCandidates,localHookKind,sourceDefinitionFor,type SourceDefinition} from '$lib/source-setup';
   import SshSourceWizard from './SshSourceWizard.svelte';
   import ProjectScope from './ProjectScope.svelte';
   import SourceSessions from './SourceSessions.svelte';
@@ -36,8 +36,44 @@
   let eventAgents=$state<SourceDefinition[]>([]);
   const discoveredLocal=$derived(localDiscoveryCandidates(localAgents,discovery,applied));
   const knownLocal=$derived(localAgents.filter(agent=>agent.kind!=='scanner'&&!discoveredLocal.some(row=>row.definition.kind===agent.kind)));
+  const featuredLocal=$derived(knownLocal.filter(agent=>discovery.some(row=>row.data_location_detected===true
+    && (row.candidate?.kind===agent.kind||settings?.sources.some(s=>s.kind===agent.kind&&s.id===row.id)))
+    || settings?.sources.some(s=>s.kind===agent.kind&&configuredSource(s,agent,settings?.auto_discovery_seen))));
+  const optionalLocal=$derived(knownLocal.filter(agent=>!featuredLocal.includes(agent)));
+  let supportedOpen=$state(false);
+  let catalog=$state<SourceDefinition[]>([]);
+  const wslSources=$derived(settings?.sources.filter(s=>s.kind==='codex_wsl'||s.kind==='deepseek_wsl')??[]);
+  const fallbackSources=$derived(settings?.sources.filter(s=>
+    !wslSources.includes(s)&&s.kind!=='remote_codex'&&s.kind!=='remote_claude_code'&&s.kind!=='generic_event'
+    &&(s.kind==='scanner'||!localAgents.some(agent=>agent.kind===s.kind))
+    &&(s.kind==='hooks'||configuredSource(s,sourceDefinitionFor(catalog,s),settings?.auto_discovery_seen)))??[]);
+  const fallbackEvents=$derived(settings?.sources.filter(s=>{
+    if(s.kind!=='generic_event')return false;
+    const local=localHookKind(s.integration?.adapter_id);
+    return !local||!localAgents.some(agent=>agent.kind===local)||!hookCatalog(local).some(d=>d.adapter_id===s.integration?.adapter_id);
+  })??[]);
   let sourceScroll:HTMLDivElement;
-  let handledReview=0, detectionRequest=0;
+  let handledReview=0, detectionRequest=0, catalogRequest=0;
+  async function refreshCatalog(currentPlatform:string){
+    const request=++catalogRequest;
+    const entries=await invoke<SourceDefinition[]>('get_source_catalog');
+    if(!active||request!==catalogRequest)return;
+    catalog=entries;
+    localAgents=entries.filter(agent=>agent.category==='local'&&(!agent.platforms.length||agent.platforms.includes(currentPlatform)));
+    eventAgents=entries.filter(agent=>agent.kind==='generic_event'&&(!agent.platforms.length||agent.platforms.includes(currentPlatform)||settings?.sources.some(s=>s.integration?.adapter_id===agent.adapter_id)));
+  }
+  function patchSource(source:MonitorSource,patch:Partial<MonitorSource>){
+    if(saving||conflict)return;
+    Object.assign(source,patch);touch();
+  }
+  let legacyRemove=$state<string|null>(null);
+  function removeLegacy(source:MonitorSource){
+    if(!settings||saving||conflict)return;
+    settings.sources=settings.sources.filter(item=>item.id!==source.id);
+    settings.ssh_paused_sources=(settings.ssh_paused_sources??[]).filter(id=>id!==source.id);
+    legacyRemove=null;touch();
+  }
+
   $effect(()=>{
     if(reviewRequest===handledReview)return;
     handledReview=reviewRequest;
@@ -45,8 +81,7 @@
     void tick().then(()=>sourceScroll?.scrollTo({top:0}));
     if(detectionSettled)void detect();
   });
-  const processAgent=$derived(localAgents.find(agent=>agent.kind==='scanner'));
-  const manualEventAgents=$derived(eventAgents.filter(agent=>!localHookKind(agent.adapter_id)));
+
   function hookCatalog(kind:AgentKind){return eventAgents.filter(agent=>localHookKind(agent.adapter_id)===kind);}
   function hookCount(kind:AgentKind){return settings?.sources.filter(s=>s.kind==='generic_event'&&localHookKind(s.integration?.adapter_id)===kind).length??0;}
   let active=true,revision=0;
@@ -71,12 +106,23 @@
     return discovery.find(d=>source ? d.id===source.id : d.candidate?.kind===kind)?.data_location_detected;
   }
   function connection(group:ServerGroup):string {
-    const report=reports[group.host];if(report&&Date.now()-report.checked_at<60000)return report.connection;
-    const claude=snapshot?.providers.find(p=>p.provider===group.agents.claude_code?.id);
-    if(claude?.status==='connected'&&claude.last_success&&Date.now()-claude.last_success<30000)return 'connected';
+    const report=reports[group.host];
+    const claude=snapshot?.providers.find(p=>p.provider===group.agents.claude_code?.id&&group.agents.claude_code?.enabled);
+    if(report&&Date.now()-report.checked_at<60000&&report.checked_at>=(claude?.last_attempt??0))return report.connection;
+    if(claude?.last_attempt&&Date.now()-claude.last_attempt<30000){
+      if(claude.message==='远端 Claude Code 的 SSH 连接失败')return 'disconnected';
+      if(claude.status==='connected'||claude.message==='未找到远端 Claude Code 会话目录'||claude.message==='远端 Claude Code 记录未读完整，已保留上次状态')return 'connected';
+    }
     const host=snapshot?.hosts.find(h=>h.host===group.host);
-    return host?.last_seen&&Date.now()-host.last_seen<30000?host.status:'unknown';
+    if(host?.status==='disconnected')return 'disconnected';
+    if(host?.last_seen&&Date.now()-host.last_seen<30000)return host.status;
+    return report&&Date.now()-report.checked_at<60000?report.connection:'unknown';
   }
+  function sourceHasIssue(s:MonitorSource){
+    return s.enabled&&['failed','partial','stale'].includes(observation(s)?.read_state??'');
+  }
+  const connectionIssues=$derived(groups.filter(group=>group.sources.some(s=>s.enabled)&&connection(group)==='disconnected').length);
+  const dataIssues=$derived(groups.filter(group=>connection(group)!=='disconnected').reduce((n,group)=>n+group.sources.filter(sourceHasIssue).length,0));
   function sshLabel(group:ServerGroup){return ({connected:'SSH 已连接',disconnected:'SSH 未连接',unknown:'SSH 尚未检测'})[connection(group)]??'SSH 尚未检测';}
   function rowStatus(kind:AgentKind,source?:MonitorSource){
     const saved=applied?.sources.find(s=>s.id===source?.id);
@@ -97,10 +143,10 @@
     catch(e){fail(e);return false;}finally{saving=false;}
   }
   async function save(){if(settings)await commit({...$state.snapshot(settings),onboarding_complete:true});}
-  async function reload(){try{settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));dirty=false;conflict=false;error='';notice='';}catch(e){fail(e);}}
-  function ensureLocal(kind:AgentKind){if(!settings)return;let s=localRows.find(s=>s.kind===kind&&s.id===activeLocalSource)??settings.sources.find(s=>s.kind===kind);if(!s){const candidate=discoveredLocal.find(row=>row.definition.kind===kind)?.candidate;s=candidate?{...structuredClone($state.snapshot(candidate)),enabled:false}:createSource(kind,'',localAgents.find(agent=>agent.kind===kind)?.name);settings.sources.push(s);}return s;}
+  async function reload(){if(saving)return;saving=true;try{settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));dirty=false;conflict=false;error='';notice='';}catch(e){fail(e);}finally{saving=false;}}
+  function ensureLocal(kind:AgentKind){if(!settings||saving)return;let s=localRows.find(s=>s.kind===kind&&s.id===activeLocalSource)??settings.sources.find(s=>s.kind===kind);if(!s){const candidate=discoveredLocal.find(row=>row.definition.kind===kind)?.candidate;s=candidate?{...structuredClone($state.snapshot(candidate)),enabled:false}:createSource(kind,'',localAgents.find(agent=>agent.kind===kind)?.name);settings.sources.push(s);}return s;}
   function ensureRemote(group:ServerGroup,key=activeRemote){
-    if(!settings)return;
+    if(!settings||saving)return;
     let source=group.agents[key];
     if(!source){
       const agent=sshAgents.find(agent=>agent.key===key)!;
@@ -133,7 +179,7 @@
   }
   async function remove(){if(!settings||!selected)return;const next=removeServer($state.snapshot(settings),selected.host);if(await commit(next)){removePrompt=false;page='home';}}
   function list(value:string){return value.split('\n').map(s=>s.trim()).filter(Boolean);}
-  function changeProjects(value:string[]){if(!settings)return;const source=editor??(page==='local'?ensureLocal(activeLocal):selected?ensureRemote(selected):undefined);if(source){source.projects=value;touch();}}
+  function changeProjects(value:string[]){if(!settings||saving||conflict)return;const source=editor??(page==='local'?ensureLocal(activeLocal):selected?ensureRemote(selected):undefined);if(source){source.projects=value;touch();}}
   async function detect(){const request=++detectionRequest;try{const found=await invoke<SourceDiscovery[]>('discover_sources');if(!active||request!==detectionRequest)return;discovery=found;notice='';if(expandedLocal)void loadProjects(localEditor);}catch(e){if(active&&request===detectionRequest)fail(e);}}
   async function probeHost(group:ServerGroup){
     if(probing[group.host])return;probing[group.host]=true;error='';
@@ -194,19 +240,19 @@
   }
   function trap(dialog:HTMLDialogElement){const previous=document.activeElement as HTMLElement|null;dialog.querySelector<HTMLElement>('button')?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'){e.preventDefault();closePrompt=false;removePrompt=false;eventPrompt=null;}if(e.key==='Tab'){const items=[...dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];if(e.shiftKey&&document.activeElement===items[0]){e.preventDefault();items.at(-1)?.focus();}else if(!e.shiftKey&&document.activeElement===items.at(-1)){e.preventDefault();items[0]?.focus();}}};dialog.addEventListener('keydown',key);return{destroy(){dialog.removeEventListener('keydown',key);if(previous?.isConnected)previous.focus();}};}
   async function saveClose(){await save();if(!dirty&&!error){closing=true;await getCurrentWindow().close();}}
-  async function discardClose(){closing=true;await getCurrentWindow().close();}
-  async function confirmHook(){const id=eventPrompt;eventPrompt=null;if(!id)return;saving=true;try{notice=await invoke<string>('configure_claude_events',{sourceId:id.id,enabled:id.enabled,confirmed:true});}catch(e){fail(e);}finally{saving=false;}}
+  async function discardClose(){if(saving)return;closing=true;await getCurrentWindow().close();}
+  async function confirmHook(){if(saving)return;const id=eventPrompt;eventPrompt=null;if(!id)return;saving=true;try{notice=await invoke<string>('configure_claude_events',{sourceId:id.id,enabled:id.enabled,confirmed:true});}catch(e){fail(e);}finally{saving=false;}}
   onMount(()=>{
     if(!isTauri()){error='请在 TaskPulse 桌面应用中打开监控来源。';return;}
     active=true;const cleanup:Array<()=>void>=[];
     void(async()=>{
       try{
-        const close=await getCurrentWindow().onCloseRequested(e=>{if(get(autostart).pending||get(preferencePending)){e.preventDefault();return;}if((dirty||saving||wizard)&&!closing){e.preventDefault();onAttention();closePrompt=true;}});if(active)cleanup.push(close);else close();
+        const close=await getCurrentWindow().onCloseRequested(e=>{if(saving||get(autostart).pending||get(preferencePending)){e.preventDefault();return;}if((dirty||wizard)&&!closing){e.preventDefault();onAttention();closePrompt=true;}});if(active)cleanup.push(close);else close();
         settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));error=await invoke<string|null>('get_monitoring_error')??'';
         const environment=await invoke<{platform:string}>('integration_environment');platform=environment.platform==='windows'?'Windows':environment.platform==='macos'?'macOS':'Linux';
-        const catalog=await invoke<SourceDefinition[]>('get_source_catalog');
-        localAgents=catalog.filter(agent=>agent.category==='local'&&(!agent.platforms.length||agent.platforms.includes(environment.platform)));
-        eventAgents=catalog.filter(agent=>agent.kind==='generic_event'&&(!agent.platforms.length||agent.platforms.includes(environment.platform)||settings?.sources.some(s=>s.integration?.adapter_id===agent.adapter_id)));
+        const catalogChanged=await listen('integration-catalog-updated',()=>{void refreshCatalog(environment.platform).catch(fail);});
+        if(active)cleanup.push(catalogChanged);else catalogChanged();
+        await refreshCatalog(environment.platform);
         const stop=await listen<DashboardSnapshot>('dashboard-snapshot-updated',e=>updateSnapshot(e.payload));if(active)cleanup.push(stop);else stop();
         updateSnapshot(await invoke<DashboardSnapshot>('get_dashboard_snapshot'));
         try{discovery=await invoke<SourceDiscovery[]>('discover_sources');if(settings&&!settings.onboarding_complete&&!dirty){for(const s of settings.sources)if(localAgents.some(agent=>agent.kind===s.kind))s.enabled=localAgents.some(agent=>agent.kind===s.kind&&agent.auto_enable_on_discovery)&&discovery.some(d=>d.id===s.id&&d.data_location_detected===true);dirty=true;}}catch(e){fail(e);}finally{detectionSettled=true;}
@@ -222,12 +268,17 @@
   <header class="ms-head"><h1>{$t(page==='server'?'服务器设置':'监控来源')}</h1>{#if page!=='local'}<button class="ms-btn" class:primary={page==='home'} disabled={saving||updating} onclick={addWizard}><Plus size={14}/>{$t('添加 SSH 服务器')}</button>{/if}</header>
   <div class="ms-tabsbar">{#if page!=='server'}<div class="ms-tabs">{#each [['local','本机'],['ssh','SSH 服务器']] as [id,label]}<button class:active={page==='local'?id==='local':tab===id} onclick={()=>{tab=id as typeof tab;if(id==='local')openLocal();else page='home';}} aria-pressed={page==='local'?id==='local':tab===id}>{$t(label)}{#if id==='ssh'}<small>{groups.length}</small>{/if}</button>{/each}</div>{:else}<button class="ms-back" onclick={()=>{page='home';tab='ssh';}}><ArrowLeft size={13}/>{$t('返回来源列表')}</button>{/if}</div>
   <div class="ms-scroll glass-scroll" bind:this={sourceScroll}>
+    <fieldset class="source-edit-lock" disabled={saving} aria-busy={saving}>
     {#if error}<div class="ms-error" role="alert">{$t(error)}{#if conflict}<button class="ms-btn small" onclick={reload}>{$t('加载最新配置')}</button>{:else}<button class="ms-btn icon-only ghost" aria-label={$t('关闭错误')} onclick={()=>error=''}><X size={13}/></button>{/if}</div>{/if}
     {#if notice}<p class="ms-success" role="status">{$t(notice)}</p>{/if}
     {#if !settings}<p class="ms-muted">{$t('正在读取设置…')}</p>
     {:else if page==='home'}
-      {#if tab==='ssh'}<div class="summary-grid"><div><small><Server size={13}/>{$t('已添加服务器')}</small><strong>{groups.length}<span>{$t('台 SSH 主机')}</span></strong></div><div><small><Link size={13}/>{$t('SSH 在线')}</small><strong>{groups.filter(g=>connection(g)==='connected').length}<span>{$t('台最近连接正常')}</span></strong></div><div class="warn"><small><Info size={13}/>{$t('需要处理')}</small><strong>{groups.filter(g=>connection(g)==='disconnected').length}<span>{$t('台连接异常')}</span></strong></div></div>{/if}
-      {#if tab!=='local'}<div class="section-top"><h2><Server size={16}/>{$t('SSH 服务器')}<span class="count-badge">{groups.length}</span></h2></div><div class="tool-row"><label class="server-search"><Search size={15}/><input bind:value={query} aria-label={$t('搜索服务器')} placeholder={$t('搜索服务器名称或 SSH Host')}/></label><button class="ms-btn small" disabled={saving} onclick={()=>void invoke('request_refresh')}><RefreshCw size={13}/>{$t('刷新状态')}</button></div><div class="server-list">{#each shown as group (group.host)}<article class="server-card" data-host={group.host}><span class="source-symbol remote"><Server size={19}/></span><div class="source-grow"><div class="server-head"><strong>{group.name}</strong><small>{group.host}</small></div><p class="server-description">{$t(group.paused?'采集已暂停，原启用状态已保留':group.sources.some(s=>s.enabled)?'已启用':'未启用')}</p><div class="agent-tags">{#each sshAgents as agent (agent.key)}<span class="mini-tag">{agent.name} · {$t(group.agents[agent.key]?.enabled?'已启用':'未启用')}</span>{/each}</div></div><div class="server-controls"><span class="ms-pill" class:warning={connection(group)==='disconnected'} class:neutral={connection(group)==='unknown'}><i></i>{$t(sshLabel(group))}</span><span class="metric"><b>{serverTaskCount(group)}</b> {$t('任务')}</span><button class="ms-btn small" onclick={()=>openServer(group)}>{$t('管理')}<ChevronRight size={13}/></button></div></article>{/each}{#if !shown.length}<div class="ms-empty"><Server size={25}/><strong>{$t(groups.length?'没有符合条件的服务器':'还没有添加 SSH 服务器')}</strong><button class="ms-btn" onclick={addWizard}><Plus size={13}/>{$t('添加服务器')}</button></div>{/if}</div>{/if}
+      {#if tab==='ssh'}
+        <p class="ms-muted" data-ssh-issues class:ms-warning={connectionIssues+dataIssues>0}>
+          {$t('SSH 连接异常：{connections} · 数据读取需检查：{sources}',{connections:connectionIssues,sources:dataIssues})}
+        </p>
+      {/if}
+      {#if tab!=='local'}<div class="section-top"><h2><Server size={16}/>{$t('SSH 服务器')}<span class="count-badge">{groups.length}</span></h2></div><div class="tool-row"><label class="server-search"><Search size={15}/><input bind:value={query} aria-label={$t('搜索服务器')} placeholder={$t('搜索服务器名称或 SSH Host')}/></label><button class="ms-btn small" disabled={saving} onclick={()=>void invoke('request_refresh')}><RefreshCw size={13}/>{$t('刷新状态')}</button></div><div class="server-list">{#each shown as group (group.host)}<article class="server-card" data-host={group.host}><span class="source-symbol remote"><Server size={19}/></span><div class="source-grow"><div class="server-head"><strong>{group.name}</strong><small>{group.host}</small></div><p class="server-description">{$t(group.paused?'采集已暂停，原启用状态已保留':group.sources.some(sourceHasIssue)?'数据读取需检查':group.sources.some(s=>s.enabled)?'已启用':'未启用')}</p><div class="agent-tags">{#each sshAgents as agent (agent.key)}<span class="mini-tag">{agent.name} · {$t(sourceStatus(group.agents[agent.key],observation(group.agents[agent.key])))}</span>{/each}</div></div><div class="server-controls"><span class="ms-pill" class:warning={connection(group)==='disconnected'} class:neutral={connection(group)==='unknown'}><i></i>{$t(sshLabel(group))}</span><span class="metric"><b>{serverTaskCount(group)}</b> {$t('任务')}</span><button class="ms-btn small" onclick={()=>openServer(group)}>{$t('管理')}<ChevronRight size={13}/></button></div></article>{/each}{#if !shown.length}<div class="ms-empty"><Server size={25}/><strong>{$t(groups.length?'没有符合条件的服务器':'还没有添加 SSH 服务器')}</strong><button class="ms-btn" onclick={addWizard}><Plus size={13}/>{$t('添加服务器')}</button></div>{/if}</div>{/if}
     {:else if page==='local'}
       <div class="section-top"><h2>{$t('本机 Agent')}</h2><button class="ms-btn small" onclick={detect}><RefreshCw size={13}/>{$t('重新检测')}</button></div>
       {#snippet localAgentRow(agent:SourceDefinition, newlyFound=false)}
@@ -235,11 +286,10 @@
           <div class="agent-entry" data-agent-kind={agent.kind}>
 <div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(newlyFound&&!source?(agent.kind==='trae'?'已检测到 · 仅支持会话目录':'已检测到 · 未启用'):rowStatus(agent.kind,source))}{#if source?.enabled&&source.projects.length&&agent.kind!=='trae'} · {taskCount(source)} {$t('任务')}{/if}{#if hookCount(agent.kind)} · {$t('{count} 个 Hook 连接',{count:hookCount(agent.kind)})}{/if}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':newlyFound&&!source?'选择添加':source?.enabled&&!source.projects.length?'设置项目范围':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.kind==='trae'?'读取 Trae 会话目录':'启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
             {#if expandedLocal===agent.kind}
-              {#if agent.kind==='doubao'}<p class="ms-muted">{$t('手动开启后，只关注兼容的豆包工作任务。普通聊天不在监控范围内。')}</p>{/if}
               {#if agent.kind==='trae'}<p class="ms-muted">{$t('Trae 的任务库尚不能直接读取。可在已发现会话中查看目录，任务进度与提醒暂不可用。')}</p>{/if}
               {#if agent.kind==='claude_code' && observation(source)?.data_detected===false}<p class="ms-muted">{$t('Claude Code 有新活动后会自动更新，旧会话不会当作运行中的任务。')}</p>{/if}
-                    <section class="agent-config" data-source-id={localEditor?.id??''}><h3>{$t('项目范围')}</h3>{#if localRows.filter(s=>s.kind===activeLocal).length>1}<label class="ms-field">{$t('数据来源实例')}<select value={localEditor?.id} onchange={e=>{activeLocalSource=e.currentTarget.value;void loadProjects(localRows.find(s=>s.id===activeLocalSource));}}>{#each localRows.filter(s=>s.kind===activeLocal) as s}<option value={s.id}>{s.name} · {s.location||$t('默认位置')}</option>{/each}</select></label>{/if}{#key localEditor?.id??activeLocal}<ProjectScope projects={localEditor?.projects??['*']} choices={localEditor?projectChoices(localEditor,snapshot?.tasks??[],projects[localEditor.id]??[]):[]} aliases={localEditor?projectAliases[localEditor.id]??[]:[]} onchange={changeProjects}/>{/key}
-        <details class="ms-advanced"><summary><Settings2 size={13}/>{$t('数据位置、排除规则与排查')}</summary><div class="advanced-inner">{#if localEditor}<label class="ms-field">{$t('数据路径')}<input value={localEditor.kind==='codex'?'CODEX_HOME / ~/.codex':localEditor.location} placeholder={localEditor.kind==='claude_code'?'CLAUDE_CONFIG_DIR / ~/.claude':$t('默认位置')} readonly={localAgents.find(agent=>agent.kind===activeLocal)?.location_kind==='none'} oninput={e=>{if(localEditor){localEditor.location=e.currentTarget.value;touch();}}}/></label><label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="3" value={localEditor.excluded_projects.join('\n')} oninput={e=>{if(localEditor){localEditor.excluded_projects=list(e.currentTarget.value);touch();}}}></textarea></label><button class="ms-btn" onclick={()=>sessionSource=localEditor??null}>{$t('已发现会话')}</button><button class="ms-btn" disabled={!!reading||dirty||!localEditor.enabled} onclick={()=>localEditor&&readLocal(localEditor)}><RefreshCw size={13}/>{$t(reading?'读取中…':'检测数据读取')}</button>{#if activeLocal==='claude_code'}<p class="ms-warning">{$t('本机会话采用只读观测；明确审批需单独确认官方 Hook。原生提问尚未支持。')}</p><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:true}:null}>{$t('配置 Claude 精确事件')}</button><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:false}:null}>{$t('移除 Claude 精确事件')}</button>{/if}<p class="ms-diagnostic">{$t(discovery.find(d=>d.id===localEditor?.id)?.detail??'尚未检测')}</p>{#each (snapshot?.providers??[]).filter(p=>p.provider===localEditor?.id&&p.status==='degraded'&&p.message) as provider (provider.provider)}<p class="ms-diagnostic" data-provider-diagnostic>{$t(provider.message??'尚无采集诊断')}</p>{/each}{:else}<p class="ms-muted">{$t('启用后可配置数据读取。')}</p>{/if}</div></details>
+                    <section class="agent-config" data-source-id={localEditor?.id??''}><h3>{$t('项目范围')}</h3>{#if localRows.filter(s=>s.kind===activeLocal).length>1}<label class="ms-field">{$t('数据来源实例')}<select value={localEditor?.id} onchange={e=>{activeLocalSource=e.currentTarget.value;void loadProjects(localRows.find(s=>s.id===activeLocalSource));}}>{#each localRows.filter(s=>s.kind===activeLocal) as s}<option value={s.id}>{s.name} · {s.location||$t('默认位置')}</option>{/each}</select></label>{/if}{#key localEditor?.id??activeLocal}<ProjectScope projects={localEditor?.projects??['*']} choices={localEditor?projectChoices(localEditor,snapshot?.tasks??[],projects[localEditor.id]??[]):[]} aliases={localEditor?projectAliases[localEditor.id]??[]:[]} disabled={saving||conflict} onchange={changeProjects}/>{/key}
+        <details class="ms-advanced"><summary><Settings2 size={13}/>{$t('数据位置、排除规则与排查')}</summary><div class="advanced-inner">{#if localEditor}<label class="ms-field">{$t('数据路径')}<input value={localEditor.kind==='codex'?'CODEX_HOME / ~/.codex':localEditor.location} placeholder={localEditor.kind==='claude_code'?'CLAUDE_CONFIG_DIR / ~/.claude':$t('默认位置')} readonly={localAgents.find(agent=>agent.kind===activeLocal)?.location_kind==='none'} oninput={e=>{if(!saving&&localEditor){localEditor.location=e.currentTarget.value;touch();}}}/></label><label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="3" value={localEditor.excluded_projects.join('\n')} oninput={e=>{if(!saving&&localEditor){localEditor.excluded_projects=list(e.currentTarget.value);touch();}}}></textarea></label><button class="ms-btn" onclick={()=>sessionSource=localEditor??null}>{$t('已发现会话')}</button><button class="ms-btn" disabled={!!reading||dirty||!localEditor.enabled} onclick={()=>localEditor&&readLocal(localEditor)}><RefreshCw size={13}/>{$t(reading?'读取中…':'检测数据读取')}</button>{#if activeLocal==='claude_code'}<p class="ms-warning">{$t('本机会话采用只读观测；明确审批需单独确认官方 Hook。原生提问尚未支持。')}</p><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:true}:null}>{$t('启用更准确的提醒')}</button><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:false}:null}>{$t('移除 Claude 精确事件')}</button>{/if}<p class="ms-diagnostic">{$t(discovery.find(d=>d.id===localEditor?.id)?.detail??'尚未检测')}</p>{#each (snapshot?.providers??[]).filter(p=>p.provider===localEditor?.id&&p.status==='degraded'&&p.message) as provider (provider.provider)}<p class="ms-diagnostic" data-provider-diagnostic>{$t(provider.message??'尚无采集诊断')}</p>{/each}{:else}<p class="ms-muted">{$t('启用后可配置数据读取。')}</p>{/if}</div></details>
       </section>
               {#if settings && hookCatalog(agent.kind).length}<EventSources {settings} catalog={hookCatalog(agent.kind)} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch} localHook/>{/if}
             {/if}
@@ -255,19 +305,50 @@
             {/each}
           </section>
         {/if}
-        {#each knownLocal as agent (agent.id)}
+        {#each featuredLocal as agent (agent.id)}
           {@render localAgentRow(agent)}
         {/each}
+        {#if !featuredLocal.length&&!discoveredLocal.length}<p class="ms-muted">{$t('还没有检测到或配置本机来源。')}</p>{/if}
+        {#if optionalLocal.length}
+          <details class="ms-advanced" data-supported-sources bind:open={supportedOpen}>
+            <summary>{$t('其他支持的 Agent')} · {optionalLocal.length}</summary>
+            {#each optionalLocal as agent (agent.id)}{@render localAgentRow(agent)}{/each}
+          </details>
+        {/if}
 <div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>void savePreference({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
       </section>
-      {#if processAgent}
-        <details class="detail-card process-discovery" data-process-discovery>
-          <summary>{$t('进程检测（可选）')}</summary>
-          <p class="ms-muted">{$t('只看 Gemini CLI 等程序是否正在运行，无法判断任务进度、审批或结果。上方已支持的工具通常不用开启此项。')}</p>
-          {@render localAgentRow(processAgent)}
+      {#snippet savedSourceRow(source:MonitorSource)}
+        <details class="ms-advanced" data-saved-source={source.id} ontoggle={e=>{if(e.currentTarget.open)void loadProjects(source);}}>
+          <summary>{source.name}{#if source.location} · {source.location}{/if} · {$t(source.kind==='doubao'?'暂停支持。':sourceStatus(source,observation(source)))}</summary>
+          <div class="advanced-inner">
+            <label class="ms-field">{$t('来源名称')}<input value={source.name} oninput={e=>patchSource(source,{name:e.currentTarget.value})}/></label>
+            {#if source.kind!=='doubao'||source.enabled}
+              <label class="ms-field">{$t('启用 {name}',{name:source.name})}<input type="checkbox" role="switch" class="settings-switch" checked={source.enabled} disabled={(source.kind==='doubao'&&!source.enabled)||settings?.ssh_paused_sources?.includes(source.id)} onchange={e=>patchSource(source,{enabled:e.currentTarget.checked})}/></label>
+            {/if}
+            <ProjectScope projects={source.projects} choices={projectChoices(source,snapshot?.tasks??[],projects[source.id]??[])} aliases={projectAliases[source.id]??[]} disabled={saving||conflict} onchange={projects=>patchSource(source,{projects})}/>
+            <label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="2" value={source.excluded_projects.join('\n')} oninput={e=>patchSource(source,{excluded_projects:list(e.currentTarget.value)})}></textarea></label>
+            {#if source.kind==='tmux'}
+              <label class="ms-field">tmux {$t('会话')}<textarea rows="2" value={source.tmux_sessions.join('\n')} oninput={e=>patchSource(source,{tmux_sessions:list(e.currentTarget.value)})}></textarea></label>
+              <label class="ms-field">tmux {$t('窗格')}<textarea rows="2" value={source.tmux_panes.join('\n')} oninput={e=>patchSource(source,{tmux_panes:list(e.currentTarget.value)})}></textarea></label>
+            {/if}
+            <div class="inline-actions">
+              <button class="ms-btn" onclick={()=>sessionSource=source}>{$t('已发现会话')}</button>
+              {#if legacyRemove===source.id}<button class="ms-btn danger" onclick={()=>removeLegacy(source)}>{$t('确认移除')}</button><button class="ms-btn" onclick={()=>legacyRemove=null}>{$t('取消')}</button>
+              {:else}<button class="ms-btn" onclick={()=>legacyRemove=source.id}>{$t('移除来源')}</button>{/if}
+            </div>
+          </div>
+        </details>
+      {/snippet}
+      {#if wslSources.length}
+        <details class="detail-card" data-wsl-sources><summary>WSL · {$t('已有来源')}</summary>
+          {#each wslSources as source (source.id)}{@render savedSourceRow(source)}{/each}
         </details>
       {/if}
-      <EventSources {settings} catalog={manualEventAgents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch}/>
+      <details class="detail-card" data-existing-advanced><summary>{$t('已有高级来源')}</summary>
+        {#each fallbackSources as source (source.id)}{@render savedSourceRow(source)}{/each}
+        {#if !fallbackEvents.length&&!fallbackSources.length}<p class="ms-muted">{$t('没有已配置的高级来源。')}</p>{/if}
+        <EventSources {settings} catalog={eventAgents} sources={fallbackEvents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch} maintenance/>
+      </details>
     {:else if selected}
       {@const source=selected.agents[activeRemote]}
       {@const report=reports[selected.host]}
@@ -287,6 +368,7 @@
             {/if}
           </div>
           {#if report}<p class="ms-muted">{$t(report.message)}</p>{/if}
+          {#if report?.[activeRemote].state==='partial'}<p class="ms-warning">{$t('项目列表不完整，未列出的项目可以手动添加路径。')}</p>{/if}
         </section>
         <section class="detail-card">
           <h3>Agent</h3>
@@ -304,12 +386,12 @@
           <h3>{$t('项目范围')}</h3>
           <label class="ms-field">{$t('选择 Agent')}<select value={activeRemote} onchange={e=>selected&&selectRemote(selected,e.currentTarget.value as SshAgent)}>{#each sshAgents as agent (agent.key)}<option value={agent.key}>{agent.name}</option>{/each}</select></label>
           {#key selected.host+':'+activeRemote}
-            <ProjectScope projects={source?.projects??['*']} choices={source?projectChoices(source,snapshot?.tasks??[],[...(projects[source.id]??[]),...(report?.[activeRemote].projects??[])]):report?.[activeRemote].projects??[]} aliases={source?projectAliases[source.id]??[]:[]} onchange={changeProjects}/>
+            <ProjectScope projects={source?.projects??['*']} choices={source?projectChoices(source,snapshot?.tasks??[],[...(projects[source.id]??[]),...(report?.[activeRemote].projects??[])]):report?.[activeRemote].projects??[]} aliases={source?projectAliases[source.id]??[]:[]} disabled={saving||conflict} onchange={changeProjects}/>
           {/key}
           <details class="ms-advanced">
             <summary><Settings2 size={13}/>{$t('高级设置：轮询、路径与诊断')}</summary>
             <div class="advanced-inner">
-              <label class="ms-field">{$t('服务器名称')}<input value={selected.name} oninput={e=>{if(selected){const entries=Object.values(selected.agents).filter(entry=>entry!==undefined);if(!entries.length){const entry=ensureRemote(selected);if(entry)entries.push(entry);}for(const entry of entries)entry.name=e.currentTarget.value;touch();}}}/></label>
+              <label class="ms-field">{$t('服务器名称')}<input value={selected.name} oninput={e=>{if(!saving&&selected){const entries=Object.values(selected.agents).filter(entry=>entry!==undefined);if(!entries.length){const entry=ensureRemote(selected);if(entry)entries.push(entry);}for(const entry of entries)entry.name=e.currentTarget.value;touch();}}}/></label>
               <label class="ms-field">{$t('轮询间隔（毫秒）')}<input type="number" min="500" max="60000" value={source?.poll_interval_ms??3000} oninput={e=>{if(selected){const s=ensureRemote(selected);if(s){s.poll_interval_ms=Number(e.currentTarget.value);touch();}}}}/></label>
               <label class="ms-field">{$t('远端数据路径')}<input value={activeRemote==='codex'?'~/.codex':'CLAUDE_CONFIG_DIR / ~/.claude'} readonly/></label>
               <p class="ms-muted">{$t('沿用现有远端采集路径；当前不提供路径覆盖。')}</p>
@@ -322,6 +404,7 @@
         </section>
       </div>
     {/if}
+    </fieldset>
   </div>
   <footer class="ms-foot" class:idle={!dirty&&page!=='server'}><span>{#if dirty}<ShieldCheck size={14}/>{$t('有未保存的配置更改')}{/if}</span><div>{#if dirty}<button class="ms-btn ghost" disabled={saving} onclick={reload}>{$t('取消更改')}</button><button class="ms-btn primary" disabled={saving||conflict||updating||!detectionSettled} onclick={save}><Save size={13}/>{$t(saving?'正在保存…':settings&&!settings.onboarding_complete?'确认并开始监控':'应用更改')}</button>{:else if page==='server'}<button class="ms-btn danger" disabled={saving} onclick={()=>removePrompt=true}><Trash2 size={13}/>{$t('移除服务器')}</button>{/if}</div></footer>
   {#if sessionSource}<SourceSessions source={sessionSource} ondismiss={()=>sessionSource=null}/>{/if}

@@ -161,6 +161,7 @@ fn probe(executor: &dyn SshExecutor, host: &str) -> Result<SshProbe, String> {
                             "missing",
                             "read_error",
                             "unsupported_format",
+                            "partial",
                         ]
                         .contains(&agent.state.as_str())
                             && agent.projects.len() <= 128

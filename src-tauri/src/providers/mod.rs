@@ -232,6 +232,21 @@ pub fn task_observation_state(task: &TaskSnapshot) -> String {
     .to_string()
 }
 
+/// The paged readers mark cached/rewound rows stale. Only their verified
+/// per-session observations may remain current while other pages are pending.
+pub(crate) fn paged_native_evidence(task: &TaskSnapshot) -> bool {
+    !task.stale
+        && !task.internal
+        && task.source == crate::domain::TaskSource::NativeAgent
+        && matches!(
+            (task.agent_id.as_deref(), task.evidence_channel.as_deref()),
+            (Some("kimi-code"), Some("native_wire"))
+                | (Some("qoder-desktop" | "qoder-transcript"), Some("native"))
+        )
+        && task.session_id.as_deref().is_some_and(|id| !id.is_empty())
+        && task.turn_key.as_deref().is_some_and(|key| !key.is_empty())
+}
+
 pub(crate) fn can_record_task_observation(task: &TaskSnapshot) -> bool {
     use crate::domain::{DetectionConfidence, TaskSource, TaskStatus};
     if task.stale || task.internal {
@@ -256,6 +271,10 @@ pub(crate) fn can_record_task_observation(task: &TaskSnapshot) -> bool {
                 && task.evidence_channel.as_deref() == Some("native_transcript")
                 && task.session_id.as_deref().is_some_and(|id| !id.is_empty())
                 && task.turn_key.as_deref().is_some_and(|key| !key.is_empty())
+        }
+        TaskSource::NativeAgent => {
+            paged_native_evidence(task)
+                && (task.status == TaskStatus::Running || task.requires_action())
         }
         _ => false,
     }

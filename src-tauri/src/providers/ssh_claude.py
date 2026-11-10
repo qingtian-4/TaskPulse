@@ -26,7 +26,7 @@ def clean(value, limit=256):
 @contextlib.contextmanager
 def read_file(path):
     # A directory entry can be replaced between enumeration and open.
-    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+    fd = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
     with os.fdopen(fd, "rb") as stream:
         if not stat.S_ISREG(os.fstat(stream.fileno()).st_mode):
             raise ValueError("not a regular file")
@@ -173,7 +173,7 @@ def inspect(root, probe, tracked):
         partial = True
     except OSError:
         partial = True
-    partial |= seen > MAX_ENTRIES or (not probe and len(paths) > MAX_FILES)
+    partial |= seen > MAX_ENTRIES or len(paths) > MAX_FILES
     used = encoded = 0
     ids = set()
     for _, _, sid, path in sorted(paths, reverse=True)[:MAX_FILES]:

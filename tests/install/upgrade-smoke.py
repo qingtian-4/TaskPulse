@@ -122,17 +122,14 @@ def overlay(source, public, endpoint, version, original_version, msi_log=None):
     replace_once(source / "src-tauri/Cargo.lock", f'name = "agent-tray"\nversion = "{original_version}"', f'name = "agent-tray"\nversion = "{version}"')
 
 
-def windows_payload_exe(package, output, kind):
+def windows_payload_exe(package, output, kind, expected_name):
     output.mkdir()
     if kind == "nsis":
         sevenzip = Path(os.environ["ProgramFiles"]) / "7-Zip/7z.exe"
         run(sevenzip, "x", package, "-o" + str(output), "-y")
     else:
         run_msi(["/a", str(package), "/qn"], {"TARGETDIR": str(output)})
-    executables = [
-        path for name in ("TaskPulse.exe", "agent-tray.exe")
-        for path in output.rglob(name)
-    ]
+    executables = list(output.rglob(expected_name))
     if len(executables) != 1:
         raise RuntimeError("Expected one actual packaged TaskPulse executable")
     return executables[0]
@@ -273,6 +270,7 @@ def prepare(kind, target, evidence):
                 legacy = json.loads(windows_bytes)
                 assert legacy.pop("mainBinaryName") == "TaskPulse"
                 legacy["bundle"]["windows"]["nsis"].pop("installerHooks")
+                legacy["bundle"]["windows"].pop("wix")
                 windows_config.write_text(json.dumps(legacy, indent=2) + "\n", encoding="utf-8")
             else:
                 windows_config.write_bytes(windows_bytes)
@@ -314,12 +312,17 @@ def prepare(kind, target, evidence):
         shutil.copy2(candidates[0], payload)
         shutil.copy2(str(candidates[0]) + ".sig", str(payload) + ".sig")
         if kind != "macos":
-            packaged_exe = windows_payload_exe(payload, output / "extracted", kind)
             expected_name = "agent-tray.exe" if label == "old" else "TaskPulse.exe"
+            packaged_exe = windows_payload_exe(payload, output / "extracted", kind, expected_name)
             if packaged_exe.name != expected_name:
                 raise RuntimeError(f"Unexpected {label} installed executable name")
             info[label + "_exe_name"] = packaged_exe.name
             info[label + "_exe_sha256"] = digest(packaged_exe)
+            if label == "new":
+                legacy = packaged_exe.with_name("agent-tray.exe")
+                if not legacy.is_file() or digest(legacy) == digest(packaged_exe):
+                    raise RuntimeError("Expected an independent packaged compatibility bridge")
+                info["new_legacy_bridge_sha256"] = digest(legacy)
         if kind == "msi":
             metadata = run(windows_powershell(), "-NoProfile", "-Command", r'''
 $ErrorActionPreference='Stop'
@@ -370,7 +373,7 @@ $view.Close()
     save(root / "ci-owned.json", {"purpose": "TaskPulse isolated installed upgrade acceptance", "commit": info["commit"]})
     save(root / "plan.json", info)
     # Upload manifest deliberately excludes local key paths/signatures and generated binaries.
-    save(evidence / "build.json", {k: v for k, v in info.items() if k in ("kind", "target", "old", "new", "commit", "old_sha256", "new_sha256", "old_exe_sha256", "new_exe_sha256", "old_exe_name", "new_exe_name")})
+    save(evidence / "build.json", {k: v for k, v in info.items() if k in ("kind", "target", "old", "new", "commit", "old_sha256", "new_sha256", "old_exe_sha256", "new_exe_sha256", "old_exe_name", "new_exe_name", "new_legacy_bridge_sha256")})
     return root / "plan.json"
 
 
@@ -759,12 +762,19 @@ def supervise(plan):
         assert child.wait(timeout=15) == 0
         assert digest(next_exe) != old_hash and digest(next_exe) == info["new_exe_sha256"]
         if next_exe != exe:
-            assert not exe.exists(), "Old installed binary remains after the rename"
+            assert exe.is_file() and digest(exe) == info["new_legacy_bridge_sha256"]
+            assert digest(exe) != old_hash, "The compatibility path still contains the old application"
+            sample = REPO / "integrations/examples/start.json"
+            check = subprocess.run([str(exe), "--integration-validate"], input=sample.read_bytes(),
+                                   capture_output=True, timeout=10, check=True)
+            assert json.loads(check.stdout)["valid"], check.stdout
+            denied = subprocess.run([str(exe), "--show"], capture_output=True, timeout=10)
+            assert denied.returncode == 2, "The compatibility bridge must reject GUI arguments"
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, run_key) as run_registration:
                 assert winreg.QueryValueEx(run_registration, "TaskPulse")[0] == f'"{next_exe}"'
             with winreg.OpenKey(winreg.HKEY_CURRENT_USER, approval_key) as approval:
                 assert winreg.QueryValueEx(approval, "TaskPulse")[0] == disabled
-            result["checks"].append("legacy binary removed, new executable launched, disabled startup preserved")
+            result["checks"].append("new executable launched, old path forwards integration stdin only, disabled startup preserved")
         if info["kind"] == "macos":
             assert digest(exe) == info["new_exe_sha256"]
             run("codesign", "--verify", "--deep", "--strict", exe.parents[2])

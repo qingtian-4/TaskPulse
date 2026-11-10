@@ -9,6 +9,12 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
+/// OpenSSH reserves exit 255 for a transport/configuration failure. A
+/// timeout or a different remote exit cannot prove whether the host answered.
+pub(crate) fn connection_failed(error: &str) -> bool {
+    error.ends_with(" exited Some(255)")
+}
+
 pub trait SshExecutor: Send + Sync {
     /// Run one remote command.  `Err` on spawn failure, timeout, or
     /// non-zero exit — callers must treat any `Err` as "no data this round",

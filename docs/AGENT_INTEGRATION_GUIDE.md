@@ -52,7 +52,7 @@
 
 ```powershell
 $OutputEncoding = [Text.UTF8Encoding]::new($false)
-Get-Content -Raw -Encoding UTF8 .\event.json | & 'C:\你的持久安装路径\agent-tray.exe' --integration-validate
+Get-Content -Raw -Encoding UTF8 .\event.json | & 'C:\你的持久安装路径\TaskPulse.exe' --integration-validate
 ```
 
 如果原生事件只需改字段/名称，可基于 `integrations/community-template.json` 修改 adapter_id、agent_id、JSON pointer、事件映射和能力限制，通过管理界面验证导入，再新建来源选中它。这样不需要修改 Rust 品牌枚举、重新构建或发布 TaskPulse。导入后没有自动安装/执行权限，证据保持自报。特殊二进制日志、远程传输、复杂关联等仍需代码适配；不写“支持所有 Agent”。
@@ -64,6 +64,8 @@ Get-Content -Raw -Encoding UTF8 .\event.json | & 'C:\你的持久安装路径\ag
 - “本轮结束”是 Agent 一轮结束，不是整个项目通过验证。中断单独显示，不伪装成功。
 - 没有可靠最终事件的 Hook 适配器（当前 Kimi/TRAE/ZCode）**不会发送正常完成弹窗**。这与本机原生读取是独立通道；Kimi wire、ZCode 原生记录的明确结束能力见[兼容说明](AGENT_COMPATIBILITY.md)。TRAE 的异步 idle_prompt 缺少 turn ID，不能结束最新任务；Stop 之后可能继续运行。不要用自动刷新/静默超时补一个假结果。
 - 关闭提醒保持未查看；查看后手动标记已查看，运行/固定任务继续显示。改名/心跳不刷新最近执行活跃期。
+
+Windows 安装版的主程序为 `TaskPulse.exe`。旧版生成的 Hook 和 MCP 仍可通过原安装目录里的兼容入口接收事件；兼容入口不能打开任务面板，不需要修改现有宿主配置。
 
 ## 诊断与撤销
 

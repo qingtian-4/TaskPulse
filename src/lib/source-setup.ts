@@ -87,15 +87,20 @@ export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSour
   return [...saved,...additions].filter(r=>!foundOnly||r.dataDetected===true||r.locationDetected===true);
 }
 
+export function configuredSource(source:MonitorSource, definition:SourceDefinition|undefined, seen:string[]=[]):boolean {
+  const seed=definition?.default_source;
+  return source.enabled || seen.includes(source.id) || !seed || source.id!==seed.id
+    || source.name!==seed.name || source.location!==seed.location || source.poll_interval_ms!==seed.poll_interval_ms
+    || JSON.stringify(source.projects)!==JSON.stringify(seed.projects)
+    || !!(source.excluded_projects.length||source.tmux_sessions.length||source.tmux_panes.length||source.integration);
+}
+
 export function sourceSections(catalog:SourceDefinition[],settings:DashboardSettings,discovery:SourceDiscovery[],platform:string,live:SourceSnapshot[],selected:string) {
   const result:{primary:SourceCatalogRow[];supported:SourceCatalogRow[];advanced:SourceCatalogRow[]}={primary:[],supported:[],advanced:[]};
   for(const category of ['local','remote','custom']){
     for(const row of sourceCatalogRows(catalog,settings.sources,discovery,category,platform,false,live)){
-      const source=row.source, seed=row.definition.default_source;
-      const configured=source && (source.id===selected || source.enabled || settings.auto_discovery_seen?.includes(source.id) ||
-        !seed || source.id!==seed.id || source.name!==seed.name || source.location!==seed.location ||
-        source.poll_interval_ms!==seed.poll_interval_ms || JSON.stringify(source.projects)!==JSON.stringify(seed.projects) ||
-        !!(source.excluded_projects.length||source.tmux_sessions.length||source.tmux_panes.length||source.integration));
+      const source=row.source;
+      const configured=source&&(source.id===selected||configuredSource(source,row.definition,settings.auto_discovery_seen));
       if(configured || category==='local'&&(row.locationDetected===true||row.dataDetected===true))result.primary.push(row);
       else if(category==='local')result.supported.push(row);
       else result.advanced.push(row);

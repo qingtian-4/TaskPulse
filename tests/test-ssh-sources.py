@@ -60,8 +60,8 @@ class ProbeTests(unittest.TestCase):
         db.close()
         before = file.read_bytes()
         result = probe.inspect(self.root)
-        self.assertEqual(result['state'], 'readable')
-        self.assertLessEqual(len(result['projects']), 128)
+        self.assertEqual(result['state'], 'partial')
+        self.assertEqual(len(result['projects']), 128)
         self.assertEqual(file.read_bytes(), before)
         self.assertEqual(set(p.name for p in self.root.iterdir()), {'state_1.sqlite'})
 
@@ -72,11 +72,11 @@ class ProbeTests(unittest.TestCase):
         for body in ['[]', '{"type":"session_meta","payload":[]}', 'x' * 65537]:
             file.write_text(body, encoding='utf-8')
             result = probe.inspect(self.root)
-            self.assertIn(result['state'], ['unsupported_format', 'read_error'])
+            self.assertIn(result['state'], ['unsupported_format', 'read_error', 'partial'])
             self.assertFalse(result['data_detected'])
         for n in range(512):
             (self.root / str(n)).touch()
-        self.assertEqual(probe.inspect(self.root)['state'], 'read_error')
+        self.assertEqual(probe.inspect(self.root)['state'], 'partial')
 
 
 if __name__ == '__main__':

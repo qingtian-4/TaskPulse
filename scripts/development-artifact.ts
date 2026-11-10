@@ -28,7 +28,7 @@ export function stageDevelopment(executable:string,out:string,commit:string,vers
   if(existsSync(loader)){assets.push('WebView2Loader.dll');copyFileSync(loader,join(out,'WebView2Loader.dll'));}
   writeFileSync(join(out,'development-manifest.json'),JSON.stringify({version,commit,tag:null,build_kind:'development',platform:'windows',architecture:'x64',state:'isolated; ~/.taskpulse-dev/<build-directory-id>',assets},null,2)+'\n');
   writeFileSync(join(out,'SHA256SUMS.txt'),assets.map(name=>`${sha256(readFileSync(join(out,name)))}  ${name}\n`).join(''));
-  writeFileSync(join(out,'START-HERE.txt'),`TaskPulse Dev — temporary test build\nSource: ${commit}\n\nExtract the whole ZIP into a new folder, then run TaskPulse.exe. No installation is needed.\nState is separate from the installed application. Startup registration and updates are disabled.\nConfirm the read-only sources in this development profile before monitoring real tasks.\nVerify the SHA-256 values in SHA256SUMS.txt; GitHub also provides the ZIP artifact digest.\nThis artifact expires after 7 days. It is not a release or an update package.\n`);
+  writeFileSync(join(out,'START-HERE.txt'),`TaskPulse Dev — temporary test build\nSource: ${commit}\n\nExtract the whole ZIP into a new folder, then run TaskPulse.exe. No installation is needed.\nState is separate from the installed application. Startup registration and updates are disabled.\nConfirm the read-only sources in this development profile before monitoring real tasks.\nVerify the SHA-256 values in SHA256SUMS.txt.\nThis local build is not a release or an update package.\n`);
 }
 if(import.meta.main){
   const root=resolve(import.meta.dir,'..'),args=process.argv.slice(2);

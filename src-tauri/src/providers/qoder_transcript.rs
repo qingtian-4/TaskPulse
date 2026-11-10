@@ -3,7 +3,7 @@
 use super::{
     jsonl_tail::JsonlTail,
     kimi::{stamp, text},
-    native_sessions,
+    native_sessions::{self, DirectorySweep},
 };
 use crate::domain::{ExecutionPhase, TaskSnapshot, TaskStatus, WaitingReason};
 use serde_json::Value;
@@ -125,36 +125,87 @@ impl Journal {
     }
 }
 #[derive(Default)]
+struct TranscriptPage {
+    sweep: DirectorySweep,
+    pending: Vec<PathBuf>,
+    complete: bool,
+}
+#[derive(Default)]
 pub(super) struct Transcripts {
     logs: HashMap<PathBuf, Journal>,
+    pages: HashMap<PathBuf, TranscriptPage>,
 }
 impl Transcripts {
-    pub fn read(&mut self, root: &Path) -> Result<Vec<TaskSnapshot>, String> {
+    pub fn read(
+        &mut self,
+        root: &Path,
+        protected: &HashSet<String>,
+    ) -> Result<(Vec<TaskSnapshot>, bool), String> {
         let began = Instant::now();
-        let mut files = vec![];
-        for p in std::fs::read_dir(root.join("projects")).map_err(|_| "project_listing")? {
-            let p = p.map_err(|_| "project_listing")?;
-            if !p.file_type().is_ok_and(|t| t.is_dir() && !t.is_symlink()) {
-                continue;
-            }
-            let sub = p.path().join("transcript");
-            let sub = if sub.is_dir() { sub } else { p.path() };
-            for f in std::fs::read_dir(sub).map_err(|_| "transcript_listing")? {
-                let f = f.map_err(|_| "transcript_listing")?;
-                if f.file_type().is_ok_and(|t| t.is_file() && !t.is_symlink())
-                    && f.path().extension().is_some_and(|s| s == "jsonl")
-                {
-                    files.push(f.path());
-                    if files.len() > 400 {
-                        return Err("transcript_admission_budget".into());
+        let projects = root.join("projects");
+        let page = self.pages.entry(projects.clone()).or_default();
+        let is_protected = |path: &Path| {
+            path.file_stem()
+                .and_then(|s| s.to_str())
+                .is_some_and(|id| protected.contains(id))
+        };
+        if page.pending.is_empty() {
+            (page.pending, page.complete) = page.sweep.page(
+                std::slice::from_ref(&projects),
+                768,
+                began,
+                |entry, depth| {
+                    let Ok(kind) = entry.file_type() else {
+                        return (None, None);
+                    };
+                    if depth == 1 && kind.is_dir() {
+                        let sub = entry.path().join("transcript");
+                        let dir = if sub.symlink_metadata().is_ok_and(|m| m.is_dir()) {
+                            sub
+                        } else {
+                            entry.path()
+                        };
+                        (Some(dir), None)
+                    } else if depth == 2
+                        && kind.is_file()
+                        && entry.path().extension().is_some_and(|s| s == "jsonl")
+                    {
+                        (None, Some(entry.path()))
+                    } else {
+                        (None, None)
                     }
-                }
+                },
+            );
+            page.complete &= page.pending.len() <= 128;
+            page.pending.sort_by_cached_key(|p| {
+                (
+                    is_protected(p),
+                    p.metadata()
+                        .and_then(|m| m.modified())
+                        .unwrap_or(SystemTime::UNIX_EPOCH),
+                )
+            });
+        }
+        let mut files: Vec<_> = page
+            .pending
+            .drain(page.pending.len().saturating_sub(128)..)
+            .collect();
+        for path in self.logs.keys() {
+            if path.starts_with(&projects) && is_protected(path) && !files.contains(path) {
+                files.push(path.clone());
             }
         }
-        files.sort();
+        files.sort_by_cached_key(|path| {
+            std::cmp::Reverse((
+                is_protected(path),
+                path.metadata()
+                    .and_then(|m| m.modified())
+                    .unwrap_or(SystemTime::UNIX_EPOCH),
+            ))
+        });
         let mut rows = vec![];
         let mut bytes = 0;
-        let mut partial = false;
+        let mut partial = !page.complete || !page.pending.is_empty();
         let mut live = HashSet::new();
         for path in files {
             live.insert(path.clone());
@@ -180,7 +231,9 @@ impl Transcripts {
             }
             let journal = self.logs.entry(path.clone()).or_default();
             let (caught_up, gap) = loop {
-                let batch = journal.tail.read(&path).map_err(|_| "transcript_read")?;
+                let Ok(batch) = journal.tail.read(&path) else {
+                    break (false, true);
+                };
                 bytes += batch.bytes_read;
                 if batch.reset {
                     journal.task = None;
@@ -211,14 +264,14 @@ impl Transcripts {
                 continue;
             }
             if let Some(task) = &journal.task {
-                rows.push(task.clone());
+                let mut task = task.clone();
+                task.native_storage = Some(native_sessions::storage_key(&path));
+                rows.push(task);
             }
         }
-        if partial {
-            return Err("transcript_catching_up_or_unsupported".into());
-        }
-        self.logs.retain(|p, _| live.contains(p));
-        Ok(rows)
+        self.logs
+            .retain(|p, _| !p.starts_with(&projects) || live.contains(p) || is_protected(p));
+        Ok((rows, partial))
     }
 }
 #[cfg(test)]

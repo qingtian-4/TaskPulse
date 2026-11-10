@@ -135,7 +135,10 @@ pub fn task_read_fresh(
         read_fresh(provider, now, interval)
             || matches!(
                 source_kind,
-                SourceKind::Doubao | SourceKind::RemoteClaudeCode
+                SourceKind::Doubao
+                    | SourceKind::RemoteClaudeCode
+                    | SourceKind::KimiCode
+                    | SourceKind::Qoder
             ) && provider.is_some_and(|h| h.verifies_task(task, now))
     }
 }
@@ -200,6 +203,8 @@ pub fn project(
                         | SourceKind::CodexWsl
                         | SourceKind::Doubao
                         | SourceKind::RemoteClaudeCode
+                        | SourceKind::KimiCode
+                        | SourceKind::Qoder
                 ) && h.has_fresh_observations(now)
                 {
                     ReadState::Partial

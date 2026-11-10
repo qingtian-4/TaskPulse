@@ -73,3 +73,68 @@ jobs:
           name: upgrade-evidence-${{ matrix.kind }}-${{ matrix.target }}-${{ github.event.pull_request.head.sha }}
           path: dist/upgrade-evidence/
           if-no-files-found: error
+
+  fresh-windows:
+    name: Fresh Windows installation (${{ matrix.kind }})
+    needs: security
+    runs-on: windows-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [nsis, msi]
+    env:
+      SOURCE_COMMIT: ${{ github.event.pull_request.head.sha }}
+      INSTALLER_KIND: ${{ matrix.kind }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
+        with:
+          bun-version: "1.4.0"
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: "1.98.0"
+          targets: x86_64-pc-windows-msvc
+      - uses: swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
+        with:
+          workspaces: src-tauri
+      - run: bun install --frozen-lockfile
+      - name: Stage exact-source installers on the runner
+        shell: pwsh
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+          bun scripts/dependency-notices.ts licenses x86_64-pc-windows-msvc
+          if ($LASTEXITCODE -ne 0) { throw 'Dependency inventory failed' }
+          bun run tauri build --target x86_64-pc-windows-msvc --features custom-protocol --bundles nsis,msi --ci -- --profile ci-release --locked
+          if ($LASTEXITCODE -ne 0) { throw 'Native installer build failed' }
+          bun scripts/release.ts stage --bundle-root src-tauri/target/x86_64-pc-windows-msvc/ci-release/bundle --out dist/release --version "$version" --commit "$env:SOURCE_COMMIT" --untagged --pr-preview
+          if ($LASTEXITCODE -ne 0) { throw 'Installer staging failed' }
+      - name: Prepare the existing medium-integrity native smoke helper
+        shell: pwsh
+        run: |
+          $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
+          if ($gsudo) { $gsudoPath = $gsudo.Source } else {
+            winget install --id gerardog.gsudo --exact --source winget --accept-source-agreements --accept-package-agreements --disable-interactivity
+            if ($LASTEXITCODE -ne 0) { throw 'Could not install CI de-elevation helper' }
+            $gsudoPath = Join-Path $env:ProgramFiles 'gsudo\Current\gsudo.exe'
+          }
+          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing CI de-elevation helper' }
+          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
+          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not grant the runner account access to acceptance evidence' }
+      - name: Install, restart, reinstall and uninstall one format
+        env:
+          TASKPULSE_PROBE_COMMIT: ${{ github.event.pull_request.head.sha }}
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install/installer-smoke.ps1 -Assets dist/release -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind "$env:INSTALLER_KIND" -VerifyRenamedExecutable
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          retention-days: 7
+          name: fresh-windows-evidence-${{ matrix.kind }}-${{ github.event.pull_request.head.sha }}
+          path: dist/installer-smoke/
+          if-no-files-found: warn

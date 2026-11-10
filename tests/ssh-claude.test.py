@@ -73,6 +73,15 @@ class RemoteReader(unittest.TestCase):
         self.assertEqual(inspect(self.root, False, {SID})["state"], "readable")
         self.assertEqual(inspect(self.root, True, set())["state"], "readable")
 
+    def test_probe_reports_bounded_project_list_as_partial(self):
+        for index in range(66):
+            sid = f"{index:08x}-1111-2222-3333-445566778899"
+            path = self.project / (sid + ".jsonl")
+            path.write_text(json.dumps({**self.start(), "sessionId": sid}) + "\n")
+        result = inspect(self.root, True, set())
+        self.assertEqual(result["state"], "partial")
+        self.assertEqual(len(result["sessions"]), 64)
+
     @unittest.skipUnless(Path("/proc/self/stat").is_file() and Path("/etc/machine-id").is_file(), "Linux procfs")
     def test_pid_reuse_or_wrong_namespace_cannot_prove_a_live_turn(self):
         self.write(self.start())
