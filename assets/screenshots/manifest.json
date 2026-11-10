@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "dabf9c82a7e757d696abdabc21c9d8476912cf8f",
+  "capture_commit": "159e7b7158a8baf3f7ea03838e7c8608605a0780",
   "modified": false,
-  "executable_sha256": "edd7f0f48ee2213476b1f58b4085b14555586a3f3b240b849ce540daea08fa9e",
+  "executable_sha256": "17108560ef02b9c986c81bd96767150caba5c9b26bf5bbeb8f14833e933f2e66",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 788,
       "dpr": 2,
-      "sha256": "dc6fcbcd1bcd1adf85bf666b9ab3821fcef7b15e07cecc2ab17a79e0a232ae95",
-      "bytes": 161732
+      "sha256": "7469e1805da76843d2b4d6542d2b08378b8137f370dcfaa2fee209b4af9b03f1",
+      "bytes": 161734
     },
     {
       "file": "notice-input.png",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "5a10f8106040a2d2f3beca8a2b1d7d69eda11240774719014b38e3b008a958a7",
-      "bytes": 25775
+      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
+      "bytes": 25774
     },
     {
       "file": "dashboard-en.png",
@@ -67,7 +67,7 @@
       "logical_width": 368,
       "logical_height": 806,
       "dpr": 2,
-      "sha256": "40ea462e3c8ecb80b16bd7e867d77904d79be687c69a6cf15a4a903591d2738e",
+      "sha256": "1dc19070afdd64f513e3ede62c7178e5a34d412ee08562f0b64ef89d322e38d5",
       "bytes": 145606
     },
     {
@@ -103,13 +103,13 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
-      "bytes": 23208
+      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
+      "bytes": 23209
     }
   ],
-  "frontend_tree": "9297939d14200c033a11ba322d8263780d3fcb81",
-  "runtime_tree": "3e06b4370680556a691b7aa48c6b43a7f6a48348",
-  "locale_tree": "d03467cc054c9b3b85d1cea46fd829ccfa1b6ddd",
+  "frontend_tree": "ee4bd2ca597caa9cb6a7d3095082a6d7052f8099",
+  "runtime_tree": "2cc0aa48f13ce96c273f658e660b714ed80305d3",
+  "locale_tree": "4d37c5594895a3b270eb04b149e628c9590682d6",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
   "lockfiles": {
     "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
