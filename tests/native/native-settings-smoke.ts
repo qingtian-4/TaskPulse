@@ -672,6 +672,8 @@ poll_interval_ms=3000
   const hermesResult=(await root.invoke('get_agents')).find((t:any)=>t.source_instance===hermesId);
   assert.equal(hermesResult.turn_key,runningHermes.turn_key);
   assert.ok(hermesResult.finished_at);
+  const hermesCard=JSON.stringify(`[data-task-id="${hermesResult.id}"]`);
+  await root.wait(`document.querySelector(${hermesCard})?.closest('section')?.querySelector('h2')?.textContent.includes('Unviewed results')`);
   const hermesNotice=await connect(await tab('/notice'));
   await hermesNotice.wait(`document.querySelector('.notice-window .heading')?.textContent==='Example session'`);
   const shownHermes=await hermesNotice.invoke('get_task_notice');
