@@ -345,8 +345,9 @@
       {:else if sourceSummary.enabled===0}{$t('无启用来源')}
       {:else}{$t('{count} 个启用来源',{count:sourceSummary.enabled})}
         {#if sourceSummary.waiting} · {$t('{count} 个等待首次读取',{count:sourceSummary.waiting})}{/if}
+        {#if sourceSummary.paginating} · {$t('{count} 个分批读取中',{count:sourceSummary.paginating})}{/if}
         {#if sourceIssues} · {$t('{count} 个待检查',{count:sourceIssues})}{/if}
-        {#if !sourceSummary.waiting&&!sourceIssues} · {$t('读取正常')}{/if}
+        {#if !sourceSummary.waiting&&!sourceSummary.paginating&&!sourceIssues} · {$t('读取正常')}{/if}
       {/if}
     </button>
     <!-- Local account quota is intentionally hidden until the feature is ready. -->

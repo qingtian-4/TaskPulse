@@ -40,8 +40,9 @@ test('support, data detection, first read, health and current work are independe
   expect(sourceReadState(empty,true)).toBe('来源读取正常');
   expect(sourceReadState(found,true)).toBe('部分会话需检查');
   expect(sourceReadState(found,false)).toBe('未读取');
-  expect(summarizeSources([])).toEqual({enabled:0,waiting:0,issues:0});
-  expect(summarizeSources([{...empty,read_state:'waiting'}, {...found,id:'other'}])).toEqual({enabled:2,waiting:1,issues:1});
+  expect(summarizeSources([])).toEqual({enabled:0,waiting:0,paginating:0,issues:0});
+  expect(summarizeSources([{...empty,read_state:'waiting'}, {...found,id:'other'}])).toEqual({enabled:2,waiting:1,paginating:0,issues:1});
+  expect(summarizeSources([{...empty,read_state:'paginating'}])).toEqual({enabled:1,waiting:0,paginating:1,issues:0});
   expect(sourceSetupStep(false,false,false)).toBe(1);expect(sourceSetupStep(true,true,true)).toBe(2);
   expect(sourceSetupStep(true,false,false)).toBe(3);expect(sourceSetupStep(true,false,true)).toBe(4);
 });

@@ -18,7 +18,6 @@ struct Journal {
     task: Option<TaskSnapshot>,
     cwd: String,
     invalid: bool,
-    unfinished: bool,
 }
 impl Default for Journal {
     fn default() -> Self {
@@ -27,11 +26,17 @@ impl Default for Journal {
             task: None,
             cwd: String::new(),
             invalid: false,
-            unfinished: false,
         }
     }
 }
 impl Journal {
+    fn resumable(&self) -> bool {
+        !self.invalid
+            && !self.tail.read_failed()
+            && !self.tail.has_gap()
+            && (self.tail.has_unread_bytes() || self.tail.has_partial_line())
+    }
+
     fn apply(&mut self, v: &Value, id: &str) -> Result<(), String> {
         if text(v, "sessionId")
             .or_else(|| text(v, "session_id"))
@@ -193,7 +198,7 @@ impl Transcripts {
         let mut files: Vec<_> = page.pending.iter().rev().take(128).cloned().collect();
         for (path, journal) in &self.logs {
             if path.starts_with(&projects)
-                && (journal.unfinished || is_protected(path))
+                && (journal.resumable() || is_protected(path))
                 && !files.contains(path)
             {
                 files.push(path.clone());
@@ -203,7 +208,7 @@ impl Transcripts {
             std::cmp::Reverse((
                 self.logs
                     .get(path)
-                    .is_some_and(|journal| journal.unfinished),
+                    .is_some_and(|journal| journal.resumable() && journal.tail.has_unread_bytes()),
                 is_protected(path),
                 path.metadata()
                     .and_then(|m| m.modified())
@@ -214,7 +219,7 @@ impl Transcripts {
         let mut bytes = 0;
         let mut status = page.status;
         let mut visited = HashSet::new();
-        let mut unfinished = self.logs.values().filter(|log| log.unfinished).count();
+        let mut unfinished = self.logs.values().filter(|log| log.resumable()).count();
         for path in files {
             if bytes >= 8 * 1024 * 1024 || began.elapsed() > Duration::from_millis(500) {
                 status = status.max(BatchRead::Paginating);
@@ -225,12 +230,18 @@ impl Transcripts {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            if unfinished >= 8 && !self.logs.get(&path).is_some_and(|log| log.unfinished) {
+            visited.insert(path.clone());
+            // Reserve admission for followed sessions and existing resumable
+            // readers, even if unrelated files are stalled at a partial line.
+            if unfinished >= 8
+                && !is_protected(&path)
+                && !self.logs.get(&path).is_some_and(Journal::resumable)
+            {
                 status = status.max(BatchRead::Paginating);
                 continue;
             }
-            visited.insert(path.clone());
             let journal = self.logs.entry(path.clone()).or_default();
+            let was_resumable = journal.resumable();
             let (caught_up, gap) = loop {
                 let Ok(batch) = journal.tail.read(&path) else {
                     break (false, true);
@@ -260,9 +271,8 @@ impl Transcripts {
                     break (batch.caught_up, batch.gap);
                 }
             };
-            unfinished -= usize::from(journal.unfinished);
-            journal.unfinished = !caught_up && !gap && !journal.invalid;
-            unfinished += usize::from(journal.unfinished);
+            unfinished -= usize::from(was_resumable);
+            unfinished += usize::from(journal.resumable());
             if gap || journal.invalid {
                 status = BatchRead::Failed;
                 continue;
@@ -284,7 +294,7 @@ impl Transcripts {
         self.logs.retain(|p, journal| {
             !p.starts_with(&projects)
                 || visited.contains(p)
-                || journal.unfinished
+                || journal.resumable()
                 || is_protected(p)
         });
         (rows, status)
@@ -338,6 +348,39 @@ mod tests {
             finished,
             "The next page must retain and resume the unfinished transcript"
         );
+    }
+
+    #[test]
+    fn stalled_partial_lines_cannot_block_a_followed_transcript() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects/fixture");
+        std::fs::create_dir_all(&project).unwrap();
+        let active = project.join("active.jsonl");
+        let mut file = std::fs::File::create(&active).unwrap();
+        writeln!(file, "{}", json!({"type":"user","uuid":"u","timestamp":"2026-11-07T00:00:00Z","message":{"content":"Fixture"}})).unwrap();
+        file.flush().unwrap();
+        let protected = HashSet::from(["active".to_string()]);
+        let mut reader = Transcripts::default();
+        assert_eq!(reader.read(dir.path(), &protected).0.len(), 1);
+        for index in 0..8 {
+            std::fs::write(
+                project.join(format!("partial-{index}.jsonl")),
+                b"{\"type\":",
+            )
+            .unwrap();
+        }
+        assert!(reader.read(dir.path(), &protected).1 == BatchRead::Paginating);
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"result","subtype":"success","duration_ms":61000})
+        )
+        .unwrap();
+        file.flush().unwrap();
+        let (rows, _) = reader.read(dir.path(), &protected);
+        assert!(rows
+            .iter()
+            .any(|task| task.waiting_reason == Some(WaitingReason::TurnEnded)));
     }
 
     #[test]

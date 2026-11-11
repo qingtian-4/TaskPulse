@@ -127,6 +127,7 @@ export function sourceReadState(observation:SourceSnapshot|undefined, enabled:bo
 export function summarizeSources(sources:SourceSnapshot[]) {
   const enabled=sources.filter(s=>s.enabled);
   return {enabled:enabled.length,waiting:enabled.filter(s=>s.read_state==='waiting').length,
+    paginating:enabled.filter(s=>s.read_state==='paginating').length,
     issues:enabled.filter(s=>['partial','failed','stale'].includes(s.read_state)).length};
 }
 

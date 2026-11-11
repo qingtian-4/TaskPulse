@@ -327,10 +327,14 @@ impl QoderProvider {
                 Err("poll_budget") => {
                     // Start the next poll at the first deferred head. A session
                     // that alone exhausts its budget cannot pin the cursor.
-                    if is_head && used_before_session > 0 {
-                        next_head = Some(id);
+                    if used_before_session == 0 {
+                        status = BatchRead::Failed;
+                    } else {
+                        if is_head {
+                            next_head = Some(id);
+                        }
+                        status = status.max(BatchRead::Paginating);
                     }
-                    status = status.max(BatchRead::Paginating);
                 }
                 Err(_) => status = BatchRead::Failed,
             }
