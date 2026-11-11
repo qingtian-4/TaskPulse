@@ -21,7 +21,7 @@ TaskPulse 是一款轻量级托盘工具，集中查看本机 Coding Agent 的�
 
 ## 安装
 
-[v0.0.1 版本说明与全部附件](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) · [SHA-256 校验和](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/SHA256SUMS.txt)
+[v0.0.1 版本说明与全部附件](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1)
 
 | 系统 | 下载 |
 | --- | --- |
@@ -30,7 +30,7 @@ TaskPulse 是一款轻量级托盘工具，集中查看本机 Coding Agent 的�
 | macOS 13.3+ · Apple Silicon | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_arm64.dmg) |
 | macOS 13.3+ · Intel | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_x64.dmg) |
 
-普通安装推荐 Windows EXE；需要 MSI 的 x64 用户可选同版本 MSI。已有较早版本的用户，请参阅[从旧版换装](docs/INSTALL.md#从旧版换装)。
+普通安装推荐 Windows EXE；需要 MSI 的 x64 用户可选同版本 MSI。
 
 ### 命令行安装
 
@@ -46,24 +46,7 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-脚本会自动选择对应架构并校验 SHA-256。[安装、系统提示与卸载](docs/INSTALL.md)
-
-## 开始使用
-
-1. **选择来源**：首次启动，在“监控来源 → 本机”确认要关注的 Agent，点击“确认并开始监控”。本机数据自动发现，服务器可在「SSH 服务器」中添加。
-2. **照常工作**：回到 Agent 开始任务，从托盘查看运行、待处理和未读结果。Windows 可按 `Ctrl+Shift+A` 打开面板。
-3. **收到提醒再回来**：在原 Agent 中回答或批准。匹配的来源事件解除请求；看完结果后，在任务详情中标记已查看。
-
-关闭提醒、打开详情和聚焦窗口都不会标记已读，更不会代你批准。通知、声音、项目范围、字号与更新均可在设置中调整。
-
-## 功能
-
-- **专注当下，无需守候**：多个 Agent 同时运行，不必一直盯着终端。
-- **关键时刻主动提醒**：根据来源的明确证据，提醒输入、审批、任务结果和异常。
-- **需要处理的任务，一目了然**：在托盘中集中查看进行中、待处理与结果待查看。
-- **重要结果不会错过**：未读结果、固定任务和未解决请求跨重启恢复。读取异常保留上次可信状态。
-- **自动发现，灵活接入**：本机来源自动发现，也可连接多台 SSH 服务器，分别设置项目范围。
-- **本地运行，尊重隐私**：无需 TaskPulse 云账号，不上传 Agent 对话，不自动修改 Agent Hook 或审批策略。
+脚本会自动选择对应架构。[安装、系统提示与卸载](docs/INSTALL.md)
 
 ## 任务面板
 
@@ -86,6 +69,23 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
   <a href="assets/screenshots/notice-approval.png"><img src="assets/screenshots/notice-approval.png" width="32%" alt="请求批准提醒"></a>
   <a href="assets/screenshots/notice-completed.png"><img src="assets/screenshots/notice-completed.png" width="32%" alt="本轮结束提醒"></a>
 </p>
+
+## 开始使用
+
+1. **选择来源**：首次启动，在“监控来源 → 本机”确认要关注的 Agent，点击“确认并开始监控”。本机数据自动发现，服务器可在「SSH 服务器」中添加。
+2. **照常工作**：回到 Agent 开始任务，从托盘查看运行、待处理和未读结果。Windows 可按 `Ctrl+Shift+A` 打开面板。
+3. **收到提醒再回来**：在原 Agent 中回答或批准。匹配的来源事件解除请求；看完结果后，在任务详情中标记已查看。
+
+关闭提醒、打开详情和聚焦窗口都不会标记已读，更不会代你批准。通知、声音、项目范围、字号与更新均可在设置中调整。
+
+## 功能
+
+- **专注当下，无需守候**：多个 Agent 同时运行，不必一直盯着终端。
+- **关键时刻主动提醒**：根据来源的明确证据，提醒输入、审批、任务结果和异常。
+- **需要处理的任务，一目了然**：在托盘中集中查看进行中、待处理与结果待查看。
+- **重要结果不会错过**：未读结果、固定任务和未解决请求跨重启恢复。读取异常保留上次可信状态。
+- **自动发现，灵活接入**：本机来源自动发现，也可连接多台 SSH 服务器，分别设置项目范围。
+- **本地运行，尊重隐私**：无需 TaskPulse 云账号，不上传 Agent 对话，不自动修改 Agent Hook 或审批策略。
 
 ## 支持的 Agent
 

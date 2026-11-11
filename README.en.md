@@ -21,7 +21,7 @@ TaskPulse is a lightweight tray app for local coding agents. It can also read Co
 
 ## Install
 
-[v0.0.1 release notes and assets](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) · [SHA-256 checksums](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/SHA256SUMS.txt)
+[v0.0.1 release notes and assets](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1)
 
 | System | Download |
 | --- | --- |
@@ -30,7 +30,7 @@ TaskPulse is a lightweight tray app for local coding agents. It can also read Co
 | macOS 13.3+ · Apple Silicon | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_arm64.dmg) |
 | macOS 13.3+ · Intel | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_x64.dmg) |
 
-On Windows, choose EXE for a standard installation or MSI if you need that format on x64. If you already have an earlier build installed, see [manual migration (Chinese)](docs/INSTALL.md#从旧版换装).
+On Windows, choose EXE for a standard installation or MSI if you need that format on x64.
 
 ### Install from the command line
 
@@ -46,24 +46,7 @@ irm https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.ps1 | ie
 curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.sh | bash
 ```
 
-The scripts select the matching architecture and verify SHA-256. [Installation, OS prompts and removal (Chinese)](docs/INSTALL.md)
-
-## Get started
-
-1. **Choose your sources.** On first launch, confirm agents under Sources → Local and start monitoring. Local data is discovered automatically; add SSH servers when needed.
-2. **Work as usual.** Start a task in your agent. The tray panel keeps running tasks, requests and unread results together. On Windows, press `Ctrl+Shift+A` to open it.
-3. **Come back when needed.** Answer or approve in the original agent. A matching source event clears the request. After reading the result, mark it as viewed in task details.
-
-Dismissing a reminder, opening details or focusing a host does not mark results as read or approve anything. Adjust notifications, sound, project scopes, text size and updates in Settings.
-
-## Features
-
-- **Focus without waiting:** run several agents without watching every terminal.
-- **Know when to return:** reminders for explicit input, approvals, results and failures supported by the source.
-- **See what needs attention:** running tasks, requests and unread results together in the tray.
-- **Keep important results:** unread results, pins and unresolved requests survive restarts. Read failures preserve the last trusted state.
-- **Connect on your terms:** discover local sources and manage multiple SSH servers and project scopes.
-- **Keep conversations local:** no TaskPulse cloud account or conversation uploads. Agent hooks and approval policies are never changed automatically.
+The scripts select the matching architecture. [Installation, OS prompts and removal (Chinese)](docs/INSTALL.md)
 
 ## Task panel
 
@@ -86,6 +69,23 @@ Each card shows whether the task runs locally or on a named SSH server. When the
   <a href="assets/screenshots/notice-approval-en.png"><img src="assets/screenshots/notice-approval-en.png" width="32%" alt="Approval request"></a>
   <a href="assets/screenshots/notice-completed-en.png"><img src="assets/screenshots/notice-completed-en.png" width="32%" alt="Turn completed"></a>
 </p>
+
+## Get started
+
+1. **Choose your sources.** On first launch, confirm agents under Sources → Local and start monitoring. Local data is discovered automatically; add SSH servers when needed.
+2. **Work as usual.** Start a task in your agent. The tray panel keeps running tasks, requests and unread results together. On Windows, press `Ctrl+Shift+A` to open it.
+3. **Come back when needed.** Answer or approve in the original agent. A matching source event clears the request. After reading the result, mark it as viewed in task details.
+
+Dismissing a reminder, opening details or focusing a host does not mark results as read or approve anything. Adjust notifications, sound, project scopes, text size and updates in Settings.
+
+## Features
+
+- **Focus without waiting:** run several agents without watching every terminal.
+- **Know when to return:** reminders for explicit input, approvals, results and failures supported by the source.
+- **See what needs attention:** running tasks, requests and unread results together in the tray.
+- **Keep important results:** unread results, pins and unresolved requests survive restarts. Read failures preserve the last trusted state.
+- **Connect on your terms:** discover local sources and manage multiple SSH servers and project scopes.
+- **Keep conversations local:** no TaskPulse cloud account or conversation uploads. Agent hooks and approval policies are never changed automatically.
 
 ## Supported agents
 
