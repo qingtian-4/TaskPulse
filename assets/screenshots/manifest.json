@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "079998f8d1eb719ebb1c528b4ae13a6eedbbdb40",
+  "capture_commit": "65405e28083fef9e6b710aa7bd4c6d6ab86e27ee",
   "modified": false,
-  "executable_sha256": "fb008fed9813222c4e3f346677c425024f8c97f095530a84fffc0bed6c449a5b",
+  "executable_sha256": "737416cdcea93d39d97ace27ad87d67baf25a729a52d211d10e44206dd1bc30a",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 657,
       "dpr": 2,
-      "sha256": "ba43438bfd39596fb32a6e9e5470ccecbccf8cd5ca4a962f2d5c51c68b5a998a",
-      "bytes": 146410
+      "sha256": "60909800e625639b3863b188074bd103fc4a04abd3ed703992994656c196ba62",
+      "bytes": 145183
     },
     {
       "file": "notice-input.png",
@@ -55,7 +55,7 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
+      "sha256": "17591933e1adcc1634c81736d3e4604afad10920a39cb28b91a7b9ab194396f0",
       "bytes": 25774
     },
     {
@@ -67,8 +67,8 @@
       "logical_width": 368,
       "logical_height": 675,
       "dpr": 2,
-      "sha256": "452235f06660308c01f2a36ccf38926d9a386a0cf246e27c7d6ba0f93f09612e",
-      "bytes": 131613
+      "sha256": "7af252211c3cf216f17dd3ec017130300f258d5f6835402853ea3cb9637d3158",
+      "bytes": 129577
     },
     {
       "file": "notice-input-en.png",
@@ -103,12 +103,12 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
-      "bytes": 23209
+      "sha256": "820a751e0d3f3cce1f28fc04e3e4bacdb4a51fbbcd5e22a80c54f583b7c3d554",
+      "bytes": 23208
     }
   ],
-  "frontend_tree": "bc73af5a2f5814fb1de9e4ab266fb02b853110d1",
-  "runtime_tree": "7b5a0b96e631dd92caf28176144cd6d47fb863ce",
+  "frontend_tree": "9a969e007c1ae4374d8439c93e13d3f5b9631fc6",
+  "runtime_tree": "5c58f22f2c85fdddb47299f8432aa4878842a448",
   "locale_tree": "a224a063c0b576010ec29abe804d6a5959a0e005",
   "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",
   "lockfiles": {
