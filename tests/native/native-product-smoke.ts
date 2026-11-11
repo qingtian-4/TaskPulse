@@ -731,9 +731,9 @@ try{
     const noticeSettings=await management.invoke('get_monitoring_settings');
     await management.invoke('save_monitoring_settings',{settings:{...noticeSettings,notifications:true},expected:noticeSettings});
     for(const [kind,title,project,label] of [
-      ['input',caption('确认导出文件格式','Choose the export format'),caption('TaskPulse 示例','TaskPulse'),'等待输入'],
-      ['approval',caption('运行项目测试','Run project checks'),caption('TaskPulse 示例','TaskPulse'),'需要授权'],
-      ['completed',caption('整理快速入门指南','Write the quick-start guide'),caption('Docs 示例','Documentation'),'本轮结束']
+      ['input',caption('选择报告导出格式','Choose a report format'),caption('报告示例','Reports'),'等待输入'],
+      ['approval',caption('运行测试套件','Run the test suite'),caption('项目示例','Example project'),'需要授权'],
+      ['completed',caption('更新快速入门指南','Update the quick-start guide'),caption('文档示例','Documentation'),'本轮结束']
     ]){
       const session='readme-notice-'+kind,requestId=session+'-request';
       event(session,'turn.started',{title,project,model:'gpt-5.4'});

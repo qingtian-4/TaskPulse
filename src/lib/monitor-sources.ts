@@ -54,4 +54,3 @@ export function localSourceStatus(
     && (!source?.enabled || observed?.read_state==='healthy'))return '未检测到本机数据';
   return sourceStatus(source,observed);
 }
-export function scopeLabel(projects:string[]):string{return projects.includes('*')?'全部项目':projects.length?'指定项目':'尚未选择项目';}

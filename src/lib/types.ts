@@ -120,37 +120,6 @@ export interface HostHealth {
   last_seen?: number;
 }
 
-// Attention priority: FAILED > WAITING_INPUT > DISCONNECTED > RUNNING > SUCCEEDED/IDLE > UNKNOWN
-export const STATUS_PRIORITY: Record<Status, number> = {
-  'failed':         0,
-  'waiting_input':  1,
-  'disconnected':   2,
-  'running':        3,
-  'succeeded':      4,
-  'idle':           4,
-  'unknown':        5,
-};
-
-export const STATUS_LABEL: Record<Status, string> = {
-  'failed':         '失败',
-  'waiting_input':  '等待输入',
-  'disconnected':   '已断开',
-  'running':        '运行中',
-  'succeeded':      '已完成',
-  'idle':           '空闲',
-  'unknown':        '未知',
-};
-
-export const STATUS_COLOR: Record<Status, string> = {
-  'failed':         '#dd4f4f',
-  'waiting_input':  '#e8c840',
-  'disconnected':   '#d46a6a',
-  'running':        '#4a90d9',
-  'succeeded':      '#78b644',
-  'idle':           '#78b644',
-  'unknown':        '#555555',
-};
-
 export const SOURCE_LABEL: Record<Source, string> = {
   'native_agent':     '其他 Agent',
   'doubao':           '豆包',
@@ -164,50 +133,11 @@ export const SOURCE_LABEL: Record<Source, string> = {
   'gemini':           'Gemini',
 };
 
-export const SOURCE_COLOR: Record<Source, string> = {
-  'native_agent':     '#69b7cf',
-  'doubao':           '#69b7cf',
-  'generic_event':    '#69b7cf',
-  'codex':            '#6fbe5a',
-  'hermes':           '#d97757',
-  'deepseek_harness': '#4a90d9',
-  'remote_tmux':      '#8a7fd9',
-  'local_file':       '#888888',
-  'claude_code':      '#d97757',
-  'gemini':           '#4a90d9',
-};
-
 export const CONFIDENCE_LABEL: Record<Confidence, string> = {
   'exact':    '精确',
   'hook':     'Hook',
   'inferred': '推断',
 };
-
-/** Maps terminal kind → short display name. null = use terminal.label instead. */
-const TERMINAL_KIND_DISPLAY: Record<string, string | null> = {
-  tmux:           'tmux',
-  screen:         'screen',
-  zellij:         'zellij',
-  neovim:         'nvim',
-  vscode:         'VS Code',
-  jetbrains:      'JetBrains',
-  kitty:          'kitty',
-  x11_generic:    null,
-  macos_app:      null,
-  windows_native: null,
-  unknown:        null,
-};
-
-export function formatTerminalChip(terminal: TerminalInfo | null): string | null {
-  if (!terminal) return null;
-  const kindDisplay = TERMINAL_KIND_DISPLAY[terminal.kind] ?? null;
-  const label = terminal.label || null;
-
-  if (!kindDisplay && !label) return null;
-  if (!kindDisplay) return label;
-  if (!label || kindDisplay.toLowerCase() === label.toLowerCase()) return kindDisplay;
-  return `${kindDisplay} · ${label}`;
-}
 
 /** Human duration from an epoch-ms timestamp until now (or until `until`). */
 export function formatElapsed(startMs: number | undefined, untilMs: number = Date.now()): string {

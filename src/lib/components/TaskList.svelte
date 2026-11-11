@@ -19,7 +19,7 @@
     {@const elapsed=taskElapsed(task,now)}
     <li class="task-item tp-tone" class:compact={$preferences.panel_density==='compact'} data-tone={taskTone(task)}>
       <button type="button" data-task-id={task.id} class:selected={selectedId===task.id} class:action-needed={matchesSignal(task,'action')} class="task-row" onclick={()=>onSelect(task)} onkeydown={navigate} aria-pressed={selectedId===task.id}>
-        <span class="dot" class:running={task.status==='running' && !task.stale} class:failed={task.status==='failed'} class:waiting={task.status==='waiting_input'} class:stale={task.stale}></span>
+        <span class="dot"></span>
         <span class="row-copy">
           <span class="row-title" title={task.name}>{task.name}</span>
           <span class="context" title={taskContext(task,settings)+(task.project_path?' · '+task.project_path:'')}>

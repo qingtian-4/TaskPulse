@@ -21,7 +21,6 @@
   import Search from '@lucide/svelte/icons/search';
   import BrandMark from './BrandMark.svelte';
   import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
-  import Inbox from '@lucide/svelte/icons/inbox';
   import Bell from '@lucide/svelte/icons/bell';
 
   let tasks = $state<TaskSnapshot[]>([]);
@@ -314,7 +313,7 @@
   {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?$t('已隐藏本轮'):$t('已停止监控此会话')}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>{$t("撤销")}</button></div>{/if}
   {#if outsideRunning.length}<p class="notice outside-running" role="status">{outsideRunning.length} {$t("个运行任务在当前视图之外")}<button class="link" onclick={showRunning}>{$t("查看全部运行任务")}</button></p>{/if}
   <main class="glass-scroll task-scroll" aria-label={$t("关注任务")}>
-    {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manageSources}>{$t("查看来源与已发现会话")}</button>{/if}</div>
+    {#if sorted.length===0}<div class="empty"><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manageSources}>{$t("查看来源与已发现会话")}</button>{/if}</div>
     {:else if view==='tasks'}
       <TaskList fitFour={sorted.length>=4} tasks={sorted} {settings} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/>
     {:else}{#each projectGroups as group}<section><h2>{group.title}</h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/each}{/if}
@@ -359,7 +358,7 @@
   .unread-filter{font-size:11px;white-space:nowrap;padding:4px 8px}.unread-filter.active{border-color:var(--tone-line);background:var(--tone-soft);color:var(--tone)}
   .task-scroll{min-height:80px;overflow-y:auto;scrollbar-gutter:stable;flex:1;padding:0 12px 8px;overscroll-behavior:contain}
   h2{font-size:13px;font-weight:600;color:var(--tp-text);padding:8px 0 0;margin:0;overflow-wrap:anywhere}
-  .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px 12px;color:var(--tp-text)}.empty-icon{display:none}
+  .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px 12px;color:var(--tp-text)}
   .empty strong{font-size:14px;font-weight:550}.empty p{font-size:12px;line-height:1.6;color:var(--tp-muted);margin:8px 0 12px}.empty button,.onboarding button{border:1px solid var(--tp-accent-line);padding:6px 12px;border-radius:8px;color:var(--tp-accent);background:var(--tp-accent-soft);font-size:12px}
   .notice{margin:0;padding:6px 12px;font-size:11px;line-height:1.6;background:var(--tp-accent-soft);color:var(--tp-accent);display:flex;align-items:center;gap:8px;max-height:60px;overflow:auto;flex:none;overflow-wrap:anywhere}.notice.error{color:var(--tp-danger);background:#f09ba70b}.dismiss{margin-left:auto;flex:none}.link{margin-left:auto;color:var(--tp-accent);white-space:nowrap;font-size:11px}
   .filters{position:absolute;z-index:3;left:12px;right:12px;top:calc(100% - 2px);display:flex;gap:8px;padding:12px;flex-wrap:wrap;max-height:42dvh;overflow:auto;background:var(--tp-raised);border:1px solid var(--tp-border-strong);border-radius:8px;box-shadow:var(--tp-shadow-window)}

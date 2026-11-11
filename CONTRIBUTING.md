@@ -76,7 +76,7 @@ Windows tray acceptance requires a clean binary for an explicit full commit SHA.
 
 The **Windows quality** job builds and verifies the portable Windows executable on the runner. It uploads verification evidence only. To try an unreleased build, use `bun run dev:desktop` or locally stage the built executable with `scripts/development-artifact.ts`. Keep `WebView2Loader.dll` beside `TaskPulse.exe` when present. The development profile is separate from the installed application's data.
 
-The **macOS compile** workflow checks shared Rust changes and their build inputs on PRs and on main. For package-specific changes, opt into the heavier PR workflows:
+The **macOS compile** workflow checks shared Rust changes and their build inputs on PRs and on main. Both opt-in workflows also run Rust tests on Windows ARM64 for same-repository PRs. Only the installer preview packages and uploads an ARM64 installer:
 
 | PR label | What it exercises |
 | --- | --- |

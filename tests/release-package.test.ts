@@ -73,11 +73,22 @@ test('draft publication requires native acceptance on every included architectur
   expect(draft.steps.find((s:any)=>s.uses?.startsWith('softprops/')).with.files).toBe('dist/publish/*');
   const contracts=Bun.YAML.parse(readFileSync(join(import.meta.dir,'../.github/workflows/release-contract.yml'),'utf8')) as any;
   expect(contracts.permissions).toEqual({contents:'read'});
-  expect(contracts.jobs['arm64-build'].if).toContain("'test:installers'");
+  const armBuild=contracts.jobs['arm64-build'];
+  const optIn="contains(github.event.pull_request.labels.*.name, 'test:installers') && (github.event.action != 'labeled' || github.event.label.name == 'test:installers')";
+  expect(armBuild.if).toContain("contains(github.event.pull_request.labels.*.name, 'test:upgrade')");
+  expect(armBuild.if).not.toContain(optIn);
+  const testStep=armBuild.steps.find((step:any)=>step.name==='Run Rust tests on native Windows ARM64');
+  expect(testStep.run).toContain('cargo test');
+  expect(testStep.if).toBeUndefined();
+  for(const step of armBuild.steps.filter((step:any)=>step.uses?.startsWith('actions/upload-artifact')
+    || /bun run tauri build|release\.ts stage|integration-bridge-smoke/.test(step.run??''))){
+    expect(step.if).toBe(optIn);
+  }
   expect(contracts.jobs['arm64-build'].if).toContain('head.repo.full_name == github.repository');
   expect(contracts.on.pull_request.types).toContain('labeled');
   const armPreview=contracts.jobs['arm64-install'];
   expect(armPreview?.needs).toContain('arm64-build');
+  expect(armPreview.if).toBe(optIn);
   expect(armPreview['runs-on']).toBe('windows-11-arm');
   expect(armPreview.steps.find((step:any)=>step.uses?.startsWith('actions/download-artifact')).with.name)
     .toBe(contracts.jobs['arm64-build'].steps.find((step:any)=>step.uses?.startsWith('actions/upload-artifact')).with.name);

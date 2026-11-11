@@ -75,13 +75,13 @@ test('local reports, captures, credentials and build files cannot enter the publ
     /^docs\/(?:maintainers\/)?(?:review|session-notes)\.md$/.test(f) ||
     /^docs\/[^/]*(?:VALIDATION|_STATUS|_FIXES_|_FIX_|_PLAN|TODO|PROPOSAL)[^/]*\.md$/.test(f) ||
     /^assets\/legacy-agenttray\//.test(f) ||
-    /\.(?:exe|msi|dmg|har|dll|pdb|rlib|rmeta|o|obj|zip|tar|tgz|7z|pem|key|p12|pfx|sqlite|sqlite3|db|dump|tfstate)$/.test(f) ||
+    /\.(?:exe|msi|dmg|pkg|msix|msixbundle|deb|rpm|appimage|har|dll|pdb|rlib|rmeta|o|obj|zip|tar|tgz|7z|pem|key|p12|pfx|sqlite|sqlite3|db|dump|tfstate)$|\.tar\.(?:gz|xz|zst)$|\.dSYM\//i.test(f) ||
     /(?:^|\/)\.env(?:$|\.)/.test(f) && !/\.env\.(?:example|template)$/.test(f));
   expect(forbidden).toEqual([]);
   const candidates=['docs/session-notes.md','docs/maintainers/review.md','assets/screenshots/raw.png',
     'assets/legacy-agenttray/demo.gif','NOTES.md','.agents/skills/tool/SKILL.md','.agents/settings.json','nested/.agents/settings.json',
     '.agents/skills/taskpulse-maintenance/private.md','.agents/skills/taskpulse-maintenance/references/token.key','skills-lock.json',
-    'CLAUDE.md','.claude/commands/private.md','dev.sh','scripts/build.sh','scripts/build.ps1','scripts/registry.sh','src-tauri/icons/android/generated.png','src-tauri/icons/ios/generated.png','output.tsbuildinfo','licenses/DEPENDENCIES.json','.env.local','session.sqlite','debug.exe','debug.msi','debug.dmg','debug.app/Contents/Info.plist','webview.har','.local/probe.json','output.zip'];
+    'CLAUDE.md','.claude/commands/private.md','dev.sh','scripts/build.sh','scripts/build.ps1','scripts/registry.sh','src-tauri/icons/android/generated.png','src-tauri/icons/ios/generated.png','output.tsbuildinfo','licenses/DEPENDENCIES.json','.env.local','session.sqlite','debug.exe','debug.msi','debug.dmg','debug.pkg','debug.msix','debug.msixbundle','debug.AppImage','debug.deb','debug.rpm','debug.tar.xz','debug.tar.zst','debug.dSYM/Contents/Info.plist','debug.app/Contents/Info.plist','webview.har','.local/probe.json','output.zip'];
   const ignored=spawnSync('git',['check-ignore','--no-index','--stdin'],{cwd:root,input:candidates.join('\n')+'\n',encoding:'utf8',windowsHide:true});
   expect(ignored.status).toBe(0);
   expect(ignored.stdout.trim().split(/\r?\n/).sort()).toEqual([...candidates].sort());
