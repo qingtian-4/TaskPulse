@@ -106,6 +106,14 @@ test('public installation acceptance is read-only, stable-only and tests anonymo
   expect(publicFlow.jobs.platforms.outputs.matrix).toBe('${{ steps.plan.outputs.matrix }}');
   expect(publicFlow.jobs.install.env.RELEASE_TAG).toContain('inputs.tag');
   expect(text).not.toMatch(/secrets\.|contents: write|gh release|git push|git tag/);
+  const steps=publicFlow.jobs.install.steps;
+  expect(steps.find((step:any)=>step.run?.includes('winget install')).if).toBe("matrix.name == 'windows-x64'");
+  expect(steps.find((step:any)=>step.run?.includes('prepare-arm64-gsudo.ps1')).if).toBe("matrix.name == 'windows-arm64'");
+  const helper=read('tests/install/prepare-arm64-gsudo.ps1');
+  expect(helper).toContain("RUNNER_ENVIRONMENT -ne 'github-hosted'");
+  expect(helper).toContain('Get-FileHash');
+  expect(helper).toContain("GetEntry('arm64/gsudo.exe')");
+
   for(const step of publicFlow.jobs.install.steps){
     if(step.uses)expect(step.uses).toMatch(/@[a-f0-9]{40}$/);
     expect(step['continue-on-error']).not.toBe(true);

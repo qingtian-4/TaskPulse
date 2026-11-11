@@ -59,8 +59,12 @@ jobs:
         with:
           ref: ${{ env.RELEASE_TAG }}
           persist-credentials: false
-      - name: Prepare medium-integrity Windows runtime acceptance
-        if: runner.os == 'Windows'
+      - name: Prepare the verified portable ARM64 de-elevation helper
+        if: matrix.name == 'windows-arm64'
+        shell: pwsh
+        run: pwsh -NoProfile -ExecutionPolicy Bypass -File tests/install/prepare-arm64-gsudo.ps1
+      - name: Prepare medium-integrity Windows x64 runtime acceptance
+        if: matrix.name == 'windows-x64'
         shell: pwsh
         run: |
           $gsudo = Get-Command gsudo.exe -ErrorAction SilentlyContinue
