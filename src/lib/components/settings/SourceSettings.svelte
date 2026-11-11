@@ -4,7 +4,7 @@
   import {invoke,isTauri} from '@tauri-apps/api/core';
   import {listen} from '@tauri-apps/api/event';
   import {getCurrentWindow} from '@tauri-apps/api/window';
-  import {Plus,Server,Laptop,Search,RefreshCw,ChevronRight,ArrowLeft,ShieldCheck,Link,Info,Folder,Terminal,Save,Trash2,Check,Pause,Play,X,Settings2,Activity} from '@lucide/svelte';
+  import {Plus,Server,Search,RefreshCw,ChevronRight,ArrowLeft,ShieldCheck,Link,Info,Terminal,Save,Trash2,Pause,Play,X,Settings2} from '@lucide/svelte';
   import {t} from '$lib/i18n';
   import {appSettings,savePreference,preferencePending} from '$lib/preferences';
   import {autostart} from '$lib/autostart';
@@ -120,6 +120,7 @@
   function sourceHasIssue(s:MonitorSource){
     return s.enabled&&['failed','partial','stale'].includes(observation(s)?.read_state??'');
   }
+  const onlineServers=$derived(groups.filter(group=>connection(group)==='connected').length);
   const connectionIssues=$derived(groups.filter(group=>group.sources.some(s=>s.enabled)&&connection(group)==='disconnected').length);
   const dataIssues=$derived(groups.filter(group=>connection(group)!=='disconnected').reduce((n,group)=>n+group.sources.filter(sourceHasIssue).length,0));
   function sshLabel(group:ServerGroup){return ({connected:'SSH 已连接',disconnected:'SSH 未连接',unknown:'SSH 尚未检测'})[connection(group)]??'SSH 尚未检测';}
@@ -138,7 +139,7 @@
   function fail(e:unknown){error=String(e);if(error.includes('配置已更新')||error.includes('其他窗口更新'))conflict=true;}
   async function commit(proposal:DashboardSettings):Promise<boolean>{
     if(!applied||saving||conflict)return false;saving=true;error='';
-    try{const next=await invoke<DashboardSettings>('save_monitoring_settings',{settings:proposal,expected:$state.snapshot(applied)});settings=structuredClone(next);applied=structuredClone(next);dirty=false;notice='已保存';return true;}
+    try{const next=await invoke<DashboardSettings>('save_monitoring_settings',{settings:proposal,expected:$state.snapshot(applied)});settings=structuredClone(next);applied=structuredClone(next);dirty=false;notice=page==='local'?'已保存':'';return true;}
     catch(e){fail(e);return false;}finally{saving=false;}
   }
   async function save(){if(settings)await commit({...$state.snapshot(settings),onboarding_complete:true});}
@@ -291,26 +292,36 @@
         </details>
       {/snippet}
     {#if error}<div class="ms-error" role="alert">{$t(error)}{#if conflict}<button class="ms-btn small" onclick={reload}>{$t('加载最新配置')}</button>{:else}<button class="ms-btn icon-only ghost" aria-label={$t('关闭错误')} onclick={()=>error=''}><X size={13}/></button>{/if}</div>{/if}
-    {#if notice}<p class="ms-success" role="status">{$t(notice)}</p>{/if}
+    {#if page==='local' && notice}<p class="ms-success" role="status">{$t(notice)}</p>{/if}
     {#if !settings}<p class="ms-muted">{$t('正在读取设置…')}</p>
     {:else if page==='home'}
-      {#if connectionIssues+dataIssues>0}
-        <p class="ms-warning" data-ssh-issues>
-          {[
-            connectionIssues ? $t('SSH 连接异常：{count}', {count:connectionIssues}) : '',
-            dataIssues ? $t('数据读取异常：{count}', {count:dataIssues}) : '',
-          ].filter(Boolean).join(' · ')}
-        </p>
-      {/if}
-      {#if groups.length}
-        <div class="tool-row">
-          <label class="server-search">
-            <Search size={15}/>
-            <input type="text" bind:value={query} aria-label={$t('搜索服务器')} placeholder={$t('搜索服务器')}/>
-          </label>
-          <button class="ms-btn small" disabled={saving} onclick={()=>void invoke('request_refresh')}><RefreshCw size={13}/>{$t('刷新状态')}</button>
+      <div class="summary-grid">
+        <div>
+          <span class="summary-label"><Server size={13}/>{$t('已添加服务器')}</span>
+          <strong>{groups.length}<span>{$t('台 SSH 主机')}</span></strong>
         </div>
+        <div>
+          <span class="summary-label"><Link size={13}/>{$t('SSH 在线')}</span>
+          <strong>{onlineServers}<span>{$t('台最近连接正常')}</span></strong>
+        </div>
+        <div>
+          <span class="summary-label"><Info size={13}/>{$t('需要处理')}</span>
+          <strong class="connection-issues">{connectionIssues}<span>{$t('台连接异常')}</span></strong>
+        </div>
+      </div>
+      {#if dataIssues>0}
+        <p class="ms-warning" data-ssh-issues>{$t('数据读取异常：{count}', {count:dataIssues})}</p>
       {/if}
+      <div class="section-top">
+        <h2><Server size={16}/>{$t('SSH 服务器')}<span class="count-badge">{groups.length}</span></h2>
+      </div>
+      <div class="tool-row">
+        <label class="server-search">
+          <Search size={15}/>
+          <input type="text" bind:value={query} aria-label={$t('搜索服务器')} placeholder={$t('搜索服务器名称或 SSH Host')}/>
+        </label>
+        <button class="ms-btn small" disabled={saving} onclick={()=>void invoke('request_refresh')}><RefreshCw size={13}/>{$t('刷新状态')}</button>
+      </div>
       {#if shown.length}
         <div class="server-list">
           {#each shown as group (group.host)}
@@ -343,7 +354,13 @@
           {/each}
         </div>
       {:else}
-        <p class="ms-empty">{$t(groups.length?'没有符合条件的服务器':'还没有添加 SSH 服务器')}</p>
+        <div class="ms-empty">
+          <Server size={25} aria-hidden="true"/>
+          <strong>{$t(groups.length?'没有符合条件的服务器':'还没有添加 SSH 服务器')}</strong>
+          {#if !groups.length}
+            <button class="ms-btn" disabled={saving||updating} onclick={addWizard}><Plus size={13}/>{$t('添加服务器')}</button>
+          {/if}
+        </div>
       {/if}
     {:else if page==='local'}
       <div class="section-top"><h2>{$t('本机 Agent')}</h2><button class="ms-btn small" onclick={detect}><RefreshCw size={13}/>{$t('重新检测')}</button></div>

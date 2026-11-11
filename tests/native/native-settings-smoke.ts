@@ -182,6 +182,7 @@ projects=["/srv/legacy"]
   assert.equal(await ui.evaluate(`document.querySelectorAll('[data-agent-kind="trae"]').length`),1);
   await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
   await ui.wait(`document.querySelector('.ms-tabs button[aria-pressed="true"]')?.textContent.includes('SSH') && !!document.querySelector('.ms-empty')`);
+  if(captureScreenshots)await Bun.write(join(owned,'settings-ssh-empty-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.evaluate(`document.querySelector('[data-source-review] button').click()`);
   await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
   assert.equal(await ui.evaluate(`document.querySelector('.ms-scroll').scrollTop`),0);
@@ -606,6 +607,9 @@ projects=["/srv/legacy"]
       }
     }
   }finally{await ui.send('Fetch.disable');ui.onRequestPaused(undefined);}
+  await ui.evaluate(`document.querySelector('.ms-back').click()`);
+  await ui.wait(`document.querySelectorAll('.server-card').length===2`);
+  assert.equal(await ui.evaluate(`!!document.querySelector('.ms-success')`),false,'The SSH list must not retain a save banner after adding a server');
   if(captureScreenshots){
     // Reset ephemeral fixture reports before capturing the home/detail page:
     // persisted configuration alone must never paint a successful SSH badge.
@@ -629,6 +633,9 @@ projects=["/srv/legacy"]
     await Bun.write(join(owned,'settings-projects-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     const bounds=await ui.evaluate(`({width:innerWidth,height:innerHeight,foot:document.querySelector('.ms-foot').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth})`);
     assert.deepEqual(bounds,{width:960,height:704,foot:704,overflow:false});
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#updates"]').click()`);
+    await ui.wait(`document.querySelector('#update-title')?.textContent.includes('0.0.1')`);
+    await Bun.write(join(owned,'settings-updates-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='en';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await ui.wait(`document.documentElement.lang==='en' && document.querySelector('.settings-status').textContent===''`);
@@ -655,6 +662,28 @@ projects=["/srv/legacy"]
     for(const section of ['panel','notifications','updates','about']){
       await ui.evaluate(`document.querySelector('.settings-nav a[href="#${section}"]').click()`);
       await ui.wait(`document.querySelector('.settings-nav a[href="#${section}"]').getAttribute('aria-current')==='page'`);
+      if(section==='updates'){
+        await ui.wait(`document.querySelector('#update-title')?.textContent.includes('0.0.1')`);
+        const cardBounds=`Array.from(document.querySelectorAll('.update-stack > .settings-group'), card => {
+          const {left,right}=card.getBoundingClientRect();
+          return {left,right};
+        })`;
+        const normal=await ui.evaluate(cardBounds);
+        assert.equal(normal.length,2);
+        assert.deepEqual(normal[0],normal[1],'Update cards must share both edges');
+        await ui.send('Emulation.setDeviceMetricsOverride',{width:440,height:520,deviceScaleFactor:1,mobile:false});
+        try{
+          await ui.wait(`innerWidth===440`);
+          const compact=await ui.evaluate(cardBounds);
+          assert.deepEqual(compact[0],compact[1],'Update cards must align in a compact window');
+          assert.ok(compact[0].left>=0&&compact[0].right<=440);
+          await Bun.write(join(owned,'settings-updates-compact-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+          console.log('Update card bounds at 960px and 440px:',JSON.stringify({normal,compact}));
+        }finally{
+          await ui.send('Emulation.clearDeviceMetricsOverride');
+          await ui.wait(`innerWidth===960`);
+        }
+      }
       await Bun.write(join(owned,`settings-${section}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     }
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
