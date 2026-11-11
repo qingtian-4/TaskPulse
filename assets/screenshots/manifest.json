@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "814572556005d19fe5bb52ae8a3d74cbadeb2cf7",
+  "capture_commit": "f68028a7936caf86dd2d517b1f4c71b7e16f8f28",
   "modified": false,
-  "executable_sha256": "6e76b87b9ca95116193778fa98c1f236c374f209b83c002feb6bf4e863a68b8d",
+  "executable_sha256": "3913f5417639a49523151fc7f27a117bc70af8e3944073a142cf180544d73e3b",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 788,
       "dpr": 2,
-      "sha256": "370006e147a98f626fc920f08252e3876f6b436c5a46263bc8daaaf0e0f5da8b",
-      "bytes": 161741
+      "sha256": "66e3af340f9d4651c5f9f18a925ef4a4f37e0616151be13b3d6b00b2e7775254",
+      "bytes": 161740
     },
     {
       "file": "notice-input.png",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "5a10f8106040a2d2f3beca8a2b1d7d69eda11240774719014b38e3b008a958a7",
-      "bytes": 25775
+      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
+      "bytes": 25774
     },
     {
       "file": "dashboard-en.png",
@@ -67,7 +67,7 @@
       "logical_width": 368,
       "logical_height": 806,
       "dpr": 2,
-      "sha256": "1dc19070afdd64f513e3ede62c7178e5a34d412ee08562f0b64ef89d322e38d5",
+      "sha256": "669c50441320c21a18ae8b9769b9b31012f6077adb2e12477a02bd58a86d71ef",
       "bytes": 145606
     },
     {
@@ -107,9 +107,9 @@
       "bytes": 23208
     }
   ],
-  "frontend_tree": "8e8bdff77f8f026142b9f074b0cefcaaa4263d8d",
+  "frontend_tree": "caa4633a307949360f86b8845203f5b3d028902c",
   "runtime_tree": "694b1e3dee5d148d68763baf5bacc27a19af9708",
-  "locale_tree": "95e9a1447c8d5d86b62ae85b3c5d14721f9cddb8",
+  "locale_tree": "a224a063c0b576010ec29abe804d6a5959a0e005",
   "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",
   "lockfiles": {
     "bun.lock": "e2a101df744f36f142261f9fab4fba1052c1d1054cbbfe96ec0f404ed6175645",

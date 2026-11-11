@@ -52,6 +52,9 @@ async function seedSource(adapter:string,agent:string){
     integration:{adapter_id:adapter,agent_id:agent,transport:'local',accept_since_ms:0}};
   const expected=await root.invoke('get_monitoring_settings');
   const saved=await management.invoke('save_monitoring_settings',{settings:{...expected,sources:[...expected.sources,source]},expected});
+  await management.send('Page.reload');
+  const selector=`[data-saved-event-connections] [data-event-source="${source.id}"]`;
+  await management.wait(`!!document.querySelector(${JSON.stringify(selector)})`);
   return saved.sources.find((s:any)=>s.id===source.id);
 }
 function send(source:any,event:any,host=false){const r=spawnSync(exe,[host?'--integration-host-event':'--integration-event','--source',source.id,'--adapter',source.integration.adapter_id],{env:{...env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:''},input:JSON.stringify(event),encoding:'utf8',windowsHide:true,timeout:8000});if(r.error)throw r.error;assert.equal(r.status,0);assert.equal(r.stdout,'');}
