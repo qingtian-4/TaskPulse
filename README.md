@@ -9,7 +9,7 @@
 
 **不必盯着 Agent，需要你时再回来。**
 
-让 Codex、Claude Code 在后台工作，把注意力留给你正在做的事情。
+让多个 Coding Agent 在后台各自执行任务，TaskPulse 替你关注 Agent，把注意力留给你正在做的事情。
 
 [下载安装](#安装) · [快速上手](#开始使用) · [支持的 Agent](#支持的-agent) · [English](README.en.md)
 
@@ -17,18 +17,20 @@
 
 </div>
 
-TaskPulse 是一款轻量级托盘工具，关注 Codex、Claude Code 等 Agent 的任务。需要回答、批准或查看本轮结果时，收到提醒再回来，无需反复切换窗口检查状态。
+TaskPulse 是一款轻量级托盘工具，集中查看本机 Coding Agent 的任务，也支持通过 SSH 读取服务器上的 Codex 和 Claude Code。需要回答、批准或查看结果时，它会提醒你。
 
 ## 安装
 
-在 [TaskPulse v0.0.1](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) 选择对应系统的安装包。
+[v0.0.1 版本说明与全部附件](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) · [SHA-256 校验和](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/SHA256SUMS.txt)
 
-| 系统 | 安装包 |
+| 系统 | 下载 |
 | --- | --- |
-| Windows 10 / 11 · x64 | `TaskPulse_0.0.1_windows_x64_setup.exe` |
-| Windows 11 · ARM64 | `TaskPulse_0.0.1_windows_arm64_setup.exe` |
-| macOS 13.3+ · Apple Silicon | `TaskPulse_0.0.1_macos_arm64.dmg` |
-| macOS 13.3+ · Intel | `TaskPulse_0.0.1_macos_x64.dmg` |
+| Windows 10 / 11 · x64 | [EXE](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_windows_x64_setup.exe) · [MSI](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_windows_x64.msi) |
+| Windows 11 · ARM64 | [EXE](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_windows_arm64_setup.exe) |
+| macOS 13.3+ · Apple Silicon | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_arm64.dmg) |
+| macOS 13.3+ · Intel | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_x64.dmg) |
+
+普通安装推荐 Windows EXE；需要 MSI 的 x64 用户可选同版本 MSI。已有较早版本的用户，请参阅[从旧版换装](docs/INSTALL.md#从旧版换装)。
 
 ### 命令行安装
 
@@ -96,7 +98,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | OpenCode | 读取本机会话、运行阶段和明确结束记录。 |
 | WorkBuddy | 读取本机任务和本轮结果，不含云端任务。 |
 | ZCode | 只读本机任务、模型、本轮推理强度和结果。 |
-| Kimi Code / kimi-cli | 只读本机主会话、明确请求和结束记录。 |
+| Kimi Code / kimi-cli | 读取本机主会话的模型、推理强度、明确请求和结束记录。 |
 | Qoder | 读取本机 Desktop 轮次及 IDE / CLI 日志，原生审批和提问尚未支持。 |
 | Trae | 发现本机会话目录。任务进度与完成提醒暂未适配。 |
 | 命令行 / 远程 tmux | 可用 `tp-run` 记录前台命令退出码，普通 tmux shell 返回仅提供推断结果。 |
@@ -113,7 +115,7 @@ Rust 负责有界采集、请求匹配与持久状态，Tauri 提供系统窗口
 
 - [ ] 扩展原生事件读取与 Agent 版本覆盖。
 - [ ] 完善跨平台返回任务、多屏与睡眠恢复。
-- [ ] 完成签名、公证与安装升级的实机覆盖。
+- [ ] 完善系统发行者签名、macOS 公证和更多升级路径的验收。
 - [ ] 评估移动端与可穿戴设备提醒。
 
 [完整路线图 / Roadmap](ROADMAP.md) · [使用与故障排查](docs/README.md)

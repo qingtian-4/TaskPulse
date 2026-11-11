@@ -9,7 +9,7 @@
 
 **Stop watching your agents. Come back when they need you.**
 
-Let your coding agents work in the background. Keep your attention on what you are doing.
+TaskPulse keeps track of your coding agents while they work in the background, so you can focus on what you are doing.
 
 [Install](#install) · [Get started](#get-started) · [Supported agents](#supported-agents) · [简体中文](README.md)
 
@@ -17,18 +17,20 @@ Let your coding agents work in the background. Keep your attention on what you a
 
 </div>
 
-TaskPulse is a lightweight tray app for local Codex and Claude Code tasks. Come back when they need an answer, approval or a review of the latest turn's result. Stay focused instead of constantly checking their progress.
+TaskPulse is a lightweight tray app for local coding agents. It can also read Codex and Claude Code tasks on SSH servers. It lets you know when an agent needs input or approval, or has a result ready to review.
 
 ## Install
 
-Choose an installer for your system in [TaskPulse v0.0.1](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1).
+[v0.0.1 release notes and assets](https://github.com/qingtian-4/TaskPulse/releases/tag/v0.0.1) · [SHA-256 checksums](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/SHA256SUMS.txt)
 
-| System | Installer |
+| System | Download |
 | --- | --- |
-| Windows 10 / 11 · x64 | `TaskPulse_0.0.1_windows_x64_setup.exe` |
-| Windows 11 · ARM64 | `TaskPulse_0.0.1_windows_arm64_setup.exe` |
-| macOS 13.3+ · Apple Silicon | `TaskPulse_0.0.1_macos_arm64.dmg` |
-| macOS 13.3+ · Intel | `TaskPulse_0.0.1_macos_x64.dmg` |
+| Windows 10 / 11 · x64 | [EXE](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_windows_x64_setup.exe) · [MSI](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_windows_x64.msi) |
+| Windows 11 · ARM64 | [EXE](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_windows_arm64_setup.exe) |
+| macOS 13.3+ · Apple Silicon | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_arm64.dmg) |
+| macOS 13.3+ · Intel | [DMG](https://github.com/qingtian-4/TaskPulse/releases/download/v0.0.1/TaskPulse_0.0.1_macos_x64.dmg) |
+
+On Windows, choose EXE for a standard installation or MSI if you need that format on x64. If you already have an earlier build installed, see [manual migration (Chinese)](docs/INSTALL.md#从旧版换装).
 
 ### Install from the command line
 
@@ -96,7 +98,7 @@ Each card shows whether the task runs locally or on a named SSH server. When the
 | OpenCode | Reads local sessions, execution phases and explicit turn outcomes. |
 | WorkBuddy | Reads local tasks and turn results. Cloud tasks are outside this source. |
 | ZCode | Reads local tasks, models, reasoning effort and turn results. |
-| Kimi Code / kimi-cli | Reads local main sessions, explicit requests and turn outcomes. |
+| Kimi Code / kimi-cli | Reads models, reasoning effort, explicit requests and turn outcomes from local main sessions. |
 | Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
 | Trae | Discovers local sessions in the workspace catalog. Task progress and completion reminders are unsupported. |
 | Shell / remote tmux | `tp-run` records the foreground command exit code. An ordinary tmux shell return only provides an inferred result. |
@@ -111,7 +113,7 @@ TaskPulse detects supported local data automatically. Choose the agents and proj
 
 - [ ] Broaden explicit native events and agent-version coverage.
 - [ ] Improve cross-platform return, multiple displays and sleep recovery.
-- [ ] Complete signing, notarization and installer/upgrade runtime coverage.
+- [ ] Expand publisher signing, macOS notarization and upgrade testing.
 - [ ] Explore mobile and wearable notifications.
 
 [Full roadmap](ROADMAP.md) · [Usage and troubleshooting](docs/README.md)
