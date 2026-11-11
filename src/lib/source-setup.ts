@@ -31,29 +31,6 @@ export interface SourceCatalogRow {
   definition:SourceDefinition; source?:MonitorSource; candidate?:MonitorSource; observation?:SourceSnapshot;
   supported:boolean; locationDetected:boolean|null; dataDetected:boolean|null;
 }
-// Short labels are presentation only. Manifests and persisted source IDs
-// continue to carry the original adapter identity.
-const LOCAL_HOOKS:Readonly<Record<string,SourceKind>>={
-  'kimi-code-cli':'kimi_code','trae-cn-ide':'trae','zcode-desktop':'zcode',
-};
-export function localHookKind(adapterId:string|undefined):SourceKind|undefined {
-  return adapterId&&Object.hasOwn(LOCAL_HOOKS,adapterId)?LOCAL_HOOKS[adapterId]:undefined;
-}
-export function isDefaultEventName(name:string,definition:SourceDefinition):boolean {
-  return name===definition.name||name===eventAdapterLabel(definition.adapter_id??'',definition.name)||
-    definition.adapter_id==='standard-events'&&[
-      '其他 Agent','其他 Agent · 通用事件','其他 Agent（标准事件）','Other Agent','Other agents (standard events)','Generic events (MCP / scripts)','通用事件（MCP / 脚本）','MCP or scripts',
-    ].includes(name);
-}
-export function eventAdapterLabel(adapterId:string,displayName:string):string {
-  return ({
-    'standard-events':'MCP 或脚本',
-    'kimi-code-cli':'Kimi Code',
-    'trae-cn-ide':'Trae',
-    'zcode-desktop':'ZCode',
-    'workbuddy-candidate':'WorkBuddy',
-  } as Record<string,string>)[adapterId]??displayName;
-}
 export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []):SourceCatalogRow[] {
   const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)
     .map(source=>{
@@ -114,13 +91,6 @@ const READ_LABELS:Record<SourceReadState,string>={
 export function sourceReadState(observation:SourceSnapshot|undefined, enabled:boolean):string {
   return READ_LABELS[enabled ? observation?.enabled ? observation.read_state : 'waiting' : 'disabled'];
 }
-export function summarizeSources(sources:SourceSnapshot[]) {
-  const enabled=sources.filter(s=>s.enabled);
-  return {enabled:enabled.length,waiting:enabled.filter(s=>s.read_state==='waiting').length,
-    paginating:enabled.filter(s=>s.read_state==='paginating').length,
-    issues:enabled.filter(s=>['partial','failed','stale'].includes(s.read_state)).length};
-}
-
 // A visual hint only. Reaching step 4 is NOT host lifecycle certification.
 export function sourceSetupStep(hasSource:boolean,draft:boolean,readTestPassed:boolean):number {
   return !hasSource?1:draft?2:readTestPassed?4:3;

@@ -12,18 +12,17 @@
   import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,sshAgents,readLabel,canRead,type AgentKind,type NewServer,type SshAgent,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
   import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '$lib/types';
   import type {ProjectChoice} from '$lib/project-options';
-  import {configuredSource,localDiscoveryCandidates,sourceDefinitionFor,type SourceDefinition} from '$lib/source-setup';
+  import {configuredSource,localDiscoveryCandidates,type SourceDefinition} from '$lib/source-setup';
   import SshSourceWizard from './SshSourceWizard.svelte';
   import ProjectScope from './ProjectScope.svelte';
   import SourceSessions from './SourceSessions.svelte';
-  import EventSources from './EventSources.svelte';
   import './monitor-sources.css';
   let {reviewRequest,onDirtyChange,onAttention}:{reviewRequest:number;onDirtyChange:(value:boolean)=>void;onAttention:()=>void}=$props();
   let settings=$state<DashboardSettings|null>(null),applied=$state<DashboardSettings|null>(null);
   let snapshot=$state<DashboardSnapshot|null>(null),discovery=$state<SourceDiscovery[]>([]);
   let page=$state<'home'|'local'|'server'>('local'),tab=$state<'local'|'ssh'>('local'),selectedHost=$state(''),query=$state('');
   let dirty=$state(false),saving=$state(false),conflict=$state(false),updating=$state(false),detectionSettled=$state(false);
-  let error=$state(''),notice=$state(''),platform=$state(''),wizard=$state(false),closePrompt=$state(false),closing=false;
+  let error=$state(''),notice=$state(''),wizard=$state(false),closePrompt=$state(false),closing=false;
   let removePrompt=$state(false),eventPrompt=$state<{id:string;enabled:boolean}|null>(null),reading=$state('');
   let reports=$state<Record<string,SshProbe>>({}),probing=$state<Record<string,boolean>>({}),projects=$state<Record<string,string[]>>({});
   let projectAliases=$state<Record<string,ProjectChoice[]>>({});
@@ -32,7 +31,6 @@
   let activeLocal=$state<AgentKind>('codex'),activeLocalSource=$state('');
   let expandedLocal=$state<AgentKind|null>(null);
   let localAgents=$state<SourceDefinition[]>([]);
-  let eventAgents=$state<SourceDefinition[]>([]);
   const discoveredLocal=$derived(localDiscoveryCandidates(localAgents,discovery,applied));
   const knownLocal=$derived(localAgents.filter(agent=>agent.kind!=='scanner'&&!discoveredLocal.some(row=>row.definition.kind===agent.kind)));
   const featuredLocal=$derived(knownLocal.filter(agent=>discovery.some(row=>row.data_location_detected===true
@@ -40,27 +38,13 @@
     || settings?.sources.some(s=>s.kind===agent.kind&&configuredSource(s,agent,settings?.auto_discovery_seen))));
   const optionalLocal=$derived(knownLocal.filter(agent=>!featuredLocal.includes(agent)));
   let supportedOpen=$state(false);
-  let catalog=$state<SourceDefinition[]>([]);
-  const wslSources=$derived(settings?.sources.filter(s=>s.kind==='codex_wsl'||s.kind==='deepseek_wsl')??[]);
-  let wslKind=$state<'codex_wsl'|'deepseek_wsl'>('codex_wsl'),wslDistro=$state(''),wslDraftId=$state('');
-  const distroName=$derived(wslDistro.trim());
-  const validDistro=$derived(distroName!==''&&!distroName.startsWith('-')&&!/[\/\\\p{Cc}]/u.test(distroName));
-  const hasDistro=(location:string)=>wslSources.some(source=>source.kind===wslKind&&source.location.toLowerCase()===location.toLowerCase());
-  const wslCandidates=$derived(discovery.filter(row=>row.data_location_detected===true&&row.candidate?.kind===wslKind&&!hasDistro(row.location)));
-  const fallbackSources=$derived(settings?.sources.filter(s=>
-    !wslSources.includes(s)&&s.kind!=='remote_codex'&&s.kind!=='remote_claude_code'&&s.kind!=='tmux'&&s.kind!=='generic_event'&&s.kind!=='doubao'
-    &&(s.kind==='scanner'||!localAgents.some(agent=>agent.kind===s.kind))
-    &&configuredSource(s,sourceDefinitionFor(catalog,s),settings?.auto_discovery_seen))??[]);
-  const savedEvents=$derived(settings?.sources.filter(source=>source.kind==='generic_event')??[]);
   let sourceScroll:HTMLDivElement;
   let handledReview=0, detectionRequest=0, catalogRequest=0;
   async function refreshCatalog(currentPlatform:string){
     const request=++catalogRequest;
     const entries=await invoke<SourceDefinition[]>('get_source_catalog');
     if(!active||request!==catalogRequest)return;
-    catalog=entries;
     localAgents=entries.filter(agent=>agent.category==='local'&&(!agent.platforms.length||agent.platforms.includes(currentPlatform)));
-    eventAgents=entries.filter(agent=>agent.kind==='generic_event'&&(!agent.platforms.length||agent.platforms.includes(currentPlatform)||settings?.sources.some(s=>s.integration?.adapter_id===agent.adapter_id)));
   }
   function patchSource(source:MonitorSource,patch:Partial<MonitorSource>){
     if(saving||conflict)return;
@@ -73,19 +57,6 @@
     settings.ssh_paused_sources=(settings.ssh_paused_sources??[]).filter(id=>id!==source.id);
     legacyRemove=null;touch();
   }
-  function addWsl(){
-    if(!settings||platform!=='Windows'||saving||conflict||!validDistro||hasDistro(distroName))return;
-    const found=wslCandidates.find(row=>row.location.toLowerCase()===distroName.toLowerCase())?.candidate;
-    const name=wslKind==='codex_wsl'?'Codex · WSL':'DeepSeek · WSL';
-    const source=found&&!settings.sources.some(row=>row.id===found.id)
-      ? {...structuredClone($state.snapshot(found)),enabled:false}
-      : createSource(wslKind,distroName,`${name} ${distroName}`);
-    settings.sources.push(source);
-    wslDraftId=source.id;
-    wslDistro='';
-    touch();
-  }
-
   $effect(()=>{
     if(reviewRequest===handledReview)return;
     handledReview=reviewRequest;
@@ -262,7 +233,7 @@
       try{
         const close=await getCurrentWindow().onCloseRequested(e=>{if(saving||get(autostart).pending||get(preferencePending)){e.preventDefault();return;}if((dirty||wizard)&&!closing){e.preventDefault();onAttention();closePrompt=true;}});if(active)cleanup.push(close);else close();
         settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));error=await invoke<string|null>('get_monitoring_error')??'';
-        const environment=await invoke<{platform:string}>('integration_environment');platform=environment.platform==='windows'?'Windows':environment.platform==='macos'?'macOS':'Linux';
+        const environment=await invoke<{platform:string}>('integration_environment');
         const catalogChanged=await listen('integration-catalog-updated',()=>{void refreshCatalog(environment.platform).catch(fail);});
         if(active)cleanup.push(catalogChanged);else catalogChanged();
         await refreshCatalog(environment.platform);
@@ -283,7 +254,7 @@
   <div class="ms-scroll glass-scroll" bind:this={sourceScroll}>
     <fieldset class="source-edit-lock" disabled={saving} aria-busy={saving}>
       {#snippet savedSourceRow(source:MonitorSource)}
-        <details class="ms-advanced" data-saved-source={source.id} open={wslDraftId===source.id} ontoggle={e=>{if(e.currentTarget.open)void loadProjects(source);}}>
+        <details class="ms-advanced" data-saved-source={source.id} ontoggle={e=>{if(e.currentTarget.open)void loadProjects(source);}}>
           <summary>{source.name}{#if source.location} · {source.location}{/if} · {$t(sourceStatus(source,observation(source)))}</summary>
           <div class="advanced-inner">
             <label class="ms-field">{$t('来源名称')}<input value={source.name} oninput={e=>patchSource(source,{name:e.currentTarget.value})}/></label>
@@ -407,32 +378,6 @@
         {/if}
 <div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>void savePreference({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
       </section>
-      {#if platform==='Windows' || wslSources.length}
-        <details class="detail-card" data-wsl-sources><summary>{$t('WSL 来源')}</summary>
-          {#if platform==='Windows'}
-            <form class="wsl-add" data-wsl-add onsubmit={e=>{e.preventDefault();addWsl();}}>
-              <label class="ms-field">Agent
-                <select bind:value={wslKind} disabled={saving||conflict}>
-                  <option value="codex_wsl">Codex</option>
-                  <option value="deepseek_wsl">DeepSeek Harness</option>
-                </select>
-              </label>
-              <label class="ms-field">{$t('WSL 发行版')}
-                <input bind:value={wslDistro} list="running-wsl-distros" placeholder="Ubuntu" disabled={saving||conflict}/>
-              </label>
-              <datalist id="running-wsl-distros">
-                {#each wslCandidates as row (row.id)}<option value={row.location}></option>{/each}
-              </datalist>
-              <button class="ms-btn" type="submit" disabled={saving||conflict||!validDistro||hasDistro(distroName)}><Plus size={13}/>{$t('添加 WSL 来源')}</button>
-            </form>
-          {/if}
-          {#each wslSources as source (source.id)}{@render savedSourceRow(source)}{/each}
-        </details>
-      {/if}
-      {#each fallbackSources as source (source.id)}{@render savedSourceRow(source)}{/each}
-      {#if savedEvents.length}
-        <EventSources {settings} catalog={eventAgents} sources={savedEvents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch}/>
-      {/if}
     {:else if selected}
       {@const source=selected.agents[activeRemote]}
       {@const report=reports[selected.host]}

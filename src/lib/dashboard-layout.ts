@@ -1,4 +1,4 @@
-// Card bottoms include section headings. Never size from the viewport's scrollHeight.
+// Card bottoms include project headings when grouping by project. Never size from the viewport's scrollHeight.
 export function dashboardHeightForRows(chrome:number,bottoms:number[],expanded=false,empty=96):number {
   if(expanded)return 840;
   const body=bottoms.length?bottoms[Math.min(4,bottoms.length)-1]:empty;

@@ -4,6 +4,7 @@
  */
 import { Database } from 'bun:sqlite';
 import { join } from 'node:path';
+import {clickDashboardFilter} from '../support/dashboard-filters';
 const tabs=await fetch('http://127.0.0.1:9337/json').then(r=>r.json()) as Array<{url:string;webSocketDebuggerUrl:string}>;
 const tab=tabs.find(t=>t.url.includes('tauri.localhost') && !t.url.includes('/notice') && !t.url.includes('/manage'));
 if(!tab)throw Error('No real TaskPulse popup at temporary CDP 9337');
@@ -23,7 +24,7 @@ try{
   await waitFor(`!!document.querySelector('.dashboard') && !!globalThis.__TAURI_INTERNALS__`);
   const original=await invoke('get_monitoring_settings');
   await waitFor(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(s=>s.provider==='codex' && s.status==='connected'))`);
-  await evaluate(`document.querySelector('.all-tasks').click()`);
+  await clickDashboardFilter(evaluate,'.all-tasks');
   const tasks=await invoke('get_agents');
   if(!tasks.some((t:any)=>t.status==='running' && !t.stale))throw Error('Requires an actual running native Agent');
   for(const task of tasks){
@@ -46,7 +47,7 @@ try{
     named++;
   }
   if(!named)throw Error('No native sidebar title was verified');
-  await evaluate(`(()=>{if(!document.querySelector('[aria-label="筛选来源"]'))[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('筛选 / 分组')).click();})()`);
+  await evaluate(`(()=>{if(!document.querySelector('[aria-label="筛选来源"]'))document.querySelector('.filter-toggle').click();})()`);
   // A hidden, collapsed filter can leave the list empty despite live tasks.
   // Use an enabled source without any fresh running task, never alter scopes.
   const running=tasks.filter((t:any)=>t.status==='running' && !t.stale);
@@ -59,7 +60,7 @@ try{
   for(const task of running)await waitFor(`!!document.querySelector('[data-task-id='+CSS.escape(${JSON.stringify(task.id)})+']')`);
   await waitFor(`!document.querySelector('.outside-running')`);
   if(JSON.stringify(await invoke('get_monitoring_settings'))!==JSON.stringify(original))throw Error('Read-only acceptance changed monitoring configuration');
-  await evaluate(`document.querySelector('.all-tasks').click()`);
+  await clickDashboardFilter(evaluate,'.all-tasks');
   const layout=await evaluate(`(()=>{const p=document.querySelector('.dashboard');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,overflow:document.documentElement.scrollWidth>innerWidth,errors:[...document.querySelectorAll('[role=alert]')].map(n=>n.textContent)};})()`);
   if(layout.width>440.1 || layout.height>720.1 || layout.overflow || layout.errors.length)throw Error('Native dashboard layout or IPC errors');
   await Bun.write('src-tauri/target/ui-smoke/native-discovery.png',Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -67,6 +68,6 @@ try{
   await Bun.write('src-tauri/target/ui-smoke/native-discovery-result.json',JSON.stringify(result,null,2));
   console.log(JSON.stringify(result));
 }finally{
-  await evaluate(`document.querySelector('.all-tasks')?.click()`).catch(()=>{});
+  await clickDashboardFilter(evaluate,'.all-tasks').catch(()=>{});
   ws.close();
 }

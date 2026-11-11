@@ -11,6 +11,7 @@ import {createReadStream} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {verifyDevelopmentBuild} from '../../scripts/development-artifact';
 import {withSmokeWorkspace,stopOwnedChild} from '../support/smoke-workspace';
+import {clickDashboardFilter} from '../support/dashboard-filters';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
 const sourceStatusOnly=process.argv.includes('--source-status-only');
@@ -58,6 +59,8 @@ await withSmokeWorkspace('dashboard-polish',async({owned,onStop})=>{
     {id:'scan:codex:anonymous',name:'unknown',source:'codex',source_instance:'scanner',status:'running',confidence:'inferred',remote:false,updated_at:now,unread:true,pinned:false},
   ];
   const records=Object.fromEntries(tasks.map(task=>[task.id,{task,unread:task.unread,pinned:task.pinned,pin_override:task.pinned?true:null,last_execution_at:now,last_turn_key:task.turn_key??null,last_status:task.status,hidden:false,ignored:false}]));
+  const oldTask={...tasks[1],id:'file:archived',name:'验收：较早关注',updated_at:now-9*86400000,finished_at:now-9*86400000};
+  records[oldTask.id]={...records['file:done'],task:oldTask,last_execution_at:oldTask.updated_at};
   await Bun.write(join(home,'attention.json'),JSON.stringify({version:4,records,baselines:{}}));
   for(const task of tasks.slice(0,2))await Bun.write(join(home,task.id.slice(5)+'.status'),JSON.stringify({v:2,name:task.name,status:task.status,turn_key:task.turn_key,execution_activity_at:now,started_at:task.started_at,finished_at:task.finished_at,exit_code:task.exit_code,confidence:task.confidence}));
   // Both configured transports read only this disposable status directory.
@@ -136,7 +139,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   const initial=await titles();
   console.log('default cards:',JSON.stringify(initial));
   assert.deepEqual([...initial].sort(),['验收：运行中的任务','验收：未查看的结果','验收：手动固定'].sort());
-  assert.equal(await root.evaluate(`!!document.querySelector('.pending-running,.filter-note,.quota')`),false,'Red-box content must be removed');
+  assert.ok(await root.evaluate(`!document.querySelector('.dashboard > footer, .task-scroll > section h2, .view-bar .all-tasks, .view-bar .archive-filter, .view-bar .uncertain-filter')`),'Hide the summary, headings and archive/uncertainty buttons with filters closed');
   const checks=['default task set excludes stale unpinned and anonymous scanner rows','removed red-box content'];
   const focusEvidence=[];
   if(focusWindow&&focusTarget){
@@ -167,18 +170,23 @@ accept_since_ms=${now}`:''}`).join('\n')}
   }
   await root.invoke('plugin:window|show',{label:'popup'});
   await Bun.write(join(owned,'dashboard-light.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await root.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('状态待更新')).click()`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_archived_attention').then(t=>t.some(x=>x.id==='file:archived'))`);
+  await clickDashboardFilter(root.evaluate,'.archive-filter');
+  await root.wait(`document.querySelector('[data-task-id="file:archived"]')`);
+  await clickDashboardFilter(root.evaluate,'.archive-filter');
+  await root.wait(`!document.querySelector('[data-task-id="file:archived"]')`);
+  await clickDashboardFilter(root.evaluate,'.uncertain-filter');
   await root.wait(`document.querySelector('.task-scroll').textContent.includes('验收：离线任务')`);
   assert.ok(!(await titles()).includes('unknown'));
   assert.equal(await root.evaluate(`!!document.querySelector('.filter-note')`),false);
-  await root.evaluate(`document.querySelector('.all-tasks').click()`);
+  await clickDashboardFilter(root.evaluate,'.all-tasks');
   await root.wait(`!document.querySelector('.task-scroll').textContent.includes('验收：离线任务')`);
   const after=await root.invoke('get_dashboard_snapshot');
   for(const id of ['file:offline','file:pinned','scan:codex:anonymous']){
     const a=before.tasks.find((t:any)=>t.id===id),b=after.tasks.find((t:any)=>t.id===id);
     assert.ok(a&&b);assert.equal(b.unread,a.unread);assert.equal(b.pinned,a.pinned);assert.equal(b.status,a.status);
   }
-  checks.push('uncertainty is reachable without acknowledging or deleting tasks');
+  checks.push('archived and uncertain tasks remain reachable in the filter popover without acknowledging or deleting tasks');
   await root.invoke('open_management',{section:'general'});
   const ui=await connect(await tab('/manage'));await ui.wait(`!!document.querySelector('.settings-heading')`);
   assert.equal(await ui.evaluate(`!!document.querySelector('.settings-save')`),false);
@@ -204,11 +212,11 @@ accept_since_ms=${now}`:''}`).join('\n')}
     const current=await root.invoke('get_task_notice');await notice.invoke('dismiss_task_notice',{id:current.current.id,reason:'user'});
   }
   checks.push('light/dark notice footer contrast >= 4.5 for hints and both actions','Chinese/English notice layouts at 320 and 368 pixels');
-  await root.evaluate(`document.querySelector('.all-tasks').click()`);
+  await clickDashboardFilter(root.evaluate,'.all-tasks');
   for(const [width,height] of [[320,400],[368,840],[460,560]]){
     await root.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
     assert.equal(await root.evaluate(`document.documentElement.scrollWidth>innerWidth || document.documentElement.scrollHeight>innerHeight`),false);
-    const box=await root.evaluate(`(()=>{const r=document.querySelector('footer').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewport:innerHeight};})()`);
+    const box=await root.evaluate(`(()=>{const r=document.querySelector('.task-scroll').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewport:innerHeight};})()`);
     assert.ok(box.bottom<=height+1);
   }
   checks.push('compact and standard dashboard layouts');

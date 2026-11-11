@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 ## 开始使用
 
-1. **选择来源**：首次启动，在“监控来源 → 本机”确认要关注的 Agent，点击“确认并开始监控”。本机数据自动发现，WSL 和 SSH 来源按需添加。
+1. **选择来源**：首次启动，在“监控来源 → 本机”确认要关注的 Agent，点击“确认并开始监控”。本机数据自动发现，服务器可在「SSH 服务器」中添加。
 2. **照常工作**：回到 Agent 开始任务，从托盘查看运行、待处理和未读结果。Windows 可按 `Ctrl+Shift+A` 打开面板。
 3. **收到提醒再回来**：在原 Agent 中回答或批准。匹配的来源事件解除请求；看完结果后，在任务详情中标记已查看。
 
@@ -60,7 +60,7 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 - **关键时刻主动提醒**：根据来源的明确证据，提醒输入、审批、任务结果和异常。
 - **需要处理的任务，一目了然**：在托盘中集中查看进行中、待处理与结果待查看。
 - **重要结果不会错过**：未读结果、固定任务和未解决请求跨重启恢复。读取异常保留上次可信状态。
-- **自动发现，灵活接入**：本机来源自动发现，也可管理多个 WSL 发行版和 SSH 服务器，分别设置项目范围。
+- **自动发现，灵活接入**：本机来源自动发现，也可连接多台 SSH 服务器，分别设置项目范围。
 - **本地运行，尊重隐私**：无需 TaskPulse 云账号，不上传 Agent 对话，不自动修改 Agent Hook 或审批策略。
 
 ## 任务面板
@@ -81,9 +81,9 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 | Agent / 来源 | 接入与能力 |
 | --- | --- |
-| Codex | 本机自动发现，也可配置独立 WSL 或 SSH 来源。读取会话、模型、本轮状态和明确提问，审批需要[明确事件](docs/CODEX_APPROVAL_OBSERVER.md)。 |
+| Codex | 本机自动发现，也可连接 SSH 服务器。读取会话、模型、本轮状态和明确提问，审批需要[明确事件](docs/CODEX_APPROVAL_OBSERVER.md)。 |
 | Claude Code | 本机自动发现，也可用 SSH 读取服务器上的运行和结束状态。明确审批需在本机配置可选官方 Hook；原生提问未支持。 |
-| DeepSeek Harness | 读取本机 Desktop / CLI，也可接入 WSL。支持模型、推理强度和明确请求。 |
+| DeepSeek Harness | 读取本机 Desktop / CLI。支持模型、推理强度和明确请求。 |
 | Hermes | 读取本机会话、模型和运行状态。 |
 | OpenCode | 读取本机会话、运行阶段和明确结束记录。 |
 | WorkBuddy | 读取本机任务和本轮结果，不含云端任务。 |
@@ -91,11 +91,9 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | Kimi Code / kimi-cli | 只读本机主会话、明确请求和结束记录。 |
 | Qoder | 读取本机 Desktop 轮次及 IDE / CLI 日志，原生审批和提问尚未支持。 |
 | Trae | 发现本机会话目录。任务进度与完成提醒暂未适配。 |
-| Gemini CLI | 可发现运行进程，完整任务状态需要事件接入。 |
-| 已保存的事件来源 | 继续接收标准事件、MCP 或兼容状态文件。 |
 | 命令行 / 远程 tmux | 可用 `tp-run` 记录前台命令退出码，普通 tmux shell 返回仅提供推断结果。 |
 
-支持的本机数据会自动检测。选择要监控的 Agent 和项目范围即可。以前配置的事件连接可在「已保存的事件连接」中管理。各来源的能力与验证范围见[兼容说明](docs/AGENT_COMPATIBILITY.md)。
+支持的本机数据会自动检测。选择要监控的 Agent 和项目范围即可。各来源的能力与验证范围见[兼容说明](docs/AGENT_COMPATIBILITY.md)。
 
 ## 工作原理
 

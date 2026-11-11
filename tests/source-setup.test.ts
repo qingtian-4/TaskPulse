@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {localDiscoveryCandidates,sourceSections,sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summarizeSources,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
+import {localDiscoveryCandidates,sourceSections,sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
 import type {DashboardSettings,MonitorSource,ProviderHealth,SourceSnapshot} from '../src/lib/types';
 
 const s:MonitorSource={id:'one',kind:'remote_codex',name:'test',enabled:true,location:'public-test',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
@@ -30,9 +30,6 @@ test('support, data detection, first read, health and current work are independe
   expect(sourceReadState(empty,true)).toBe('来源读取正常');
   expect(sourceReadState(found,true)).toBe('部分会话需检查');
   expect(sourceReadState(found,false)).toBe('未读取');
-  expect(summarizeSources([])).toEqual({enabled:0,waiting:0,paginating:0,issues:0});
-  expect(summarizeSources([{...empty,read_state:'waiting'}, {...found,id:'other'}])).toEqual({enabled:2,waiting:1,paginating:0,issues:1});
-  expect(summarizeSources([{...empty,read_state:'paginating'}])).toEqual({enabled:1,waiting:0,paginating:1,issues:0});
   expect(sourceSetupStep(false,false,false)).toBe(1);expect(sourceSetupStep(true,true,true)).toBe(2);
   expect(sourceSetupStep(true,false,false)).toBe(3);expect(sourceSetupStep(true,false,true)).toBe(4);
 });

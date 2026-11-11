@@ -32,7 +32,7 @@ Windows 10/11 x64 是主要验收平台。Windows 11 ARM64 使用独立的 ARM64
 
 只有能核验所属进程和窗口时，TaskPulse 才会把宿主聚焦当作成功。聚焦窗口不代表已跳转到精确会话。无法可靠返回时，请打开任务详情并复制路径或会话 ID。关闭通知、返回宿主都不会自动标为已读或批准。
 
-Kimi Code、Trae 和 ZCode 使用本机只读检测。以前配置的事件来源可在「已保存的事件连接」中管理。
+Kimi Code、Trae 和 ZCode 使用本机只读检测。以前配置的事件来源保留原有设置，日常使用在「本机」选择 Agent 即可。
 
 事件接入需要宿主实际发送开始、结束、失败或请求事件，安装一个 Agent 并不会自动补齐这些能力。TaskPulse 不会自动修改 Agent Hook、代理或审批策略。[接入指南](AGENT_INTEGRATION_GUIDE.md) · [标准事件协议](AGENT_INTEGRATION_PROTOCOL.md)
 

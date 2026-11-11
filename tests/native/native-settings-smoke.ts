@@ -71,6 +71,23 @@ kind="codex_wsl"
 location="TaskPulse-Fixture-Not-Running"
 enabled=false
 projects=["/srv/legacy"]
+[[dashboard.sources]]
+id="scanner"
+name="Legacy process scanner"
+kind="scanner"
+enabled=false
+projects=["*"]
+[[dashboard.sources]]
+id="generic_event:existing-kimi"
+name="Existing Kimi events"
+kind="generic_event"
+enabled=false
+projects=["legacy-events"]
+[dashboard.sources.integration]
+adapter_id="kimi-code-cli"
+agent_id="kimi-code-cli"
+transport="local"
+accept_since_ms=0
 `);
   const reserve=createServer();await new Promise<void>(ok=>reserve.listen(0,'127.0.0.1',ok));
   const port=(reserve.address() as {port:number}).port;await new Promise<void>((ok,fail)=>reserve.close(e=>e?fail(e):ok()));
@@ -138,6 +155,17 @@ projects=["/srv/legacy"]
   await ui.wait(`!!document.querySelector('.ms-head')`);
   console.log('settings smoke: cold section',await ui.evaluate(`document.querySelector('.settings-main h1').textContent`));
   await ui.wait(`document.querySelector('.settings-nav a[href="#sources"]')?.getAttribute('aria-current')==='page'`);
+  await root.invoke('open_management',{section:'general'});
+  await ui.wait(`!!document.querySelector('.language-select')`);
+  const generalSizing=await ui.evaluate(`(()=>{
+    const select=document.querySelector('.language-select');
+    const box=select.getBoundingClientRect();
+    return {heading:parseFloat(getComputedStyle(document.querySelector('.settings-section>h2')).fontSize),
+      label:parseFloat(getComputedStyle(document.querySelector('.setting-row .setting-label')).fontSize),
+      selectWidth:box.width,selectHeight:box.height};
+  })()`);
+  assert.ok(generalSizing.heading>generalSizing.label && generalSizing.selectWidth<150 && generalSizing.selectHeight<=38,JSON.stringify(generalSizing));
+  if(captureScreenshots)await Bun.write(join(owned,'settings-general-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   // Both cold creation and warm window reuse must honor every allowed section.
   for(const section of ['general','panel','sources','notifications','updates','about']){
     await root.invoke('open_management',{section});
@@ -180,7 +208,7 @@ projects=["/srv/legacy"]
   await ui.send('Page.reload');
   await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('[data-agent-kind="trae"]').length`),1);
-  assert.ok(await ui.evaluate(`document.querySelector('#running-wsl-distros option[value="Fixture"]')`),'Detected WSL distributions should be offered only in the WSL form');
+  assert.ok(await ui.evaluate(`!document.querySelector('#running-wsl-distros, [data-wsl-sources]')`),'WSL discovery must not add a panel to native Agent settings');
   await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
   await ui.wait(`document.querySelector('.ms-tabs button[aria-pressed="true"]')?.textContent.includes('SSH') && !!document.querySelector('.ms-empty')`);
   if(captureScreenshots)await Bun.write(join(owned,'settings-ssh-empty-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -477,39 +505,15 @@ projects=["/srv/legacy"]
     assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.ms-success')?.textContent??'')`),false,'Application save feedback must follow the selected language');
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
-  // Preserved WSL and legacy file sources can be edited by their exact IDs.
-  await ui.evaluate(`document.querySelector('[data-wsl-sources]').open=true;document.querySelector('[data-saved-source="wsl-legacy"]').open=true;document.querySelector('[data-saved-source="local_file"]').open=true;`);
-  assert.ok(await ui.evaluate(`document.querySelector('[data-saved-source="wsl-legacy"]').textContent.includes('TaskPulse-Fixture-Not-Running')&&document.querySelector('[data-saved-source="local_file"] .project-options').textContent.includes('legacy-files')`));
-  await ui.evaluate(`(()=>{const node=document.querySelector('[data-saved-source="wsl-legacy"] .add-path input');node.value='/srv/additional';node.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-  await ui.evaluate(`document.querySelector('[data-saved-source="wsl-legacy"] .add-path button').click();`);
-  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
-  await ui.evaluate(`document.querySelector('.ms-foot .primary').click();`);
-  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  // Editing a native Agent must preserve the configuration of hidden source kinds.
   const legacySaved=(await ui.invoke('get_monitoring_settings')).sources;
-  assert.deepEqual(legacySaved.find((source:any)=>source.id==='wsl-legacy').projects,['/srv/legacy','/srv/additional']);
-  assert.deepEqual(legacySaved.find((source:any)=>source.id==='local_file').projects,['legacy-files']);
-  const legacyWsl=legacySaved.find((source:any)=>source.id==='wsl-legacy');
-  const setDistro=async(distro:string)=>ui.evaluate(`(()=>{
-    const field=document.querySelector('[data-wsl-add] input');
-    if(!field)throw Error('WSL on-demand form is missing after configuring a first distro');
-    field.value=${JSON.stringify(distro)};
-    field.dispatchEvent(new Event('input',{bubbles:true}));
-  })()`);
-  await setDistro(legacyWsl.location.toUpperCase());
-  assert.equal(await ui.evaluate(`document.querySelector('[data-wsl-add] button').disabled`),true,'Duplicate distro must be rejected case-insensitively');
-  const secondDistro='TaskPulse-Second-Fixture-Not-Running';
-  await setDistro(secondDistro);
-  await ui.evaluate(`document.querySelector('[data-wsl-add] button').click()`);
-  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
-  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
-  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
-  const secondSaved=await ui.invoke('get_monitoring_settings');
-  const second=secondSaved.sources.find((source:any)=>source.kind==='codex_wsl'&&source.location===secondDistro);
-  assert.ok(second && !second.enabled && second.id!==legacyWsl.id);
-  assert.deepEqual(secondSaved.sources.find((source:any)=>source.id===legacyWsl.id),legacyWsl);
-  assert.deepEqual(second.projects,['*']);
-  assert.ok(await ui.evaluate(`!!document.querySelector('[data-wsl-add] input')`),'Another distro can still be added');
-  await ui.invoke('save_monitoring_settings',{settings:{...secondSaved,sources:legacySaved},expected:secondSaved});
+  for(const [id,scope] of [['wsl-legacy','/srv/legacy'],['local_file','legacy-files'],['generic_event:existing-kimi','legacy-events']]){
+    const source=legacySaved.find((row:any)=>row.id===id);
+    assert.ok(source&&!source.enabled,`Saved source ${id} must stay disabled and present`);
+    assert.deepEqual(source.projects,[scope]);
+  }
+  assert.equal(legacySaved.find((row:any)=>row.id==='scanner')?.enabled,false);
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-wsl-sources], [data-saved-source], [data-saved-event-connections], [data-agent-kind="scanner"]')`));
   // Actual filesystem aliases produce one picker row without rewriting scopes.
   const aliasProject=join(owned,'public-project');await mkdir(aliasProject);
   const drive=aliasProject[0].toLowerCase(),relative=aliasProject.slice(3).split(String.fromCharCode(92)).join('/');
@@ -754,82 +758,18 @@ projects=["/srv/legacy"]
   await ui.evaluate(`document.querySelector('.ms-back')?.click();document.querySelector('.ms-tabs button').click()`);
   await ui.wait(`!!document.querySelector('.local-agents')`);
   assert.ok(await ui.evaluate(`!document.querySelector('[data-existing-advanced], [data-maintenance-tools], [data-saved-event-connections], [data-agent-kind="scanner"]')`));
-  const beforeEvent=await ui.invoke('get_monitoring_settings');
-  // Seed previously configured connections in this disposable profile only.
-  // A new profile has no generic creation or maintenance menu.
-  const savedBridges=['A','B'].map(suffix=>({
-    id:`generic_event:existing-${suffix}`,kind:'generic_event',name:`Existing script ${suffix}`,
-    enabled:false,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,
-    integration:{agent_id:'custom-agent',adapter_id:'standard-events',transport:'local',accept_since_ms:0},
-  }));
-  const savedHooks=[['kimi-code-cli','kimi-code-cli'],['trae-cn-ide','trae-cn'],['zcode-desktop','zcode']].map(([adapter,agent])=>({
-    ...savedBridges[0], id:`generic_event:existing-${adapter}`, name:`Existing ${adapter}`,
-    integration:{...savedBridges[0].integration,adapter_id:adapter,agent_id:agent},
-  }));
-  await ui.invoke('save_monitoring_settings',{settings:{...beforeEvent,sources:[...beforeEvent.sources,...savedBridges,...savedHooks]},expected:beforeEvent});
-  await ui.wait(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length===5`);
-  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-saved-event-connections] .agent-row strong')].map(el=>el.textContent)`),['Existing script A','Existing script B',...savedHooks.map(source=>source.name)]);
-  await ui.evaluate(`document.querySelector('[data-saved-event-connections]').open=true`);
-  assert.ok(await ui.evaluate(`!document.querySelector('[data-saved-event-connections] [data-event-add]')`));
-  const seededEvents=await ui.invoke('get_monitoring_settings');
-  const standardSelector='[data-event-source="generic_event:existing-B"]';
-  await ui.evaluate(`document.querySelector('${standardSelector} .agent-row button').click()`);
-  await ui.wait(`!!document.querySelector('${standardSelector} .universal li')`);
-  assert.equal(await ui.evaluate(`document.querySelectorAll('${standardSelector} .universal li').length`),3);
-  assert.ok(await ui.evaluate(`document.querySelector('${standardSelector} .universal .actions button').disabled`));
-  // Existing custom manifests still import without changing source settings.
-  const manifest=await Bun.file(resolve('integrations/community-template.json')).json();
-  manifest.adapter_id='taskpulse-native-fixture';manifest.agent_id='taskpulse-native-fixture';manifest.display_name='Native fixture manifest';
-  await ui.evaluate(`(()=>{const area=document.querySelector('${standardSelector} .manifest');area.open=true;const input=area.querySelector('textarea');input.value=${JSON.stringify(JSON.stringify(manifest))};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-  await ui.evaluate(`document.querySelector('${standardSelector} .manifest button').click()`);
-  await ui.wait(`__TAURI_INTERNALS__.invoke('get_source_catalog').then(c=>c.some(x=>x.adapter_id==='taskpulse-native-fixture'))`);
-  assert.equal(await ui.evaluate(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length`),5);
   await ui.evaluate(`document.querySelector('[data-supported-sources]').open=true`);
   for(const kind of ['trae','zcode','kimi_code']){
     const row=`[data-agent-kind="${kind}"]`;
     assert.equal(await ui.evaluate(`document.querySelectorAll(${JSON.stringify(row)}).length`),1);
     await ui.evaluate(`document.querySelector(${JSON.stringify(row+' .agent-row button')}).click()`);
     await ui.wait(`!!document.querySelector(${JSON.stringify(row+' .agent-config')})`);
-    assert.ok(await ui.evaluate(`!document.querySelector(${JSON.stringify(row+' .local-hook, '+row+' [data-event-source]')})`));
   }
-  assert.ok(await ui.evaluate(`![...document.querySelectorAll('button')].some(button=>['Add Hook connection','Preview Hook installation'].includes(button.textContent.trim()))`));
-  const eventSaved=await ui.invoke('get_monitoring_settings');
-  assert.deepEqual(eventSaved.sources,seededEvents.sources,'Opening native source configuration must not add event connections');
-  const existingKimi='[data-event-source="generic_event:existing-kimi-code-cli"]';
-  await ui.evaluate(`document.querySelector('${existingKimi} .agent-row button').click()`);
-  await ui.wait(`!!document.querySelector('${existingKimi} [data-integration-editor]')`);
-  assert.ok(await ui.evaluate(`!!document.querySelector('${existingKimi} .settings-switch')`));
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-wsl-sources], [data-saved-source], [data-saved-event-connections], [data-event-source], [data-agent-kind="scanner"]')`));
   if(await ui.evaluate(`!!document.querySelector('.ms-foot .primary')`)){
     await ui.evaluate(`document.querySelector('.ms-foot button').click()`);
     await ui.wait(`!document.querySelector('.ms-foot .primary')`);
   }
-  const standardSaved=eventSaved.sources.filter((s:any)=>s.integration?.adapter_id==='standard-events');
-  assert.equal(standardSaved.length,2);
-  assert.equal(new Set(standardSaved.map((s:any)=>s.id)).size,2);
-  assert.ok(standardSaved.every((s:any)=>!s.enabled));
-  // The simplified flow still exports the saved source-bound configuration.
-  const standardId=standardSaved[1].id;
-  const standardRow=`[data-event-source="${standardId}"]`;
-  await ui.evaluate(`document.querySelector('${standardRow} .settings-switch').click()`);
-  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
-  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
-  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
-  if(!await ui.evaluate(`!!document.querySelector('${standardRow} .universal')`)){
-    await ui.evaluate(`document.querySelector('${standardRow} .agent-row button').click()`);
-  }
-  await ui.wait(`document.querySelector('${standardRow} .universal .actions button')?.disabled===false`);
-  await ui.evaluate(`document.querySelector('${standardRow} .universal .actions button').click()`);
-  await ui.wait(`!!document.querySelector('${standardRow} .universal pre')`);
-  const config=JSON.parse(await ui.evaluate(`document.querySelector('${standardRow} .universal pre').textContent`));
-  assert.deepEqual(config.mcpServers.taskpulse.args,['--integration-mcp','--source',standardId]);
-  assert.ok(config.mcpServers.taskpulse.env.TASKPULSE_HOME);
-  const enabledEventSaved=await ui.invoke('get_monitoring_settings');
-  assert.ok(enabledEventSaved.sources.find((s:any)=>s.id===standardId).enabled);
-  if(captureScreenshots){
-    await ui.evaluate(`document.querySelector('${standardRow}').scrollIntoView({block:'start',behavior:'instant'})`);
-    await Bun.write(join(owned,'settings-event-agents-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  }
-  await ui.invoke('save_monitoring_settings',{settings:{...enabledEventSaved,sources:beforeEvent.sources},expected:enabledEventSaved});
   // Open the picker before the Hermes worker has a session. The new session
   // is read from an owned SQLite database, not injected through the WebView.
   const hermesDb=join(owned,'hermes-state.db');
@@ -928,6 +868,6 @@ projects=["/srv/legacy"]
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.equal(restored.preferences.task_font_size,14);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,firstPaint,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected','panel gear and tray command restore minimized settings and bring the existing window forward',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','initial preferred size across six sections; active native maximize/restore and maximized warm reuse','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language/theme/font size synchronized and persisted across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,firstPaint,generalSizing,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected','panel gear and tray command restore minimized settings and bring the existing window forward',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','initial preferred size across six sections; active native maximize/restore and maximized warm reuse','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language/theme/font size synchronized and persisted across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });
