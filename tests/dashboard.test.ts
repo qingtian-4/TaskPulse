@@ -10,6 +10,16 @@ import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
 
+test('normal turn end has one label and leaves attention colors distinct',()=>{
+  const done:TaskSnapshot={...base,status:'succeeded',finished_at:2};
+  const ended:TaskSnapshot={...done,status:'waiting_input',waiting_reason:'turn_ended'};
+  const waiting:TaskSnapshot={...base,status:'waiting_input',waiting_reason:'question'};
+  expect([taskLabel(done),taskLabel(ended)]).toEqual(['本轮结束','本轮结束']);
+  expect([taskTone(base),taskTone(waiting),taskTone(done),taskTone(ended)]).toEqual(['running','action','unread','unread']);
+  expect(taskLabel({...ended,outcome:'interrupted'})).toBe('已中断');
+  expect(taskLabel({...done,status:'failed'})).toBe('失败');
+});
+
 test('translate reducer-owned terminal copy while preserving identical native and producer text',()=>{
   for(const [outcome,message] of Object.entries({turn_ended:'本轮结束，尚未查看',failed:'来源明确报告本轮失败',interrupted:'本轮已中断，非成功'})){
     const ended:TaskSnapshot={...base,source:'generic_event',status:outcome==='failed'?'failed':'waiting_input',waiting_reason:'turn_ended',finished_at:2,outcome,message};

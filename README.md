@@ -65,6 +65,8 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 ## 任务面板
 
+**蓝色**表示运行中，**琥珀色**表示等待输入或授权，**青绿色**表示结果待查看。托盘图标使用同一套颜色。卡片显示「本轮结束」时，表示 Agent 已结束这一轮执行。
+
 <p align="center"><a href="assets/screenshots/dashboard.png"><img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse v0.0.1：运行中、等待输入、请求批准与未读结果"></a></p>
 
 <p align="center"><img src="assets/promo/teaser-8s.gif" width="768" alt="8 秒认识 TaskPulse：专注工作，在需要输入、审批或查看结果时回来"></p>
@@ -84,10 +86,10 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 | Codex | 本机自动发现，也可连接 SSH 服务器。读取会话、模型、本轮状态和明确提问，审批需要[明确事件](docs/CODEX_APPROVAL_OBSERVER.md)。 |
 | Claude Code | 本机自动发现，也可用 SSH 读取服务器上的运行和结束状态。明确审批需在本机配置可选官方 Hook；原生提问未支持。 |
 | DeepSeek Harness | 读取本机 Desktop / CLI。支持模型、推理强度和明确请求。 |
-| Hermes | 读取本机会话、模型和运行状态。 |
+| Hermes | 读取本机会话、模型和运行状态；会话记录了推理强度时一并显示。 |
 | OpenCode | 读取本机会话、运行阶段和明确结束记录。 |
 | WorkBuddy | 读取本机任务和本轮结果，不含云端任务。 |
-| ZCode | 只读本机任务、模型和本轮结果。 |
+| ZCode | 只读本机任务、模型、本轮推理强度和结果。 |
 | Kimi Code / kimi-cli | 只读本机主会话、明确请求和结束记录。 |
 | Qoder | 读取本机 Desktop 轮次及 IDE / CLI 日志，原生审批和提问尚未支持。 |
 | Trae | 发现本机会话目录。任务进度与完成提醒暂未适配。 |

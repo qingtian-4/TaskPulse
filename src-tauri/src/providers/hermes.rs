@@ -151,6 +151,7 @@ pub fn discover_db() -> Option<PathBuf> {
 /// One active session pulled from the DB.
 struct SessionRow {
     model: Option<String>,
+    reasoning_effort: Option<String>,
     id: String,
     name: Option<String>,
     title: Option<String>,
@@ -335,6 +336,7 @@ fn row_to_snapshot(row: &SessionRow, lease: Option<TurnLease>, now: SystemTime) 
     task.stale = status == TaskStatus::Unknown;
     task.project = project;
     task.model = row.model.as_deref().and_then(super::reported_model);
+    task.reasoning_effort = row.reasoning_effort.clone();
     task.project_path = project_path.map(str::to_owned);
     if task.status == TaskStatus::WaitingInput {
         task.waiting_reason = Some(if waiting_for_user {
@@ -424,6 +426,34 @@ fn session_columns(
     names
 }
 
+fn model_config_column(columns: &std::collections::HashSet<String>) -> &'static str {
+    if columns.contains("model_config") {
+        "CASE WHEN typeof(model_config) = 'text' AND length(CAST(model_config AS BLOB)) <= 8192 THEN model_config END"
+    } else {
+        "NULL"
+    }
+}
+
+fn session_effort(config: Option<&str>, model: Option<&str>) -> Option<String> {
+    let model = model?;
+    let config: serde_json::Value = serde_json::from_str(config?).ok()?;
+    if config
+        .get("model")
+        .is_some_and(|reported| reported.as_str() != Some(model))
+    {
+        return None;
+    }
+    let reasoning = config.get("reasoning_config")?;
+    match reasoning.get("enabled") {
+        Some(value) if value.as_bool() == Some(false) => Some("off".into()),
+        Some(value) if value.as_bool() != Some(true) => None,
+        _ => reasoning
+            .get("effort")?
+            .as_str()
+            .and_then(super::reported_model),
+    }
+}
+
 /// The older CLI schema tracks session creation/end, not the current turn.
 fn legacy_session_catalog(
     conn: &rusqlite::Connection,
@@ -444,11 +474,12 @@ fn legacy_session_catalog(
     {
         return Ok(None);
     }
-    let mut stmt = conn.prepare(
-        "SELECT id, substr(title, 1, 256), substr(model, 1, 128), started_at
+    let config_column = model_config_column(columns);
+    let mut stmt = conn.prepare(&format!(
+        "SELECT id, substr(title, 1, 256), substr(model, 1, 128), started_at, {config_column}
          FROM sessions WHERE typeof(id) = 'text' AND length(id) BETWEEN 1 AND 256
-         ORDER BY started_at DESC LIMIT 400",
-    )?;
+         ORDER BY started_at DESC LIMIT 400"
+    ))?;
     let catalog = stmt
         .query_map([], |row| {
             let id: String = row.get(0)?;
@@ -469,6 +500,10 @@ fn legacy_session_catalog(
             task.session_id = Some(id);
             task.started_at = started_at;
             task.model = model.as_deref().and_then(super::reported_model);
+            task.reasoning_effort = session_effort(
+                row.get::<_, Option<String>>(4)?.as_deref(),
+                task.model.as_deref(),
+            );
             Ok(task)
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -569,13 +604,14 @@ impl Provider for HermesProvider {
             }
         };
         let model_column = optional("model", "NULL");
+        let config_column = model_config_column(&columns);
         let hidden_column = optional("hidden", "0");
         let read_column = optional("last_read_at", "NULL");
         // Active sessions, newest activity first.
         let mut stmt = match conn.prepare(&format!(
             "SELECT id, display_name, title, last_activity_at, started_at, cwd, git_repo_root, \
              ended_at, end_reason, archived, {hidden_column}, pinned, {read_column}, \
-             last_activity_description, {model_column} FROM sessions ORDER BY last_activity_at DESC",
+             last_activity_description, {model_column}, {config_column} FROM sessions ORDER BY last_activity_at DESC",
         )) {
             Ok(stmt) => stmt,
             Err(error) => {
@@ -591,6 +627,7 @@ impl Provider for HermesProvider {
             }
         };
         let rows: Vec<SessionRow> = match stmt.query_map([], |r| {
+            let model: Option<String> = r.get(14)?;
             Ok(SessionRow {
                 id: r.get(0)?,
                 name: r.get(1)?,
@@ -606,7 +643,11 @@ impl Provider for HermesProvider {
                 pinned: r.get(11)?,
                 last_read_at: r.get(12)?,
                 description: r.get(13)?,
-                model: r.get(14)?,
+                reasoning_effort: session_effort(
+                    r.get::<_, Option<String>>(15)?.as_deref(),
+                    model.as_deref(),
+                ),
+                model,
             })
         }) {
             Ok(mapped) => match mapped.collect::<rusqlite::Result<Vec<_>>>() {
@@ -749,6 +790,41 @@ mod tests {
             provider.poll(SystemTime::now()).tasks[0].model.as_deref(),
             Some("next-model")
         );
+    }
+
+    #[test]
+    fn native_session_model_metadata_reports_effort_without_guessing() {
+        let now = now_secs();
+        let (_dir, db) = make_db(
+            &[("s", "Session", now, "/project", false, 0.0)],
+            &[("s", now + 300.0)],
+        );
+        let mut provider = HermesProvider::with_db_path(db.clone());
+        let conn = rusqlite::Connection::open(db).unwrap();
+        conn.execute_batch("ALTER TABLE sessions ADD COLUMN model TEXT; ALTER TABLE sessions ADD COLUMN model_config TEXT; UPDATE sessions SET model='proxy-model';").unwrap();
+        for (config, expected) in [
+            (
+                r#"{"model":"proxy-model","reasoning_config":{"enabled":true,"effort":"high"}}"#,
+                Some("high"),
+            ),
+            (
+                r#"{"model":"proxy-model","reasoning_config":{"enabled":false,"effort":"high"}}"#,
+                Some("off"),
+            ),
+            (
+                r#"{"model":"another","reasoning_config":{"enabled":true,"effort":"high"}}"#,
+                None,
+            ),
+            (r#"{"reasoning_config":{"effort":42}}"#, None),
+            ("{partial", None),
+        ] {
+            conn.execute("UPDATE sessions SET model_config=?1", [config])
+                .unwrap();
+            let task = provider.poll(SystemTime::now()).tasks.remove(0);
+            assert_eq!(task.model.as_deref(), Some("proxy-model"));
+            assert_eq!(task.reasoning_effort.as_deref(), expected);
+            assert_eq!(task.status, TaskStatus::Running);
+        }
     }
 
     #[test]
@@ -1142,8 +1218,16 @@ mod tests {
         assert!(out.authoritative);
         assert!(!out.catalog.is_empty());
         assert!(out.catalog.iter().all(|task| !task.id.is_empty()));
+        let efforts = out
+            .catalog
+            .iter()
+            .filter(|t| t.reasoning_effort.is_some())
+            .count();
+        if std::env::var_os("TASKPULSE_EXPECT_NATIVE_EFFORT").is_some() {
+            assert!(efforts > 0);
+        }
         println!(
-            "Hermes native: {} discovered sessions, {} without project paths, {} active leases",
+            "Hermes native: {} discovered sessions, {} without project paths, {} active leases, {efforts} with reasoning effort",
             out.catalog.len(),
             out.catalog
                 .iter()

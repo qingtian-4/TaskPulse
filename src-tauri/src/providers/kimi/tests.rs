@@ -1,5 +1,56 @@
 use crate::domain::{TaskStatus, WaitingReason};
 #[test]
+fn native_request_model_metadata_survives_agent_loop_and_resets_per_turn() {
+    let root = tempfile::tempdir().unwrap();
+    let main = root.path().join("sessions/project/session/agents/main");
+    std::fs::create_dir_all(&main).unwrap();
+    std::fs::write(
+        root.path().join("config.toml"),
+        "[models.\"Public/deepseek-flash\"]\nmodel = \"deepseek-flash\"\ndisplay_name = \"DeepSeek V4.1 Flash 1017\"\n",
+    ).unwrap();
+    let at = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64;
+    let mut records = vec![
+        json!({"type":"turn.started","turnId":1,"time":at}),
+        json!({"type":"llm.request","agentId":"main","kind":"loop","model":"deepseek-flash","modelAlias":"Public/deepseek-flash","thinkingEffort":"high","time":at+1}),
+        json!({"type":"agent.message.appended","agentId":"main","message":{"meta":{"model":{"provider":"agent-loop","model":"agent-loop"}}},"time":at+2}),
+        json!({"type":"llm.request","agentId":"main","kind":"compaction","model":"summary","thinkingEffort":"low","time":at+3}),
+    ];
+    let path = main.join("wire.jsonl");
+    let write = |rows: &[Value]| {
+        std::fs::write(
+            &path,
+            rows.iter().map(|v| format!("{v}\n")).collect::<String>(),
+        )
+        .unwrap()
+    };
+    write(&records);
+    let mut provider = KimiProvider::new(Some(root.path().into()));
+    let task = provider.poll(SystemTime::now()).tasks.remove(0);
+    assert_eq!(task.model.as_deref(), Some("DeepSeek V4.1 Flash 1017"));
+    assert_eq!(task.reasoning_effort.as_deref(), Some("high"));
+    // A global default cannot supply this turn's model. A new turn with no
+    // explicit model starts with unknown metadata, even when a wrapper arrives.
+    records.extend([
+        json!({"type":"turn.ended","turnId":1,"reason":"completed","time":at+4}),
+        json!({"type":"turn.started","turnId":2,"time":at+5}),
+        json!({"type":"agent.message.appended","message":{"meta":{"model":{"provider":"agent-loop","model":"agent-loop"}}},"time":at+6}),
+    ]);
+    write(&records);
+    let next = provider.poll(SystemTime::now()).tasks.remove(0);
+    assert_eq!(next.id, task.id);
+    assert_ne!(next.turn_key, task.turn_key);
+    assert_eq!((next.model, next.reasoning_effort), (None, None));
+    records.push(json!({"type":"llm.request","modelAlias":"Public/deepseek-flash","model":"different-native-model","time":at+7}));
+    write(&records);
+    let switched = provider.poll(SystemTime::now()).tasks.remove(0);
+    assert_eq!(switched.model.as_deref(), Some("different-native-model"));
+    assert!(switched.reasoning_effort.is_none());
+}
+
+#[test]
 fn aliased_roots_do_not_duplicate_sessions_but_distinct_roots_remain_ambiguous() {
     let root = tempfile::tempdir().unwrap();
     let make = |base: &Path| {
@@ -268,4 +319,30 @@ fn kimi_capacity_keeps_protected_pending_and_reads_later_pages() {
         }
     }
     assert_eq!(observed.len(), 514);
+}
+
+#[test]
+#[ignore = "read-only real Kimi logs and model labels; prints only counts"]
+fn live_kimi_request_models() {
+    let mut provider = KimiProvider::new(None);
+    let expected = std::env::var("TASKPULSE_EXPECT_KIMI_MODEL").ok();
+    let mut models = 0;
+    let mut efforts = 0;
+    let mut expected_seen = false;
+    for _ in 0..12 {
+        let out = provider.poll(SystemTime::now());
+        for task in out.catalog {
+            assert_ne!(task.model.as_deref(), Some("agent-loop"));
+            models += usize::from(task.model.is_some());
+            efforts += usize::from(task.reasoning_effort.is_some());
+            expected_seen |= task.model.as_ref() == expected.as_ref()
+                && task.reasoning_effort.as_deref() == Some("high");
+        }
+        if out.authoritative {
+            break;
+        }
+    }
+    assert!(models > 0 && efforts > 0);
+    assert!(expected.is_none() || expected_seen);
+    println!("Kimi: {models} model and {efforts} effort observations");
 }

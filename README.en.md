@@ -65,6 +65,8 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 
 ## Task panel
 
+**Blue** means running, **amber** means awaiting input or approval, and **teal** means there is a result to review. The tray icon uses the same colors. “Turn ended” means the agent has finished its current turn.
+
 <p align="center"><a href="assets/screenshots/dashboard-en.png"><img src="assets/screenshots/dashboard-en.png" width="368" alt="TaskPulse v0.0.1 showing running tasks, input, approval and unread results"></a></p>
 
 <p align="center"><img src="assets/promo/teaser-8s.gif" width="768" alt="An eight-second introduction to TaskPulse: return for input, approval or results"></p>
@@ -84,10 +86,10 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 | Codex | Discover locally or connect over SSH. Reads sessions, models, turn state and explicit questions. Approvals require an [explicit event](docs/CODEX_APPROVAL_OBSERVER.md). |
 | Claude Code | Discover locally or monitor running and completed turns over SSH. Explicit approvals require optional local hooks; native questions are unsupported. |
 | DeepSeek Harness | Read local Desktop or CLI data. Supports reported models, reasoning effort and explicit requests. |
-| Hermes | Reads local sessions, models and running state. |
+| Hermes | Reads local sessions, models and running state, plus reasoning effort when the session records it. |
 | OpenCode | Reads local sessions, execution phases and explicit turn outcomes. |
 | WorkBuddy | Reads local tasks and turn results. Cloud tasks are outside this source. |
-| ZCode | Reads local tasks, models and turn results. |
+| ZCode | Reads local tasks, models, reasoning effort and turn results. |
 | Kimi Code / kimi-cli | Reads local main sessions, explicit requests and turn outcomes. |
 | Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
 | Trae | Discovers local sessions in the workspace catalog. Task progress and completion reminders are unsupported. |

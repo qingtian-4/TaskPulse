@@ -21,7 +21,9 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
  await Bun.write(join(session,'state.json'),JSON.stringify({id:'session-kimi',title:'Kimi 原生会话公开夹具',cwd:'C:/public/Kimi'}));
  const wire=join(session,'agents','main','wire.jsonl'),at=Date.now();
  const event=async(type:string,data:Record<string,unknown>={},delta=0)=>appendFile(wire,JSON.stringify({type,agentId:'main',time:at+delta,...data})+'\n');
- await Bun.write(wire,'');await event('metadata',{protocol_version:'1.5',created_at:at});await event('turn.prompt',{turnId:1,origin:'user',input:[{type:'text',text:'Public fixture'}]});await event('llm.request',{kind:'loop',model:'kimi-public-model',thinkingEffort:'high'});
+ await Bun.write(join(kimi,'config.toml'),'[models."fixture/flash"]\nmodel = "public-flash"\ndisplay_name = "Public Flash"\n');
+ await Bun.write(wire,'');await event('metadata',{protocol_version:'1.5',created_at:at});await event('turn.prompt',{turnId:1,origin:'user',input:[{type:'text',text:'Public fixture'}]});await event('llm.request',{kind:'loop',model:'public-flash',modelAlias:'fixture/flash',thinkingEffort:'high'});
+ await event('agent.message.appended',{message:{meta:{model:{provider:'agent-loop',model:'agent-loop'}}}});
  const db=new Database(join(qoder,'main.sqlite'));
  db.exec(`CREATE TABLE chat_sessions(session_id TEXT,title TEXT,cwd TEXT,model TEXT,deleted_at TEXT,archived INTEGER,owner_session_id TEXT,updated_at TEXT);
  CREATE TABLE chat_session_messages(session_id TEXT,message_id TEXT,turn_id TEXT,sequence INTEGER,payload_json TEXT,status TEXT,source TEXT,created_at TEXT,updated_at TEXT);`);
@@ -47,7 +49,8 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
   start();let root=await connect();await root.wait(`!!document.querySelector('.dashboard')`);const build=await root.invoke('get_build_info');assert.equal(build.commit,commit);assert.equal(build.modified,false);assert.equal(build.process_id,app!.pid);
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
   await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.filter(t=>t.status==='running').length===2)`);
-  const tasks=await root.invoke('get_agents'),k=tasks.find((t:any)=>t.agent_id==='kimi-code'),q=tasks.find((t:any)=>t.agent_id==='qoder-desktop');assert.ok(k&&q);assert.equal(k.reasoning_effort,'high');assert.equal(q.model,'qoder-public-model');
+  const tasks=await root.invoke('get_agents'),k=tasks.find((t:any)=>t.agent_id==='kimi-code'),q=tasks.find((t:any)=>t.agent_id==='qoder-desktop');assert.ok(k&&q);assert.equal(k.model,'Public Flash');assert.equal(k.reasoning_effort,'high');assert.equal(q.model,'qoder-public-model');
+  await root.wait(`document.querySelector('[data-task-id="${k.id}"] .model')?.textContent.includes('Public Flash') && document.querySelector('[data-task-id="${k.id}"] .effort')?.textContent==='high'`);
   assert.ok(tasks.every((t:any)=>t.agent_id!=='trae'),'Opaque TRAE store must not create fake tasks');
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='public-trae'&&p.status==='degraded'))`);
   await event('interaction.request',{id:'native-question',kind:'question',toolCallId:'native-call',request:{questions:[{id:'choice',question:'Public fixture'}]}},1000);
@@ -68,12 +71,14 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
   const ended=await root.invoke('get_agents');assert.ok(ended.every((t:any)=>t.unread&&t.finished_at));
   await root.invoke('update_task_attention',{id:k.id,action:'pin'});
   await Bun.write(join(owned,'native-reader-results.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await root.invoke('open_management',{section:'sources'});const manage=await connect('/manage');await manage.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
+  await root.invoke('open_management',{section:'sources'});const manage=await connect('/manage');
+  await manage.wait(`!!document.querySelector('.local-agents')`);
+  assert.ok(await manage.evaluate(`!document.querySelector('[data-agent-kind="scanner"], [data-saved-source="local_file"]')`));
   await manage.wait(`document.querySelector('[data-agent-kind="trae"]').textContent.includes('已检测到 · 仅支持会话目录')`);
   await manage.wait(`document.querySelector('[data-agent-kind="claude_code"]').textContent.includes('读取正常 · 暂无近期会话')`);
   assert.equal(await manage.evaluate(`document.querySelector('[data-agent-kind="trae"] strong').textContent`),'Trae');
   await Bun.write(join(owned,'native-reader-settings.png'),Buffer.from((await manage.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  sockets.forEach(s=>s.close());await stopOwnedChild(app);start();root=await connect();await root.wait(`typeof __TAURI_INTERNALS__!=='undefined'&&!!document.querySelector('.dashboard')`);await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${k.id}'&&t.finished_at&&t.unread&&t.pinned&&t.reasoning_effort==='high')&&t.some(t=>t.id==='${q.id}'&&t.finished_at&&t.model==='qoder-public-model'))`);
+  sockets.forEach(s=>s.close());await stopOwnedChild(app);start();root=await connect();await root.wait(`typeof __TAURI_INTERNALS__!=='undefined'&&!!document.querySelector('.dashboard')`);await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${k.id}'&&t.finished_at&&t.unread&&t.pinned&&t.model==='Public Flash'&&t.reasoning_effort==='high')&&t.some(t=>t.id==='${q.id}'&&t.finished_at&&t.model==='qoder-public-model'))`);
   assert.equal((await root.invoke('get_agents')).length,2);
   // Exercise real provider freshness without making the test wait two
   // minutes: the new native start is already 108 seconds old at admission.
@@ -95,7 +100,40 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
   await root.wait(`document.querySelector('[data-task-id="${quietId}"] .status-label')?.textContent==='运行中'`);
   await appendFile(quietWire,JSON.stringify({type:'turn.ended',turnId:'quiet',reason:'completed',time:Date.now()})+'\n');
   await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${quietId}'&&t.waiting_reason==='turn_ended'&&t.finished_at))`);
-  const result={passed:true,commit,modified:false,executableSha256:createHash('sha256').update(await Bun.file(exe).bytes()).digest('hex'),checks:['Kimi native v1.5 request → panel → independent popup → exact resolution','unrelated response and queued cancel cannot end or resolve active request','partial native write preserves unresolved request and degrades health','explicit Kimi/Qoder end freezes source duration','opaque TRAE data never invents tasks or healthy state','12 catalog-driven native entries; Trae catalog-only and healthy empty Claude reads','same native session IDs, unread, pin, model and effort survive restart','Kimi quiet open turn remains visible as unconfirmed through a refresh, recovers the same card, and ends only on an explicit event'],inputs:'Public synthetic native schema; not real Agent-host certification',realAgentConfigurationsChanged:false};
+  const hermesPath=join(owned,'hermes.db'),zcodePath=join(owned,'zcode.db');
+  const hermes=new Database(hermesPath),zcode=new Database(zcodePath),started=Date.now();
+  try {
+    hermes.exec(`CREATE TABLE sessions(id TEXT,display_name TEXT,title TEXT,last_activity_at REAL,started_at REAL,cwd TEXT,git_repo_root TEXT,ended_at REAL,end_reason TEXT,archived INTEGER,hidden INTEGER,pinned INTEGER,last_read_at REAL,last_activity_description TEXT,model TEXT,model_config TEXT);
+      CREATE TABLE session_turn_leases(conversation_id TEXT,acquired_at REAL,expires_at REAL);
+      CREATE TABLE messages(id INTEGER PRIMARY KEY,session_id TEXT,role TEXT,timestamp REAL,finish_reason TEXT,active INTEGER DEFAULT 1,compacted INTEGER DEFAULT 0,display_kind TEXT);`);
+    hermes.query("INSERT INTO sessions VALUES('test-hermes',NULL,'Hermes example',?,?,'C:/public/Hermes',NULL,NULL,NULL,0,0,0,NULL,NULL,'hermes-public',?)")
+      .run(started/1000,started/1000,JSON.stringify({model:'hermes-public',reasoning_config:{enabled:true,effort:'high'}}));
+    hermes.query("INSERT INTO session_turn_leases VALUES('test-hermes',?,?)").run(started/1000,started/1000+300);
+    zcode.exec(`CREATE TABLE session(id TEXT,title TEXT,directory TEXT,last_outcome TEXT,time_deleted INTEGER,time_archived INTEGER,time_updated INTEGER);
+      CREATE TABLE message(id TEXT,session_id TEXT,sequence INTEGER,data TEXT);
+      CREATE TABLE part(id TEXT,message_id TEXT,sequence INTEGER,data TEXT);
+      INSERT INTO session VALUES('test-zcode','ZCode example','C:/public/ZCode','completed',NULL,NULL,${started});`);
+    zcode.query("INSERT INTO message VALUES('z-user','test-zcode',1,?)").run(JSON.stringify({role:'user',time:{created:started},
+      modelSelection:{providerId:'public',modelId:'zcode-public',options:{reasoningLevel:'high'}},
+      model:{providerID:'public',modelID:'zcode-public',variant:'max'}}));
+    await root.invoke('open_management',{section:'sources'});const settings=await connect('/manage');
+    const saved=await settings.invoke('get_monitoring_settings');
+    const additions=[['public-hermes','hermes',hermesPath],['public-zcode','zcode',zcodePath]].map(([id,kind,location])=>({
+      id,kind,name:id,location,enabled:true,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:500
+    }));
+    await settings.invoke('save_monitoring_settings',{expected:saved,settings:{...saved,sources:[...saved.sources,...additions]}});
+    await root.wait(`document.querySelector('[data-task-id="public-hermes:hermes:test-hermes"] .effort')?.textContent==='high'`);
+    await root.wait(`document.querySelector('[data-task-id="public-zcode:zcode:test-zcode"] .effort')?.textContent==='high'`);
+    const live=await root.invoke('get_agents');
+    assert.equal(live.find((t:any)=>t.source_instance==='public-zcode').model,'zcode-public');
+    assert.equal(live.find((t:any)=>t.source_instance==='public-hermes').model,'hermes-public');
+    zcode.query("INSERT INTO message VALUES('z-assistant','test-zcode',2,?)").run(JSON.stringify({role:'assistant',parentID:'z-user',providerId:'public',modelId:'zcode-public',time:{created:started+100,completed:started+200},finish:'stop'}));
+    await root.wait(`document.querySelector('[data-task-id="public-zcode:zcode:test-zcode"] .status-label')?.textContent==='本轮结束'`);
+    assert.equal(await root.evaluate(`document.querySelector('[data-task-id="public-zcode:zcode:test-zcode"]').closest('.task-item').dataset.tone`),'unread');
+  } finally {
+    hermes.close();zcode.close();
+  }
+  const result={passed:true,commit,modified:false,executableSha256:createHash('sha256').update(await Bun.file(exe).bytes()).digest('hex'),checks:['Kimi native v1.5 request → panel → independent popup → exact resolution','unrelated response and queued cancel cannot end or resolve active request','partial native write preserves unresolved request and degrades health','explicit Kimi/Qoder end freezes source duration','opaque TRAE data never invents tasks or healthy state','native Agent settings, catalog-only Trae and healthy empty Claude reads','Kimi alias, Hermes session effort and ZCode current-turn effort reach the native renderer','successful ZCode turns use the common end label and unread tone','same native session IDs, unread, pin, model and effort survive restart','Kimi quiet open turn remains visible as unconfirmed through a refresh, recovers the same card, and ends only on an explicit event'],inputs:'Public synthetic native schema; not real Agent-host certification',realAgentConfigurationsChanged:false};
   await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
  }catch(error){await Bun.write(join(owned,'failure.json'),JSON.stringify({error:String(error),stderr},null,2));throw error;}finally{db.close();}
 });
