@@ -11,6 +11,72 @@ use std::{
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+// Keep model selection on the real user row, outside the bounded assistant
+// tail. Project only short metadata fields; never materialize a prompt.
+const USER_TURN_SQL: &str = "
+    WITH latest_user AS (
+        SELECT id, sequence, data FROM message
+        WHERE session_id=?1 AND json_extract(data,'$.role')='user'
+          AND coalesce(json_extract(data,'$.synthetic'),0)=0
+          AND (json_extract(data,'$.semantics.origin') IS NULL
+               OR json_extract(data,'$.semantics.origin')='real_user')
+        ORDER BY sequence DESC LIMIT 1
+    ), model_metadata AS (
+        SELECT id, sequence, json_extract(data,'$.time.created') AS created,
+            CASE WHEN json_type(data,'$.modelSelection.modelId')='text' THEN data ->> '$.modelSelection.modelId' END AS selected_model,
+            CASE WHEN json_type(data,'$.modelSelection.providerId')='text' THEN data ->> '$.modelSelection.providerId' END AS selected_provider,
+            CASE WHEN json_type(data,'$.modelSelection.options.reasoningLevel')='text' THEN data ->> '$.modelSelection.options.reasoningLevel' END AS selected_effort,
+            coalesce(
+                CASE WHEN json_type(data,'$.model.modelID')='text' THEN data ->> '$.model.modelID' END,
+                CASE WHEN json_type(data,'$.model.modelId')='text' THEN data ->> '$.model.modelId' END) AS legacy_model,
+            coalesce(
+                CASE WHEN json_type(data,'$.model.providerID')='text' THEN data ->> '$.model.providerID' END,
+                CASE WHEN json_type(data,'$.model.providerId')='text' THEN data ->> '$.model.providerId' END) AS legacy_provider,
+            CASE WHEN json_type(data,'$.model.variant')='text' THEN data ->> '$.model.variant' END AS legacy_effort
+        FROM latest_user
+    )
+    SELECT id, created, sequence,
+        CASE WHEN typeof(selected_model)='text' AND length(selected_model) <= 200 THEN selected_model END,
+        CASE WHEN typeof(selected_provider)='text' AND length(selected_provider) <= 200 THEN selected_provider END,
+        CASE WHEN typeof(selected_effort)='text' AND length(selected_effort) <= 64 THEN selected_effort END,
+        CASE WHEN typeof(legacy_model)='text' AND length(legacy_model) <= 200 THEN legacy_model END,
+        CASE WHEN typeof(legacy_provider)='text' AND length(legacy_provider) <= 200 THEN legacy_provider END,
+        CASE WHEN typeof(legacy_effort)='text' AND length(legacy_effort) <= 64 THEN legacy_effort END
+    FROM model_metadata";
+
+#[derive(Default)]
+struct ModelSelection {
+    model: Option<String>,
+    provider: Option<String>,
+    effort: Option<String>,
+}
+
+impl ModelSelection {
+    fn read(row: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<Self> {
+        let field = |n| {
+            Ok::<_, rusqlite::Error>(
+                row.get::<_, Option<String>>(first + n)?
+                    .as_deref()
+                    .and_then(super::reported_model),
+            )
+        };
+        Ok(Self {
+            model: field(0)?,
+            provider: field(1)?,
+            effort: field(2)?,
+        })
+    }
+
+    fn agrees_with(&self, model: &str, provider: Option<&str>) -> bool {
+        self.model.as_deref() == Some(model)
+            && self
+                .provider
+                .as_deref()
+                .zip(provider)
+                .is_none_or(|(a, b)| a == b)
+    }
+}
+
 pub fn default_db() -> PathBuf {
     dirs_next::home_dir()
         .unwrap_or_default()
@@ -140,14 +206,21 @@ impl ZcodeProvider {
             let (id, title, project, outcome) = row?;
             // Runtime reminders also have role=user. Only an actual user prompt
             // creates a turn, and it must remain discoverable through long tool loops.
-            let user: Option<(String,u64,i64)>=tx.query_row(
-                "SELECT id,json_extract(data,'$.time.created'),sequence FROM message WHERE session_id=?1 AND json_extract(data,'$.role')='user' AND coalesce(json_extract(data,'$.synthetic'),0)=0 AND (json_extract(data,'$.semantics.origin') IS NULL OR json_extract(data,'$.semantics.origin')='real_user') ORDER BY sequence DESC LIMIT 1",
-                [&id], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))
-            ).optional()?;
-            let Some((user_id, started, user_sequence)) = user else {
+            let user = tx
+                .query_row(USER_TURN_SQL, [&id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, u64>(1)?,
+                        row.get::<_, i64>(2)?,
+                        ModelSelection::read(row, 3)?,
+                        ModelSelection::read(row, 6)?,
+                    ))
+                })
+                .optional()?;
+            let Some((user_id, started, user_sequence, selection, legacy)) = user else {
                 continue;
             };
-            let mut messages = tx.prepare("SELECT id, json_object('role',json_extract(data,'$.role'),'created',json_extract(data,'$.time.created'),'completed',json_extract(data,'$.time.completed'),'parent',json_extract(data,'$.parentID'),'model',coalesce(json_extract(data,'$.modelId'),json_extract(data,'$.modelID')),'finish',json_extract(data,'$.finish'),'error_code',json_extract(data,'$.error.data.code'),'turn_result',json_extract(data,'$.error.data.turnResult'),'error',json_type(data,'$.error') NOT IN ('null') AND json_type(data,'$.error') IS NOT NULL) FROM message WHERE session_id=?1 AND sequence>=?2 AND (json_extract(data,'$.role')='assistant' OR id=?3) ORDER BY sequence DESC LIMIT 64")?;
+            let mut messages = tx.prepare("SELECT id, json_object('role',json_extract(data,'$.role'),'created',json_extract(data,'$.time.created'),'completed',json_extract(data,'$.time.completed'),'parent',json_extract(data,'$.parentID'),'model',coalesce(json_extract(data,'$.modelId'),json_extract(data,'$.modelID')),'provider',coalesce(json_extract(data,'$.providerId'),json_extract(data,'$.providerID')),'finish',json_extract(data,'$.finish'),'error_code',json_extract(data,'$.error.data.code'),'turn_result',json_extract(data,'$.error.data.turnResult'),'error',json_type(data,'$.error') NOT IN ('null') AND json_type(data,'$.error') IS NOT NULL) FROM message WHERE session_id=?1 AND sequence>=?2 AND (json_extract(data,'$.role')='assistant' OR id=?3) ORDER BY sequence DESC LIMIT 64")?;
             let messages = messages
                 .query_map(rusqlite::params![id, user_sequence, user_id], |r| {
                     Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
@@ -185,10 +258,44 @@ impl ZcodeProvider {
                 .map(|s| s.to_string_lossy().into_owned());
             task.turn_key = Some(user_id.clone());
             task.started_at = Some(UNIX_EPOCH + Duration::from_millis(started));
-            task.model = messages
+            let assistant_model = messages
                 .iter()
-                .take_while(|(id, _)| id != &user_id)
-                .find_map(|(_, v)| v["model"].as_str().and_then(super::reported_model));
+                .filter(|(_, v)| v["parent"].as_str() == Some(user_id.as_str()))
+                .find_map(|(_, v)| {
+                    let model = v["model"].as_str().and_then(super::reported_model)?;
+                    Some((model, v["provider"].as_str()))
+                });
+            let selected_model = selection
+                .model
+                .as_deref()
+                .map(|model| (model, selection.provider.as_deref()))
+                .or_else(|| {
+                    legacy
+                        .model
+                        .as_deref()
+                        .map(|model| (model, legacy.provider.as_deref()))
+                });
+            if let Some((model, provider)) = assistant_model
+                .as_ref()
+                .map(|(model, provider)| (model.as_str(), *provider))
+                .or(selected_model)
+            {
+                task.model = Some(model.to_owned());
+                // If the assistant actually used a different model or provider,
+                // the user's requested reasoning level cannot describe it.
+                if selection.agrees_with(model, provider) {
+                    task.reasoning_effort = selection.effort.clone();
+                }
+                if task.reasoning_effort.is_none()
+                    && selection
+                        .model
+                        .as_ref()
+                        .is_none_or(|_| selection.agrees_with(model, provider))
+                    && legacy.agrees_with(model, provider)
+                {
+                    task.reasoning_effort = legacy.effort;
+                }
+            }
             // Native outcome alone can belong to an older turn. Require the latest
             // assistant to explicitly reference this user turn and finish it.
             let current_assistant = latest["role"] == "assistant"
@@ -374,6 +481,60 @@ mod tests {
         )
         .unwrap();
     }
+    #[test]
+    fn native_turn_model_metadata_comes_from_the_real_user_even_after_long_tool_loop() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("db.sqlite");
+        let db = fixture(&path);
+        let mut provider = ZcodeProvider::new(path);
+        let now = UNIX_EPOCH + Duration::from_millis(5000);
+        provider.poll(now);
+        message(
+            &db,
+            "u2",
+            3,
+            json!({"role":"user","time":{"created":3000},
+          "modelSelection":{"providerId":"proxy","modelId":"model-b","options":{"reasoningLevel":"high"}},
+          "model":{"providerID":"proxy","modelID":"model-b","variant":"max"}}),
+        );
+        let task = provider.poll(now).tasks.remove(0);
+        assert_eq!(task.model.as_deref(), Some("model-b"));
+        assert_eq!(task.reasoning_effort.as_deref(), Some("high"));
+        for n in 4..74 {
+            message(
+                &db,
+                &format!("a{n}"),
+                n,
+                json!({"role":"assistant","parentID":"u2","providerId":"proxy","modelId":"model-b","time":{"created":3100,"completed":3200},"finish":"tool-calls"}),
+            );
+        }
+        let task = provider.poll(now).tasks.remove(0);
+        assert_eq!(task.reasoning_effort.as_deref(), Some("high"));
+        message(
+            &db,
+            "fallback",
+            74,
+            json!({"role":"assistant","parentID":"u2","providerId":"fallback","modelId":"model-b","time":{"created":3300},"finish":"tool-calls"}),
+        );
+        assert!(provider.poll(now).tasks[0].reasoning_effort.is_none());
+        message(
+            &db,
+            "u3",
+            75,
+            json!({"role":"user","time":{"created":4000},"model":{"modelID":"model-c","variant":"low"}}),
+        );
+        let task = provider.poll(now).tasks.remove(0);
+        assert_eq!(task.model.as_deref(), Some("model-c"));
+        assert_eq!(task.reasoning_effort.as_deref(), Some("low"));
+        message(
+            &db,
+            "u4",
+            76,
+            json!({"role":"user","time":{"created":4100},"model":{"modelID":"model-c"}}),
+        );
+        assert!(provider.poll(now).tasks[0].reasoning_effort.is_none());
+    }
+
     #[test]
     fn desktop_projects_are_independent_of_runtime_read_health() {
         let dir = tempfile::tempdir().unwrap();
@@ -723,11 +884,19 @@ mod tests {
         assert!(output.authoritative, "{:?}", output.error);
         assert!(!output.catalog.is_empty());
         let models = output.catalog.iter().filter(|t| t.model.is_some()).count();
+        let efforts = output
+            .catalog
+            .iter()
+            .filter(|t| t.reasoning_effort.is_some())
+            .count();
         println!(
-            "ZCode sessions={} active={} models={models}",
+            "ZCode sessions={} active={} models={models} efforts={efforts}",
             output.catalog.len(),
             output.tasks.len()
         );
+        if std::env::var_os("TASKPULSE_EXPECT_NATIVE_EFFORT").is_some() {
+            assert!(efforts > 0);
+        }
         assert!(models > 0);
     }
 }

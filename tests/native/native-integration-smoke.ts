@@ -52,9 +52,6 @@ async function seedSource(adapter:string,agent:string){
     integration:{adapter_id:adapter,agent_id:agent,transport:'local',accept_since_ms:0}};
   const expected=await root.invoke('get_monitoring_settings');
   const saved=await management.invoke('save_monitoring_settings',{settings:{...expected,sources:[...expected.sources,source]},expected});
-  await management.send('Page.reload');
-  const selector=`[data-saved-event-connections] [data-event-source="${source.id}"]`;
-  await management.wait(`!!document.querySelector(${JSON.stringify(selector)})`);
   return saved.sources.find((s:any)=>s.id===source.id);
 }
 function send(source:any,event:any,host=false){const r=spawnSync(exe,[host?'--integration-host-event':'--integration-event','--source',source.id,'--adapter',source.integration.adapter_id],{env:{...env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:''},input:JSON.stringify(event),encoding:'utf8',windowsHide:true,timeout:8000});if(r.error)throw r.error;assert.equal(r.status,0);assert.equal(r.stdout,'');}
@@ -68,9 +65,9 @@ try{
   assert.equal(resourceMetrics.process_memory.available,true);
   assert.equal(resourceMetrics.integration_disk.complete,true);
   checks.push('native asynchronous resource diagnostics IPC/memory/bounded isolated disk scan');
-  await management.wait(`!!document.querySelector('[data-saved-event-connections] [data-event-adapter="kimi-code-cli"]')`);
+  assert.ok((await management.invoke('get_monitoring_settings')).sources.some((source:any)=>source.id===kimi.id));
   assert.ok(await management.evaluate(`!document.querySelector('[data-event-add]')`));
-  checks.push('existing Kimi connection stays manageable without a creation action');
+  checks.push('existing Kimi connection remains readable through native IPC and hidden from local Agent settings');
   const tasksBefore=await root.invoke('get_agents');const test=await management.invoke('integration_test',{sourceId:kimi.id});assert.equal(test.test,true);assert.deepEqual(await root.invoke('get_agents'),tasksBefore);
   checks.push('connection test stays outside tasks');
   const preview=await management.invoke('integration_preview',{sourceId:kimi.id,remove:false});

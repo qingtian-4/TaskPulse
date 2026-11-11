@@ -1,4 +1,4 @@
-//! Read-only Kimi Code and legacy kimi-cli wire journals. No config/credentials.
+//! Read-only Kimi wire journals and optional model labels. No credential files.
 use super::{
     jsonl_tail::JsonlTail,
     native_sessions::{self, BatchRead, DirectorySweep, Sessions},
@@ -61,6 +61,35 @@ pub(super) fn read_json(path: &Path) -> Result<Value, String> {
         return Err("metadata_budget".into());
     }
     serde_json::from_slice(&b).map_err(|_| "metadata_json".into())
+}
+
+#[derive(serde::Deserialize, Default)]
+struct ModelLabels {
+    #[serde(default)]
+    models: HashMap<String, ModelLabel>,
+}
+
+#[derive(serde::Deserialize)]
+struct ModelLabel {
+    model: Option<String>,
+    display_name: Option<String>,
+}
+
+fn read_model_labels(root: &Path) -> Option<ModelLabels> {
+    use std::io::Read;
+    const LIMIT: u64 = 256 * 1024;
+    let path = root.join("config.toml");
+    if !path.symlink_metadata().ok()?.is_file() {
+        return None;
+    }
+    let file = std::fs::File::open(path).ok()?;
+    let mut bytes = Vec::new();
+    file.take(LIMIT + 1).read_to_end(&mut bytes).ok()?;
+    if bytes.len() as u64 > LIMIT {
+        return None;
+    }
+    // Deserialize only model IDs and display names, never provider credentials.
+    toml::from_str(std::str::from_utf8(&bytes).ok()?).ok()
 }
 
 fn valid_storage_component(id: &str) -> bool {
@@ -243,6 +272,7 @@ impl KimiProvider {
         let mut tasks = vec![];
         let mut bytes = 0usize;
         let mut metadata_bytes = 0u64;
+        let mut model_labels = HashMap::new();
         let mut live = HashSet::new();
         let mut seen = HashSet::new();
         let mut duplicates = HashSet::new();
@@ -311,6 +341,30 @@ impl KimiProvider {
                 continue;
             }
             if let Some(mut task) = log.state.task.clone() {
+                if let Some(name) = log.state.request_model.as_ref().and_then(|(alias, model)| {
+                    let root = dir.ancestors().nth(3)?;
+                    if !self.roots.iter().any(|candidate| candidate == root) {
+                        return None;
+                    }
+                    let label = model_labels
+                        .entry(root.to_path_buf())
+                        .or_insert_with(|| read_model_labels(root))
+                        .as_ref()?
+                        .models
+                        .get(alias)?;
+                    if model
+                        .as_ref()
+                        .is_some_and(|model| label.model.as_ref() != Some(model))
+                    {
+                        return None;
+                    }
+                    label
+                        .display_name
+                        .as_deref()
+                        .and_then(super::reported_model)
+                }) {
+                    task.model = Some(name);
+                }
                 let metadata = dir.join("state.json");
                 if metadata.exists() {
                     let Ok(stat) = metadata.metadata() else {

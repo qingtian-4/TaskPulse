@@ -5,6 +5,7 @@
  * Close the debug-enabled app and restart normally after this test.
  */
 import { mkdir } from 'node:fs/promises';
+import {clickDashboardFilter} from '../support/dashboard-filters';
 
 const out = 'src-tauri/target/ui-smoke';
 await mkdir(out, { recursive: true });
@@ -87,10 +88,10 @@ try {
   const archived = await native.invoke('get_archived_attention');
   if (archived.some((t:any)=>t.status==='running' || t.internal) || archived.some((t:any)=>initial.some((v:any)=>v.id===t.id))) throw Error('Archive/main overlap or live task archived');
   if (original.recent_days && archived.some((t:any)=>t.updated_at < Date.now()-original.recent_days*86400000)) {
-    await native.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('较早关注')).click()`);
+    await clickDashboardFilter(native.evaluate,'.archive-filter');
     await native.waitFor(`document.querySelectorAll('.task-row').length===${archived.length}`);
     await Bun.write(out + '/native-archive.png', Buffer.from((await native.send('Page.captureScreenshot', {format:'png'})).data,'base64'));
-    await native.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('近期活动')).click()`);
+    await clickDashboardFilter(native.evaluate,'.archive-filter');
     await native.waitFor(`document.querySelectorAll('.task-row').length===${initial.length}`);
   }
   const providers = await native.invoke('get_providers');

@@ -11,6 +11,7 @@ import {createReadStream} from 'node:fs';
 import {createHash} from 'node:crypto';
 import {verifyDevelopmentBuild} from '../../scripts/development-artifact';
 import {withSmokeWorkspace,stopOwnedChild} from '../support/smoke-workspace';
+import {clickDashboardFilter} from '../support/dashboard-filters';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
 const sourceStatusOnly=process.argv.includes('--source-status-only');
@@ -58,6 +59,8 @@ await withSmokeWorkspace('dashboard-polish',async({owned,onStop})=>{
     {id:'scan:codex:anonymous',name:'unknown',source:'codex',source_instance:'scanner',status:'running',confidence:'inferred',remote:false,updated_at:now,unread:true,pinned:false},
   ];
   const records=Object.fromEntries(tasks.map(task=>[task.id,{task,unread:task.unread,pinned:task.pinned,pin_override:task.pinned?true:null,last_execution_at:now,last_turn_key:task.turn_key??null,last_status:task.status,hidden:false,ignored:false}]));
+  const oldTask={...tasks[1],id:'file:archived',name:'验收：较早关注',updated_at:now-9*86400000,finished_at:now-9*86400000};
+  records[oldTask.id]={...records['file:done'],task:oldTask,last_execution_at:oldTask.updated_at};
   await Bun.write(join(home,'attention.json'),JSON.stringify({version:4,records,baselines:{}}));
   for(const task of tasks.slice(0,2))await Bun.write(join(home,task.id.slice(5)+'.status'),JSON.stringify({v:2,name:task.name,status:task.status,turn_key:task.turn_key,execution_activity_at:now,started_at:task.started_at,finished_at:task.finished_at,exit_code:task.exit_code,confidence:task.confidence}));
   // Both configured transports read only this disposable status directory.
@@ -136,7 +139,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   const initial=await titles();
   console.log('default cards:',JSON.stringify(initial));
   assert.deepEqual([...initial].sort(),['验收：运行中的任务','验收：未查看的结果','验收：手动固定'].sort());
-  assert.equal(await root.evaluate(`!!document.querySelector('.pending-running,.filter-note,.quota')`),false,'Red-box content must be removed');
+  assert.ok(await root.evaluate(`!document.querySelector('.dashboard > footer, .task-scroll > section h2, .view-bar .all-tasks, .view-bar .archive-filter, .view-bar .uncertain-filter')`),'Hide the summary, headings and archive/uncertainty buttons with filters closed');
   const checks=['default task set excludes stale unpinned and anonymous scanner rows','removed red-box content'];
   const focusEvidence=[];
   if(focusWindow&&focusTarget){
@@ -167,18 +170,23 @@ accept_since_ms=${now}`:''}`).join('\n')}
   }
   await root.invoke('plugin:window|show',{label:'popup'});
   await Bun.write(join(owned,'dashboard-light.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await root.evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('状态待更新')).click()`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_archived_attention').then(t=>t.some(x=>x.id==='file:archived'))`);
+  await clickDashboardFilter(root.evaluate,'.archive-filter');
+  await root.wait(`document.querySelector('[data-task-id="file:archived"]')`);
+  await clickDashboardFilter(root.evaluate,'.archive-filter');
+  await root.wait(`!document.querySelector('[data-task-id="file:archived"]')`);
+  await clickDashboardFilter(root.evaluate,'.uncertain-filter');
   await root.wait(`document.querySelector('.task-scroll').textContent.includes('验收：离线任务')`);
   assert.ok(!(await titles()).includes('unknown'));
   assert.equal(await root.evaluate(`!!document.querySelector('.filter-note')`),false);
-  await root.evaluate(`document.querySelector('.all-tasks').click()`);
+  await clickDashboardFilter(root.evaluate,'.all-tasks');
   await root.wait(`!document.querySelector('.task-scroll').textContent.includes('验收：离线任务')`);
   const after=await root.invoke('get_dashboard_snapshot');
   for(const id of ['file:offline','file:pinned','scan:codex:anonymous']){
     const a=before.tasks.find((t:any)=>t.id===id),b=after.tasks.find((t:any)=>t.id===id);
     assert.ok(a&&b);assert.equal(b.unread,a.unread);assert.equal(b.pinned,a.pinned);assert.equal(b.status,a.status);
   }
-  checks.push('uncertainty is reachable without acknowledging or deleting tasks');
+  checks.push('archived and uncertain tasks remain reachable in the filter popover without acknowledging or deleting tasks');
   await root.invoke('open_management',{section:'general'});
   const ui=await connect(await tab('/manage'));await ui.wait(`!!document.querySelector('.settings-heading')`);
   assert.equal(await ui.evaluate(`!!document.querySelector('.settings-save')`),false);
@@ -204,11 +212,11 @@ accept_since_ms=${now}`:''}`).join('\n')}
     const current=await root.invoke('get_task_notice');await notice.invoke('dismiss_task_notice',{id:current.current.id,reason:'user'});
   }
   checks.push('light/dark notice footer contrast >= 4.5 for hints and both actions','Chinese/English notice layouts at 320 and 368 pixels');
-  await root.evaluate(`document.querySelector('.all-tasks').click()`);
+  await clickDashboardFilter(root.evaluate,'.all-tasks');
   for(const [width,height] of [[320,400],[368,840],[460,560]]){
     await root.send('Emulation.setDeviceMetricsOverride',{width,height,deviceScaleFactor:1,mobile:false});
     assert.equal(await root.evaluate(`document.documentElement.scrollWidth>innerWidth || document.documentElement.scrollHeight>innerHeight`),false);
-    const box=await root.evaluate(`(()=>{const r=document.querySelector('footer').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewport:innerHeight};})()`);
+    const box=await root.evaluate(`(()=>{const r=document.querySelector('.task-scroll').getBoundingClientRect();return {top:r.top,bottom:r.bottom,viewport:innerHeight};})()`);
     assert.ok(box.bottom<=height+1);
   }
   checks.push('compact and standard dashboard layouts');
@@ -237,8 +245,10 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await root.wait(`${ongoing}===2`);
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id==='codex:public-good'&&t.status==='running'&&!t.stale));
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  const readState=`document.querySelector('[data-source-id="codex"] .read-state')`;
-  await ui.wait(`${readState}?.textContent?.includes('Some sessions need attention')`);
+  await ui.wait(`!!document.querySelector('.ms-tabs button')`);
+  await ui.evaluate(`document.querySelector('.ms-tabs button:first-child').click()`);
+  const readState=`document.querySelector('[data-agent-kind="codex"] .agent-row small')`;
+  await ui.wait(`${readState}?.textContent?.includes('Some data needs refreshing')`);
   // The source badge has its own receiver and clock. Observe it independently
   // of the dashboard so a steady headline cannot hide a settings regression.
   await ui.evaluate(`(()=>{const badge=${readState};window.__sourceReadSamples=[badge.textContent];window.__sourceReadObserver=new MutationObserver(()=>window.__sourceReadSamples.push(badge.textContent));window.__sourceReadObserver.observe(badge,{childList:true,characterData:true,subtree:true});})()`);
@@ -257,7 +267,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.equal(new Set(attempts).size,8,'Eight distinct native collection attempts are required');
   assert.ok(ongoingSamples.length>0);
   assert.ok(ongoingSamples.every(count=>count===2),`Running count flickered between clock ticks: ${JSON.stringify(ongoingSamples)}`);
-  assert.ok(sourceReadSamples.every(label=>label.includes('Some sessions need attention')),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
+  assert.ok(sourceReadSamples.every(label=>label.includes('Some data needs refreshing')),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
   checks.push('two running sessions stay visible across eight partial-source collections between UI clock ticks');
   checks.push('settings partial-source badge stays stable across the same eight collections');
   // Once that session itself is no longer verified, its previous proof must
@@ -265,15 +275,15 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await rename(rollout,join(codex,'moved-good.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!p.task_observations?.['codex:public-good']))`);
   await root.wait(`${ongoing}===1`);
-  await ui.wait(`${readState}?.textContent?.includes('Some sessions need attention')`);
+  await ui.wait(`${readState}?.textContent?.includes('Some data needs refreshing')`);
   checks.push('partial Codex collection preserves an independently verified ongoing task; missing task proof is revoked');
   await rename(join(codex,'sessions/rollout-public-second.jsonl'),join(codex,'moved-second.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!Object.keys(p.task_observations??{}).length))`);
   await root.wait(`${ongoing}===0`);
-  await ui.wait(`${readState}?.textContent?.includes('Source access failed')`);
+  await ui.wait(`${readState}?.textContent?.includes('Read error')`);
   await rename(badRollout,join(codex,'moved-bad.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
-  await ui.wait(`${readState}?.textContent?.includes('Source access healthy')`);
+  await ui.wait(`${readState}?.textContent?.includes('Reads healthy')`);
   checks.push('source badge still reports unavailable session evidence and real source recovery');
   if(focusTarget){
     assert.equal(await root.invoke('open_task',{id:'file:pinned'}),'focus_unavailable');
@@ -282,8 +292,10 @@ accept_since_ms=${now}`:''}`).join('\n')}
     assert.equal(selected.unread,true,'Falling back to details must preserve unread state');
     checks.push('expired native window reports failed focus and opens task details without marking it read');
   }
-  await ui.wait(`document.querySelector('[data-source-id="scanner"]')?.textContent.includes('No data detected')`);
-  checks.push('healthy generic source without an event reports no data, sessions or current tasks');
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-agent-kind="scanner"], [data-saved-source="scanner"]')`));
+  const generic=(await root.invoke('get_dashboard_snapshot')).view.sources.find((row:any)=>row.id==='scanner');
+  assert.deepEqual(generic,emptySource);
+  checks.push('hidden generic source remains healthy without falsely reporting data, sessions or tasks');
   const stampNow=Date.now();
   await Bun.write(join(home,'blocker.pending'),JSON.stringify({v:2,name:'Public request fixture',status:'needs-input',turn_key:'public-blocker',
     waiting_reason:'question',input_request_id:'public-question',execution_activity_at:stampNow,confidence:'hook',cli:'codex'}));
@@ -313,9 +325,9 @@ accept_since_ms=${now}`:''}`).join('\n')}
   checks.push('a vanished CLI-tagged request becomes uncertain in the dashboard and inbox while its actual file reader stays healthy');
   const currentSettings=await ui.invoke('get_monitoring_settings');
   await ui.invoke('save_monitoring_settings',{expected:currentSettings,settings:{...currentSettings,sources:[]}});
-  await root.wait(`document.querySelector('.dashboard footer')?.textContent.includes('No enabled sources')`);
-  assert.equal((await root.invoke('get_dashboard_snapshot')).view.sources.length,0);
-  checks.push('zero enabled sources is explicit in the native dashboard');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.view.sources.length===0)`);
+  assert.ok(await root.evaluate(`!document.querySelector('.dashboard > footer')`));
+  checks.push('zero enabled sources removes the sources from the snapshot without a dashboard footer');
   assert.deepEqual(errors,[]);
   assert.equal(await fileSha256(exe),executableSha256);
   assert.equal(await fileSha256(original),executableSha256);

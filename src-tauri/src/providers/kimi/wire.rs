@@ -31,6 +31,7 @@ pub(super) struct WireState {
     pub(super) native_turn: Option<String>,
     pub(super) request_calls: HashMap<String, String>,
     pub(super) cwd: Option<String>,
+    pub(super) request_model: Option<(String, Option<String>)>,
 }
 impl WireState {
     fn begin(&mut self, id: &str, key: String, at: SystemTime) {
@@ -54,9 +55,8 @@ impl WireState {
             task.name = old.name.clone();
             task.project = old.project.clone();
             task.project_path = old.project_path.clone();
-            task.model = old.model.clone();
-            task.reasoning_effort = old.reasoning_effort.clone();
         }
+        self.request_model = None;
         self.task = Some(task);
         if let Some(cwd) = &self.cwd {
             self.task.as_mut().unwrap().project_path = Some(cwd.clone());
@@ -398,22 +398,25 @@ impl WireState {
             _ => {}
         }
         if kind == "llm.request" && text(data, "kind") != Some("compaction") {
-            if let Some(model) = text(data, "modelAlias")
-                .or_else(|| text(data, "model"))
-                .and_then(reported_model)
-            {
-                task.model = Some(model);
+            let model = text(data, "model").and_then(reported_model);
+            let alias = text(data, "modelAlias").and_then(reported_model);
+            if let Some(identity) = model.clone().or_else(|| alias.clone()) {
+                self.request_model = Some((alias.unwrap_or_else(|| identity.clone()), model));
+                task.model = Some(identity);
+                task.reasoning_effort = text(data, "thinkingEffort").and_then(reported_model);
             }
-            task.reasoning_effort = text(data, "thinkingEffort").and_then(reported_model);
         }
-        if matches!(
-            kind,
-            "context.append_message" | "agent.message.appended" | "human.agent.message.appended"
-        ) {
+        // A legacy transcript may have model metadata only on an assistant
+        // message. The execution wrapper is not a model, and never overrides
+        // the native request's model/effort for this turn.
+        if self.request_model.is_none()
+            && matches!(kind, "context.append_message" | "agent.message.appended")
+        {
             if let Some(model) = data
                 .pointer("/message/meta/model/model")
                 .or_else(|| data.pointer("/message/message/model"))
                 .and_then(Value::as_str)
+                .filter(|model| model.trim() != "agent-loop")
                 .and_then(reported_model)
             {
                 task.model = Some(model);

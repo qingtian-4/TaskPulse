@@ -10,12 +10,12 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 | --- | --- | --- |
 | Codex | `CODEX_HOME` 或 `~/.codex` 中的元数据与会话日志 | 原生任务、项目、模型和执行阶段；读取宿主留下的明确提问，审批需有明确事件，见[审批观察器](CODEX_APPROVAL_OBSERVER.md)。添加独立发行版来源，需要运行中的 WSL 和 Python 3；不会唤醒停止的发行版。添加你自己的 SSH 主机与项目范围 |
 | Claude Code | `CLAUDE_CONFIG_DIR` 或 `~/.claude` | 本机原生会话观测，可用官方 Hook 确认审批与生命周期。也可[通过 SSH 读取服务器上的运行和结束状态](PRODUCT_DASHBOARD.md#个性化设置)，远端审批和原生提问未支持 |
-| Hermes | 原生 SQLite 数据库与运行租约 | 标题、已记录的项目路径、模型及运行状态。没有路径的会话可选「未关联项目」；已跟踪的轮次有明确最终回复时可进入待查看，仅有会话记录不会生成任务 |
+| Hermes | 原生 SQLite 数据库与运行租约 | 标题、已记录的项目路径、模型、推理强度及运行状态。没有路径的会话可选「未关联项目」；已跟踪的轮次有明确最终回复时可进入待查看，仅有会话记录不会生成任务 |
 | DeepSeek Harness | `DSH_HOME` 或 `~/.dsh`，可用 `TASKPULSE_DSH_HOME` 覆盖 | Desktop / CLI 原生会话，支持旧日志与 v4 日志；明确提问按调用与问题 ID 匹配回答，审批按请求 ID 匹配决定；读取请求中报告的推理强度 |
 | OpenCode | `~/.local/share/opencode/opencode.db`，支持 `XDG_DATA_HOME` | 读取运行阶段、模型与明确结束记录；支持 v2 和旧版会话表；不提供独立提问或审批提醒 |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `projects/*.jsonl` 会话目录 | 数据库与增量日志关联本轮开始/结束；不包含云端任务，不提供独立提问或审批提醒 |
-| ZCode | `~/.zcode/cli/db/db.sqlite` 与桌面项目索引 | 原生标题、项目、模型、工具阶段与整轮结果；桌面项目可独立发现，不导入旧任务；不提供独立审批事件 |
-| Kimi Code / kimi-cli | `~/.kimi-code` / `KIMI_CODE_HOME`；旧版 `~/.kimi` / `KIMI_SHARE_DIR` | 只读主会话 wire；明确轮次结束、审批、提问按原生请求 ID 匹配。仅显示日志报告的模型与推理强度；后台子 Agent 暂不单独导入。宿主版本的实机验证仍待完成 |
+| ZCode | `~/.zcode/cli/db/db.sqlite` 与桌面项目索引 | 原生标题、项目、模型、本轮推理强度、工具阶段与整轮结果；桌面项目可独立发现，不导入旧任务；不提供独立审批事件 |
+| Kimi Code / kimi-cli | `~/.kimi-code` / `KIMI_CODE_HOME`；旧版 `~/.kimi` / `KIMI_SHARE_DIR` | 只读主会话 wire；明确轮次结束、审批、提问按原生请求 ID 匹配。使用主会话请求报告的模型与推理强度，有匹配的本机模型显示名时一并采用；后台子 Agent 暂不单独导入。宿主版本的实机验证仍待完成 |
 | Qoder | Desktop 的 `main.sqlite`，以及 `~/.qoder/projects` 转录 | Desktop 完整轮次投影提供结束与时长；IDE/CLI 需要实际存在的顶层 `result`，不把 Stop Hook 或模型回复结束当作整轮结束。原生审批和提问尚未支持。原生读取外可选标准事件；IDE 与 CLI Hook 不等同 |
 | Trae | 本机公开工作区元数据 | 可发现公开会话。当前主会话库不是标准 SQLite；完整任务状态、模型、审批、提问和结束仍未适配，不显示为读取健康 |
 | Gemini CLI | 按需配置 | 启用进程扫描发现运行进程；完整任务生命周期需要事件接入 |
@@ -32,7 +32,7 @@ Windows 10/11 x64 是主要验收平台。Windows 11 ARM64 使用独立的 ARM64
 
 只有能核验所属进程和窗口时，TaskPulse 才会把宿主聚焦当作成功。聚焦窗口不代表已跳转到精确会话。无法可靠返回时，请打开任务详情并复制路径或会话 ID。关闭通知、返回宿主都不会自动标为已读或批准。
 
-Kimi Code、Trae 和 ZCode 使用本机只读检测。以前配置的事件来源可在「已保存的事件连接」中管理。
+Kimi Code、Trae 和 ZCode 使用本机只读检测。以前配置的事件来源保留原有设置，日常使用在「本机」选择 Agent 即可。
 
 事件接入需要宿主实际发送开始、结束、失败或请求事件，安装一个 Agent 并不会自动补齐这些能力。TaskPulse 不会自动修改 Agent Hook、代理或审批策略。[接入指南](AGENT_INTEGRATION_GUIDE.md) · [标准事件协议](AGENT_INTEGRATION_PROTOCOL.md)
 

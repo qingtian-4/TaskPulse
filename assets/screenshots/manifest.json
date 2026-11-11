@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "f68028a7936caf86dd2d517b1f4c71b7e16f8f28",
+  "capture_commit": "61fe287279a42636b6b215837062ae8cbf122834",
   "modified": false,
-  "executable_sha256": "3913f5417639a49523151fc7f27a117bc70af8e3944073a142cf180544d73e3b",
+  "executable_sha256": "06d980e76512c3d55a963cbd562a42e1dbef39f29fd1cda4c24183aee7357d6e",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -15,12 +15,12 @@
       "language": "zh-CN",
       "kind": "dashboard",
       "width": 736,
-      "height": 1576,
+      "height": 1314,
       "logical_width": 368,
-      "logical_height": 788,
+      "logical_height": 657,
       "dpr": 2,
-      "sha256": "66e3af340f9d4651c5f9f18a925ef4a4f37e0616151be13b3d6b00b2e7775254",
-      "bytes": 161740
+      "sha256": "42dbec1e5974259ac2754680d16784d406489cb2097ffd161dcd89ff437b4cca",
+      "bytes": 145193
     },
     {
       "file": "notice-input.png",
@@ -31,8 +31,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "014e2d4cbf2978e3e5baa958ddd3677eebc383fb5e35a28028f4199109a7b4bd",
-      "bytes": 25613
+      "sha256": "bfb96ab5b69cf80046c18f049d966c7ad96278ce83f3c48e994c7b3c785f9ae1",
+      "bytes": 24262
     },
     {
       "file": "notice-approval.png",
@@ -43,8 +43,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "c12a9f134fb33bc39e9d23775329de45046371ca707c370ef4d363d628a01b8c",
-      "bytes": 24350
+      "sha256": "db53d1690271f0f5cc2d8a3bee8296f3c26258b02e02b833c7f8e5f0c5a30664",
+      "bytes": 23247
     },
     {
       "file": "notice-completed.png",
@@ -55,20 +55,20 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
-      "bytes": 25774
+      "sha256": "8be7bc5b476fe64b6c4d35aeb64f6b418a0f1cb4aafe0c81477647560a30be3b",
+      "bytes": 25342
     },
     {
       "file": "dashboard-en.png",
       "language": "en",
       "kind": "dashboard",
       "width": 736,
-      "height": 1612,
+      "height": 1350,
       "logical_width": 368,
-      "logical_height": 806,
+      "logical_height": 675,
       "dpr": 2,
-      "sha256": "669c50441320c21a18ae8b9769b9b31012f6077adb2e12477a02bd58a86d71ef",
-      "bytes": 145606
+      "sha256": "8676a7a04d2481616136e93009dccf919b08cc2f6cca526efed6152ff615d4ad",
+      "bytes": 129638
     },
     {
       "file": "notice-input-en.png",
@@ -79,8 +79,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "9876f3fd13820c6148239c27f9fcc2a9fd2160773332032416cce045ab1e3a7b",
-      "bytes": 21213
+      "sha256": "f2f8eb576a04b32d7ee66d71c5754404552836bd6ca07ba38998b5d058f1838f",
+      "bytes": 21208
     },
     {
       "file": "notice-approval-en.png",
@@ -91,8 +91,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "449890570115abec5ef1143435cf5705a4dfc608d724aa8e54cb717e2a89641a",
-      "bytes": 20832
+      "sha256": "a45c1ecbf2cd635d42b55aedaef09ca4aa71d40efea693dabf4080489351a849",
+      "bytes": 20498
     },
     {
       "file": "notice-completed-en.png",
@@ -103,12 +103,12 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
-      "bytes": 23208
+      "sha256": "e1d98529f2230177605bb87d4fdb5bc4069eb1d10c1128197b1597af829f62ea",
+      "bytes": 23446
     }
   ],
-  "frontend_tree": "caa4633a307949360f86b8845203f5b3d028902c",
-  "runtime_tree": "694b1e3dee5d148d68763baf5bacc27a19af9708",
+  "frontend_tree": "66d44b25d9508264dd1ba59acfa8e3cd34303dd5",
+  "runtime_tree": "5c58f22f2c85fdddb47299f8432aa4878842a448",
   "locale_tree": "a224a063c0b576010ec29abe804d6a5959a0e005",
   "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",
   "lockfiles": {

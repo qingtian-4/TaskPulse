@@ -65,6 +65,14 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 
 ## Task panel
 
+The task panel and tray icon use the same colors:
+
+- **Blue · Ongoing:** The agent is running a task.
+- **Amber · Needs attention:** The agent is waiting for input or approval. These tasks also count as ongoing.
+- **Teal · Unviewed:** The turn has ended and the result is ready to review. Failures appear in red.
+
+Each card shows whether the task runs locally or on a named SSH server. When the source reports them, the card shows the model and reasoning effort, such as `high`. The timer shows elapsed time while the task runs and keeps the final duration after it ends. The panel fits its cards up to four; additional cards scroll within the list.
+
 <p align="center"><a href="assets/screenshots/dashboard-en.png"><img src="assets/screenshots/dashboard-en.png" width="368" alt="TaskPulse v0.0.1 showing running tasks, input, approval and unread results"></a></p>
 
 <p align="center"><img src="assets/promo/teaser-8s.gif" width="768" alt="An eight-second introduction to TaskPulse: return for input, approval or results"></p>
@@ -81,21 +89,19 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 
 | Agent or source | Connection and capabilities |
 | --- | --- |
-| Codex | Discover locally or connect a separate WSL or SSH source. Reads sessions, models, turn state and explicit questions. Approvals require an [explicit event](docs/CODEX_APPROVAL_OBSERVER.md). |
+| Codex | Discover locally or connect over SSH. Reads sessions, models, turn state and explicit questions. Approvals require an [explicit event](docs/CODEX_APPROVAL_OBSERVER.md). |
 | Claude Code | Discover locally or monitor running and completed turns over SSH. Explicit approvals require optional local hooks; native questions are unsupported. |
-| DeepSeek Harness | Read local Desktop or CLI data, or connect WSL. Supports reported models, reasoning effort and explicit requests. |
-| Hermes | Reads local sessions, models and running state. |
+| DeepSeek Harness | Read local Desktop or CLI data. Supports reported models, reasoning effort and explicit requests. |
+| Hermes | Reads local sessions, models and running state, plus reasoning effort when the session records it. |
 | OpenCode | Reads local sessions, execution phases and explicit turn outcomes. |
 | WorkBuddy | Reads local tasks and turn results. Cloud tasks are outside this source. |
-| ZCode | Reads local tasks, models and turn results. |
+| ZCode | Reads local tasks, models, reasoning effort and turn results. |
 | Kimi Code / kimi-cli | Reads local main sessions, explicit requests and turn outcomes. |
 | Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
 | Trae | Discovers local sessions in the workspace catalog. Task progress and completion reminders are unsupported. |
-| Gemini CLI | Discovers running processes. Task lifecycle requires an event connection. |
-| Saved event sources | Continue receiving Standard Events, MCP or compatible status files. |
 | Shell / remote tmux | `tp-run` records the foreground command exit code. An ordinary tmux shell return only provides an inferred result. |
 
-TaskPulse detects supported local data automatically. Choose the agents and projects to monitor. Manage previously configured senders under Saved event connections. See [compatibility and setup details (Chinese)](docs/AGENT_COMPATIBILITY.md).
+TaskPulse detects supported local data automatically. Choose the agents and projects to monitor. See [compatibility and setup details (Chinese)](docs/AGENT_COMPATIBILITY.md).
 
 ## How it works
 

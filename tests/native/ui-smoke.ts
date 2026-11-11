@@ -3,6 +3,7 @@
  * Run `bun tests/native/ui-smoke.ts`. Never changes real TaskPulse/Agent data.
  */
 import { mkdir } from 'node:fs/promises';
+import {clickDashboardFilter} from '../support/dashboard-filters';
 const out = 'src-tauri/target/ui-smoke';
 await mkdir(out,{recursive:true});
 const target = await fetch('http://127.0.0.1:9227/json/new?about:blank',{method:'PUT'}).then(r=>r.json()) as {webSocketDebuggerUrl:string};
@@ -49,21 +50,21 @@ try {
   await waitFor(`document.querySelectorAll('.task-row').length===28`);
   const layout=await evaluate(`(()=>{const p=document.querySelector('.dashboard'),m=document.querySelector('main');return {width:p.getBoundingClientRect().width,height:p.getBoundingClientRect().height,scroll:m.scrollHeight>m.clientHeight,overflow:document.documentElement.scrollWidth>440,errors:[...document.querySelectorAll('[role=alert]')].map(n=>n.textContent),rows:document.querySelectorAll('.task-row').length};})()`);
   if(layout.width>440||layout.height>720||!layout.scroll||layout.overflow||layout.errors.length)throw Error(JSON.stringify(layout));
-  if(!await evaluate(`document.querySelector('main h2')?.textContent.startsWith('进行中')`))throw Error('Ongoing tasks are not first');
+  if(!await evaluate(`document.querySelector('main .task-item')?.dataset.tone==='running'`))throw Error('Ongoing tasks are not first');
   await evaluate(`document.querySelector('[aria-label^="消息中心："]').click()`);
   await waitFor(`document.querySelector('.message-center')?.textContent.includes('验收：授权阻塞')`);
   await evaluate(`[...document.querySelectorAll('.message-center button')].find(b=>b.textContent==='重新打开提醒').click()`);
   await waitFor(`__smokeCalls.some(c=>c.cmd==='reopen_task_prompt')`);
   if(await evaluate(`__smokeCalls.some(c=>c.cmd==='update_task_attention')`))throw Error('Reopening marked a request viewed');
   await evaluate(`document.querySelector('[aria-label="关闭消息中心"]').click()`);
-  await evaluate(`[...document.querySelectorAll('.view-bar button')].find(b=>b.textContent.includes('筛选 / 分组')).click()`);
+  await evaluate(`document.querySelector('.filter-toggle').click()`);
   await evaluate(`(()=>{const s=document.querySelector('[aria-label="筛选项目"]');s.value=[...s.options].find(o=>o.value)?.value;s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await evaluate(`__smokeStartProject()`);
   await waitFor(`document.querySelector('.outside-running')?.textContent.includes('1 个运行任务')`);
-  await waitFor(`document.querySelector('.filter-note')?.textContent.includes('项目：test-project')`);
+  await waitFor(`document.querySelector('[aria-label="筛选项目"]')?.selectedOptions[0].textContent.includes('test-project')`);
   await evaluate(`[...document.querySelectorAll('.counts button')].find(b=>b.textContent.trim().startsWith('进行中')).click()`);
   await waitFor(`document.querySelector('[data-task-id="test-new-project"]') && document.querySelectorAll('.task-row').length===28`);
-  await evaluate(`document.querySelector('.all-tasks').click()`);
+  await clickDashboardFilter(evaluate,'.all-tasks');
   await waitFor(`document.querySelectorAll('.task-row').length===29`);
   await evaluate(`[...document.querySelectorAll('.task-row')].find(row=>row.textContent.includes('验收：已结束')).click()`);
   await waitFor(`document.querySelector('.detail')?.textContent.includes('本轮结束')`);

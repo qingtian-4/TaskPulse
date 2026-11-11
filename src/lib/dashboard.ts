@@ -101,7 +101,7 @@ export function taskLabel(task: TaskSnapshot): string {
   if (isInferredCommandEnd(task)) return '观察到结束 · 退出码未知';
   if (task.status === 'running') return '运行中';
   if (task.status === 'waiting_input') return task.waiting_reason === 'turn_ended' ? '本轮结束' : '状态待确认';
-  return { succeeded: '已完成', failed: '失败', idle: '空闲', disconnected: '已断开', unknown: '状态未知' }[task.status];
+  return { succeeded: '本轮结束', failed: '失败', idle: '空闲', disconnected: '已断开', unknown: '状态未知' }[task.status];
 }
 // Subphase is presentation, never a lifecycle/notification heuristic. Missing
 // phase must not be advertised as thinking, or a completed command as current.

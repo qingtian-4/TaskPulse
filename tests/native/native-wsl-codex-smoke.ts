@@ -1,11 +1,7 @@
-/** Actual WebView2/WSL acceptance with temporary CDP 9337. No Agent prompts.
- * Temporarily enables one running WSL distro, restoring TaskPulse config by
- * default. TASKPULSE_KEEP_WSL_CODEX=1 retains it only after full success.
- * Does not alter Agent configuration, session files, hooks or read state.
+/** Read-only native WebView2/WSL acceptance over a test-owned CDP 9337.
+ * The isolated TaskPulse profile must already contain the enabled WSL source.
+ * This script never saves settings or writes Agent data.
  */
-import { mkdir } from 'node:fs/promises';
-const out='src-tauri/target/ui-smoke';
-await mkdir(out,{recursive:true});
 type Tab={url:string;webSocketDebuggerUrl:string};
 const tabs=async():Promise<Tab[]>=>fetch('http://127.0.0.1:9337/json').then(r=>r.json());
 async function connect(tab:Tab){
@@ -29,36 +25,11 @@ for(let i=0;i<100;i++){
   await Bun.sleep(100);
 }
 if(!popup)throw Error('No actual TaskPulse popup');
-const root=await connect(popup);let manage:Awaited<ReturnType<typeof connect>>|undefined;
-let original:any;let saved=false;let success=false;
-try{
-  original=await root.invoke('get_monitoring_settings');
-  const discovery=await root.invoke('discover_sources');
-  let source=original.sources.find((s:any)=>s.kind==='codex_wsl'&&s.location.toLowerCase()===distro.toLowerCase());
-  const candidate=discovery.find((s:any)=>s.data_location_detected===true&&s.candidate?.kind==='codex_wsl'&&s.candidate.location.toLowerCase()===distro.toLowerCase());
-  if(!source&&!candidate)throw Error('No running WSL candidate: '+distro);
-  await root.invoke('plugin:window|show',{label:'popup'});
-  await root.evaluate(`document.querySelector('[aria-label="管理监控来源"]').click()`);
-  let tab:Tab|undefined;
-  for(let i=0;i<100;i++){tab=(await tabs()).find(t=>t.url.includes('/manage'));if(tab)break;await Bun.sleep(100);}
-  if(!tab)throw Error('Management did not open');
-  manage=await connect(tab);
-  await manage.wait(`!!document.querySelector('.manage') && document.querySelectorAll('.source-item').length>0`);
-  if(!source){
-    const label='发现 '+candidate.candidate.name;
-    await manage.wait(`document.body.textContent.includes(${JSON.stringify(label)})`);
-    await manage.evaluate(`[...document.querySelectorAll('.message')].find(x=>x.textContent.includes(${JSON.stringify(label)})).querySelector('button').click()`);
-    await manage.wait(`document.querySelector('header .primary')?.disabled===false`);
-    saved=true;
-    await manage.evaluate(`document.querySelector('header .primary').click()`);
-  }else if(!source.enabled){
-    saved=true;
-    await manage.evaluate(`document.querySelector('[aria-label=${JSON.stringify('启用 '+source.name)}]').click()`);
-  }
-  await root.wait(`__TAURI_INTERNALS__.invoke('get_monitoring_settings').then(s=>s.sources.some(x=>x.kind==='codex_wsl'&&x.location.toLowerCase()===${JSON.stringify(distro.toLowerCase())}&&x.enabled))`);
-  source=(await root.invoke('get_monitoring_settings')).sources.find((s:any)=>s.kind==='codex_wsl'&&s.location.toLowerCase()===distro.toLowerCase());
-  await manage.evaluate(`[...document.querySelectorAll('.source-item')].find(x=>x.textContent.includes(${JSON.stringify(source.name)})).querySelector('button').click()`);
-  await manage.wait(`document.body.textContent.includes('独立于 Windows')`);
+const root=await connect(popup);
+try {
+  const settings=await root.invoke('get_monitoring_settings');
+  const source=settings.sources.find((s:any)=>s.kind==='codex_wsl'&&s.location.toLowerCase()===distro.toLowerCase());
+  if(!source?.enabled)throw Error('Configure the WSL source in the isolated profile before starting this smoke test');
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(s=>s.provider===${JSON.stringify(source.id)}&&s.status==='connected'))`);
   const directory=await root.invoke('list_discovered_sessions',{source:source.id,query:project,offset:0,limit:100});
   if(!directory.items.length)throw Error('WSL native sessions missing');
@@ -66,28 +37,8 @@ try{
   const sample=title?directory.items.find((v:any)=>v.task.name===title):directory.items[0];
   if(!sample)throw Error('Native sidebar rename/title mismatch');
   if(project&&(sample.task.project!==project||!sample.task.project_path?.startsWith('/')))throw Error('Linux project metadata mismatch');
-  const others=(s:any)=>s.sources.filter((v:any)=>v.id!==source.id);
-  if(JSON.stringify(others(await root.invoke('get_monitoring_settings')))!==JSON.stringify(others(original)))throw Error('Other source scopes changed');
-  // Prove the distro partition can be disabled/restored without editing scopes.
-  const enabled=await root.invoke('get_monitoring_settings');
-  const disabled=structuredClone(enabled);disabled.sources.find((s:any)=>s.id===source.id).enabled=false;
-  saved=true;
-  await manage!.invoke('save_monitoring_settings',{settings:disabled});
-  await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>!t.some(x=>x.source_instance===${JSON.stringify(source.id)}))`);
-  await manage!.invoke('save_monitoring_settings',{settings:enabled});
-  await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(s=>s.provider===${JSON.stringify(source.id)}&&s.status==='connected'))`);
-  await manage.invoke('plugin:window|show',{label:'management'});
-  await Bun.write(out+'/native-wsl-source.png',Buffer.from((await manage.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  await manage.evaluate(`[...document.querySelectorAll('nav button')].find(x=>x.textContent==='已发现会话').click()`);
-  await manage.evaluate(`const select=document.querySelector('[aria-label="会话来源"]');select.value=${JSON.stringify(source.id)};select.dispatchEvent(new Event('change',{bubbles:true}));`);
-  await manage.wait(`document.querySelectorAll('article.session').length>0`);
-  await Bun.write(out+'/native-wsl-directory.png',Buffer.from((await manage.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
-  const result={passed:true,source:source.id,distro,sessions:directory.total,sample:{id:sample.task.id,title:sample.task.name,project:sample.task.project,path:sample.task.project_path,status:sample.task.status},checks:['actual WSL candidate and save UI','connected native source','stable isolated session IDs','native title and Linux project','independent disable/enable','unchanged Windows and SSH scopes'],notVerified:['real new-turn end-to-end latency','all Linux users or shell-only custom CODEX_HOME']};
-  await Bun.write(out+'/native-wsl-result.json',JSON.stringify(result,null,2));
-  console.log(JSON.stringify(result));success=true;
-}finally{
-  try{
-    if(saved&&original&&(!success||process.env.TASKPULSE_KEEP_WSL_CODEX!=='1'))await manage!.invoke('save_monitoring_settings',{settings:original});
-    if(manage)await manage.invoke('plugin:window|close',{label:'management'});
-  }finally{manage?.close();root.close();}
+  console.log(JSON.stringify({passed:true,source:source.id,distro,sessions:directory.total,
+    checks:['connected native source','stable isolated session IDs','native title and Linux project']}));
+} finally {
+  root.close();
 }

@@ -91,6 +91,13 @@ skills-lock.json
 *.exe
 *.msi
 *.dmg
+*.pkg
+*.msix
+*.msixbundle
+*.deb
+*.rpm
+*.[Aa]pp[Ii]mage
+*.dSYM/
 *.app/
 *.dll
 *.pdb
@@ -105,6 +112,8 @@ skills-lock.json
 *.zip
 *.tar
 *.tar.gz
+*.tar.xz
+*.tar.zst
 *.tgz
 *.7z
 *.sqlite

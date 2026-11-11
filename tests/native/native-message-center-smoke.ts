@@ -159,7 +159,7 @@ await withSmokeWorkspace('message-center-native',async({owned,evidenceDir,onStop
   await root.wait(`document.querySelector('.counts [data-tone="action"] b').textContent==='0'`);
   c=await center();assert.equal(c.unread,0);assert.equal(c.entries.find((e:any)=>e.request_id==='q3').state,'unconfirmed');
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id===requestTask.id));
-  assert.ok(await root.evaluate(`document.querySelector('.signals')?.textContent.includes('来源待更新')`));
+  assert.ok(await root.evaluate(`!document.querySelector('.dashboard > footer') && !document.querySelector('.signals')?.textContent.includes('来源待更新')`));
   await management.invoke('save_monitoring_settings',{settings});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(x=>x.provider==='a'&&x.status==='connected'))`);
   send('request','input.requested',{request_id:'q3',payload:{request_kind:'question'}});

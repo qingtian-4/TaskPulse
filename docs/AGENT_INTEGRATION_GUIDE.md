@@ -1,12 +1,10 @@
 # 接入其他 Coding Agent
 
-通过标准事件或 MCP，把支持外部事件的 Agent 连接到 TaskPulse。先查看[兼容说明](AGENT_COMPATIBILITY.md)，选择合适的接入方式。事件接入使用本机进程通信；WSL 和 SSH 请使用各自的 Codex 来源。
+本文说明如何维护已配置的本机事件发送端。日常使用从「设置 → 监控来源 → 本机」选择 Agent 即可。支持范围见[兼容说明](AGENT_COMPATIBILITY.md)。
 
-## 从界面接入
+## 已有事件连接
 
-本机 Agent 从「设置 → 监控来源 → 本机」开启。Kimi Code、Trae 和 ZCode 使用原生只读检测，支持范围见[兼容说明](AGENT_COMPATIBILITY.md)。
-
-已配置事件发送端的用户可以展开「已保存的事件连接」，调整项目范围或停用连接。「测试事件接收」只验证 TaskPulse 接收端。宿主版本是用户记录，实测版本以能力说明为准。
+本机 Agent 使用原生只读检测。已配置的通用 Hook、MCP 和脚本连接保留原设置，设置页不列出这些连接。
 
 ### 旧 Hook 的配置位置
 
@@ -17,18 +15,13 @@
 | ZCode Desktop | `~/.zcode/cli/config.json`，hooks.events | process command + argv；不改变全局 hooks.enabled；需你在宿主确认开关并新建会话 |
 | WorkBuddy Desktop | 无需 Hook，可添加本机原生来源 | 只读本地数据库与会话日志；通用 Hook 描述仍不提供宿主事件映射或安装 |
 
-以前通过 TaskPulse 安装的 Hook 可在对应连接的「支持范围与排查」中预览撤销。核对文件和条目后再确认，文件在预览后有变化时需重新预览。停用来源会停止采集，宿主 Hook 的撤销由你另行确认。
-
-## 没有内置品牌时
-
+如需停用旧 Hook，请在宿主的设置或配置文件里只移除原有的 TaskPulse 条目，保留其他 Hook。更改前先备份配置。
 
 ### 支持本机 MCP 的桌面或 CLI 宿主
 
-1. 在「监控来源 → 本机」打开以前保存的连接，按需要启用并应用更改。设置页不再提供通用连接的新增入口；已有连接按原名保留。
-2. 点击“生成本机 MCP 配置”并复制，将其中的 `taskpulse` 条目合并到宿主已有的 `mcpServers`，保留其他服务。配置使用当前已安装应用的绝对路径；macOS 指向 `.app/Contents/MacOS/agent-tray`，不要求安装 Python、Bun 或另一个服务。
-3. 在宿主里确认并重载 MCP，验证能发现 `taskpulse_report`。TaskPulse 只导出配置，不自动修改宿主、不安装 Hook、不改变批准策略。
-4. 宿主或自动化框架在实际生命周期节点调用该工具。若只能让模型主动调用，应把它视为**可能漏报的协作上报**；MCP 连接本身不能自动观察宿主的对话、系统批准弹窗或最终结束。可靠的原生 Hook/日志优先于提示词要求模型上报。
-5. 先调用 `kind=connection.test` 验证接收（不会创建任务），再执行一次可核对的真实任务；仅工具列表可见或连接成功不能记为实机适配通过。
+1. 保留宿主已有的 `mcpServers.taskpulse` 配置，确认宿主仍能发现 `taskpulse_report`。
+2. 宿主或自动化框架在实际生命周期节点调用该工具。若只能让模型主动调用，应把它视为**可能漏报的协作上报**；MCP 连接本身不能自动观察宿主的对话、系统批准弹窗或最终结束。可靠的原生 Hook/日志优先于提示词要求模型上报。
+3. 先调用 `kind=connection.test` 验证接收（不会创建任务），再执行一次可核对的真实任务；仅工具列表可见或连接成功不能记为实机适配通过。
 
 工具参数沿用标准事件的 `session_id`、`turn_id`、`event_id`、`kind`、`request_id`、`call_id` 和最小 `payload`，**不要传 `agent_id`、来源 ID 或凭据**；它们由保存的来源绑定。会话 ID 跨轮次稳定，轮次 ID 每次新执行变化，事件 ID 对同一次事实/重试保持不变。每个批准/提问单独使用 request ID，只解除对应请求。只有明确的 `turn.completed` / `turn.failed` / `turn.interrupted` 能结束该轮；进程退出、MCP 断开和工具返回均不能代替结束事件。
 
@@ -40,7 +33,7 @@
 
 ### 支持 Hook / API / 脚本事件的宿主
 
-如果工具能产生[标准 v1 事件](AGENT_INTEGRATION_PROTOCOL.md)，打开已有连接的「使用脚本发送任务状态」，点击「导出脚本命令和示例」，使用其中**当前来源绑定的 argv 和 agent_id**。将事件写到 exe stdin 并关闭输入流。生产者应使用其真实 session/turn/event/request/call ID；不要让模型仅靠提示词自报结束来冒充官方生命周期。
+如果工具能产生[标准 v1 事件](AGENT_INTEGRATION_PROTOCOL.md)，沿用发送端已有的命令和绑定的 `agent_id`。将事件写到 exe stdin 并关闭输入流。生产者应使用其真实 session/turn/event/request/call ID；不要让模型仅靠提示词自报结束来冒充官方生命周期。
 
 仓库 `integrations/examples/` 是明确的合成格式示例，可复制到隔离实验环境；别当作真实采集结果导入日常监控。使用安装路径验证格式的 PowerShell 形式：
 
@@ -49,7 +42,7 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false)
 Get-Content -Raw -Encoding UTF8 .\event.json | & 'C:\你的持久安装路径\TaskPulse.exe' --integration-validate
 ```
 
-如果原生事件只需改字段/名称，可基于 `integrations/community-template.json` 修改 adapter_id、agent_id、JSON pointer、事件映射和能力限制，在已保存连接的设置中验证导入。导入只更新适配目录，不会新建或自动替换连接。这样不需要修改 Rust 品牌枚举、重新构建或发布 TaskPulse。导入后没有自动安装/执行权限，证据保持自报。特殊二进制日志、远程传输、复杂关联等仍需代码适配；不写“支持所有 Agent”。
+自定义事件映射的格式示例见 `integrations/community-template.json`。特殊二进制日志、远程传输和复杂关联需要单独适配。
 
 ## 状态应该怎么看
 
@@ -63,7 +56,7 @@ Windows 安装版的主程序为 `TaskPulse.exe`。旧版生成的 Hook 和 MCP 
 
 ## 诊断与撤销
 
-保存后点“接入诊断”：查看接收数量、最近接收时间、最新采样事件类型、来源 health、历史错误代码。历史 last_error 可以保留，即使后续已恢复；connected 只指有事件/本地收集正常，不代表某版本完整支持。没有心跳的安静来源不会被推断完成。
+已有连接的诊断记录保存在对应来源目录，可查看接收数量、最近接收时间、最新采样事件类型和历史错误代码。历史 last_error 可以保留，即使后续已恢复；connected 只指有事件/本地收集正常，不代表某版本完整支持。没有心跳的安静来源不会被推断完成。
 
 常见代码：source_disabled（来源停用）、host_event_not_supported（原生事件未适配）、turn_id_required/native_turn_id_missing（缺少轮次）、ambiguous_permission_resolution（无法唯一解除）、permission_call_mismatch（关联冲突）、lock_timeout（2 秒锁等待超时）、journal_quota_export_before_reset（配额）、checkpoint_backup_failed/state_replace_failed（持久化失败）。Hook 失败退出 0 是保护宿主，不代表事件写入成功；应检查诊断和 journal。
 
@@ -74,8 +67,8 @@ Windows 安装版的主程序为 `TaskPulse.exe`。旧版生成的 Hook 和 MCP 
 seen 去重上限不会清空旧账本；达到后拒绝普通新事实，但幂等的明确解除、工具返回和终态仍可恢复已有执行。每检查点最多保留64条隔离索引；原始事实不删除。磁盘耗尽/持久化失败仍可能无法接收，包括恢复事实，此时保留旧状态并人工排查，不能声称零丢失或自动轮转。
 
 1. 先在原 Agent 核对活动任务和未解决请求，不要标记它们完成来清理。
-2. 停用该来源，并关闭**自己的 TaskPulse 实例**；确认没有该来源的 Hook 写入进程。
+2. 在宿主停用该来源的事件发送端，并关闭**自己的 TaskPulse 实例**；确认没有该来源的 Hook 写入进程。
 3. 备份 `~/.taskpulse/integrations/<source-sha256>/` 整个目录及 attention.json、notifications.json、config.toml。只处理这一明确来源，不清空 `.taskpulse` 或其他来源。
 4. 损坏检查点能自动备份/重放；损坏 journal 或达到配额则保留原目录导出排查。不要直接删除未消费尾部/未解决请求。保留该来源和备份，在继续采集前排查导出的记录。
 
-达到存储上限时按界面提示检查，避免继续积累无用事件。
+达到存储上限时，按上述步骤保留证据再排查。

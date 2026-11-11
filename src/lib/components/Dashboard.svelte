@@ -6,12 +6,12 @@
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
   import { CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery, type DashboardView, type DashboardSnapshot } from '$lib/types';
-  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, taskElapsed, projectKey, sourceFreshness, enabledDashboardSources, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, SECTION_NAMES, SECTION_ORDER, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
+  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, taskElapsed, projectKey, sourceFreshness, enabledDashboardSources, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
   import TaskList from './TaskList.svelte';
   import MessageCenter from './MessageCenter.svelte';
   import {projectDashboardTasks} from '$lib/dashboard';
   import {measureDashboard} from '$lib/dashboard-layout';
-  import {localDiscoveryCandidates,summarizeSources,type SourceDefinition} from '$lib/source-setup';
+  import {localDiscoveryCandidates,type SourceDefinition} from '$lib/source-setup';
   import {acceptMessageState} from '$lib/messages';
   import type {MessageCenterState} from '$lib/types';
   import Settings from '@lucide/svelte/icons/settings';
@@ -21,7 +21,6 @@
   import Search from '@lucide/svelte/icons/search';
   import BrandMark from './BrandMark.svelte';
   import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
-  import Inbox from '@lucide/svelte/icons/inbox';
   import Bell from '@lucide/svelte/icons/bell';
 
   let tasks = $state<TaskSnapshot[]>([]);
@@ -92,8 +91,6 @@
     }
     return [...groups.values()];
   });
-  const sourceSummary=$derived(summarizeSources(snapshotView?.sources??[]));
-  const sourceIssues=$derived(sourceSummary.issues+providers.filter(p=>p.provider.startsWith('state:')&&p.status==='degraded').length);
   const overview=$derived(snapshotView?.counts??{
     ongoing:candidates.filter(t=>taskSection(t)==='ongoing').length,
     action:candidates.filter(t=>matchesSignal(t,'action')).length,
@@ -197,7 +194,7 @@
   // Measure natural card content after rendering, including status/filter chrome.
   $effect(()=>{
     if(!layoutReady)return;
-    JSON.stringify([sorted,view,showPrompts,selectedTask,showFilters,showArchive,error,note,sourceIssues,$preferences,$t,layoutEpoch,now]);
+    JSON.stringify([sorted,view,showPrompts,selectedTask,showFilters,showArchive,error,note,$preferences,$t,layoutEpoch,now]);
     const ticket=++layoutTicket;
     layoutQueue=tick().then(()=>{if(ticket===layoutTicket&&panel)sessionHeight=measureDashboard(panel,showPrompts||!!selectedTask);}).then(()=>tick());
   });
@@ -260,7 +257,7 @@
         await subscribe(win.onResized(({payload})=>{if(payload.width!==lastWidth){lastWidth=payload.width;layoutEpoch++;}}));
         void document.fonts.ready.then(()=>{if(mounted)layoutEpoch++;});
         await subscribe(win.onFocusChanged(({payload:focused})=>{
-          if(focused) {showArchive=false;resetFilters();void snapshots().catch(e=>error=String(e));}
+          if(focused)void snapshots().catch(e=>error=String(e));
         }));
       } catch(e) { error='无法读取监控数据：'+String(e); }
       finally { layoutReady=true; await tick(); await layoutQueue; await resizeQueue; await emit('popup-ready',null).catch(()=>{}); }
@@ -285,14 +282,25 @@
     <button class="overview tp-tone" data-tone="unread" class:active={filterSection==='results'} aria-pressed={filterSection==='results'} title={$t("尚未查看的本轮结果，包括失败")} onclick={()=>chooseSection('results')}><span>{$t("待查看")}</span><b>{overview.results}</b></button>
   </div>
   <p id="count-help" class="sr-only">{$t("待处理包含在进行中，计数不相加。")}</p>
-  {#if candidates.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed')) || sourceIssues}<div class="signals">
+  {#if candidates.some(t=>matchesSignal(t,'approval') || matchesSignal(t,'question') || matchesSignal(t,'failed'))}<div class="signals">
     {#if candidates.some(t=>matchesSignal(t,'approval'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='approval'} aria-pressed={filterSignal==='approval'} onclick={()=>chooseSignal('approval')}>{$t("待批准")} {candidates.filter(t=>matchesSignal(t,'approval')).length}</button>{/if}
     {#if candidates.some(t=>matchesSignal(t,'question'))}<button class="tp-chip tp-tone" data-tone="action" class:active={filterSignal==='question'} aria-pressed={filterSignal==='question'} onclick={()=>chooseSignal('question')}>{$t("待回答")} {candidates.filter(t=>matchesSignal(t,'question')).length}</button>{/if}
     {#if candidates.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>{$t("失败结果")} {candidates.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
-    {#if sourceIssues}<button class="tp-chip tp-tone" data-tone="stale" onclick={manageSources}>{$t("来源待更新")} {sourceIssues}</button>{/if}
   </div>{/if}
-  <div class="view-bar"><button class="all-tasks" class:active={!showArchive && !filterText} onclick={()=>{showArchive=false;resetFilters();}}>{$t("当前关注")} {attentionTasks.length}</button>{#if uncertainTasks.length}<button class:active={filterSection==='uncertain'} onclick={()=>chooseSection('uncertain')}>{$t("状态待更新")} {uncertainTasks.length}</button>{/if}{#if archiveTasks.length}<button class:active={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();}}>{$t("较早关注")} {archiveTasks.length}</button>{/if}<button class="filter-toggle tp-btn" class:active={!!filterText} data-variant="ghost" aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={12}/>{showFilters?$t('收起筛选'):$t('筛选 / 分组')}</button></div>
-  <div class="search-bar"><label class="search"><Search size={14}/><input aria-label={$t("搜索任务")} placeholder={$t("搜索任务、项目、Agent 或模型   /")} bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label={$t("清除搜索")}>×</button>{/if}</label></div>
+  <div class="view-bar">
+    <label class="search"><Search size={15}/><input aria-label={$t("搜索任务")} placeholder={$t("搜索任务、项目、Agent 或模型   /")} bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label={$t("清除搜索")}>×</button>{/if}</label>
+    <button class="filter-toggle tp-btn tp-icon" class:active={!!filterText||showArchive||showFilters} aria-label={$t('筛选 / 分组')} title={$t('筛选 / 分组')} aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={16}/></button>
+    {#if showFilters}<div class="filters">
+      <select bind:value={filterSource} aria-label={$t("筛选来源")}><option value="">{$t("全部来源")}</option>{#each enabledDashboardSources(settings) as s}<option value={s.id}>{s.name}</option>{/each}</select>
+      <select bind:value={filterProject} aria-label={$t("筛选项目")}><option value="">{$t("全部项目")}</option>{#each projects as p}<option value={p.key}>{p.label}</option>{/each}</select>
+      {#if locations.length>1}<select bind:value={filterLocation} aria-label={$t("筛选位置")}><option value="">{$t("全部位置")}</option>{#each locations as location}<option>{location}</option>{/each}</select>{/if}
+      {#if uncertainTasks.length && !showArchive}<button class="view-toggle uncertain-filter" aria-pressed={filterSection==='uncertain'} onclick={()=>{chooseSection('uncertain');showFilters=false;}}>{$t('状态待更新')}</button>{/if}
+      {#if archiveTasks.length || showArchive}<button class="view-toggle archive-filter" aria-pressed={showArchive} onclick={()=>{showArchive=!showArchive;resetFilters();showFilters=false;}}>{showArchive?$t('当前关注'):$t('较早关注')}</button>{/if}
+      <button class="view-toggle group-toggle" onclick={()=>view=view==='tasks'?'projects':'tasks'} title={$t("切换任务/项目视图")}>{view==='tasks'?$t('按项目'):$t('按任务')}</button>
+      <button class="unread-filter tp-chip tp-tone" data-tone="unread" class:active={unreadOnly} aria-pressed={unreadOnly} onclick={()=>unreadOnly=!unreadOnly} title={$t("筛选所有尚未查看的任务，含运行中任务；不同于上方的结果待查看计数")}>{$t("仅未查看")} {displayed.filter(t=>t.unread).length}</button>
+      <button class="view-toggle all-tasks" disabled={!filterText&&!showArchive} onclick={()=>{showArchive=false;resetFilters();showFilters=false;}}>{$t("清除筛选")}</button>
+    </div>{/if}
+  </div>
   {#if demo}<p class="notice">{$t("浏览器演示 · 以下均为示例，不是真实采集结果")}</p>{/if}
   {#if showPrompts}<MessageCenter center={messages} prompts={pendingPrompts} {now} onRead={readMessages} onClose={()=>showPrompts=false} onSelect={id=>void selectMessage(id)} onReopen={entry=>void reopenRequest(entry.task_id,entry.request_id,entry.turn_key)} onReopenPrompt={task=>void reopenRequest(task.id,task.input_request_id,task.turn_key)} onPrompt={task=>{showPrompts=false;selectTask(task);}} />{/if}
   {#if error}<p class="notice error" role="alert">{error}</p>{/if}
@@ -302,24 +310,13 @@
   {#if settings && !settings.onboarding_complete}<div class="onboarding"><strong>{$t("选择你要关注的 Agent")}</strong><p>{$t("确认本机来源，或添加远程服务器。新任务会自动出现。")}</p><button onclick={manageSources}>{$t("设置监控来源")}</button></div>{/if}
   {#if newSources.length}<p class="notice" data-source-review><span>{$t("新发现：{names}",{names:newSources.slice(0,2).map(row=>$t(row.definition.name)).join('、')})}{#if newSources.length>2} +{newSources.length-2}{/if}</span><button class="link" onclick={reviewSources}>{$t("选择添加")}</button></p>{/if}
   {#if refreshing}<p class="notice" role="status">{$t("刷新中：")}{progress.total-progress.pending.length} / {progress.total} {$t("个来源已返回")}{#if progress.failed.length} · {progress.failed.length} {$t("个失败")}{/if}</p>{/if}
-  {#if showArchive}<p class="notice">{$t("较早关注保留原状态和未读标记，不占近期面板；可重新加入或固定。")}</p>{/if}
   {#if lastHidden}<div class="notice">{lastHidden.action==='restore'?$t('已隐藏本轮'):$t('已停止监控此会话')}：{lastHidden.task.name}<button class="link" onclick={async()=>{const previous=lastHidden!;await action(previous.task,previous.action);lastHidden=null;}}>{$t("撤销")}</button></div>{/if}
-  {#if showFilters}
-  <div class="filters">
-    <select bind:value={filterSource} aria-label={$t("筛选来源")}><option value="">{$t("全部来源")}</option>{#each enabledDashboardSources(settings) as s}<option value={s.id}>{s.name}</option>{/each}</select>
-    <select bind:value={filterProject} aria-label={$t("筛选项目")}><option value="">{$t("全部项目")}</option>{#each projects as p}<option value={p.key}>{p.label}</option>{/each}</select>
-    {#if locations.length>1}<select bind:value={filterLocation} aria-label={$t("筛选位置")}><option value="">{$t("全部位置")}</option>{#each locations as location}<option>{location}</option>{/each}</select>{/if}
-    <button class="view-toggle" onclick={()=>view=view==='tasks'?'projects':'tasks'} title={$t("切换任务/项目视图")}>{view==='tasks'?$t('按项目'):$t('按任务')}</button>
-    <button class="unread-filter tp-chip tp-tone" data-tone="unread" class:active={unreadOnly} aria-pressed={unreadOnly} onclick={()=>unreadOnly=!unreadOnly} title={$t("筛选所有尚未查看的任务，含运行中任务；不同于上方的结果待查看计数")}>{$t("仅未查看")} {displayed.filter(t=>t.unread).length}</button>
-    {#if filterText}<button class="view-toggle" onclick={resetFilters}>{$t("清除筛选")}</button>{/if}
-  </div>
-  {/if}
   {#if outsideRunning.length}<p class="notice outside-running" role="status">{outsideRunning.length} {$t("个运行任务在当前视图之外")}<button class="link" onclick={showRunning}>{$t("查看全部运行任务")}</button></p>{/if}
   <main class="glass-scroll task-scroll" aria-label={$t("关注任务")}>
-    {#if sorted.length===0}<div class="empty"><span class="empty-icon" aria-hidden="true"><Inbox size={24}/></span><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manageSources}>{$t("查看来源与已发现会话")}</button>{/if}</div>
+    {#if sorted.length===0}<div class="empty"><strong>{displayed.length?$t('当前筛选没有任务'):$t('当前没有需要关注的任务')}</strong><p>{displayed.length?$t('任务已采集，但不符合上方筛选条件。'):$t('已启用范围内的新执行会自动加入；旧项目再次执行也会回来。')}</p>{#if filterText}<button onclick={()=>{showArchive=false;resetFilters();}}>{$t("清除筛选，查看全部任务")}</button>{:else}<button onclick={manageSources}>{$t("查看来源与已发现会话")}</button>{/if}</div>
     {:else if view==='tasks'}
-      {#each SECTION_ORDER as section}{@const group=sorted.filter(t=>taskSection(t)===section)}{#if group.length}<section><h2>{$t(SECTION_NAMES[section])}<span>{group.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/if}{/each}
-    {:else}{#each projectGroups as group}<section><h2>{group.title}<span>{group.tasks.length}</span></h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {providers} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/each}{/if}
+      <TaskList fitFour={sorted.length>=4} tasks={sorted} {settings} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/>
+    {:else}{#each projectGroups as group}<section><h2>{group.title}</h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/each}{/if}
   </main>
   {#if selectedTask}
     <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label={$t("任务详情")}>
@@ -339,19 +336,7 @@
       </div>
     </aside>
   {/if}
-  <footer>
-    <button class:degraded={sourceIssues>0} onclick={manageSources} title={$t("管理来源；任务详情可查看采集时间")}>
-      {#if !demo&&dashboardRevision===0}{$t('正在读取来源状态')}
-      {:else if sourceSummary.enabled===0}{$t('无启用来源')}
-      {:else}{$t('{count} 个启用来源',{count:sourceSummary.enabled})}
-        {#if sourceSummary.waiting} · {$t('{count} 个等待首次读取',{count:sourceSummary.waiting})}{/if}
-        {#if sourceSummary.paginating} · {$t('{count} 个分批读取中',{count:sourceSummary.paginating})}{/if}
-        {#if sourceIssues} · {$t('{count} 个待检查',{count:sourceIssues})}{/if}
-        {#if !sourceSummary.waiting&&!sourceSummary.paginating&&!sourceIssues} · {$t('读取正常')}{/if}
-      {/if}
-    </button>
-    <!-- Local account quota is intentionally hidden until the feature is ready. -->
-  </footer>
+
 </div>
 <style>
   .detail{font-size:var(--tp-task-font-size,12px);line-height:1.5}
@@ -362,30 +347,31 @@
   .header-actions{display:flex;gap:4px}.header-actions button{border:0;position:relative}.header-actions span{position:absolute;right:0;top:0;font-size:10px;min-width:14px;line-height:14px;text-align:center;border-radius:4px;background:var(--tp-card);color:var(--tp-action)}
   .counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 12px 8px;flex:none}
   .overview{text-align:left;padding:8px 12px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-card);min-width:0}
-  .overview span{font-size:11px;color:var(--tp-muted);white-space:nowrap}.overview b{display:block;font-size:24px;line-height:1.25;font-weight:600;letter-spacing:-.03em;color:var(--tone);margin-top:4px;font-variant-numeric:tabular-nums}
+  .overview span{font-size:12px;color:var(--tp-muted);white-space:nowrap}.overview b{display:block;font-size:24px;line-height:1.25;font-weight:600;letter-spacing:-.03em;color:var(--tone);margin-top:4px;font-variant-numeric:tabular-nums}
   .overview:hover{border-color:var(--tone-line);background:var(--tp-raised)}.overview.active{border-color:var(--tone-line);background:var(--tone-soft)}.overview.active span{color:var(--tp-text)}
   .signals{display:flex;gap:8px;flex-wrap:wrap;padding:0 12px 4px;max-height:68px;overflow:auto;flex:none}.signals button{font-size:11px;padding:2px 8px;border-radius:16px}.signals .active{box-shadow:inset 0 0 0 1px var(--tone)}
-  .view-bar{display:flex;flex-wrap:wrap;align-items:center;gap:12px;padding:4px 12px 8px;flex:none}.view-bar>button{font-size:11px;color:var(--tp-muted);border-radius:4px;padding:4px 0}.view-bar>button.active{color:var(--tp-accent)}.view-bar .filter-toggle{margin-left:auto;min-height:28px;padding:4px 0;gap:4px;font-size:11px}
-  .search-bar{display:flex;padding:0 12px 8px;flex:none}.search{display:flex;gap:8px;align-items:center;min-height:36px;border:1px solid var(--tp-border-strong);background:var(--tp-input);border-radius:8px;padding:6px 8px;min-width:0;flex:1;color:var(--tp-muted)}
-  .search:focus-within{border-color:var(--tp-accent-line)}.search input{width:100%;min-width:0;border:0;outline:none;background:transparent;color:var(--tp-text);font-size:12px;line-height:1.5;padding:0;border-radius:0}.search input:focus-visible{outline:none}.search input::placeholder{color:var(--tp-quiet)}.search>button{font-size:16px;width:24px;line-height:24px}
+  .view-bar{position:relative;display:flex;align-items:center;gap:8px;padding:2px 12px 8px;flex:none}
+  .view-bar .filter-toggle{flex:none;width:36px;height:36px;min-height:36px;color:var(--tp-muted);background:var(--tp-card);border-color:var(--tp-border-strong);border-radius:8px}
+  .view-bar .filter-toggle.active{color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line)}
+  .search{display:flex;gap:8px;align-items:center;min-height:36px;border:1px solid var(--tp-border-strong);background:var(--tp-input);border-radius:8px;padding:6px 9px;min-width:0;flex:1;color:var(--tp-muted)}
+  .search:focus-within{border-color:var(--tp-accent-line)}.search input{width:100%;min-width:0;border:0;outline:none;background:transparent;color:var(--tp-text);font-size:13px;line-height:1.5;padding:0;border-radius:0}.search input:focus-visible{outline:none}.search input::placeholder{color:var(--tp-quiet)}.search>button{font-size:16px;width:24px;line-height:24px}
   .unread-filter{font-size:11px;white-space:nowrap;padding:4px 8px}.unread-filter.active{border-color:var(--tone-line);background:var(--tone-soft);color:var(--tone)}
   .task-scroll{min-height:80px;overflow-y:auto;scrollbar-gutter:stable;flex:1;padding:0 12px 8px;overscroll-behavior:contain}
-  h2{font-size:11px;font-weight:550;color:var(--tp-muted);padding:8px 0 0;margin:0;display:flex;gap:8px;min-width:0;overflow-wrap:anywhere}h2 span{font-size:11px;color:var(--tp-quiet);font-variant-numeric:tabular-nums}
-  .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px 12px;color:var(--tp-text)}.empty-icon{display:none}
+  h2{font-size:13px;font-weight:600;color:var(--tp-text);padding:8px 0 0;margin:0;overflow-wrap:anywhere}
+  .empty{display:flex;flex-direction:column;align-items:center;text-align:center;padding:16px 12px;color:var(--tp-text)}
   .empty strong{font-size:14px;font-weight:550}.empty p{font-size:12px;line-height:1.6;color:var(--tp-muted);margin:8px 0 12px}.empty button,.onboarding button{border:1px solid var(--tp-accent-line);padding:6px 12px;border-radius:8px;color:var(--tp-accent);background:var(--tp-accent-soft);font-size:12px}
   .notice{margin:0;padding:6px 12px;font-size:11px;line-height:1.6;background:var(--tp-accent-soft);color:var(--tp-accent);display:flex;align-items:center;gap:8px;max-height:60px;overflow:auto;flex:none;overflow-wrap:anywhere}.notice.error{color:var(--tp-danger);background:#f09ba70b}.dismiss{margin-left:auto;flex:none}.link{margin-left:auto;color:var(--tp-accent);white-space:nowrap;font-size:11px}
-  .filters{position:absolute;z-index:3;left:12px;right:12px;top:188px;display:flex;gap:8px;padding:12px;flex-wrap:wrap;max-height:42dvh;overflow:auto;background:var(--tp-raised);border:1px solid var(--tp-border-strong);border-radius:8px;box-shadow:var(--tp-shadow-window)}
-  .filters select{font-size:12px;flex:1;padding:6px;min-width:110px;max-width:100%}.view-toggle{font-size:11px;border:1px solid var(--tp-border-strong);border-radius:4px;padding:4px 8px}
+  .filters{position:absolute;z-index:3;left:12px;right:12px;top:calc(100% - 2px);display:flex;gap:8px;padding:12px;flex-wrap:wrap;max-height:42dvh;overflow:auto;background:var(--tp-raised);border:1px solid var(--tp-border-strong);border-radius:8px;box-shadow:var(--tp-shadow-window)}
+  .filters select{font-size:12px;flex:1;padding:6px;min-width:110px;max-width:100%}.view-toggle{font-size:12px;border:1px solid var(--tp-border-strong);border-radius:6px;padding:4px 8px}.view-toggle[aria-pressed=true]{color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line)}
   .detail{margin:0 12px 8px;padding:12px;border:1px solid var(--tone-line);border-radius:8px;background:var(--tp-card);max-height:32dvh;min-height:96px;overflow:auto;flex:0 1 auto}
   .detail-heading{display:flex;gap:8px;align-items:flex-start}.detail-heading strong{flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;font-size:14px;font-weight:600;line-height:1.5}.detail-heading>.tp-chip{flex:none;max-width:100px}.detail-heading>button{height:24px;width:24px;flex:none}
   .detail p{font-size:11px;color:var(--tp-muted);margin:4px 0;line-height:1.6;overflow-wrap:anywhere}
   .command{max-height:72px;overflow:auto;margin:8px 0;padding:8px;background:var(--tp-input);border:1px solid var(--tp-border);border-radius:4px}.command span{font-size:11px;color:var(--tp-quiet)}.command pre{white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:12px;line-height:1.5;color:var(--tp-text);margin:4px 0}
   .evidence{font-size:11px;color:var(--tp-muted);margin:8px 0}.evidence>summary{padding:4px 8px}.evidence p{padding:0 8px}
   .detail-actions{display:flex;gap:8px;flex-wrap:wrap}.detail-actions>.tp-btn{font-size:11px;min-height:28px;padding:4px 8px}.more{font-size:11px;color:var(--tp-muted);width:100%}.more summary{padding:4px 8px}.more button{display:block;padding:8px;white-space:normal;text-align:left;font-size:11px}
-  footer{display:flex;gap:8px;align-items:center;justify-content:space-between;border-top:1px solid var(--tp-border);padding:8px 12px;font-size:11px;color:var(--tp-muted);flex:none;min-height:40px}footer>button{font-size:11px;text-align:left;min-width:0;color:var(--tp-muted)}footer>button.degraded{color:var(--tp-action)}
   .onboarding{padding:12px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:14px}.onboarding p{font-size:12px;color:var(--tp-muted);line-height:1.6;margin:8px 0}
-  @media(max-width:380px){header{min-height:46px;padding:6px 10px 6px 12px}.counts{gap:6px;padding:8px 10px 6px}.overview{padding:6px 10px}.overview b{font-size:22px;margin-top:2px}.header-actions{gap:2px}footer{min-height:36px;padding-top:6px;padding-bottom:6px}}
-  @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.search-bar{padding-left:8px;padding-right:8px}footer{padding:8px;font-size:10px}footer>button{font-size:10px}.detail-heading{flex-wrap:wrap}}
+  @media(max-width:380px){header{min-height:46px;padding:6px 10px 6px 12px}.counts{gap:6px;padding:8px 10px 6px}.overview{padding:6px 10px}.overview b{font-size:22px;margin-top:2px}.header-actions{gap:2px}}
+  @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.filters{left:8px;right:8px}.detail-heading{flex-wrap:wrap}}
 
   @media(max-height:500px){.dashboard:has(.detail) header{min-height:44px;padding-top:6px;padding-bottom:6px}.dashboard:has(.detail) .counts{padding-top:8px}.dashboard:has(.detail) .overview{padding-top:4px;padding-bottom:4px}.detail{max-height:30dvh;min-height:80px;padding:8px}.task-scroll{min-height:40px}}
 </style>
