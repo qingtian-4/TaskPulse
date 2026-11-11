@@ -30,7 +30,7 @@
 
 ### 支持本机 MCP 的桌面或 CLI 宿主
 
-1. 打开「监控来源 → 本机 → 连接其他工具」，添加 MCP 或脚本连接。把名称改成对方工具名，打开开关并应用更改。每个宿主单独建来源，便于停用和项目范围隔离。
+1. 在「监控来源 → 本机」打开以前保存的连接，按需要启用并应用更改。设置页不再提供通用连接的新增入口；已有连接按原名保留。
 2. 点击“生成本机 MCP 配置”并复制，将其中的 `taskpulse` 条目合并到宿主已有的 `mcpServers`，保留其他服务。配置使用当前已安装应用的绝对路径；macOS 指向 `.app/Contents/MacOS/agent-tray`，不要求安装 Python、Bun 或另一个服务。
 3. 在宿主里确认并重载 MCP，验证能发现 `taskpulse_report`。TaskPulse 只导出配置，不自动修改宿主、不安装 Hook、不改变批准策略。
 4. 宿主或自动化框架在实际生命周期节点调用该工具。若只能让模型主动调用，应把它视为**可能漏报的协作上报**；MCP 连接本身不能自动观察宿主的对话、系统批准弹窗或最终结束。可靠的原生 Hook/日志优先于提示词要求模型上报。
@@ -46,7 +46,7 @@
 
 ### 支持 Hook / API / 脚本事件的宿主
 
-如果工具能产生[标准 v1 事件](AGENT_INTEGRATION_PROTOCOL.md)，添加 MCP 或脚本连接，打开「使用脚本发送任务状态」，点击「导出脚本命令和示例」，使用其中**当前来源绑定的 argv 和 agent_id**。将事件写到 exe stdin 并关闭输入流。生产者应使用其真实 session/turn/event/request/call ID；不要让模型仅靠提示词自报结束来冒充官方生命周期。
+如果工具能产生[标准 v1 事件](AGENT_INTEGRATION_PROTOCOL.md)，打开已有连接的「使用脚本发送任务状态」，点击「导出脚本命令和示例」，使用其中**当前来源绑定的 argv 和 agent_id**。将事件写到 exe stdin 并关闭输入流。生产者应使用其真实 session/turn/event/request/call ID；不要让模型仅靠提示词自报结束来冒充官方生命周期。
 
 仓库 `integrations/examples/` 是明确的合成格式示例，可复制到隔离实验环境；别当作真实采集结果导入日常监控。使用安装路径验证格式的 PowerShell 形式：
 
@@ -55,7 +55,7 @@ $OutputEncoding = [Text.UTF8Encoding]::new($false)
 Get-Content -Raw -Encoding UTF8 .\event.json | & 'C:\你的持久安装路径\TaskPulse.exe' --integration-validate
 ```
 
-如果原生事件只需改字段/名称，可基于 `integrations/community-template.json` 修改 adapter_id、agent_id、JSON pointer、事件映射和能力限制，通过管理界面验证导入，再新建来源选中它。这样不需要修改 Rust 品牌枚举、重新构建或发布 TaskPulse。导入后没有自动安装/执行权限，证据保持自报。特殊二进制日志、远程传输、复杂关联等仍需代码适配；不写“支持所有 Agent”。
+如果原生事件只需改字段/名称，可基于 `integrations/community-template.json` 修改 adapter_id、agent_id、JSON pointer、事件映射和能力限制，在已保存连接的设置中验证导入。导入只更新适配目录，不会新建或自动替换连接。这样不需要修改 Rust 品牌枚举、重新构建或发布 TaskPulse。导入后没有自动安装/执行权限，证据保持自报。特殊二进制日志、远程传输、复杂关联等仍需代码适配；不写“支持所有 Agent”。
 
 ## 状态应该怎么看
 

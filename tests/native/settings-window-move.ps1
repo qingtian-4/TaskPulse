@@ -1,4 +1,4 @@
-param([int]$ProcessId,[string]$Exe,[string]$Title,[int]$X,[int]$Y,[ValidateSet('Move','Maximize','Restore')][string]$Action='Move')
+param([int]$ProcessId,[string]$Exe,[string]$Title,[int]$X,[int]$Y,[ValidateSet('Move','Maximize','Restore','Minimize')][string]$Action='Move')
 $ErrorActionPreference='Stop'
 . (Join-Path $PSScriptRoot '..\install\installer-process.ps1')
 $process=Get-Process -Id $ProcessId
@@ -28,7 +28,7 @@ public static class TaskPulseSettingsMove {
         if(action!="Move") {
             long style=GetWindowLongPtr(matches[0],-16).ToInt64();
             if((style&0x00010000)==0||(style&0x00040000)==0)throw new Exception("Owned settings window has disabled maximize/resize controls");
-            ShowWindowAsync(matches[0],action=="Maximize"?3:9);return;
+            ShowWindowAsync(matches[0],action=="Maximize"?3:action=="Minimize"?6:9);return;
         }
         var previous=SetThreadDpiAwarenessContext(new IntPtr(-4));
         try {if(!SetWindowPos(matches[0],IntPtr.Zero,x,y,0,0,0x0001|0x0004|0x0010))throw new System.ComponentModel.Win32Exception();}

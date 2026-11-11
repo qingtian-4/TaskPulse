@@ -143,10 +143,11 @@ export function dashboardCandidates(tasks:TaskSnapshot[]):TaskSnapshot[] {
   )));
 }
 
-// This is a view, never an acknowledgement, deletion or lifecycle transition.
-// Source filters/search and the uncertainty tab can still reach other records.
+// Keep a known open turn in the default panel when its liveness expires.
+// Uncertainty remains visible as such and never contributes to live counts.
 export function defaultDashboardTasks(tasks:TaskSnapshot[]):TaskSnapshot[] {
-  return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task));
+  return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task)
+    || (task.stale && task.status==='running' && task.finished_at==null && !!task.session_id?.trim() && !!task.turn_key?.trim()));
 }
 export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
   if(!task.remote&&task.id.startsWith('file:'))return settings?.sources.find(s=>s.id==='local_file'&&s.kind==='hooks');

@@ -23,7 +23,8 @@ async function fileSha256(path:string){
 const reproduce=process.argv.includes('--reproduce');
 const callbacksOnly=process.argv.includes('--callbacks-only');
 const physicalOnly=process.argv.includes('--physical-only');
-assert.ok([reproduce,callbacksOnly,physicalOnly].filter(Boolean).length<=1,'Choose one native acceptance mode');
+const settingsOnly=process.argv.includes('--settings-only');
+assert.ok([reproduce,callbacksOnly,physicalOnly,settingsOnly].filter(Boolean).length<=1,'Choose one native acceptance mode');
 await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
   const home=join(owned,'profile');await mkdir(home);
   await Bun.write(join(home,'config.toml'),'[dashboard]\nversion=2\nonboarding_complete=true\nauto_discover_local=false\nauto_check_updates=false\nnotifications=false\nsound=false\n[dashboard.preferences]\nshow_on_start=false\nlanguage="zh-CN"\n');
@@ -65,7 +66,7 @@ await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
   const root=await connect();await root.wait(`!!document.querySelector('.dashboard')`);
   const build=await root.invoke('get_build_info');assert.equal(build.process_id,app.pid);
   verifyDevelopmentBuild(build,expectedCommit,version);
-  const mode=physicalOnly?'physical-only':callbacksOnly?'callbacks-only':reproduce?'reproduce':'full';
+  const mode=settingsOnly?'settings-only':physicalOnly?'physical-only':callbacksOnly?'callbacks-only':reproduce?'reproduce':'full';
   async function result(report:Record<string,unknown>){
     assert.equal(await fileSha256(exe),executableSha256,'The tested executable changed during acceptance');
     assert.equal(await fileSha256(original),executableSha256,'The supplied executable changed during acceptance');
@@ -100,6 +101,29 @@ await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
   async function hide(){const prior=await waitState(()=>true);await root.invoke('close_popup');return waitState(s=>!s.visible&&(!prior.visible||s.events.length>=prior.events.length+1))}
   async function menu(){await action('menu');return waitState(s=>s.menu.length>=6)}
   async function select(label:string){const current=await menu();const index=current.menu.indexOf(label);assert.ok(index>=0,'Native menu label missing: '+label);await action('menu-select',{index});await waitState(s=>s.menu.length===0)}
+  async function restoreSettings(){
+    await select('设置');const management=await connect('/manage');await management.wait(`!!document.querySelector('.settings-heading')`);
+    await management.evaluate(`window.__trayReuse=true`);
+    const managementTitle=await management.invoke('plugin:window|title',{label:'management'});
+    const minimized=await windowsTestProcess('powershell.exe',[
+      '-NoProfile','-ExecutionPolicy','Bypass','-File',resolve(import.meta.dir,'settings-window-move.ps1'),
+      '-ProcessId',String(app.pid),'-Exe',exe,'-Title',managementTitle,'-Action','Minimize',
+    ],15000);
+    assert.equal(minimized.exitCode,0,minimized.stderr);
+    await management.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_minimized',{label:'management'})`);
+    await select('设置');
+    await management.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_minimized',{label:'management'}).then(v=>!v)`);
+    await management.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'management'})`);
+    assert.equal(await management.evaluate(`window.__trayReuse`),true);
+    return management;
+  }
+  if(settingsOnly){
+    await waitState(()=>true,30000);
+    const management=await restoreSettings();
+    await management.invoke('plugin:window|close',{label:'management'});
+    await result({passed:true,checks:['Native Settings restores and focuses the same minimized management WebView']});
+    return;
+  }
   try{
     await waitState(()=>true,30000);
     await show();await Bun.sleep(400);
@@ -162,8 +186,7 @@ await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
       await select('隐藏任务面板');await waitState(s=>!s.visible);mark=(await waitState(()=>true)).events.length;
       await select('隐藏任务面板');assert.equal((await waitState(()=>true)).visible,false);assert.deepEqual(eventsSince(await waitState(()=>true),mark),[]);
       checks.push('native menu Show and Hide are independently idempotent');
-      await select('设置');const management=await connect('/manage');await management.wait(`!!document.querySelector('.settings-heading')`);
-      await management.evaluate(`window.__trayReuse=true`);await select('设置');assert.equal(await management.evaluate(`window.__trayReuse`),true);
+      const management=await restoreSettings();
       async function language(language:string){
         const settings=await root.invoke('get_monitoring_settings');
         const expected=Object.fromEntries(['preferences','default_view','recent_days','notifications','sound','notification_mode','auto_check_updates','auto_discover_local'].map(key=>[key,settings[key]]));
@@ -173,7 +196,7 @@ await withSmokeWorkspace('tray-native',async({owned,onStop})=>{
       await language('en');state=await menu();assert.ok(state.menu.includes('Settings'));assert.ok(state.menu.includes('Show task panel'));
       await action('menu-select',{index:state.menu.indexOf('Settings')});await waitState(s=>s.menu.length===0);assert.equal(await management.evaluate(`window.__trayReuse`),true);
       await language('zh-CN');await management.invoke('plugin:window|close',{label:'management'});
-      checks.push('Chinese/English native Settings reuses the same management WebView');
+      checks.push('Chinese/English native Settings restores and focuses the same management WebView');
       const monitors:any[]=await root.invoke('plugin:window|available_monitors');assert.ok(monitors.length>=2,'Actual multi-monitor acceptance requires at least two displays');
       const monitorEvidence=[];
       await hide();

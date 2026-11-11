@@ -293,6 +293,10 @@ impl TaskStore {
 /// 3. A stale observation never replaces a non-stale one. Cross-source ties
 ///    still use the provider timestamp and prefer active state on an exact tie.
 fn merge_into(existing: &mut TaskSnapshot, new: TaskSnapshot) {
+    if existing.loses_open_turn_evidence(&new) {
+        existing.stale = true;
+        return;
+    }
     if existing.is_agent_session()
         && new.source == existing.source
         && new.source_instance == existing.source_instance
@@ -377,6 +381,49 @@ fn confidence_cmp(a: DetectionConfidence, b: DetectionConfidence) -> std::cmp::O
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn repeated_inconclusive_native_reads_cannot_replace_a_known_open_turn() {
+        let mut task = t0("kimi:open", TaskStatus::Running, DetectionConfidence::Hook);
+        task.source = TaskSource::NativeAgent;
+        task.source_instance = Some("kimi_code".into());
+        task.session_id = Some("open".into());
+        task.turn_key = Some("turn".into());
+        let at = task.updated_at;
+        let mut unknown = task.clone();
+        unknown.status = TaskStatus::Unknown;
+        unknown.stale = true;
+        unknown.updated_at += Duration::from_secs(1);
+        let mut store = TaskStore::default();
+        store.merge(vec![task.clone()], at);
+        for _ in 0..3 {
+            let out = store.merge(vec![unknown.clone()], at);
+            assert_eq!(out[0].status, TaskStatus::Running);
+            assert!(out[0].stale && out[0].finished_at.is_none());
+            assert_eq!(out[0].updated_at, at);
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("attention.json");
+        let mut attention = crate::attention::AttentionTracker::open(path.clone());
+        attention.reconcile(vec![task.clone()]);
+        attention.set_pinned(&task.id, true).unwrap();
+        let mut restored = crate::attention::AttentionTracker::open(path);
+        let retained = restored.reconcile(vec![unknown]);
+        assert_eq!(retained[0].id, task.id);
+        assert_eq!(retained[0].status, TaskStatus::Running);
+        assert!(retained[0].pinned && retained[0].stale && retained[0].finished_at.is_none());
+
+        let mut ended = task;
+        ended.status = TaskStatus::WaitingInput;
+        ended.waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
+        ended.updated_at += Duration::from_secs(5);
+        ended.finished_at = Some(ended.updated_at);
+        let result = store.merge(vec![ended.clone()], ended.updated_at);
+        assert_eq!(result[0].finished_at, ended.finished_at);
+        let result = restored.reconcile(result);
+        assert!(result[0].pinned && result[0].unread && !result[0].stale);
+    }
+
     #[test]
     fn lifecycle_old_native_turn_never_replaces_newer_running_observation() {
         let mut current = t0("codex:s", TaskStatus::Running, DetectionConfidence::Hook);

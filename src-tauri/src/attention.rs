@@ -219,7 +219,9 @@ impl AttentionTracker {
                 }
                 // An incomplete read can carry an earlier pending subset
                 // after a restart. It cannot replace a durable unresolved request.
-                if task.stale && record.task.requires_action() {
+                if (task.stale && record.task.requires_action())
+                    || record.task.loses_open_turn_evidence(&task)
+                {
                     record.task.stale = true;
                     record.task.new_execution = false;
                     continue;

@@ -44,9 +44,9 @@
   let catalog=$state<SourceDefinition[]>([]);
   const wslSources=$derived(settings?.sources.filter(s=>s.kind==='codex_wsl'||s.kind==='deepseek_wsl')??[]);
   const fallbackSources=$derived(settings?.sources.filter(s=>
-    !wslSources.includes(s)&&s.kind!=='remote_codex'&&s.kind!=='remote_claude_code'&&s.kind!=='generic_event'
+    !wslSources.includes(s)&&s.kind!=='remote_codex'&&s.kind!=='remote_claude_code'&&s.kind!=='tmux'&&s.kind!=='generic_event'&&s.kind!=='doubao'
     &&(s.kind==='scanner'||!localAgents.some(agent=>agent.kind===s.kind))
-    &&(s.kind==='hooks'||configuredSource(s,sourceDefinitionFor(catalog,s),settings?.auto_discovery_seen)))??[]);
+    &&configuredSource(s,sourceDefinitionFor(catalog,s),settings?.auto_discovery_seen))??[]);
   const fallbackEvents=$derived(settings?.sources.filter(s=>{
     if(s.kind!=='generic_event')return false;
     const local=localHookKind(s.integration?.adapter_id);
@@ -269,6 +269,26 @@
   <div class="ms-tabsbar">{#if page!=='server'}<div class="ms-tabs">{#each [['local','本机'],['ssh','SSH 服务器']] as [id,label]}<button class:active={page==='local'?id==='local':tab===id} onclick={()=>{tab=id as typeof tab;if(id==='local')openLocal();else page='home';}} aria-pressed={page==='local'?id==='local':tab===id}>{$t(label)}{#if id==='ssh'}<small>{groups.length}</small>{/if}</button>{/each}</div>{:else}<button class="ms-back" onclick={()=>{page='home';tab='ssh';}}><ArrowLeft size={13}/>{$t('返回来源列表')}</button>{/if}</div>
   <div class="ms-scroll glass-scroll" bind:this={sourceScroll}>
     <fieldset class="source-edit-lock" disabled={saving} aria-busy={saving}>
+      {#snippet savedSourceRow(source:MonitorSource)}
+        <details class="ms-advanced" data-saved-source={source.id} ontoggle={e=>{if(e.currentTarget.open)void loadProjects(source);}}>
+          <summary>{source.name}{#if source.location} · {source.location}{/if} · {$t(sourceStatus(source,observation(source)))}</summary>
+          <div class="advanced-inner">
+            <label class="ms-field">{$t('来源名称')}<input value={source.name} oninput={e=>patchSource(source,{name:e.currentTarget.value})}/></label>
+            <label class="ms-field">{$t('启用 {name}',{name:source.name})}<input type="checkbox" role="switch" class="settings-switch" checked={source.enabled} disabled={settings?.ssh_paused_sources?.includes(source.id)} onchange={e=>patchSource(source,{enabled:e.currentTarget.checked})}/></label>
+            <ProjectScope projects={source.projects} choices={projectChoices(source,snapshot?.tasks??[],projects[source.id]??[])} aliases={projectAliases[source.id]??[]} disabled={saving||conflict} onchange={projects=>patchSource(source,{projects})}/>
+            <label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="2" value={source.excluded_projects.join('\n')} oninput={e=>patchSource(source,{excluded_projects:list(e.currentTarget.value)})}></textarea></label>
+            {#if source.kind==='tmux'}
+              <label class="ms-field">tmux {$t('会话')}<textarea rows="2" value={source.tmux_sessions.join('\n')} oninput={e=>patchSource(source,{tmux_sessions:list(e.currentTarget.value)})}></textarea></label>
+              <label class="ms-field">tmux {$t('窗格')}<textarea rows="2" value={source.tmux_panes.join('\n')} oninput={e=>patchSource(source,{tmux_panes:list(e.currentTarget.value)})}></textarea></label>
+            {/if}
+            <div class="inline-actions">
+              <button class="ms-btn" onclick={()=>sessionSource=source}>{$t('已发现会话')}</button>
+              {#if legacyRemove===source.id}<button class="ms-btn danger" onclick={()=>removeLegacy(source)}>{$t('确认移除')}</button><button class="ms-btn" onclick={()=>legacyRemove=null}>{$t('取消')}</button>
+              {:else}<button class="ms-btn" onclick={()=>legacyRemove=source.id}>{$t('移除来源')}</button>{/if}
+            </div>
+          </div>
+        </details>
+      {/snippet}
     {#if error}<div class="ms-error" role="alert">{$t(error)}{#if conflict}<button class="ms-btn small" onclick={reload}>{$t('加载最新配置')}</button>{:else}<button class="ms-btn icon-only ghost" aria-label={$t('关闭错误')} onclick={()=>error=''}><X size={13}/></button>{/if}</div>{/if}
     {#if notice}<p class="ms-success" role="status">{$t(notice)}</p>{/if}
     {#if !settings}<p class="ms-muted">{$t('正在读取设置…')}</p>
@@ -317,38 +337,15 @@
         {/if}
 <div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>void savePreference({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
       </section>
-      {#snippet savedSourceRow(source:MonitorSource)}
-        <details class="ms-advanced" data-saved-source={source.id} ontoggle={e=>{if(e.currentTarget.open)void loadProjects(source);}}>
-          <summary>{source.name}{#if source.location} · {source.location}{/if} · {$t(source.kind==='doubao'?'暂停支持。':sourceStatus(source,observation(source)))}</summary>
-          <div class="advanced-inner">
-            <label class="ms-field">{$t('来源名称')}<input value={source.name} oninput={e=>patchSource(source,{name:e.currentTarget.value})}/></label>
-            {#if source.kind!=='doubao'||source.enabled}
-              <label class="ms-field">{$t('启用 {name}',{name:source.name})}<input type="checkbox" role="switch" class="settings-switch" checked={source.enabled} disabled={(source.kind==='doubao'&&!source.enabled)||settings?.ssh_paused_sources?.includes(source.id)} onchange={e=>patchSource(source,{enabled:e.currentTarget.checked})}/></label>
-            {/if}
-            <ProjectScope projects={source.projects} choices={projectChoices(source,snapshot?.tasks??[],projects[source.id]??[])} aliases={projectAliases[source.id]??[]} disabled={saving||conflict} onchange={projects=>patchSource(source,{projects})}/>
-            <label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="2" value={source.excluded_projects.join('\n')} oninput={e=>patchSource(source,{excluded_projects:list(e.currentTarget.value)})}></textarea></label>
-            {#if source.kind==='tmux'}
-              <label class="ms-field">tmux {$t('会话')}<textarea rows="2" value={source.tmux_sessions.join('\n')} oninput={e=>patchSource(source,{tmux_sessions:list(e.currentTarget.value)})}></textarea></label>
-              <label class="ms-field">tmux {$t('窗格')}<textarea rows="2" value={source.tmux_panes.join('\n')} oninput={e=>patchSource(source,{tmux_panes:list(e.currentTarget.value)})}></textarea></label>
-            {/if}
-            <div class="inline-actions">
-              <button class="ms-btn" onclick={()=>sessionSource=source}>{$t('已发现会话')}</button>
-              {#if legacyRemove===source.id}<button class="ms-btn danger" onclick={()=>removeLegacy(source)}>{$t('确认移除')}</button><button class="ms-btn" onclick={()=>legacyRemove=null}>{$t('取消')}</button>
-              {:else}<button class="ms-btn" onclick={()=>legacyRemove=source.id}>{$t('移除来源')}</button>{/if}
-            </div>
-          </div>
-        </details>
-      {/snippet}
       {#if wslSources.length}
         <details class="detail-card" data-wsl-sources><summary>WSL · {$t('已有来源')}</summary>
           {#each wslSources as source (source.id)}{@render savedSourceRow(source)}{/each}
         </details>
       {/if}
-      <details class="detail-card" data-existing-advanced><summary>{$t('已有高级来源')}</summary>
-        {#each fallbackSources as source (source.id)}{@render savedSourceRow(source)}{/each}
-        {#if !fallbackEvents.length&&!fallbackSources.length}<p class="ms-muted">{$t('没有已配置的高级来源。')}</p>{/if}
-        <EventSources {settings} catalog={eventAgents} sources={fallbackEvents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch} maintenance/>
-      </details>
+      {#each fallbackSources as source (source.id)}{@render savedSourceRow(source)}{/each}
+      {#if fallbackEvents.length}
+        <EventSources {settings} catalog={eventAgents} sources={fallbackEvents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch}/>
+      {/if}
     {:else if selected}
       {@const source=selected.agents[activeRemote]}
       {@const report=reports[selected.host]}
@@ -402,6 +399,9 @@
             </div>
           </details>
         </section>
+        {#each selected.sources.filter(item=>item.kind==='tmux') as source (source.id)}
+          {@render savedSourceRow(source)}
+        {/each}
       </div>
     {/if}
     </fieldset>
