@@ -762,9 +762,14 @@ projects=["/srv/legacy"]
     enabled:false,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,
     integration:{agent_id:'custom-agent',adapter_id:'standard-events',transport:'local',accept_since_ms:0},
   }));
-  await ui.invoke('save_monitoring_settings',{settings:{...beforeEvent,sources:[...beforeEvent.sources,...savedBridges]},expected:beforeEvent});
-  await ui.wait(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length===2`);
-  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-saved-event-connections] .agent-row strong')].map(el=>el.textContent)`),['Existing script A','Existing script B']);
+  const savedHooks=[['kimi-code-cli','kimi-code-cli'],['trae-cn-ide','trae-cn'],['zcode-desktop','zcode']].map(([adapter,agent])=>({
+    ...savedBridges[0], id:`generic_event:existing-${adapter}`, name:`Existing ${adapter}`,
+    integration:{...savedBridges[0].integration,adapter_id:adapter,agent_id:agent},
+  }));
+  await ui.invoke('save_monitoring_settings',{settings:{...beforeEvent,sources:[...beforeEvent.sources,...savedBridges,...savedHooks]},expected:beforeEvent});
+  await ui.wait(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length===5`);
+  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-saved-event-connections] .agent-row strong')].map(el=>el.textContent)`),['Existing script A','Existing script B',...savedHooks.map(source=>source.name)]);
+  await ui.evaluate(`document.querySelector('[data-saved-event-connections]').open=true`);
   assert.ok(await ui.evaluate(`!document.querySelector('[data-saved-event-connections] [data-event-add]')`));
   const seededEvents=await ui.invoke('get_monitoring_settings');
   const standardSelector='[data-event-source="generic_event:existing-B"]';
@@ -778,26 +783,26 @@ projects=["/srv/legacy"]
   await ui.evaluate(`(()=>{const area=document.querySelector('${standardSelector} .manifest');area.open=true;const input=area.querySelector('textarea');input.value=${JSON.stringify(JSON.stringify(manifest))};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await ui.evaluate(`document.querySelector('${standardSelector} .manifest button').click()`);
   await ui.wait(`__TAURI_INTERNALS__.invoke('get_source_catalog').then(c=>c.some(x=>x.adapter_id==='taskpulse-native-fixture'))`);
-  assert.equal(await ui.evaluate(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length`),2);
+  assert.equal(await ui.evaluate(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length`),5);
   await ui.evaluate(`document.querySelector('[data-supported-sources]').open=true`);
-  for(const [kind,adapter] of [['trae','trae-cn-ide'],['zcode','zcode-desktop'],['kimi_code','kimi-code-cli']]){
+  for(const kind of ['trae','zcode','kimi_code']){
     const row=`[data-agent-kind="${kind}"]`;
     assert.equal(await ui.evaluate(`document.querySelectorAll(${JSON.stringify(row)}).length`),1);
     await ui.evaluate(`document.querySelector(${JSON.stringify(row+' .agent-row button')}).click()`);
-    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' .local-hook summary')})`);
-    await ui.evaluate(`document.querySelector(${JSON.stringify(row+' .local-hook summary')}).click()`);
-    await ui.evaluate(`document.querySelector(${JSON.stringify(row+' [data-event-add]')}).click()`);
-    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' [data-event-adapter="'+adapter+'"] [data-integration-editor]')})`);
-    assert.equal(await ui.evaluate(`document.querySelector(${JSON.stringify(row+' [data-event-adapter="'+adapter+'"] .agent-row strong')}).textContent`),'Connection 1');
+    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' .agent-config')})`);
+    assert.ok(await ui.evaluate(`!document.querySelector(${JSON.stringify(row+' .local-hook, '+row+' [data-event-source]')})`));
   }
-  await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"] [data-integration-editor]')`);
-  assert.deepEqual((await ui.invoke('get_monitoring_settings')).sources,seededEvents.sources,'Opening an event draft must not write configuration or Hooks');
-  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
-  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  assert.ok(await ui.evaluate(`![...document.querySelectorAll('button')].some(button=>['Add Hook connection','Preview Hook installation'].includes(button.textContent.trim()))`));
   const eventSaved=await ui.invoke('get_monitoring_settings');
-  const eventSource=eventSaved.sources.find((s:any)=>s.integration?.adapter_id==='kimi-code-cli');
-  assert.equal(eventSource.enabled,false);assert.equal(eventSource.integration.agent_id,'kimi-code-cli');
-  assert.ok(eventSource.id.startsWith('generic_event:'));
+  assert.deepEqual(eventSaved.sources,seededEvents.sources,'Opening native source configuration must not add event connections');
+  const existingKimi='[data-event-source="generic_event:existing-kimi-code-cli"]';
+  await ui.evaluate(`document.querySelector('${existingKimi} .agent-row button').click()`);
+  await ui.wait(`!!document.querySelector('${existingKimi} [data-integration-editor]')`);
+  assert.ok(await ui.evaluate(`!!document.querySelector('${existingKimi} .settings-switch')`));
+  if(await ui.evaluate(`!!document.querySelector('.ms-foot .primary')`)){
+    await ui.evaluate(`document.querySelector('.ms-foot button').click()`);
+    await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  }
   const standardSaved=eventSaved.sources.filter((s:any)=>s.integration?.adapter_id==='standard-events');
   assert.equal(standardSaved.length,2);
   assert.equal(new Set(standardSaved.map((s:any)=>s.id)).size,2);

@@ -12,7 +12,7 @@
   import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,sshAgents,readLabel,canRead,type AgentKind,type NewServer,type SshAgent,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
   import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '$lib/types';
   import type {ProjectChoice} from '$lib/project-options';
-  import {configuredSource,localDiscoveryCandidates,localHookKind,sourceDefinitionFor,type SourceDefinition} from '$lib/source-setup';
+  import {configuredSource,localDiscoveryCandidates,sourceDefinitionFor,type SourceDefinition} from '$lib/source-setup';
   import SshSourceWizard from './SshSourceWizard.svelte';
   import ProjectScope from './ProjectScope.svelte';
   import SourceSessions from './SourceSessions.svelte';
@@ -51,11 +51,7 @@
     !wslSources.includes(s)&&s.kind!=='remote_codex'&&s.kind!=='remote_claude_code'&&s.kind!=='tmux'&&s.kind!=='generic_event'&&s.kind!=='doubao'
     &&(s.kind==='scanner'||!localAgents.some(agent=>agent.kind===s.kind))
     &&configuredSource(s,sourceDefinitionFor(catalog,s),settings?.auto_discovery_seen))??[]);
-  const fallbackEvents=$derived(settings?.sources.filter(s=>{
-    if(s.kind!=='generic_event')return false;
-    const local=localHookKind(s.integration?.adapter_id);
-    return !local||!localAgents.some(agent=>agent.kind===local)||!hookCatalog(local).some(d=>d.adapter_id===s.integration?.adapter_id);
-  })??[]);
+  const savedEvents=$derived(settings?.sources.filter(source=>source.kind==='generic_event')??[]);
   let sourceScroll:HTMLDivElement;
   let handledReview=0, detectionRequest=0, catalogRequest=0;
   async function refreshCatalog(currentPlatform:string){
@@ -98,8 +94,6 @@
     if(detectionSettled)void detect();
   });
 
-  function hookCatalog(kind:AgentKind){return eventAgents.filter(agent=>localHookKind(agent.adapter_id)===kind);}
-  function hookCount(kind:AgentKind){return settings?.sources.filter(s=>s.kind==='generic_event'&&localHookKind(s.integration?.adapter_id)===kind).length??0;}
   let active=true,revision=0;
   let sessionSource=$state<MonitorSource|null>(null);
   const groups=$derived(settings?servers(settings):[]);
@@ -384,12 +378,11 @@
       {#snippet localAgentRow(agent:SourceDefinition, newlyFound=false)}
           {@const source=localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind)}
           <div class="agent-entry" data-agent-kind={agent.kind}>
-<div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(newlyFound&&!source?(agent.kind==='trae'?'已检测到 · 仅支持会话目录':'已检测到 · 未启用'):rowStatus(agent.kind,source))}{#if source?.enabled&&source.projects.length&&agent.kind!=='trae'} · {taskCount(source)} {$t('任务')}{/if}{#if hookCount(agent.kind)} · {$t('{count} 个 Hook 连接',{count:hookCount(agent.kind)})}{/if}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':newlyFound&&!source?'选择添加':source?.enabled&&!source.projects.length?'设置项目范围':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.kind==='trae'?'读取 Trae 会话目录':'启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
+<div class="agent-row"><span class="agent-icon"><Terminal size={18}/></span><div class="source-grow"><strong>{$t(agent.name)}</strong><small>{$t(newlyFound&&!source?(agent.kind==='trae'?'已检测到 · 仅支持会话目录':'已检测到 · 未启用'):rowStatus(agent.kind,source))}{#if source?.enabled&&source.projects.length&&agent.kind!=='trae'} · {taskCount(source)} {$t('任务')}{/if}</small></div><button class="ms-btn small" class:chosen={expandedLocal===agent.kind} aria-expanded={expandedLocal===agent.kind} onclick={()=>{if(expandedLocal===agent.kind)expandedLocal=null;else void configureLocal(agent.kind,source?.id??'');}}>{$t(expandedLocal===agent.kind?'收起':newlyFound&&!source?'选择添加':source?.enabled&&!source.projects.length?'设置项目范围':'配置')}</button><input class="settings-switch" type="checkbox" role="switch" aria-label={$t(agent.kind==='trae'?'读取 Trae 会话目录':'启用 {name}',{name:$t(agent.name)})} checked={source?.enabled??false} disabled={saving||conflict} onchange={async e=>{const control=e.currentTarget;await toggleLocal(agent.kind,control.checked);control.checked=(localRows.find(s=>s.kind===agent.kind&&s.id===activeLocalSource)??localRows.find(s=>s.kind===agent.kind))?.enabled??false;}}/></div>
             {#if expandedLocal===agent.kind}
                     <section class="agent-config" data-source-id={localEditor?.id??''}><h3>{$t('项目范围')}</h3>{#if localRows.filter(s=>s.kind===activeLocal).length>1}<label class="ms-field">{$t('数据来源实例')}<select value={localEditor?.id} onchange={e=>{activeLocalSource=e.currentTarget.value;void loadProjects(localRows.find(s=>s.id===activeLocalSource));}}>{#each localRows.filter(s=>s.kind===activeLocal) as s}<option value={s.id}>{s.name} · {s.location||$t('默认位置')}</option>{/each}</select></label>{/if}{#key localEditor?.id??activeLocal}<ProjectScope projects={localEditor?.projects??['*']} choices={localEditor?projectChoices(localEditor,snapshot?.tasks??[],projects[localEditor.id]??[]):[]} aliases={localEditor?projectAliases[localEditor.id]??[]:[]} disabled={saving||conflict} onchange={changeProjects}/>{/key}
         <details class="ms-advanced"><summary><Settings2 size={13}/>{$t('数据位置、排除规则与排查')}</summary><div class="advanced-inner">{#if localEditor}<label class="ms-field">{$t('数据路径')}<input value={localEditor.kind==='codex'?'CODEX_HOME / ~/.codex':localEditor.location} placeholder={localEditor.kind==='claude_code'?'CLAUDE_CONFIG_DIR / ~/.claude':$t('默认位置')} readonly={localAgents.find(agent=>agent.kind===activeLocal)?.location_kind==='none'} oninput={e=>{if(!saving&&localEditor){localEditor.location=e.currentTarget.value;touch();}}}/></label><label class="ms-field">{$t('排除规则，每行一项')}<textarea rows="3" value={localEditor.excluded_projects.join('\n')} oninput={e=>{if(!saving&&localEditor){localEditor.excluded_projects=list(e.currentTarget.value);touch();}}}></textarea></label><button class="ms-btn" onclick={()=>sessionSource=localEditor??null}>{$t('已发现会话')}</button><button class="ms-btn" disabled={!!reading||dirty||!localEditor.enabled} onclick={()=>localEditor&&readLocal(localEditor)}><RefreshCw size={13}/>{$t(reading?'读取中…':'检测数据读取')}</button>{#if activeLocal==='claude_code'}<p class="ms-warning">{$t('本机会话采用只读观测；明确审批需单独确认官方 Hook。原生提问尚未支持。')}</p><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:true}:null}>{$t('启用更准确的提醒')}</button><button class="ms-btn" disabled={dirty||saving} onclick={()=>eventPrompt=localEditor?{id:localEditor.id,enabled:false}:null}>{$t('移除 Claude 精确事件')}</button>{/if}<p class="ms-diagnostic">{$t(discovery.find(d=>d.id===localEditor?.id)?.detail??'尚未检测')}</p>{#each (snapshot?.providers??[]).filter(p=>p.provider===localEditor?.id&&p.status==='degraded'&&p.message) as provider (provider.provider)}<p class="ms-diagnostic" data-provider-diagnostic>{$t(provider.message??'尚无采集诊断')}</p>{/each}{:else}<p class="ms-muted">{$t('启用后可配置数据读取。')}</p>{/if}</div></details>
       </section>
-              {#if settings && hookCatalog(agent.kind).length}<EventSources {settings} catalog={hookCatalog(agent.kind)} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch} localHook/>{/if}
             {/if}
           </div>
       {/snippet}
@@ -437,8 +430,8 @@
         </details>
       {/if}
       {#each fallbackSources as source (source.id)}{@render savedSourceRow(source)}{/each}
-      {#if fallbackEvents.length}
-        <EventSources {settings} catalog={eventAgents} sources={fallbackEvents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch}/>
+      {#if savedEvents.length}
+        <EventSources {settings} catalog={eventAgents} sources={savedEvents} observations={snapshot?.view.sources??[]} {dirty} disabled={saving||conflict} changed={touch}/>
       {/if}
     {:else if selected}
       {@const source=selected.agents[activeRemote]}

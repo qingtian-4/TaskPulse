@@ -1,5 +1,5 @@
 import {test,expect} from 'bun:test';
-import {localDiscoveryCandidates,createEventSource,sourceSections,sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summarizeSources,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
+import {localDiscoveryCandidates,sourceSections,sourceReadState,readTestResult,sourceCapability,sourceCatalogRows,summarizeSources,sourceSetupStep,type SourceDefinition} from '../src/lib/source-setup';
 import type {DashboardSettings,MonitorSource,ProviderHealth,SourceSnapshot} from '../src/lib/types';
 
 const s:MonitorSource={id:'one',kind:'remote_codex',name:'test',enabled:true,location:'public-test',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000};
@@ -14,16 +14,6 @@ test('the review list contains only new local sources the user can add',()=>{
   expect(localDiscoveryCandidates(catalog,candidates,{...settings,sources:[...settings.sources,candidates[0].candidate]})).toEqual([]);
 });
 
-test('event source drafts keep manifest identity, require opt-in and support multiple instances',()=>{
-  for(const adapter of ['kimi-code-cli','trae-cn-ide','standard-events']){
-    const definition:SourceDefinition={id:`integration:${adapter}`,kind:'generic_event',category:'custom',name:adapter,location_kind:'none',platforms:[],adapter_id:adapter,agent_id:'declared-agent'};
-    const a=createEventSource(definition),b=createEventSource(definition);
-    expect(a.id).not.toBe(b.id);expect(a.enabled).toBe(false);expect(a.location).toBe('');
-    expect(a.integration).toEqual({adapter_id:adapter,agent_id:'declared-agent',transport:'local',accept_since_ms:0});
-    expect(a.projects).toEqual(['*']);expect(definition.agent_id).toBe('declared-agent');
-  }
-  expect(()=>createEventSource({id:'native',kind:'codex',category:'local',name:'Codex',location_kind:'none',platforms:[]})).toThrow();
-});
 test('support, data detection, first read, health and current work are independent',()=>{
   const ssh:SourceDefinition={id:'remote_codex',kind:'remote_codex',name:'SSH',category:'remote',platforms:[],location_kind:'host',multiple_instances:true};
   const wsl:SourceDefinition={...ssh,id:'deepseek_harness',kind:'deepseek_wsl',platforms:['windows']};

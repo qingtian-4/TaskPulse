@@ -45,31 +45,29 @@ async function start(){
   const environment=await root.invoke('integration_environment');assert.equal(environment.isolated,true);assert.equal(resolve(environment.state_directory).toLowerCase(),home.toLowerCase());
 }
 async function stop(){try{management?.close();root?.close();}finally{await stopOwnedChild(app);}management=undefined;root=undefined;app=undefined;for(let n=0;n<50;n++){if(!await tabs().then(()=>true).catch(()=>false))return;await Bun.sleep(100);}throw Error('Owned debug listener did not close');}
-async function openManagement(){await root.invoke('open_management');let tab:Tab|undefined;for(let n=0;n<100;n++){tab=(await tabs()).find(t=>t.url.includes('/manage'));if(tab)break;await Bun.sleep(100);}if(!tab)throw Error('Management missing');management=await connect(tab);await management.wait(`!!document.querySelector('.source-layout')`);}
-async function addSource(adapter:string){
-  await management.evaluate(`(()=>{const select=document.querySelector('[aria-label="新增来源类型"]');select.value='generic_event';select.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('.add button').click();})()`);
-  const optionSelector='[aria-label="Agent 适配描述"] option[value="'+adapter+'"]';
-  await management.wait(`!!document.querySelector(${JSON.stringify(optionSelector)})`);
-  await management.evaluate(`(()=>{const select=document.querySelector('[aria-label="Agent 适配描述"]');select.value=${JSON.stringify(adapter)};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-  await management.wait(`document.querySelector('header .primary').disabled===false`);
-  await management.evaluate(`document.querySelector('header .primary').click()`);
-  await management.wait(`document.querySelector('header .primary').disabled===true`);
-  const settings=await root.invoke('get_monitoring_settings');return settings.sources.findLast((s:any)=>s.integration?.adapter_id===adapter);
+async function openManagement(){await root.invoke('open_management',{section:'sources'});let tab:Tab|undefined;for(let n=0;n<100;n++){tab=(await tabs()).find(t=>t.url.includes('/manage'));if(tab)break;await Bun.sleep(100);}if(!tab)throw Error('Management missing');management=await connect(tab);await management.wait(`!!document.querySelector('.source-layout')`);}
+async function seedSource(adapter:string,agent:string){
+  const source={id:`generic_event:fixture-${adapter}`,kind:'generic_event',name:adapter,
+    enabled:true,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,
+    integration:{adapter_id:adapter,agent_id:agent,transport:'local',accept_since_ms:0}};
+  const expected=await root.invoke('get_monitoring_settings');
+  const saved=await management.invoke('save_monitoring_settings',{settings:{...expected,sources:[...expected.sources,source]},expected});
+  return saved.sources.find((s:any)=>s.id===source.id);
 }
 function send(source:any,event:any,host=false){const r=spawnSync(exe,[host?'--integration-host-event':'--integration-event','--source',source.id,'--adapter',source.integration.adapter_id],{env:{...env,WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS:''},input:JSON.stringify(event),encoding:'utf8',windowsHide:true,timeout:8000});if(r.error)throw r.error;assert.equal(r.status,0);assert.equal(r.stdout,'');}
 let report:any;
 let loadMetrics:any=null;
 let resourceMetrics:any=null;
 try{
-  await start();await openManagement();const kimi=await addSource('kimi-code-cli');assert.ok(kimi);
+  await start();await openManagement();const kimi=await seedSource('kimi-code-cli','kimi-code-cli');assert.ok(kimi);
   resourceMetrics=await root.invoke('get_resource_diagnostics');
   assert.equal(typeof resourceMetrics.checkpoint_writes,'number');
   assert.equal(resourceMetrics.process_memory.available,true);
   assert.equal(resourceMetrics.integration_disk.complete,true);
   checks.push('native asynchronous resource diagnostics IPC/memory/bounded isolated disk scan');
-  assert.ok(await management.evaluate(`document.body.textContent.includes('Stop 不会自动产生完成提醒')`));
-  assert.equal(await management.evaluate(`document.querySelectorAll('[aria-label="通用事件传输"] option:disabled').length`),2);
-  checks.push('actual source creation/capabilities/disabled transports');
+  await management.wait(`!!document.querySelector('[data-saved-event-connections] [data-event-adapter="kimi-code-cli"]')`);
+  assert.ok(await management.evaluate(`!document.querySelector('[data-event-add]')`));
+  checks.push('existing Kimi connection stays manageable without a creation action');
   const tasksBefore=await root.invoke('get_agents');const test=await management.invoke('integration_test',{sourceId:kimi.id});assert.equal(test.test,true);assert.deepEqual(await root.invoke('get_agents'),tasksBefore);
   checks.push('connection test stays outside tasks');
   const preview=await management.invoke('integration_preview',{sourceId:kimi.id,remove:false});
@@ -78,13 +76,9 @@ try{
   await assert.rejects(()=>management.invoke('integration_apply',{token:preview.token,confirmed:true}));assert.equal(await Bun.file(join(host,'config.toml')).text(),changed);
   const next=await management.invoke('integration_preview',{sourceId:kimi.id,remove:false});
   await assert.rejects(()=>management.invoke('integration_apply',{token:next.token,confirmed:false}));assert.equal(await Bun.file(join(host,'config.toml')).text(),changed);
-  // Exercise the actual consent UI, only after asserting sandbox environment.
-  await management.evaluate(`document.querySelector('.integration-advanced').open=true`);
-  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='预览新增 Hook').click()`);
-  await management.wait(`!!document.querySelector('[aria-label="Hook 配置差异"]')`);
-  await management.evaluate(`document.querySelector('.confirmation input').click()`);
-  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='确认写入这次差异').click()`);
-  await management.wait(`!document.querySelector('[aria-label="Hook 配置差异"]')`);
+  // Seed the old installation through the native API in the owned sandbox.
+  const setup=await management.invoke('integration_preview',{sourceId:kimi.id,remove:false});
+  await management.invoke('integration_apply',{token:setup.token,confirmed:true});
   const installedText=await Bun.file(join(host,'config.toml')).text();assert.ok(installedText.includes('synthetic-user-hook'));assert.ok(installedText.includes('# synthetic external edit'));
   checks.push('fingerprint conflicts/explicit sandbox consent/comment preservation');
   send(kimi,{hook_event_name:'TurnStarted',session_id:'synthetic-kimi',turn_id:'turn-a',session_title:'合成 Kimi 契约任务',cwd:'D:\\synthetic'},true);
@@ -105,16 +99,12 @@ try{
   const encoded=shell.split(' -EncodedCommand ')[1];assert.ok(encoded);
   const roundtrip=spawnSync('powershell.exe',['-NoLogo','-NoProfile','-NonInteractive','-EncodedCommand',encoded],{env,input:JSON.stringify({hook_event_name:'SessionHeartbeat',session_id:'synthetic-kimi'}),encoding:'utf8',windowsHide:true,timeout:15000});assert.equal(roundtrip.status,0);assert.equal(roundtrip.stdout,'');
   checks.push('generated Windows shell forwarding with Unicode/space/apostrophe path');
-  // Import a new identity through real UI. No Rust brand branch or reinstall.
-  await management.evaluate(`(()=>{const s=document.querySelector('[aria-label="新增来源类型"]');s.value='generic_event';s.dispatchEvent(new Event('change',{bubbles:true}));document.querySelector('.add button').click();})()`);
-  await management.wait(`document.querySelector('[aria-label="Agent 适配描述"]')?.value==='standard-events' && document.querySelector('[aria-label="Agent 适配描述"]').disabled===false`);
-  const custom=await Bun.file('integrations/community-template.json').json();custom.adapter_id='synthetic-editor';custom.agent_id='synthetic-editor';custom.display_name='合成社区 Agent';
-  await management.evaluate(`(()=>{document.querySelector('.integration-advanced').open=true;const t=document.querySelector('[aria-label="适配描述 JSON"]');t.closest('details').open=true;t.value=${JSON.stringify(JSON.stringify(custom))};t.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-  await management.wait(`[...document.querySelectorAll('button')].some(b=>b.textContent==='验证并导入描述'&&!b.disabled)`);
-  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='验证并导入描述').click()`);
-  await management.wait(`document.querySelector('[aria-label="Agent 适配描述"]').value==='synthetic-editor'`);
-  await management.evaluate(`document.querySelector('header .primary').click()`);await management.wait(`document.querySelector('header .primary').disabled===true`);
-  const settings=await root.invoke('get_monitoring_settings');const producer=settings.sources.find((s:any)=>s.integration?.agent_id==='synthetic-editor');assert.ok(producer);
+  // Import a new producer identity through the real management IPC.
+  const custom=await Bun.file('integrations/community-template.json').json();
+  custom.adapter_id='synthetic-editor';custom.agent_id='synthetic-editor';custom.display_name='合成社区 Agent';
+  await management.invoke('integration_import',{text:JSON.stringify(custom)});
+  const producer=await seedSource(custom.adapter_id,custom.agent_id);
+  assert.ok(producer);
   const base={schema_version:1,agent_id:'synthetic-editor',session_id:'synthetic-session',turn_id:'turn-a',payload:{title:'合成标准事件任务',project:'synthetic-project'}};
   send(producer,{...base,event_id:'a-start',kind:'turn.started'});send(producer,{...base,event_id:'a-end',kind:'turn.completed'});send(producer,{...base,turn_id:'turn-b',event_id:'b-start',kind:'turn.started'});
   await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.session_id==='synthetic-session'&&t.turn_key==='turn-b'&&t.status==='running'))`);
@@ -159,16 +149,11 @@ try{
   const sourceHash=new Bun.CryptoHasher('sha256').update(kimi.id).digest('hex');
   await unlink(join(home,'integrations',sourceHash,'hook-installation.json'));
   registrations=await management.invoke('integration_installations');assert.ok(registrations.some((r:any)=>r.source_id===kimi.id&&r.orphaned));
-  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='刷新 Hook 登记').click()`);
-  await management.wait(`document.querySelector('[aria-label="已登记 Hook 清理"]').textContent.includes('来源已移除')`);
-  // Remove only registered sandbox Hook entries, retaining the user's changes.
-  await management.evaluate(`document.querySelector('.hook-registry').open=true;[...document.querySelectorAll('button')].find(b=>b.textContent==='预览撤销已登记 Hook').click()`);
-  await management.wait(`!!document.querySelector('[aria-label="已移除来源 Hook 撤销差异"]')`);
-  await management.evaluate(`document.querySelector('[aria-label="已移除来源 Hook 撤销差异"] input').click()`);
-  await management.evaluate(`[...document.querySelectorAll('button')].find(b=>b.textContent==='确认撤销这次差异').click()`);
-  await management.wait(`!document.querySelector('[aria-label="已移除来源 Hook 撤销差异"]')`);
+  const removal=await management.invoke('integration_preview',{sourceId:kimi.id,remove:true});
+  assert.ok(removal.path.startsWith(home));
+  await management.invoke('integration_apply',{token:removal.token,confirmed:true});
   const removed=await Bun.file(join(host,'config.toml')).text();assert.ok(removed.includes('synthetic-user-hook'));assert.ok(!removed.includes('EncodedCommand'));
-  checks.push('R4 removed-source Hook cleanup remains accessible, explicit, and retains foreign settings/hooks');
+  checks.push('removed-source Hook cleanup requires consent and retains foreign settings/hooks');
   assert.ok(!(await management.invoke('integration_installations')).some((r:any)=>r.source_id===kimi.id));
   const restoredSettings=await root.invoke('get_monitoring_settings');restoredSettings.sources.push(kimi);await management.invoke('save_monitoring_settings',{settings:restoredSettings});
   deliveryBefore=(await root.invoke('get_notification_log')).length;

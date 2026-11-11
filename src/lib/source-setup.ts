@@ -39,12 +39,6 @@ const LOCAL_HOOKS:Readonly<Record<string,SourceKind>>={
 export function localHookKind(adapterId:string|undefined):SourceKind|undefined {
   return adapterId&&Object.hasOwn(LOCAL_HOOKS,adapterId)?LOCAL_HOOKS[adapterId]:undefined;
 }
-export function eventConnections(catalog:SourceDefinition[],sources:MonitorSource[]){
-  return catalog.flatMap(definition=>{
-    const connections=sources.filter(s=>s.kind==='generic_event'&&s.integration?.adapter_id===definition.adapter_id);
-    return connections.length?[{definition,connections}]:[];
-  });
-}
 export function isDefaultEventName(name:string,definition:SourceDefinition):boolean {
   return name===definition.name||name===eventAdapterLabel(definition.adapter_id??'',definition.name)||
     definition.adapter_id==='standard-events'&&[
@@ -59,10 +53,6 @@ export function eventAdapterLabel(adapterId:string,displayName:string):string {
     'zcode-desktop':'ZCode',
     'workbuddy-candidate':'WorkBuddy',
   } as Record<string,string>)[adapterId]??displayName;
-}
-export function createEventSource(definition:SourceDefinition,name=definition.name):MonitorSource {
-  if(definition.kind!=='generic_event'||!definition.adapter_id||!definition.agent_id)throw Error('invalid_event_definition');
-  return {id:`generic_event:${crypto.randomUUID()}`,kind:'generic_event',name,location:'',enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,integration:{agent_id:definition.agent_id,adapter_id:definition.adapter_id,transport:'local',accept_since_ms:0}};
 }
 export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []):SourceCatalogRow[] {
   const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)

@@ -8,13 +8,14 @@
   type Capability={support:string;channel:string;validation:string;tested_versions:string[];limitations:string};
   type Manifest={adapter_id:string;agent_id:string;display_name:string;product_form:string;systems:string[];official_sources:string[];supported_versions:string[];capabilities:Record<string,Capability>};
   type Preview={token:string;source_id:string;path:string;action:string;entries:unknown[];decoded_command:string;notes:string[]};
-  let {source,dirty,changed,localHook=false}:{source:MonitorSource;dirty:boolean;changed:()=>void;localHook?:boolean}=$props();
+  let {source,dirty,changed}:{source:MonitorSource;dirty:boolean;changed:()=>void}=$props();
   let catalog=$state<Manifest[]>([]), text=$state(''), message=$state(''), error=$state(''), busy=$state(false);
   let preview=$state<Preview|null>(null), confirmed=$state(false), diagnostic=$state(''), exported=$state('');
   const adapter=$derived(catalog.find(m=>m.adapter_id===source.integration?.adapter_id));
   let platform=$state(''), mcpConfig=$state('');
+  const localHook=$derived(localHookKind(source.integration?.adapter_id)!==undefined);
   const standard=$derived(source.integration?.adapter_id==='standard-events');
-  const installable=$derived(platform==='windows' && ['kimi-code-cli','trae-cn-ide','zcode-desktop'].includes(source.integration?.adapter_id??''));
+  const removable=$derived(platform==='windows' && localHook);
   const platformName=$derived(({windows:'Windows',macos:'macOS',linux:'Linux'} as Record<string,string>)[platform]??'当前系统');
   const labels:Record<string,string>={session_discovery:'会话发现',title:'原生标题',project:'项目',turn_start:'执行开始',phase:'运行阶段',final_end:'最终本轮结束',failure:'本轮失败',approval_request:'批准请求',approval_resolution:'批准解除',question:'提问',focus:'原生跳转'};
   const supports:Record<string,string>={explicit:'明确事件',inferred:'受限关联',unsupported:'不支持'};
@@ -31,7 +32,7 @@
   }
   async function action(fn:()=>Promise<void>){busy=true;error='';message='';try{await fn();}catch(e){error=String(e);}finally{busy=false;}}
   async function importManifest(){await action(async()=>{await invoke<Manifest>('integration_import',{text});await load();await emit('integration-catalog-updated');message='描述文件已导入，但没有安装任何 Hook，也不会自动启用来源。';});}
-  async function makePreview(remove:boolean){await action(async()=>{preview=await invoke<Preview>('integration_preview',{sourceId:source.id,remove});confirmed=false;});}
+  async function previewRemoval(){await action(async()=>{preview=await invoke<Preview>('integration_preview',{sourceId:source.id,remove:true});confirmed=false;});}
   async function apply(){if(!preview||!confirmed)return;await action(async()=>{message=await invoke<string>('integration_apply',{token:preview!.token,confirmed:true});preview=null;confirmed=false;});}
   async function exportMcp(){await action(async()=>{const result=await invoke<{mcp_config:unknown}>('integration_export',{sourceId:source.id});if(!result.mcp_config)throw Error('请新建标准事件来源');mcpConfig=JSON.stringify(result.mcp_config,null,2);});}
   $effect(()=>{if(dirty){mcpConfig='';exported='';}});
@@ -75,12 +76,12 @@
   <div class="actions">
     <button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{diagnostic=JSON.stringify(await invoke('integration_diagnose',{sourceId:source.id}),null,2);})}>{$t("接入诊断")}</button>
     {#if !standard}<button class="tp-btn" disabled={busy||dirty} onclick={()=>action(async()=>{exported=JSON.stringify(await invoke('integration_export',{sourceId:source.id}),null,2);})}>{$t("导出标准接入说明")}</button>{/if}
-    {#if installable}<button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(false)}>{$t("预览新增 Hook")}</button><button class="tp-btn" disabled={busy||dirty} onclick={()=>makePreview(true)}>{$t("预览撤销 Hook")}</button>{:else}<p>{$t("当前平台没有此描述的已核验 Hook 安装方式。标准事件 / MCP 需要宿主主动接入，不会自动安装。")}</p>{/if}
+    {#if removable}<button class="tp-btn" disabled={busy||dirty} onclick={previewRemoval}>{$t("预览撤销 Hook")}</button>{/if}
   </div>
   {#if dirty}<p>{$t("请先保存来源配置，再测试或生成配置差异。修改既有 Agent 身份请新建来源。")}</p>{/if}
   {#if preview}
     <section class="preview" aria-label={$t("Hook 配置差异")}>
-      <h4>{preview.action==='remove'?$t('移除'):$t('新增')} {$t("TaskPulse 自有 Hook")}</h4><p>{preview.path}</p>
+      <h4>{$t("移除")} {$t("TaskPulse 自有 Hook")}</h4><p>{preview.path}</p>
       <pre>{JSON.stringify(preview.entries,null,2)}</pre><details class="tp-fold"><summary>{$t("查看命令的可读内容")}</summary><pre>{preview.decoded_command}</pre></details>
       {#each preview.notes as note}<p>{$t(note)}</p>{/each}
       <label class="confirmation"><input type="checkbox" bind:checked={confirmed}/>{$t("我已审阅上述文件位置与条目，同意写入这次差异")}</label>
@@ -106,7 +107,7 @@
   .capability-details,.integration-advanced{margin:12px 0}.capability-details>summary,.integration-advanced>summary{font-size:13px}
   .capabilities{padding:0 12px}.capability{display:grid;grid-template-columns:minmax(80px,1fr) minmax(0,2fr);align-items:center;gap:6px;padding:11px 0;border-bottom:1px solid var(--tp-border)}
   .capability:last-child{border:0}.capability strong{font-weight:550;font-size:13px;color:var(--tp-text)}.capability-badges{display:flex;gap:5px;flex-wrap:wrap;justify-content:flex-end}.capability small{grid-column:1/-1;color:var(--tp-muted);font-size:12px;line-height:1.8;overflow-wrap:anywhere}
-  .actions{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.tp-btn{font-size:13px;min-height:30px}.actions p{width:100%;font-size:12px}
+  .actions{display:flex;flex-wrap:wrap;gap:7px;margin:12px 0}.tp-btn{font-size:13px;min-height:30px}
   .integration-advanced>.actions,.integration-advanced>p,.integration-advanced>label,.integration-advanced>.tp-fold{margin-left:12px;margin-right:12px}.identity{font-size:12px;color:var(--tp-quiet)}
   pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:260px;overflow:auto;background:var(--tp-input);border:1px solid var(--tp-border);padding:10px;border-radius:var(--tp-radius-sm);font-size:12px;color:var(--tp-muted);margin:10px 12px}
   .preview{border:1px solid #edc38045;background:#edc38005;border-radius:var(--tp-radius-md);padding:12px;margin:12px}.preview h4{font-size:13px;color:var(--tp-action);margin:0 0 10px}.preview pre{margin:10px 0}.preview .tp-btn{margin:4px 4px 0 0}

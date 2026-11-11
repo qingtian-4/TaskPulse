@@ -91,6 +91,8 @@ Start with the [integration guide](docs/AGENT_INTEGRATION_GUIDE.md) and [event p
 
 ## Submit and release
 
+Keep local diagnostics, raw screenshots, acceptance logs and build packages in `.local/`. Approved public screenshots belong in `assets/screenshots/` with their capture manifest.
+
 Keep PRs focused and include validation. Preserve unrelated work and upstream attribution. Never commit credentials, private task data, build products or investigation notes. Contributions use the [MIT License](LICENSE), including the original AgentTray attribution.
 
 A formal Release is for an accepted **stable** version, not an iteration/testing channel:
