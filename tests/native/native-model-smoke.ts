@@ -32,9 +32,10 @@ await withSmokeWorkspace('model-native',async({owned,evidenceDir,onStop})=>{
   for(let n=0;n<200;n++){if(failure)throw failure;tab=(await tabs().catch(()=>[])).find(t=>t.url.includes('tauri.localhost')&&!/\/(manage|notice)/.test(t.url));if(tab)break;if(app.exitCode!==null)throw Error('App exited: '+stderr);await Bun.sleep(100);}
   assert.ok(tab,'Native page missing: '+stderr);
   ws=new WebSocket(tab.webSocketDebuggerUrl);await new Promise<void>((ok,fail)=>{ws!.onopen=()=>ok();ws!.onerror=()=>fail(Error('CDP connection failed'));});
+  let holdPreference=false;let pausedPreference:string|undefined;
   let seq=0;const pending=new Map<number,{ok:(v:any)=>void,fail:(e:any)=>void,timer:ReturnType<typeof setTimeout>}>();
   const errors:string[]=[];
-  ws.onmessage=e=>{const m=JSON.parse(String(e.data));if(m.method==='Runtime.exceptionThrown')errors.push(JSON.stringify(m.params.exceptionDetails));const p=pending.get(m.id);if(!p)return;clearTimeout(p.timer);pending.delete(m.id);m.error?p.fail(Error(JSON.stringify(m.error))):p.ok(m.result);};
+  ws.onmessage=e=>{const m=JSON.parse(String(e.data));if(m.method==='Fetch.requestPaused'){if(holdPreference)pausedPreference=m.params.requestId;return;}if(m.method==='Runtime.exceptionThrown')errors.push(JSON.stringify(m.params.exceptionDetails));const p=pending.get(m.id);if(!p)return;clearTimeout(p.timer);pending.delete(m.id);m.error?p.fail(Error(JSON.stringify(m.error))):p.ok(m.result);};
   const send=(method:string,params:Record<string,unknown>={})=>new Promise<any>((ok,fail)=>{const id=++seq;const timer=setTimeout(()=>{pending.delete(id);fail(Error('CDP timeout '+method));},15000);pending.set(id,{ok,fail,timer});ws!.send(JSON.stringify({id,method,params}));});
   const evaluate=async(expression:string)=>{const r=await send('Runtime.evaluate',{expression,awaitPromise:true,returnByValue:true,userGesture:true});if(r.exceptionDetails)throw Error(JSON.stringify(r.exceptionDetails));return r.result.value;};
   const invoke=(cmd:string)=>evaluate(`__TAURI_INTERNALS__.invoke(${JSON.stringify(cmd)})`);
@@ -62,7 +63,8 @@ await withSmokeWorkspace('model-native',async({owned,evidenceDir,onStop})=>{
   await wait(`document.querySelectorAll('.task-row').length===1 && document.querySelector('.model')?.textContent.includes('deepseek')`);
   await evaluate(`document.querySelector('[aria-label="清除搜索"]').click()`);await wait(`document.querySelectorAll('.task-row').length===2`);
   await evaluate(`[...document.querySelectorAll('.task-row')].find(e=>e.textContent.includes('来源未提供模型')).click()`);
-  await wait(`document.querySelector('.model-detail')?.textContent.includes('来源未提供')`);
+  await wait(`document.querySelector('.detail-heading')?.textContent.includes('来源未提供模型') && !document.querySelector('.model-detail')`);
+  assert.ok((await invoke('get_agents')).some((t:any)=>t.name.includes('来源未提供模型')&&!t.model));
   await send('Emulation.clearDeviceMetricsOverride');
   const actual=await evaluate(`({width:innerWidth,height:innerHeight,dpr:devicePixelRatio,overflow:document.documentElement.scrollWidth>innerWidth})`);
   assert.ok(actual.width<=370,JSON.stringify(actual));assert.equal(actual.overflow,false);
@@ -74,13 +76,23 @@ await withSmokeWorkspace('model-native',async({owned,evidenceDir,onStop})=>{
   const receive=ws!.onmessage;ws!.close();ws=new WebSocket(management.webSocketDebuggerUrl);
   await new Promise<void>((ok,fail)=>{ws!.onopen=()=>ok();ws!.onerror=()=>fail(Error('Management CDP failed'));});ws.onmessage=receive;
   await send('Runtime.enable');
-  await wait(`[...document.querySelectorAll('nav button')].some(b=>b.textContent.includes('应用更新'))`);
-  await wait(`document.querySelector('.updates')?.textContent.includes('应用更新')`);
+  await wait(`document.querySelector('.settings-nav a[href="#updates"]')?.getAttribute('aria-current')==='page'`);
+  await wait(`document.querySelector('.updates #update-title')?.textContent.includes('当前版本')`);
   const emitUpdate=(phase:string)=>evaluate(`window.__TAURI__.event.emit('application-update',${JSON.stringify({...updateStatus,phase,version:'99.0.0',can_install:true,notes:'Isolated update UI fixture'})})`);
   await emitUpdate('available');
   await wait(`[...document.querySelectorAll('.updates button')].some(b=>b.textContent.includes('下载并安装'))`);
-  await evaluate(`[...document.querySelectorAll('.preferences label')].find(l=>l.textContent.includes('自动检查更新')).querySelector('input').click()`);
-  await wait(`[...document.querySelectorAll('.updates button')].find(b=>b.textContent.includes('下载并安装'))?.disabled===true`);
+  holdPreference=true;
+  await send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/save_preferences',requestStage:'Request'}]});
+  try {
+    await evaluate(`document.querySelector('.update-stack .preference-row input').click()`);
+    for(let n=0;n<100&&!pausedPreference;n++)await Bun.sleep(50);
+    assert.ok(pausedPreference,'Preference save must reach the native IPC boundary');
+    await wait(`document.querySelector('.updates .install-action')?.disabled===true`);
+  } finally {
+    holdPreference=false;
+    if(pausedPreference)await send('Fetch.continueRequest',{requestId:pausedPreference});
+    await send('Fetch.disable');
+  }
   await emitUpdate('downloading');await wait(`document.querySelector('main fieldset')?.disabled===true`);
   await emitUpdate('error');await wait(`document.querySelector('main fieldset')?.disabled===false`);
   await Bun.write(join(owned,'settings-updates.png'),Buffer.from((await send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -90,6 +102,6 @@ await withSmokeWorkspace('model-native',async({owned,evidenceDir,onStop})=>{
   const staleRejected=await evaluate(`__TAURI_INTERNALS__.invoke('save_monitoring_settings',{settings:${JSON.stringify(expected)},expected:${JSON.stringify(expected)}}).then(()=>false,()=>true)`);
   assert.equal(staleRejected,true,'stale settings cannot overwrite a concurrent save');
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['real Claude parser + native IPC + WebView2','reported model visible','missing model explicit in details','long names at normal/minimum width and height','model switch preserves lifecycle and start time','model search','native compact window','update IPC and unsaved-setting protection','download locks settings; error unlocks','concurrent setting save rejects stale baseline'],actual,layouts,data:'isolated synthetic transcripts, not host certification'},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,checks:['real Claude parser + native IPC + WebView2','reported model visible','missing model has no invented badge in details','long names at normal/minimum width and height','model switch preserves lifecycle and start time','model search','native compact window','update IPC and unsaved-setting protection','download locks settings; error unlocks','concurrent setting save rejects stale baseline'],actual,layouts,data:'isolated synthetic transcripts, not host certification'},null,2));
   console.log(JSON.stringify({passed:true,evidenceDir,layouts}));
 });
