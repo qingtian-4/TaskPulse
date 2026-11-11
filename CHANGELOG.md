@@ -13,6 +13,7 @@
 ### Improved
 
 - Preserve pending requests, unread results and pins across restarts and incomplete reads.
+- Separate native Kimi Code, Trae and ZCode settings from previously saved event connections.
 - Distinguish support, detection, enablement, read health, sessions and active tasks.
 - Bound compatibility-file and Claude journal reads; retain trusted state on capacity or format errors.
 - Organize runtime, tools and verification entrypoints with shared maintenance guidance, updated bilingual usage and architecture diagrams.
@@ -22,5 +23,7 @@
 - Windows tray click/focus races, settings focus ownership, source-detection deduplication and verified project-path aliases.
 - Codex large-record validation and matching input-request resolution, including DeepSeek Harness.
 - Aliased Kimi data roots no longer create false duplicate sessions.
+- Resume Qoder transcripts across read batches and rotate Desktop sessions when a poll reaches its budget.
+- Preserve SSH source drafts when saving fails and retain saved settings when adding a WSL distribution.
 
 TaskPulse's first official release. Built on AgentTray with its MIT attribution and contribution history preserved.
