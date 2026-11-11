@@ -394,6 +394,8 @@ projects=["/srv/legacy"]
   assert.equal((await ui.invoke('get_autostart')).available,false);
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+  await ui.wait(`!!document.querySelector('.ms-tabs button')`);
+  await ui.evaluate(`document.querySelector('.ms-tabs button').click()`);
   await ui.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('.ms-tabs button').length`),2);
   assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false);
@@ -634,7 +636,7 @@ projects=["/srv/legacy"]
     const bounds=await ui.evaluate(`({width:innerWidth,height:innerHeight,foot:document.querySelector('.ms-foot').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth})`);
     assert.deepEqual(bounds,{width:960,height:704,foot:704,overflow:false});
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#updates"]').click()`);
-    await ui.wait(`document.querySelector('#update-title')?.textContent.includes('0.0.1')`);
+    await ui.wait(`document.querySelector('#update-title')?.textContent.includes(${JSON.stringify(build.version)})`);
     await Bun.write(join(owned,'settings-updates-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='en';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
@@ -663,7 +665,7 @@ projects=["/srv/legacy"]
       await ui.evaluate(`document.querySelector('.settings-nav a[href="#${section}"]').click()`);
       await ui.wait(`document.querySelector('.settings-nav a[href="#${section}"]').getAttribute('aria-current')==='page'`);
       if(section==='updates'){
-        await ui.wait(`document.querySelector('#update-title')?.textContent.includes('0.0.1')`);
+        await ui.wait(`document.querySelector('#update-title')?.textContent.includes(${JSON.stringify(build.version)})`);
         const cardBounds=`Array.from(document.querySelectorAll('.update-stack > .settings-group'), card => {
           const {left,right}=card.getBoundingClientRect();
           return {left,right};

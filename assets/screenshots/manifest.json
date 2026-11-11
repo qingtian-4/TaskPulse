@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "c9a1ac9590c981869c92e9a94ac1e5620fddd440",
+  "capture_commit": "333d5309607eb78ec540a478772f3e01bdb898fd",
   "modified": false,
-  "executable_sha256": "430befa7ab1b2d707ea1a772b33c80f163b3f1b8d655f5eb70699461dd1c214c",
+  "executable_sha256": "294a35e677a515394848ca8e3a302a4f3e319df13cb38c4bb2a079db9e3c0542",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 788,
       "dpr": 2,
-      "sha256": "dc6fcbcd1bcd1adf85bf666b9ab3821fcef7b15e07cecc2ab17a79e0a232ae95",
-      "bytes": 161732
+      "sha256": "71e4b016706a1465ccdbc34d579d70d5e2a40e568f55953748cc82c76ea7b85d",
+      "bytes": 161792
     },
     {
       "file": "notice-input.png",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
-      "bytes": 25774
+      "sha256": "5a10f8106040a2d2f3beca8a2b1d7d69eda11240774719014b38e3b008a958a7",
+      "bytes": 25775
     },
     {
       "file": "dashboard-en.png",
@@ -67,7 +67,7 @@
       "logical_width": 368,
       "logical_height": 806,
       "dpr": 2,
-      "sha256": "40ea462e3c8ecb80b16bd7e867d77904d79be687c69a6cf15a4a903591d2738e",
+      "sha256": "669c50441320c21a18ae8b9769b9b31012f6077adb2e12477a02bd58a86d71ef",
       "bytes": 145606
     },
     {
@@ -103,11 +103,11 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "820a751e0d3f3cce1f28fc04e3e4bacdb4a51fbbcd5e22a80c54f583b7c3d554",
+      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
       "bytes": 23208
     }
   ],
-  "frontend_tree": "5a43ca905ed62c887800e23c9dd208845f648851",
+  "frontend_tree": "b846a9f3f2697c6eee6e3dae6d31bfaa3c8ccf63",
   "runtime_tree": "197b37dcd687a83992a8b7481f0b972cd0b0a881",
   "locale_tree": "8f9b1340f294de17e7237cc80d9f05796424a5aa",
   "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
