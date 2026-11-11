@@ -70,8 +70,15 @@ test('versioned native media has intact provenance and three reminders share one
     expect(tree.status).toBe(0);
     expect(manifest[field],`${path}: screenshots must match the current application source`).toBe(tree.stdout.trim());
   }
-  expect(manifest.application_config_sha256).toBe(createHash('sha256').update(readFileSync(resolve(root,'src-tauri/tauri.conf.json'))).digest('hex'));
-  for(const file of ['bun.lock','src-tauri/Cargo.lock'])expect(manifest.lockfiles[file],file).toBe(createHash('sha256').update(readFileSync(resolve(root,file))).digest('hex'));
+  for(const [file,expected] of [
+    ['src-tauri/tauri.conf.json',manifest.application_config_sha256],
+    ...Object.entries(manifest.lockfiles),
+  ]){
+    const bytes=readFileSync(resolve(root,file));
+    expect(bytes.includes(13),`${file}: checkout must use LF for screenshot provenance`).toBe(false);
+    expect(createHash('sha256').update(bytes).digest('hex'),file).toBe(expected);
+  }
+  expect(Object.keys(manifest.lockfiles).sort()).toEqual(['bun.lock','src-tauri/Cargo.lock']);
   expect(manifest.data).toContain('Example tasks');
   expect(manifest.version).toBe(JSON.parse(read('package.json')).version);
   expect(manifest.assets).toHaveLength(8);

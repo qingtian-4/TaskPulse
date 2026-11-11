@@ -21,10 +21,18 @@
       agents.claude_code.enabled=agents.claude_code.enabled&&canRead(value.claude_code);}}
     catch(e){if(alive&&request===ticket)hostError=String(e);}finally{if(alive&&request===ticket)testing=false;}
   }
-  async function finish(){if(!report||saving)return;saving=true;try{const saved=await onadd({host:host.trim(),name:name.trim()||host.trim(),agents:$state.snapshot(agents),report});if(!saved)hostError='配置未保存，请检查冲突后重试。';}catch(e){hostError=String(e);}finally{saving=false;}}
+  async function finish(){if(!report||saving)return;saving=true;hostError='';try{const saved=await onadd({host:host.trim(),name:name.trim()||host.trim(),agents:$state.snapshot(agents),report});if(!saved)hostError='配置未保存，请检查冲突后重试。';}catch(e){hostError=String(e);}finally{saving=false;}}
   function focus(dialog:HTMLElement){
     (dialog.querySelector<HTMLElement>('input:not(:disabled)')??dialog.querySelector<HTMLElement>('button'))?.focus();
-    const handler=(e:KeyboardEvent)=>{if(e.key==='Escape'&&!saving){e.preventDefault();oncancel();}if(e.key==='Tab'){const nodes=[...dialog.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)')].filter(n=>n.getClientRects().length);if(e.shiftKey&&document.activeElement===nodes[0]){e.preventDefault();nodes.at(-1)?.focus();}else if(!e.shiftKey&&document.activeElement===nodes.at(-1)){e.preventDefault();nodes[0]?.focus();}}};
+    const handler=(e:KeyboardEvent)=>{
+      if(e.key==='Escape'){e.preventDefault();if(!saving)oncancel();}
+      if(e.key==='Tab'){
+        const nodes=[...dialog.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)')].filter(n=>n.getClientRects().length);
+        if(!nodes.length){e.preventDefault();return;}
+        if(e.shiftKey&&document.activeElement===nodes[0]){e.preventDefault();nodes.at(-1)?.focus();}
+        else if(!e.shiftKey&&document.activeElement===nodes.at(-1)){e.preventDefault();nodes[0]?.focus();}
+      }
+    };
     dialog.addEventListener('keydown',handler);return{destroy(){dialog.removeEventListener('keydown',handler);}};
   }
 </script>
@@ -44,62 +52,64 @@
 
     <div class="modal-body">
       {#if hostError}<div class="ms-error" role="alert">{$t(hostError)}</div>{/if}
-      {#if step===1}
-        <div class="two-cols">
-          <label class="ms-field">{$t('SSH Host')}<input value={host} oninput={e=>editHost(e.currentTarget.value)} aria-label={$t('SSH Host')} placeholder="gpu-server" autocomplete="off"/></label>
-          <label class="ms-field">{$t('显示名称')}<input bind:value={name} aria-label={$t('服务器显示名称')}/></label>
-        </div>
-        {#if aliases.length}
-          <div class="host-choices">
-            <h3>{$t('从已有 SSH 配置中选择')}</h3>
-            <div class="alias-grid">
-              {#each aliases as alias (alias)}
-                <button class:selected={host===alias} class="alias-choice" aria-pressed={host===alias} disabled={existing.includes(alias)} title={existing.includes(alias)?$t('已添加'):undefined} onclick={()=>editHost(alias)}>
-                  {alias}{#if host===alias}<Check size={14}/>{/if}
-                </button>
-              {/each}
+      <fieldset disabled={saving} aria-busy={saving}>
+        {#if step===1}
+          <div class="two-cols">
+            <label class="ms-field">{$t('SSH Host')}<input value={host} oninput={e=>editHost(e.currentTarget.value)} aria-label={$t('SSH Host')} placeholder="gpu-server" autocomplete="off"/></label>
+            <label class="ms-field">{$t('显示名称')}<input bind:value={name} aria-label={$t('服务器显示名称')}/></label>
+          </div>
+          {#if aliases.length}
+            <div class="host-choices">
+              <h3>{$t('从已有 SSH 配置中选择')}</h3>
+              <div class="alias-grid">
+                {#each aliases as alias (alias)}
+                  <button class:selected={host===alias} class="alias-choice" aria-pressed={host===alias} disabled={existing.includes(alias)} title={existing.includes(alias)?$t('已添加'):undefined} onclick={()=>editHost(alias)}>
+                    {alias}{#if host===alias}<Check size={14}/>{/if}
+                  </button>
+                {/each}
+              </div>
+            </div>
+          {/if}
+          {#if duplicate}<p class="ms-error" role="alert">{$t('此 SSH Host 已添加，请管理现有服务器。')}</p>{/if}
+        {:else if step===2}
+          <div class="probe-heading">
+            <strong>{host}</strong>
+            <div class="test-action">
+              <button class="ms-btn" disabled={testing} onclick={test}><RefreshCw size={14}/>{$t(testing?'正在检测…':report?'重新检测':'开始检测')}</button>
             </div>
           </div>
+          <dl class="test-steps" aria-live="polite">
+            <div><dt>{$t('SSH 连接')}</dt><dd class:ok={report?.connection==='connected'} class:problem={report?.connection==='disconnected'}>{$t(report?report.connection==='connected'?'连接通过':'连接失败':testing?'检测中…':'待检测')}</dd></div>
+            {#each sshAgents as agent (agent.key)}
+              <div>
+                <dt>{agent.name}</dt>
+                <dd class:ok={canRead(report?.[agent.key])} class:problem={report?.connection==='connected'&&!canRead(report?.[agent.key])}>{$t(report?.[agent.key].state==='partial'?'项目列表不完整':readLabel(report?.[agent.key].state))}</dd>
+              </div>
+            {/each}
+          </dl>
+          {#if report?.connection==='disconnected'}<p class="ms-error" role="alert">{$t(report.message)}</p>{/if}
+        {:else}
+          <div class="wizard-agents">
+            {#each sshAgents as agent (agent.key)}
+              {@const available=canRead(report?.[agent.key])}
+              <label class:checked={agents[agent.key].enabled}>
+                <input type="checkbox" bind:checked={agents[agent.key].enabled} disabled={!available}/>
+                <strong>{agent.name}</strong>
+                {#if !available}<span class="agent-state">{$t(readLabel(report?.[agent.key].state))}</span>{/if}
+              </label>
+            {/each}
+          </div>
+          {#each sshAgents.filter(agent=>agents[agent.key].enabled) as agent (agent.key)}
+            <section class="wizard-projects">
+              <h3>{agent.name} · {$t('项目范围')}</h3>
+              <ProjectScope projects={agents[agent.key].projects} choices={report?.[agent.key].projects??[]} disabled={saving} onchange={value=>agents[agent.key].projects=value}/>
+              {#if !agents[agent.key].projects.includes('*')&&report?.[agent.key].state==='partial'}
+                <p class="ms-warning">{$t('项目列表不完整，未列出的项目可以手动添加路径。')}</p>
+              {/if}
+            </section>
+          {/each}
         {/if}
-        {#if duplicate}<p class="ms-error" role="alert">{$t('此 SSH Host 已添加，请管理现有服务器。')}</p>{/if}
-      {:else if step===2}
-        <div class="probe-heading">
-          <strong>{host}</strong>
-          <div class="test-action">
-            <button class="ms-btn" disabled={testing} onclick={test}><RefreshCw size={14}/>{$t(testing?'正在检测…':report?'重新检测':'开始检测')}</button>
-          </div>
-        </div>
-        <dl class="test-steps" aria-live="polite">
-          <div><dt>{$t('SSH 连接')}</dt><dd class:ok={report?.connection==='connected'} class:problem={report?.connection==='disconnected'}>{$t(report?report.connection==='connected'?'连接通过':'连接失败':testing?'检测中…':'待检测')}</dd></div>
-          {#each sshAgents as agent (agent.key)}
-            <div>
-              <dt>{agent.name}</dt>
-              <dd class:ok={canRead(report?.[agent.key])} class:problem={report?.connection==='connected'&&!canRead(report?.[agent.key])}>{$t(report?.[agent.key].state==='partial'?'项目列表不完整':readLabel(report?.[agent.key].state))}</dd>
-            </div>
-          {/each}
-        </dl>
-        {#if report?.connection==='disconnected'}<p class="ms-error" role="alert">{$t(report.message)}</p>{/if}
-      {:else}
-        <div class="wizard-agents">
-          {#each sshAgents as agent (agent.key)}
-            {@const available=canRead(report?.[agent.key])}
-            <label class:checked={agents[agent.key].enabled}>
-              <input type="checkbox" bind:checked={agents[agent.key].enabled} disabled={!available}/>
-              <strong>{agent.name}</strong>
-              {#if !available}<span class="agent-state">{$t(readLabel(report?.[agent.key].state))}</span>{/if}
-            </label>
-          {/each}
-        </div>
-        {#each sshAgents.filter(agent=>agents[agent.key].enabled) as agent (agent.key)}
-          <section class="wizard-projects">
-            <h3>{agent.name} · {$t('项目范围')}</h3>
-            <ProjectScope projects={agents[agent.key].projects} choices={report?.[agent.key].projects??[]} onchange={value=>agents[agent.key].projects=value}/>
-            {#if !agents[agent.key].projects.includes('*')&&report?.[agent.key].state==='partial'}
-              <p class="ms-warning">{$t('项目列表不完整，未列出的项目可以手动添加路径。')}</p>
-            {/if}
-          </section>
-        {/each}
-      {/if}
+      </fieldset>
     </div>
 
     <footer class="modal-footer">

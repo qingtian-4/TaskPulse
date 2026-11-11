@@ -20,6 +20,8 @@ html[data-theme=light] .monitor-sources{--ms-accent:#167e6c;--ms-soft:#eff8f4;--
 .discovery-review{padding:10px 12px;margin:0 0 9px;border:1px solid var(--ms-border);border-radius:8px;background:var(--ms-soft)}.discovery-review h3{margin:0 0 4px}
 
 .monitor-sources .source-edit-lock{min-inline-size:0;margin:0;padding:0;border:0}
+.monitor-sources .wsl-add{display:flex;flex-wrap:wrap;align-items:end;gap:8px;margin:12px 0}
+.monitor-sources .wsl-add input{width:100%}
 
 .monitor-sources :is(.ms-head,.ms-tabsbar,.ms-scroll,.ms-foot){width:100%;max-width:960px;margin-inline:auto}
 

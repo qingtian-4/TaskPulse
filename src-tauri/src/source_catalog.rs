@@ -120,7 +120,7 @@ fn native_capabilities(kind: SourceKind) -> Capabilities {
             Explicit,
             Explicit,
             Inferred,
-            Unsupported,
+            Explicit,
             Unsupported,
             Unsupported,
             ReturnTarget::Details,
@@ -250,7 +250,7 @@ fn definition(
             SourceKind::RemoteCodex => "读取已配置 SSH 主机的 Codex 会话；依赖主机可达、权限与远端数据格式。",
             SourceKind::RemoteClaudeCode => "只读 SSH 账号的 Claude Code 会话记录；明确结束才提醒，不读取审批或提问。",
             SourceKind::ClaudeCode => "原生会话读取为尽力推断。自愿接入 Hook 后可观察审批；提问接口目前无法同时确认对话框和匹配解除。",
-            SourceKind::Hermes => "原生标题、项目和运行租约；没有明确结束证据时不猜测任务完成。",
+            SourceKind::Hermes => "读取原生标题、项目和运行租约；已跟踪轮次有明确最终回复时可确认结束。",
             SourceKind::DeepseekDesktop => "读取原生 Desktop / CLI 存储，支持旧版与 v4 日志；状态能力取决于宿主记录。",
             SourceKind::DeepseekWsl => "独立读取已启用 WSL 安装，不与 Windows 桌面会话混合。",
             SourceKind::Tmux => "普通 shell 返回仅为推断结束，退出码未知；前台 tp-run 可报告直接子进程退出。",
@@ -362,6 +362,13 @@ mod tests {
             .unwrap();
         assert_eq!(process.capabilities.turn_end, Evidence::Unsupported);
         assert_eq!(process.capabilities.approval, Evidence::Unsupported);
+        let hermes = entries
+            .iter()
+            .find(|e| e.kind == SourceKind::Hermes)
+            .unwrap();
+        assert_eq!(hermes.capabilities.turn_end, Evidence::Explicit);
+        assert_eq!(hermes.capabilities.approval, Evidence::Unsupported);
+        assert_eq!(hermes.capabilities.question, Evidence::Unsupported);
         assert!(!entries.iter().any(|e| e.kind == SourceKind::Doubao));
         assert!(entries
             .iter()

@@ -204,6 +204,14 @@ pub(super) struct DirectorySweep {
     paged: bool,
 }
 
+#[derive(Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum BatchRead {
+    #[default]
+    Complete,
+    Paginating,
+    Failed,
+}
+
 impl DirectorySweep {
     pub fn page<T>(
         &mut self,
@@ -211,7 +219,7 @@ impl DirectorySweep {
         visit_limit: usize,
         start: std::time::Instant,
         mut item: impl FnMut(std::fs::DirEntry, usize) -> (Option<std::path::PathBuf>, Option<T>),
-    ) -> (Vec<T>, bool) {
+    ) -> (Vec<T>, BatchRead) {
         let mut rows = Vec::new();
         for _ in 0..visit_limit {
             if start.elapsed() > Duration::from_millis(350) {
@@ -219,9 +227,15 @@ impl DirectorySweep {
             }
             let Some(dir) = self.stack.last_mut() else {
                 let Some(root) = roots.get(self.root) else {
-                    let complete = !self.incomplete && !self.paged;
+                    let status = if self.incomplete {
+                        BatchRead::Failed
+                    } else if self.paged {
+                        BatchRead::Paginating
+                    } else {
+                        BatchRead::Complete
+                    };
                     *self = Self::default();
-                    return (rows, complete);
+                    return (rows, status);
                 };
                 self.root += 1;
                 match std::fs::read_dir(root) {
@@ -249,7 +263,14 @@ impl DirectorySweep {
             }
         }
         self.paged = true;
-        (rows, false)
+        (
+            rows,
+            if self.incomplete {
+                BatchRead::Failed
+            } else {
+                BatchRead::Paginating
+            },
+        )
     }
 }
 

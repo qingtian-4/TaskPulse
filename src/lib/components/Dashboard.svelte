@@ -327,7 +327,7 @@
       <p>{taskContext(selectedTask,settings)}</p>
       {#if $preferences.show_model&&selectedTask.model}<p class="model-detail">{selectedTask.model}{#if selectedTask.reasoning_effort}<span class="detail-effort">{selectedTask.reasoning_effort}</span>{/if}</p>{/if}
       {#if $preferences.show_elapsed&&taskElapsed(selectedTask,now)}<p>{$t(selectedTask.status==='running'?'运行时长':'总时长')} {taskElapsed(selectedTask,now)}</p>{/if}
-      <details class="evidence tp-fold"><summary>{$t("状态依据与采集时间")}</summary><p>{$t("状态依据：")}{$t(CONFIDENCE_LABEL[selectedTask.confidence])}</p><p>{sourceFreshness(selectedTask,settings,providers,now)} {$t("· 最后活动")} {$t(formatAgo(selectedTask.updated_at,now))}</p></details>
+      <details class="evidence tp-fold"><summary>{$t("状态依据与采集时间")}</summary><p>{$t("状态依据：")}{$t(CONFIDENCE_LABEL[selectedTask.confidence])}</p><p>{$t(sourceFreshness(selectedTask,settings,providers,now))} {$t("· 最后活动")} {$t(formatAgo(selectedTask.updated_at,now))}</p></details>
       <div class="command glass-scroll"><span>{selectedTask.stale?$t('上次观测活动（非实时）'):selectedTask.status==='running'?$t('当前活动'):$t('最近消息')}</span><pre>{taskActivity(selectedTask)}</pre></div>
       <div class="detail-actions">
         {#if selectedTask.can_focus}<button class="tp-btn" title={$t("只聚焦宿主窗口，不标记已查看")} onclick={()=>open(selectedTask!)}>{selectedTask.terminal?.kind==='windows_native'?$t('聚焦运行窗口'):$t('请求返回终端')}</button>{/if}

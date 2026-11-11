@@ -23,7 +23,7 @@
   let snapshot=$state<DashboardSnapshot|null>(null),discovery=$state<SourceDiscovery[]>([]);
   let page=$state<'home'|'local'|'server'>('local'),tab=$state<'local'|'ssh'>('local'),selectedHost=$state(''),query=$state('');
   let dirty=$state(false),saving=$state(false),conflict=$state(false),updating=$state(false),detectionSettled=$state(false);
-  let error=$state(''),notice=$state(''),platform=$state('Windows'),wizard=$state(false),closePrompt=$state(false),closing=false;
+  let error=$state(''),notice=$state(''),platform=$state(''),wizard=$state(false),closePrompt=$state(false),closing=false;
   let removePrompt=$state(false),eventPrompt=$state<{id:string;enabled:boolean}|null>(null),reading=$state('');
   let reports=$state<Record<string,SshProbe>>({}),probing=$state<Record<string,boolean>>({}),projects=$state<Record<string,string[]>>({});
   let projectAliases=$state<Record<string,ProjectChoice[]>>({});
@@ -42,6 +42,11 @@
   let supportedOpen=$state(false);
   let catalog=$state<SourceDefinition[]>([]);
   const wslSources=$derived(settings?.sources.filter(s=>s.kind==='codex_wsl'||s.kind==='deepseek_wsl')??[]);
+  let wslKind=$state<'codex_wsl'|'deepseek_wsl'>('codex_wsl'),wslDistro=$state(''),wslDraftId=$state('');
+  const distroName=$derived(wslDistro.trim());
+  const validDistro=$derived(distroName!==''&&!distroName.startsWith('-')&&!/[\/\\\p{Cc}]/u.test(distroName));
+  const hasDistro=(location:string)=>wslSources.some(source=>source.kind===wslKind&&source.location.toLowerCase()===location.toLowerCase());
+  const wslCandidates=$derived(discovery.filter(row=>row.data_location_detected===true&&row.candidate?.kind===wslKind&&!hasDistro(row.location)));
   const fallbackSources=$derived(settings?.sources.filter(s=>
     !wslSources.includes(s)&&s.kind!=='remote_codex'&&s.kind!=='remote_claude_code'&&s.kind!=='tmux'&&s.kind!=='generic_event'&&s.kind!=='doubao'
     &&(s.kind==='scanner'||!localAgents.some(agent=>agent.kind===s.kind))
@@ -71,6 +76,18 @@
     settings.sources=settings.sources.filter(item=>item.id!==source.id);
     settings.ssh_paused_sources=(settings.ssh_paused_sources??[]).filter(id=>id!==source.id);
     legacyRemove=null;touch();
+  }
+  function addWsl(){
+    if(!settings||platform!=='Windows'||saving||conflict||!validDistro||hasDistro(distroName))return;
+    const found=wslCandidates.find(row=>row.location.toLowerCase()===distroName.toLowerCase())?.candidate;
+    const name=wslKind==='codex_wsl'?'Codex · WSL':'DeepSeek · WSL';
+    const source=found&&!settings.sources.some(row=>row.id===found.id)
+      ? {...structuredClone($state.snapshot(found)),enabled:false}
+      : createSource(wslKind,distroName,`${name} ${distroName}`);
+    settings.sources.push(source);
+    wslDraftId=source.id;
+    wslDistro='';
+    touch();
   }
 
   $effect(()=>{
@@ -190,7 +207,7 @@
   }
   async function readLocal(source:MonitorSource){
     if(reading||dirty)return;reading=source.id;error='';
-    try{const since=await invoke<number>('request_refresh');for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,300));if(!active)return;const states=await invoke<DashboardSnapshot>('get_dashboard_snapshot');updateSnapshot(states);const result=states.providers.find(p=>p.provider===source.id);if((result?.last_attempt??0)>=since){await loadProjects(source);notice=result?.status==='connected'?'读取完成，请查看来源状态':'读取失败，已保留上次状态';return;}}notice='读取未完成，已保留上次状态';}
+    try{const since=await invoke<number>('request_refresh');for(let i=0;i<50;i++){await new Promise(r=>setTimeout(r,300));if(!active)return;const states=await invoke<DashboardSnapshot>('get_dashboard_snapshot');updateSnapshot(states);const result=states.providers.find(p=>p.provider===source.id);if((result?.last_attempt??0)>=since){await loadProjects(source);notice=result?.status==='connected'?'读取完成，请查看来源状态':result?.status==='paginating'?'正在分批读取':'读取失败，已保留上次状态';return;}}notice='读取未完成，已保留上次状态';}
     catch(e){fail(e);}finally{if(active)reading='';}
   }
   async function loadProjects(source?:MonitorSource){
@@ -272,7 +289,7 @@
   <div class="ms-scroll glass-scroll" bind:this={sourceScroll}>
     <fieldset class="source-edit-lock" disabled={saving} aria-busy={saving}>
       {#snippet savedSourceRow(source:MonitorSource)}
-        <details class="ms-advanced" data-saved-source={source.id} ontoggle={e=>{if(e.currentTarget.open)void loadProjects(source);}}>
+        <details class="ms-advanced" data-saved-source={source.id} open={wslDraftId===source.id} ontoggle={e=>{if(e.currentTarget.open)void loadProjects(source);}}>
           <summary>{source.name}{#if source.location} · {source.location}{/if} · {$t(sourceStatus(source,observation(source)))}</summary>
           <div class="advanced-inner">
             <label class="ms-field">{$t('来源名称')}<input value={source.name} oninput={e=>patchSource(source,{name:e.currentTarget.value})}/></label>
@@ -397,8 +414,25 @@
         {/if}
 <div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>void savePreference({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
       </section>
-      {#if wslSources.length}
-        <details class="detail-card" data-wsl-sources><summary>WSL · {$t('已有来源')}</summary>
+      {#if platform==='Windows' || wslSources.length}
+        <details class="detail-card" data-wsl-sources><summary>{$t('WSL 来源')}</summary>
+          {#if platform==='Windows'}
+            <form class="wsl-add" data-wsl-add onsubmit={e=>{e.preventDefault();addWsl();}}>
+              <label class="ms-field">Agent
+                <select bind:value={wslKind} disabled={saving||conflict}>
+                  <option value="codex_wsl">Codex</option>
+                  <option value="deepseek_wsl">DeepSeek Harness</option>
+                </select>
+              </label>
+              <label class="ms-field">{$t('WSL 发行版')}
+                <input bind:value={wslDistro} list="running-wsl-distros" placeholder="Ubuntu" disabled={saving||conflict}/>
+              </label>
+              <datalist id="running-wsl-distros">
+                {#each wslCandidates as row (row.id)}<option value={row.location}></option>{/each}
+              </datalist>
+              <button class="ms-btn" type="submit" disabled={saving||conflict||!validDistro||hasDistro(distroName)}><Plus size={13}/>{$t('添加 WSL 来源')}</button>
+            </form>
+          {/if}
           {#each wslSources as source (source.id)}{@render savedSourceRow(source)}{/each}
         </details>
       {/if}

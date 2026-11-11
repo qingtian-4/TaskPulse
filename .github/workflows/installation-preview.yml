@@ -223,6 +223,7 @@ jobs:
       - run: bun run test:ui-model
       - run: bun run test:release
       - run: bun run test:installation-preview
+      - run: bun run test:docs
       - run: python3 tests/test-cli-install.py
       - run: python3 tests/test-macos-package.py
       - run: python3 tests/test-codex-observer.py

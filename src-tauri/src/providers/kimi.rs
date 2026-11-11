@@ -1,7 +1,7 @@
 //! Read-only Kimi Code and legacy kimi-cli wire journals. No config/credentials.
 use super::{
     jsonl_tail::JsonlTail,
-    native_sessions::{self, DirectorySweep, Sessions},
+    native_sessions::{self, BatchRead, DirectorySweep, Sessions},
     Provider, ProviderOutput,
 };
 use crate::domain::TaskSnapshot;
@@ -136,30 +136,30 @@ impl KimiProvider {
                 .iter()
                 .map(|root| root.join("sessions"))
                 .collect::<Vec<_>>();
-            (self.pending, self.complete_page) =
-                self.sweep.page(&roots, 768, started, |entry, depth| {
-                    if !entry
-                        .file_type()
-                        .is_ok_and(|t| t.is_dir() && !t.is_symlink())
-                    {
-                        return (None, None);
-                    }
-                    if depth == 1 {
-                        return (Some(entry.path()), None);
-                    }
-                    let dir = entry.path();
-                    let modern = dir.join("agents/main/wire.jsonl");
-                    let path = if modern.is_file() {
-                        modern
-                    } else {
-                        dir.join("wire.jsonl")
-                    };
-                    let candidate = path
-                        .is_file()
-                        .then(|| (entry.file_name().to_string_lossy().into_owned(), path, dir));
-                    (None, candidate)
-                });
-            self.complete_page &= self.pending.len() <= 128;
+            let (pending, status) = self.sweep.page(&roots, 768, started, |entry, depth| {
+                if !entry
+                    .file_type()
+                    .is_ok_and(|t| t.is_dir() && !t.is_symlink())
+                {
+                    return (None, None);
+                }
+                if depth == 1 {
+                    return (Some(entry.path()), None);
+                }
+                let dir = entry.path();
+                let modern = dir.join("agents/main/wire.jsonl");
+                let path = if modern.is_file() {
+                    modern
+                } else {
+                    dir.join("wire.jsonl")
+                };
+                let candidate = path
+                    .is_file()
+                    .then(|| (entry.file_name().to_string_lossy().into_owned(), path, dir));
+                (None, candidate)
+            });
+            self.pending = pending;
+            self.complete_page = status == BatchRead::Complete && self.pending.len() <= 128;
             self.pending.sort_by_cached_key(|(id, path, _)| {
                 (
                     protected.contains(id),

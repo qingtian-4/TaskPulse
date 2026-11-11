@@ -21,6 +21,7 @@ jobs:
       - uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2
         with:
           bun-version: "1.4.0"
+      - run: bun run test:docs
       - run: python3 tests/test-release-package.py
       - run: python3 tests/test-cli-install.py
       - run: python3 tests/test-public-install.py
@@ -65,3 +66,69 @@ jobs:
           path: dist/arm64-preview/*
           retention-days: 7
           if-no-files-found: error
+
+  arm64-install:
+    name: Verify ARM64 NSIS preview on a fresh runner (round ${{ matrix.round }})
+    needs: [arm64-build]
+    runs-on: windows-11-arm
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        round: [1, 2]
+    env:
+      TASKPULSE_PROBE_COMMIT: ${{ github.event.pull_request.head.sha }}
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
+        with:
+          name: windows-arm64-preview-${{ github.event.pull_request.head.sha || github.sha }}
+          path: dist/arm64-preview
+      - name: Verify the downloaded preview matches the checked-out source
+        shell: pwsh
+        run: |
+          $version = (Get-Content -Raw package.json | ConvertFrom-Json).version
+          $manifest = Get-Content -Raw dist/arm64-preview/release-manifest.json | ConvertFrom-Json
+          if ($manifest.commit -ne $env:TASKPULSE_PROBE_COMMIT -or (git rev-parse HEAD) -ne $env:TASKPULSE_PROBE_COMMIT -or $manifest.version -ne $version -or $manifest.build_kind -ne 'pr-preview' -or $null -ne $manifest.tag -or $manifest.architecture -ne 'arm64') {
+            throw 'ARM64 preview identity mismatch'
+          }
+          "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
+      - name: Prepare ordinary-user WebView2 acceptance on the disposable runner
+        shell: pwsh
+        run: |
+          # The ARM64 hosted image does not provide WinGet. Use the upstream
+          # portable binary in runner-owned storage without installing it.
+          $directory = Join-Path $env:RUNNER_TEMP ("taskpulse-gsudo-" + [Guid]::NewGuid().ToString('N'))
+          New-Item -ItemType Directory -Path $directory | Out-Null
+          $archive = Join-Path $directory 'gsudo.portable.zip'
+          curl.exe --silent --show-error --fail --location --proto '=https' --proto-redir '=https' --retry 2 --retry-all-errors --retry-max-time 60 --connect-timeout 12 --max-time 30 --output "$archive" 'https://github.com/gerardog/gsudo/releases/download/v2.6.1/gsudo.portable.zip'
+          if ($LASTEXITCODE -ne 0) { throw 'Could not download ARM64 CI de-elevation helper' }
+          $expected = '21130bf178d7b9891207f00bff56f05b6b363ce9cec7b2d084e45fb12ee51f44'
+          if ((Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash -ne $expected) { throw 'ARM64 CI de-elevation helper checksum mismatch' }
+          $gsudoPath = Join-Path $directory 'gsudo.exe'
+          $zip = [IO.Compression.ZipFile]::OpenRead($archive)
+          try {
+            $entry = $zip.GetEntry('arm64/gsudo.exe')
+            if (-not $entry) { throw 'Missing ARM64 de-elevation executable in verified archive' }
+            [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $gsudoPath)
+          } finally {
+            $zip.Dispose()
+          }
+          Remove-Item -LiteralPath $archive
+          if (-not (Test-Path -LiteralPath $gsudoPath)) { throw 'Missing CI de-elevation helper' }
+          "GSUDO_EXE=$gsudoPath" >> $env:GITHUB_ENV
+          $ciAccount = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+          icacls "$env:GITHUB_WORKSPACE" /grant "${ciAccount}:(OI)(CI)M"
+          if ($LASTEXITCODE -ne 0) { throw 'Could not grant the runner account access to acceptance evidence' }
+      - name: Install, restart, reinstall and uninstall the ARM64 NSIS preview
+        run: powershell -NoProfile -ExecutionPolicy Bypass -File tests/install/installer-smoke.ps1 -Assets dist/arm64-preview -Version "$env:RELEASE_VERSION" -Gsudo "$env:GSUDO_EXE" -InstallerKind nsis -Architecture arm64 -VerifyRenamedExecutable
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        if: always()
+        with:
+          name: preview-evidence-windows-arm64-nsis-${{ matrix.round }}-${{ github.event.pull_request.head.sha }}
+          path: dist/installer-smoke/
+          retention-days: 7
+          if-no-files-found: warn

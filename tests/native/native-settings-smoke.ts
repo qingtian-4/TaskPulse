@@ -180,6 +180,7 @@ projects=["/srv/legacy"]
   await ui.send('Page.reload');
   await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('[data-agent-kind="trae"]').length`),1);
+  assert.ok(await ui.evaluate(`document.querySelector('#running-wsl-distros option[value="Fixture"]')`),'Detected WSL distributions should be offered only in the WSL form');
   await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
   await ui.wait(`document.querySelector('.ms-tabs button[aria-pressed="true"]')?.textContent.includes('SSH') && !!document.querySelector('.ms-empty')`);
   if(captureScreenshots)await Bun.write(join(owned,'settings-ssh-empty-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -487,6 +488,28 @@ projects=["/srv/legacy"]
   const legacySaved=(await ui.invoke('get_monitoring_settings')).sources;
   assert.deepEqual(legacySaved.find((source:any)=>source.id==='wsl-legacy').projects,['/srv/legacy','/srv/additional']);
   assert.deepEqual(legacySaved.find((source:any)=>source.id==='local_file').projects,['legacy-files']);
+  const legacyWsl=legacySaved.find((source:any)=>source.id==='wsl-legacy');
+  const setDistro=async(distro:string)=>ui.evaluate(`(()=>{
+    const field=document.querySelector('[data-wsl-add] input');
+    if(!field)throw Error('WSL on-demand form is missing after configuring a first distro');
+    field.value=${JSON.stringify(distro)};
+    field.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  await setDistro(legacyWsl.location.toUpperCase());
+  assert.equal(await ui.evaluate(`document.querySelector('[data-wsl-add] button').disabled`),true,'Duplicate distro must be rejected case-insensitively');
+  const secondDistro='TaskPulse-Second-Fixture-Not-Running';
+  await setDistro(secondDistro);
+  await ui.evaluate(`document.querySelector('[data-wsl-add] button').click()`);
+  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  const secondSaved=await ui.invoke('get_monitoring_settings');
+  const second=secondSaved.sources.find((source:any)=>source.kind==='codex_wsl'&&source.location===secondDistro);
+  assert.ok(second && !second.enabled && second.id!==legacyWsl.id);
+  assert.deepEqual(secondSaved.sources.find((source:any)=>source.id===legacyWsl.id),legacyWsl);
+  assert.deepEqual(second.projects,['*']);
+  assert.ok(await ui.evaluate(`!!document.querySelector('[data-wsl-add] input')`),'Another distro can still be added');
+  await ui.invoke('save_monitoring_settings',{settings:{...secondSaved,sources:legacySaved},expected:secondSaved});
   // Actual filesystem aliases produce one picker row without rewriting scopes.
   const aliasProject=join(owned,'public-project');await mkdir(aliasProject);
   const drive=aliasProject[0].toLowerCase(),relative=aliasProject.slice(3).split(String.fromCharCode(92)).join('/');
@@ -549,14 +572,21 @@ projects=["/srv/legacy"]
   // save/CAS/config persistence remains live; no production probe override exists.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   let probeCase='empty';
+  let holdWizardSave=false;
+  let wizardSaveRequest='';
   ui.onRequestPaused(async({requestId,request})=>{
     const command=new URL(request.url).pathname.slice(1);
+    if(command==='save_monitoring_settings'){
+      if(holdWizardSave&&request.method==='POST')wizardSaveRequest=requestId;
+      else await ui.send('Fetch.continueRequest',{requestId});
+      return;
+    }
     const host=request.method==='POST'&&request.postData?JSON.parse(request.postData).host:'';
     const body=command==='discover_ssh_hosts'?['taskpulse-claude-fixture.invalid','taskpulse-empty-fixture.invalid']:{host,checked_at:Date.now(),connection:'connected',codex:{state:probeCase,data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/alpha','/srv/public/beta']:[]},claude_code:{state:probeCase==='readable'?'readable':'missing',data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/claude']:[]},message:'SSH 已连接；Agent 数据读取能力单独检测'};
     await ui.send('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/json'},{name:'Tauri-Response',value:'ok'},{name:'Access-Control-Expose-Headers',value:'Tauri-Response'},{name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'},{name:'Access-Control-Allow-Methods',value:'POST, OPTIONS'},{name:'Access-Control-Allow-Headers',value:'Content-Type, Tauri-Callback, Tauri-Error, Tauri-Invoke-Key'}],body:Buffer.from(JSON.stringify(body)).toString('base64')});
   });
   try{
-    await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/discover_ssh_hosts'},{urlPattern:'http://ipc.localhost/probe_ssh_source'}]});
+    await ui.send('Fetch.enable',{patterns:['discover_ssh_hosts','probe_ssh_source','save_monitoring_settings'].map(command=>({urlPattern:'http://ipc.localhost/'+command}))});
     for(const host of ['taskpulse-claude-fixture.invalid','taskpulse-empty-fixture.invalid']){
       probeCase=host==='taskpulse-claude-fixture.invalid'?'readable':'read_error';
       await ui.evaluate(`document.querySelector('.ms-head .ms-btn').click()`);
@@ -587,6 +617,33 @@ projects=["/srv/legacy"]
         assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked`),true);
         await ui.evaluate(`document.querySelectorAll('.ssh-wizard .scope-modes input')[1].click()`);
         await ui.evaluate(`document.querySelector('.ssh-wizard .project-options input').click()`);
+        holdWizardSave=true;
+        try{
+          await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
+          for(let attempt=0;attempt<100&&!wizardSaveRequest;attempt++)await Bun.sleep(50);
+          assert.ok(wizardSaveRequest,'Adding a server must reach the native save boundary');
+          const draft=await ui.evaluate(`(()=>{
+            const wizard=document.querySelector('.ssh-wizard');
+            const fields=Array.from(wizard.querySelectorAll('.wizard-agents input, .project-scope input, .project-scope button'));
+            const [alpha,beta]=wizard.querySelectorAll('.project-options input');
+            const agent=wizard.querySelector('.wizard-agents input');
+            beta.click();
+            agent.click();
+            return {frozen:fields.every(field=>field.matches(':disabled')),alpha:alpha.checked,beta:beta.checked,enabled:agent.checked};
+          })()`);
+          assert.deepEqual(draft,{frozen:true,alpha:true,beta:false,enabled:true},'An in-flight save must freeze the actual wizard controls');
+          await ui.send('Fetch.fulfillRequest',{requestId:wizardSaveRequest,responseCode:200,responseHeaders:[
+            {name:'Content-Type',value:'application/json'},{name:'Tauri-Response',value:'error'},
+            {name:'Access-Control-Expose-Headers',value:'Tauri-Response'},{name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'}
+          ],body:Buffer.from(JSON.stringify('Isolated wizard save failure')).toString('base64')});
+          wizardSaveRequest='';
+          await ui.wait(`document.querySelector('.ssh-wizard [role="alert"]') && !document.querySelector('.ssh-wizard .modal-footer .primary').disabled`);
+          assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked && document.querySelector('.wizard-projects input[type="checkbox"]:checked')?.closest('label').textContent.includes('/srv/public/alpha')`),true);
+          assert.ok(!(await ui.invoke('get_monitoring_settings')).sources.some((source:any)=>source.location===host),'A rejected save cannot enable or persist the draft');
+        }finally{
+          holdWizardSave=false;
+          if(wizardSaveRequest)await ui.send('Fetch.failRequest',{requestId:wizardSaveRequest,errorReason:'Aborted'});
+        }
         await ui.evaluate(`document.querySelector('.wizard-agents input').click()`);
         await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].click()`);
         await ui.evaluate(`document.querySelectorAll('.ssh-wizard .scope-modes input')[1].click()`);

@@ -3,7 +3,7 @@
 use super::{
     jsonl_tail::JsonlTail,
     kimi::{stamp, text},
-    native_sessions::{self, DirectorySweep},
+    native_sessions::{self, BatchRead, DirectorySweep},
 };
 use crate::domain::{ExecutionPhase, TaskSnapshot, TaskStatus, WaitingReason};
 use serde_json::Value;
@@ -18,6 +18,7 @@ struct Journal {
     task: Option<TaskSnapshot>,
     cwd: String,
     invalid: bool,
+    unfinished: bool,
 }
 impl Default for Journal {
     fn default() -> Self {
@@ -26,6 +27,7 @@ impl Default for Journal {
             task: None,
             cwd: String::new(),
             invalid: false,
+            unfinished: false,
         }
     }
 }
@@ -128,7 +130,7 @@ impl Journal {
 struct TranscriptPage {
     sweep: DirectorySweep,
     pending: Vec<PathBuf>,
-    complete: bool,
+    status: BatchRead,
 }
 #[derive(Default)]
 pub(super) struct Transcripts {
@@ -140,7 +142,7 @@ impl Transcripts {
         &mut self,
         root: &Path,
         protected: &HashSet<String>,
-    ) -> Result<(Vec<TaskSnapshot>, bool), String> {
+    ) -> (Vec<TaskSnapshot>, BatchRead) {
         let began = Instant::now();
         let projects = root.join("projects");
         let page = self.pages.entry(projects.clone()).or_default();
@@ -150,7 +152,7 @@ impl Transcripts {
                 .is_some_and(|id| protected.contains(id))
         };
         if page.pending.is_empty() {
-            (page.pending, page.complete) = page.sweep.page(
+            (page.pending, page.status) = page.sweep.page(
                 std::slice::from_ref(&projects),
                 768,
                 began,
@@ -176,7 +178,9 @@ impl Transcripts {
                     }
                 },
             );
-            page.complete &= page.pending.len() <= 128;
+            if page.pending.len() > 128 {
+                page.status = page.status.max(BatchRead::Paginating);
+            }
             page.pending.sort_by_cached_key(|p| {
                 (
                     is_protected(p),
@@ -186,17 +190,20 @@ impl Transcripts {
                 )
             });
         }
-        let mut files: Vec<_> = page
-            .pending
-            .drain(page.pending.len().saturating_sub(128)..)
-            .collect();
-        for path in self.logs.keys() {
-            if path.starts_with(&projects) && is_protected(path) && !files.contains(path) {
+        let mut files: Vec<_> = page.pending.iter().rev().take(128).cloned().collect();
+        for (path, journal) in &self.logs {
+            if path.starts_with(&projects)
+                && (journal.unfinished || is_protected(path))
+                && !files.contains(path)
+            {
                 files.push(path.clone());
             }
         }
         files.sort_by_cached_key(|path| {
             std::cmp::Reverse((
+                self.logs
+                    .get(path)
+                    .is_some_and(|journal| journal.unfinished),
                 is_protected(path),
                 path.metadata()
                     .and_then(|m| m.modified())
@@ -205,12 +212,12 @@ impl Transcripts {
         });
         let mut rows = vec![];
         let mut bytes = 0;
-        let mut partial = !page.complete || !page.pending.is_empty();
-        let mut live = HashSet::new();
+        let mut status = page.status;
+        let mut visited = HashSet::new();
+        let mut unfinished = self.logs.values().filter(|log| log.unfinished).count();
         for path in files {
-            live.insert(path.clone());
             if bytes >= 8 * 1024 * 1024 || began.elapsed() > Duration::from_millis(500) {
-                partial = true;
+                status = status.max(BatchRead::Paginating);
                 break;
             }
             let id = path
@@ -218,17 +225,11 @@ impl Transcripts {
                 .unwrap_or_default()
                 .to_string_lossy()
                 .into_owned();
-            if !self.logs.contains_key(&path)
-                && self
-                    .logs
-                    .values()
-                    .filter(|l| l.tail.has_partial_line())
-                    .count()
-                    >= 8
-            {
-                partial = true;
+            if unfinished >= 8 && !self.logs.get(&path).is_some_and(|log| log.unfinished) {
+                status = status.max(BatchRead::Paginating);
                 continue;
             }
+            visited.insert(path.clone());
             let journal = self.logs.entry(path.clone()).or_default();
             let (caught_up, gap) = loop {
                 let Ok(batch) = journal.tail.read(&path) else {
@@ -259,8 +260,15 @@ impl Transcripts {
                     break (batch.caught_up, batch.gap);
                 }
             };
-            if !caught_up || gap || journal.invalid {
-                partial = true;
+            unfinished -= usize::from(journal.unfinished);
+            journal.unfinished = !caught_up && !gap && !journal.invalid;
+            unfinished += usize::from(journal.unfinished);
+            if gap || journal.invalid {
+                status = BatchRead::Failed;
+                continue;
+            }
+            if !caught_up {
+                status = status.max(BatchRead::Paginating);
                 continue;
             }
             if let Some(task) = &journal.task {
@@ -269,15 +277,79 @@ impl Transcripts {
                 rows.push(task);
             }
         }
-        self.logs
-            .retain(|p, _| !p.starts_with(&projects) || live.contains(p) || is_protected(p));
-        Ok((rows, partial))
+        page.pending.retain(|path| !visited.contains(path));
+        if !page.pending.is_empty() {
+            status = status.max(BatchRead::Paginating);
+        }
+        self.logs.retain(|p, journal| {
+            !p.starts_with(&projects)
+                || visited.contains(p)
+                || journal.unfinished
+                || is_protected(p)
+        });
+        (rows, status)
     }
 }
 #[cfg(test)]
 mod tests {
     use super::*;
     use serde_json::json;
+    use std::io::Write;
+
+    #[test]
+    fn transcript_larger_than_one_poll_survives_the_history_page() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects/fixture/transcript");
+        std::fs::create_dir_all(&project).unwrap();
+        for index in 0..128 {
+            let file =
+                std::fs::File::create(project.join(format!("history-{index:03}.jsonl"))).unwrap();
+            file.set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(1_700_000_000))
+                .unwrap();
+        }
+        let active = project.join("active.jsonl");
+        let mut file = std::fs::File::create(&active).unwrap();
+        writeln!(file, "{}", json!({"type":"user","sessionId":"active","uuid":"u","timestamp":"2026-11-07T00:00:00Z","message":{"content":"Fixture"}})).unwrap();
+        let progress = json!({"type":"progress","data":"x".repeat(128 * 1024)}).to_string();
+        for _ in 0..72 {
+            writeln!(file, "{progress}").unwrap();
+        }
+        writeln!(
+            file,
+            "{}",
+            json!({"type":"result","sessionId":"active","subtype":"success","duration_ms":61000})
+        )
+        .unwrap();
+        drop(file);
+
+        let mut reader = Transcripts::default();
+        let protected = HashSet::new();
+        let (first, status) = reader.read(dir.path(), &protected);
+        assert!(status == BatchRead::Paginating && first.is_empty());
+        let mut finished = false;
+        for _ in 0..4 {
+            let (rows, _) = reader.read(dir.path(), &protected);
+            finished |= rows.iter().any(|task| {
+                task.session_id.as_deref() == Some("active")
+                    && task.waiting_reason == Some(WaitingReason::TurnEnded)
+            });
+        }
+        assert!(
+            finished,
+            "The next page must retain and resume the unfinished transcript"
+        );
+    }
+
+    #[test]
+    fn malformed_transcript_reports_failure_instead_of_pagination() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects/fixture");
+        std::fs::create_dir_all(&project).unwrap();
+        std::fs::write(project.join("bad.jsonl"), b"{broken json}\n").unwrap();
+        let (rows, status) = Transcripts::default().read(dir.path(), &HashSet::new());
+        assert!(rows.is_empty() && status == BatchRead::Failed);
+    }
+
     #[test]
     fn assistant_end_and_stop_hooks_cannot_finish_query() {
         let mut p = Journal::default();

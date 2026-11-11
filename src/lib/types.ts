@@ -232,7 +232,7 @@ export function formatAgo(ms: number | undefined, nowMs: number = Date.now()): s
 
 export interface ProviderHealth {
   provider: string;
-  status: 'connected' | 'degraded';
+  status: 'connected' | 'paginating' | 'degraded';
   last_success?: number;
   last_attempt?: number;
   task_observations?: Record<string,{observed_at:number;state:string}>;
@@ -253,7 +253,7 @@ export interface CodexAccountQuota {
 
 export interface UpdateStatus {phase:string;current_version:string;version:string|null;notes:string|null;checked_at:number|null;downloaded:number;total:number|null;message:string|null;can_install:boolean}
 
-export type SourceReadState = 'disabled' | 'waiting' | 'healthy' | 'partial' | 'failed' | 'stale';
+export type SourceReadState = 'disabled' | 'waiting' | 'healthy' | 'paginating' | 'partial' | 'failed' | 'stale';
 export interface SourceSnapshot {
   id: string; kind: SourceKind; location: string; enabled: boolean; read_state: SourceReadState; data_detected: boolean | null;
   discovered_sessions: number; current_tasks: number;

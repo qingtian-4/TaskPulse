@@ -151,6 +151,15 @@ try{
   root=await page('');await root.wait(`!!document.querySelector('.dashboard')`);
   const build=await root.invoke('get_build_info');if(expectedCommit){assert.equal(build.commit,expectedCommit);assert.equal(build.modified,false);}assert.equal(build.process_id,app!.pid);
   buildEvidence={version:build.version,commit:build.commit,modified:build.modified,executableSha256:createHash('sha256').update(new Uint8Array(await Bun.file(exe).arrayBuffer())).digest('hex')};
+  if(process.argv.includes('--capture')){
+    const captureInputs:Record<string,string>={};
+    for(const name of ['src-tauri/tauri.conf.json','bun.lock','src-tauri/Cargo.lock']){
+      const bytes=new Uint8Array(await Bun.file(name).arrayBuffer());
+      assert.ok(!bytes.includes(13),name+' must use LF for screenshot provenance');
+      captureInputs[name]=createHash('sha256').update(bytes).digest('hex');
+    }
+    buildEvidence.captureInputs=captureInputs;
+  }
   assert.equal((await root.invoke('integration_environment')).isolated,true);
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
   let layout={scroll:false,height:0,horizontal:false};

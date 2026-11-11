@@ -15,6 +15,7 @@ pub enum ReadState {
     Disabled,
     Waiting,
     Healthy,
+    Paginating,
     Partial,
     Failed,
     Stale,
@@ -196,6 +197,16 @@ pub fn project(
             {
                 ReadState::Waiting
             }
+            Some(h) if h.status == ProviderStatus::Paginating => {
+                if h.last_attempt
+                    .and_then(|at| now.duration_since(at).ok())
+                    .is_some_and(|age| age <= Duration::from_secs(30))
+                {
+                    ReadState::Paginating
+                } else {
+                    ReadState::Stale
+                }
+            }
             Some(h) if h.status == ProviderStatus::Degraded => {
                 if matches!(
                     source.kind,
@@ -226,8 +237,9 @@ pub fn project(
                     );
                 }
             }
-            if matches!(read_state, ReadState::Healthy | ReadState::Partial)
-                && h.has_fresh_observations(now)
+            if read_state == ReadState::Paginating
+                || matches!(read_state, ReadState::Healthy | ReadState::Partial)
+                    && h.has_fresh_observations(now)
             {
                 if let Some(at) = h.last_attempt {
                     consider_expiry(&mut view, now, epoch_ms(at), 30_000);
@@ -350,6 +362,41 @@ mod tests {
                 })
                 .collect(),
         }
+    }
+
+    #[test]
+    fn pagination_keeps_verified_tasks_current_and_distinguishes_an_empty_failed_read() {
+        let now = UNIX_EPOCH + Duration::from_secs(100);
+        let mut settings = settings();
+        settings.sources[0].kind = SourceKind::Qoder;
+        settings.sources[0].id = "qoder".into();
+        let mut observed = task("observed", now);
+        observed.source = TaskSource::NativeAgent;
+        observed.source_instance = Some("qoder".into());
+        observed.agent_id = Some("qoder-desktop".into());
+        observed.evidence_channel = Some("native".into());
+        observed.session_id = Some("observed".into());
+        let mut unobserved = observed.clone();
+        unobserved.id = "unobserved".into();
+        unobserved.session_id = Some("unobserved".into());
+        let mut health = provider(now, std::slice::from_ref(&observed));
+        health.provider = "qoder".into();
+        health.status = ProviderStatus::Paginating;
+        let view = project(
+            &[observed, unobserved],
+            &[health.clone()],
+            &settings,
+            &Default::default(),
+            now,
+        );
+        assert_eq!(view.sources[0].read_state, ReadState::Paginating);
+        assert_eq!(view.counts.ongoing, 1);
+        assert_eq!(view.unconfirmed_task_ids, ["unobserved"]);
+        health.status = ProviderStatus::Degraded;
+        health.task_observations.clear();
+        health.message = Some("database read failed".into());
+        let failed = project(&[], &[health], &settings, &Default::default(), now);
+        assert_eq!(failed.sources[0].read_state, ReadState::Failed);
     }
 
     #[test]

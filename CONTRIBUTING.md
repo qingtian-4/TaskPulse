@@ -80,7 +80,7 @@ The **macOS compile** workflow checks shared Rust changes and their build inputs
 
 | PR label | What it exercises |
 | --- | --- |
-| `test:installers` | Windows EXE/MSI fresh installs plus both macOS architectures and CLI packaging |
+| `test:installers` | Windows x64 EXE/MSI and ARM64 NSIS fresh installs plus both macOS architectures and CLI packaging |
 | `test:upgrade` | Runner-local Windows NSIS/MSI fresh installs and cross-version upgrades on Windows and both Mac architectures; only evidence is uploaded |
 
 The managed MSI upgrade verifies the signed download from a standard account, then the CI administrator services only the approved advertised package. The harness relaunches the app as the same standard user. This is separate from interactive MSI UAC and installer-driven relaunch. Adding the label starts its workflow; subsequent PR commits rerun it with the new exact head. Removing the label stops future package runs. These workflows use read-only permissions and never publish a Release. Installer previews exercise release identity: use a clean VM/test account, rather than installing them over daily production data. Use the portable development artifact for ordinary same-machine testing.
@@ -151,6 +151,10 @@ them. The macOS compile job only type-checks Rust (including test code). It does
 not build installers, launch the application, or replace either macOS release
 artifact and its native acceptance. Keep the filled checklist with the local
 release evidence or PR; the checklist itself does not publish anything.
+
+For README captures, use the input SHA-256 values recorded by the native capture.
+Git checks out the Tauri configuration and both lockfiles with LF on every
+platform, so the manifest and documentation test hash the same file bytes.
 
 
 For a clean Windows development executable, run the isolated settings and
