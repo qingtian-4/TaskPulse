@@ -118,6 +118,7 @@ pub struct ProviderOutput {
     /// Whether this poll is a complete, authoritative view of the provider.
     /// A degraded poll may re-emit stale tasks, but must never reconcile away
     /// tasks that are absent from its partial result.
+    /// A non-authoritative poll without an error is ordinary pagination.
     pub authoritative: bool,
     pub error: Option<String>,
 }
@@ -173,6 +174,7 @@ pub const PROVIDER_TIMEOUT: &str = "采集超过 30 秒未返回；保留上次�
 #[serde(rename_all = "snake_case")]
 pub enum ProviderStatus {
     Connected,
+    Paginating,
     Degraded,
 }
 
@@ -295,7 +297,10 @@ impl ProviderHealth {
     }
 
     pub fn verifies_task(&self, task: &TaskSnapshot, now: SystemTime) -> bool {
-        self.status == ProviderStatus::Degraded && self.matches_latest_observation(task, now)
+        matches!(
+            self.status,
+            ProviderStatus::Degraded | ProviderStatus::Paginating
+        ) && self.matches_latest_observation(task, now)
     }
 
     pub fn matches_latest_observation(&self, task: &TaskSnapshot, now: SystemTime) -> bool {

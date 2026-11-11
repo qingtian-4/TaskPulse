@@ -143,10 +143,11 @@ export function dashboardCandidates(tasks:TaskSnapshot[]):TaskSnapshot[] {
   )));
 }
 
-// This is a view, never an acknowledgement, deletion or lifecycle transition.
-// Source filters/search and the uncertainty tab can still reach other records.
+// Keep a known open turn in the default panel when its liveness expires.
+// Uncertainty remains visible as such and never contributes to live counts.
 export function defaultDashboardTasks(tasks:TaskSnapshot[]):TaskSnapshot[] {
-  return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task));
+  return dashboardCandidates(tasks).filter(task=>task.pinned || taskSection(task)==='ongoing' || isEndedResult(task)
+    || (task.stale && task.status==='running' && task.finished_at==null && !!task.session_id?.trim() && !!task.turn_key?.trim()));
 }
 export function taskSource(task: TaskSnapshot, settings?: DashboardSettings | null) {
   if(!task.remote&&task.id.startsWith('file:'))return settings?.sources.find(s=>s.id==='local_file'&&s.kind==='hooks');
@@ -173,6 +174,7 @@ export function projectKey(task: TaskSnapshot, settings?: DashboardSettings | nu
 export function sourceFreshness(task: TaskSnapshot, settings: DashboardSettings | null, providers: ProviderHealth[], now: number): string {
   const source = taskSource(task, settings);
   const health = providers.find(p => p.provider === (source?.id ?? task.source_instance));
+  if(health?.status==='paginating')return '正在分批读取';
   if(health?.status==='degraded' && source?.enabled && (source.kind==='codex'||source.kind==='codex_wsl'||source.kind==='remote_claude_code'||source.kind==='kimi_code'||source.kind==='qoder') && !task.stale && (task.status==='running'||needsAction(task)) && health.task_observations?.[task.id])return '该会话已更新；同一来源的其他会话需检查';
   if (!health?.last_success) return '来源尚未成功采集';
   const age = now - health.last_success;

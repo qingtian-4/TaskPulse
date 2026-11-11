@@ -478,9 +478,18 @@ async fn open_management_window(
             app.emit_to("management", "management-section", section)
                 .map_err(|e| e.to_string())?;
         }
-        fit_management(&win)?;
+        // Show does not restore a minimized window. Restore its native
+        // placement before querying geometry (which can be off-screen while
+        // iconic), and let focus succeed independently of monitor fitting.
+        if win.is_minimized().map_err(|e| e.to_string())? {
+            win.unminimize().map_err(|e| e.to_string())?;
+        }
         win.show().map_err(|e| e.to_string())?;
-        return win.set_focus().map_err(|e| e.to_string());
+        win.set_focus().map_err(|e| e.to_string())?;
+        if let Err(error) = fit_management(&win) {
+            log::warn!("Could not fit the reopened settings window: {error}");
+        }
+        return Ok(());
     }
     let settings = crate::monitoring::get_monitoring_settings();
     let theme = match settings.preferences.theme.as_str() {

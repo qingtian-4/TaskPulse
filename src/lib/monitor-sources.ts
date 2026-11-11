@@ -43,7 +43,7 @@ export function projectChoices(source:MonitorSource,tasks:TaskSnapshot[],extra:s
 export function sourceStatus(source:MonitorSource|undefined,observed?:SourceSnapshot):string {
   if(!source?.enabled)return '未启用';
   if(!observed||observed.read_state==='waiting')return '等待首次读取';
-  return ({healthy:observed.data_detected?'读取正常':'读取正常 · 暂无近期会话',partial:'部分数据待更新',failed:'读取异常',stale:'数据待更新',disabled:'已暂停',waiting:'等待首次读取'} as const)[observed.read_state];
+  return ({healthy:observed.data_detected?'读取正常':'读取正常 · 暂无近期会话',paginating:'正在分批读取',partial:'部分数据待更新',failed:'读取异常',stale:'数据待更新',disabled:'已暂停',waiting:'等待首次读取'} as const)[observed.read_state];
 }
 export function localSourceStatus(
   source:MonitorSource|undefined,observed:SourceSnapshot|undefined,locationDetected:boolean|null|undefined,

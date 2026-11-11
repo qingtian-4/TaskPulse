@@ -110,6 +110,9 @@ impl JsonlTail {
     pub fn has_partial_line(&self) -> bool {
         !self.pending.is_empty()
     }
+    pub(super) fn has_unread_bytes(&self) -> bool {
+        self.signature.is_some_and(|(_, len)| self.offset < len)
+    }
     pub fn diagnostics(&self) -> serde_json::Value {
         serde_json::json!({"length":self.signature.map(|(_,len)|len),"offset":self.offset,
             "reset_count":self.resets,"last_reset_reason":self.last_reset,"error_code":self.last_error,

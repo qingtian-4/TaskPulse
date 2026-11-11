@@ -180,8 +180,10 @@ projects=["/srv/legacy"]
   await ui.send('Page.reload');
   await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('[data-agent-kind="trae"]').length`),1);
+  assert.ok(await ui.evaluate(`document.querySelector('#running-wsl-distros option[value="Fixture"]')`),'Detected WSL distributions should be offered only in the WSL form');
   await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
-  await ui.wait(`!!document.querySelector('.server-list')`);
+  await ui.wait(`document.querySelector('.ms-tabs button[aria-pressed="true"]')?.textContent.includes('SSH') && !!document.querySelector('.ms-empty')`);
+  if(captureScreenshots)await Bun.write(join(owned,'settings-ssh-empty-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await root.evaluate(`document.querySelector('[data-source-review] button').click()`);
   await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
   assert.equal(await ui.evaluate(`document.querySelector('.ms-scroll').scrollTop`),0);
@@ -236,6 +238,23 @@ projects=["/srv/legacy"]
     const child=Bun.spawn([join(process.env.SystemRoot??'C:/Windows','System32/WindowsPowerShell/v1.0/powershell.exe'),'-NoProfile','-ExecutionPolicy','Bypass','-File',actions,'-ProcessId',String(app!.pid),'-Exe',exe,'-Title',title,'-Action',action],{stdout:'pipe',stderr:'pipe'});
     const [code,,error]=await Promise.all([child.exited,new Response(child.stdout).text(),new Response(child.stderr).text()]);assert.equal(code,0,error);
   };
+  // Reuse the same native window from both entry points. Show alone does
+  // not restore an iconic HWND, even if the WebView receives navigation.
+  await ui.evaluate('window.__settingsWindowReused=true');
+  for(const entry of ['panel','tray-command']){
+    await windowAction('Minimize');
+    await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_minimized',{label:'management'})`);
+    if(entry==='panel'){
+      await root.invoke('plugin:window|show',{label:'popup'});
+      await root.invoke('plugin:window|set_focus',{label:'popup'});
+      await root.evaluate(`document.querySelector('[aria-label="设置"]').click()`);
+    }else{
+      await root.invoke('open_management');
+    }
+    await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_minimized',{label:'management'}).then(v=>!v)`);
+    await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_focused',{label:'management'})`);
+    assert.equal(await ui.evaluate('window.__settingsWindowReused'),true,entry+' must reuse the same settings page');
+  }
   await windowAction('Maximize');await ui.wait(`__TAURI_INTERNALS__.invoke('plugin:window|is_maximized',{label:'management'})`);
   const maximized=await ui.invoke('plugin:window|inner_size',{label:'management'});
   await root.invoke('open_management',{section:'sources'});assert.equal(await ui.invoke('plugin:window|is_maximized',{label:'management'}),true,'Reopening settings must preserve maximization');
@@ -376,10 +395,12 @@ projects=["/srv/legacy"]
   assert.equal((await ui.invoke('get_autostart')).available,false);
   }
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
+  await ui.wait(`!!document.querySelector('.ms-tabs button')`);
+  await ui.evaluate(`document.querySelector('.ms-tabs button').click()`);
   await ui.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('.ms-tabs button').length`),2);
   assert.equal(await ui.evaluate(`!!document.querySelector('.local-card')`),false);
-  assert.ok(await ui.evaluate(`!document.querySelector('[data-supported-sources]').open && !document.querySelector('[data-existing-advanced]').open && !document.querySelector('[data-agent-kind="scanner"]')`));
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-supported-sources]').open && !document.querySelector('[data-existing-advanced]')&&!document.querySelector('[data-maintenance-tools]') && !document.querySelector('[data-agent-kind="scanner"]')`));
   await ui.evaluate(`document.querySelector('[data-supported-sources]').open=true`);
   assert.equal(await ui.evaluate(`/Hermes/.test(document.querySelector('.local-agents').textContent)&&/OpenCode/.test(document.querySelector('.local-agents').textContent)`),true);
   assert.equal(await ui.evaluate(`!!document.querySelector('.settings-footnote')`),false);
@@ -457,7 +478,7 @@ projects=["/srv/legacy"]
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
   // Preserved WSL and legacy file sources can be edited by their exact IDs.
-  await ui.evaluate(`document.querySelector('[data-wsl-sources]').open=true;document.querySelector('[data-existing-advanced]').open=true;document.querySelector('[data-saved-source="wsl-legacy"]').open=true;document.querySelector('[data-saved-source="local_file"]').open=true;`);
+  await ui.evaluate(`document.querySelector('[data-wsl-sources]').open=true;document.querySelector('[data-saved-source="wsl-legacy"]').open=true;document.querySelector('[data-saved-source="local_file"]').open=true;`);
   assert.ok(await ui.evaluate(`document.querySelector('[data-saved-source="wsl-legacy"]').textContent.includes('TaskPulse-Fixture-Not-Running')&&document.querySelector('[data-saved-source="local_file"] .project-options').textContent.includes('legacy-files')`));
   await ui.evaluate(`(()=>{const node=document.querySelector('[data-saved-source="wsl-legacy"] .add-path input');node.value='/srv/additional';node.dispatchEvent(new Event('input',{bubbles:true}));})()`);
   await ui.evaluate(`document.querySelector('[data-saved-source="wsl-legacy"] .add-path button').click();`);
@@ -467,6 +488,28 @@ projects=["/srv/legacy"]
   const legacySaved=(await ui.invoke('get_monitoring_settings')).sources;
   assert.deepEqual(legacySaved.find((source:any)=>source.id==='wsl-legacy').projects,['/srv/legacy','/srv/additional']);
   assert.deepEqual(legacySaved.find((source:any)=>source.id==='local_file').projects,['legacy-files']);
+  const legacyWsl=legacySaved.find((source:any)=>source.id==='wsl-legacy');
+  const setDistro=async(distro:string)=>ui.evaluate(`(()=>{
+    const field=document.querySelector('[data-wsl-add] input');
+    if(!field)throw Error('WSL on-demand form is missing after configuring a first distro');
+    field.value=${JSON.stringify(distro)};
+    field.dispatchEvent(new Event('input',{bubbles:true}));
+  })()`);
+  await setDistro(legacyWsl.location.toUpperCase());
+  assert.equal(await ui.evaluate(`document.querySelector('[data-wsl-add] button').disabled`),true,'Duplicate distro must be rejected case-insensitively');
+  const secondDistro='TaskPulse-Second-Fixture-Not-Running';
+  await setDistro(secondDistro);
+  await ui.evaluate(`document.querySelector('[data-wsl-add] button').click()`);
+  await ui.wait(`!!document.querySelector('.ms-foot .primary')`);
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  const secondSaved=await ui.invoke('get_monitoring_settings');
+  const second=secondSaved.sources.find((source:any)=>source.kind==='codex_wsl'&&source.location===secondDistro);
+  assert.ok(second && !second.enabled && second.id!==legacyWsl.id);
+  assert.deepEqual(secondSaved.sources.find((source:any)=>source.id===legacyWsl.id),legacyWsl);
+  assert.deepEqual(second.projects,['*']);
+  assert.ok(await ui.evaluate(`!!document.querySelector('[data-wsl-add] input')`),'Another distro can still be added');
+  await ui.invoke('save_monitoring_settings',{settings:{...secondSaved,sources:legacySaved},expected:secondSaved});
   // Actual filesystem aliases produce one picker row without rewriting scopes.
   const aliasProject=join(owned,'public-project');await mkdir(aliasProject);
   const drive=aliasProject[0].toLowerCase(),relative=aliasProject.slice(3).split(String.fromCharCode(92)).join('/');
@@ -529,14 +572,21 @@ projects=["/srv/legacy"]
   // save/CAS/config persistence remains live; no production probe override exists.
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
   let probeCase='empty';
+  let holdWizardSave=false;
+  let wizardSaveRequest='';
   ui.onRequestPaused(async({requestId,request})=>{
     const command=new URL(request.url).pathname.slice(1);
+    if(command==='save_monitoring_settings'){
+      if(holdWizardSave&&request.method==='POST')wizardSaveRequest=requestId;
+      else await ui.send('Fetch.continueRequest',{requestId});
+      return;
+    }
     const host=request.method==='POST'&&request.postData?JSON.parse(request.postData).host:'';
     const body=command==='discover_ssh_hosts'?['taskpulse-claude-fixture.invalid','taskpulse-empty-fixture.invalid']:{host,checked_at:Date.now(),connection:'connected',codex:{state:probeCase,data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/alpha','/srv/public/beta']:[]},claude_code:{state:probeCase==='readable'?'readable':'missing',data_detected:probeCase==='readable',projects:probeCase==='readable'?['/srv/public/claude']:[]},message:'SSH 已连接；Agent 数据读取能力单独检测'};
     await ui.send('Fetch.fulfillRequest',{requestId,responseCode:200,responseHeaders:[{name:'Content-Type',value:'application/json'},{name:'Tauri-Response',value:'ok'},{name:'Access-Control-Expose-Headers',value:'Tauri-Response'},{name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'},{name:'Access-Control-Allow-Methods',value:'POST, OPTIONS'},{name:'Access-Control-Allow-Headers',value:'Content-Type, Tauri-Callback, Tauri-Error, Tauri-Invoke-Key'}],body:Buffer.from(JSON.stringify(body)).toString('base64')});
   });
   try{
-    await ui.send('Fetch.enable',{patterns:[{urlPattern:'http://ipc.localhost/discover_ssh_hosts'},{urlPattern:'http://ipc.localhost/probe_ssh_source'}]});
+    await ui.send('Fetch.enable',{patterns:['discover_ssh_hosts','probe_ssh_source','save_monitoring_settings'].map(command=>({urlPattern:'http://ipc.localhost/'+command}))});
     for(const host of ['taskpulse-claude-fixture.invalid','taskpulse-empty-fixture.invalid']){
       probeCase=host==='taskpulse-claude-fixture.invalid'?'readable':'read_error';
       await ui.evaluate(`document.querySelector('.ms-head .ms-btn').click()`);
@@ -551,11 +601,49 @@ projects=["/srv/legacy"]
       await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
       await ui.wait(`!!document.querySelector('.wizard-agents')`);
       if(captureScreenshots)await Bun.write(join(owned,`settings-wizard-${host==='taskpulse-claude-fixture.invalid'?'projects':'read-error'}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      if(captureScreenshots&&host==='taskpulse-claude-fixture.invalid'){
+        await ui.send('Emulation.setDeviceMetricsOverride',{width:440,height:520,deviceScaleFactor:1,mobile:false});
+        try{
+          await ui.wait(`innerWidth===440`);
+          assert.equal(await ui.evaluate(`(()=>{const dialog=document.querySelector('.ssh-wizard'),rect=dialog.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight&&dialog.scrollWidth<=dialog.clientWidth+1;})()`),true,'Compact wizard must fit the viewport');
+          await Bun.write(join(owned,'settings-wizard-compact-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+        }finally{
+          await ui.send('Emulation.clearDeviceMetricsOverride');
+          await ui.wait(`innerWidth===960`);
+        }
+      }
       assert.equal(await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].disabled`),host==='taskpulse-empty-fixture.invalid');
       if(host==='taskpulse-claude-fixture.invalid'){
         assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked`),true);
         await ui.evaluate(`document.querySelectorAll('.ssh-wizard .scope-modes input')[1].click()`);
         await ui.evaluate(`document.querySelector('.ssh-wizard .project-options input').click()`);
+        holdWizardSave=true;
+        try{
+          await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
+          for(let attempt=0;attempt<100&&!wizardSaveRequest;attempt++)await Bun.sleep(50);
+          assert.ok(wizardSaveRequest,'Adding a server must reach the native save boundary');
+          const draft=await ui.evaluate(`(()=>{
+            const wizard=document.querySelector('.ssh-wizard');
+            const fields=Array.from(wizard.querySelectorAll('.wizard-agents input, .project-scope input, .project-scope button'));
+            const [alpha,beta]=wizard.querySelectorAll('.project-options input');
+            const agent=wizard.querySelector('.wizard-agents input');
+            beta.click();
+            agent.click();
+            return {frozen:fields.every(field=>field.matches(':disabled')),alpha:alpha.checked,beta:beta.checked,enabled:agent.checked};
+          })()`);
+          assert.deepEqual(draft,{frozen:true,alpha:true,beta:false,enabled:true},'An in-flight save must freeze the actual wizard controls');
+          await ui.send('Fetch.fulfillRequest',{requestId:wizardSaveRequest,responseCode:200,responseHeaders:[
+            {name:'Content-Type',value:'application/json'},{name:'Tauri-Response',value:'error'},
+            {name:'Access-Control-Expose-Headers',value:'Tauri-Response'},{name:'Access-Control-Allow-Origin',value:'http://tauri.localhost'}
+          ],body:Buffer.from(JSON.stringify('Isolated wizard save failure')).toString('base64')});
+          wizardSaveRequest='';
+          await ui.wait(`document.querySelector('.ssh-wizard [role="alert"]') && !document.querySelector('.ssh-wizard .modal-footer .primary').disabled`);
+          assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked && document.querySelector('.wizard-projects input[type="checkbox"]:checked')?.closest('label').textContent.includes('/srv/public/alpha')`),true);
+          assert.ok(!(await ui.invoke('get_monitoring_settings')).sources.some((source:any)=>source.location===host),'A rejected save cannot enable or persist the draft');
+        }finally{
+          holdWizardSave=false;
+          if(wizardSaveRequest)await ui.send('Fetch.failRequest',{requestId:wizardSaveRequest,errorReason:'Aborted'});
+        }
         await ui.evaluate(`document.querySelector('.wizard-agents input').click()`);
         await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].click()`);
         await ui.evaluate(`document.querySelectorAll('.ssh-wizard .scope-modes input')[1].click()`);
@@ -578,6 +666,9 @@ projects=["/srv/legacy"]
       }
     }
   }finally{await ui.send('Fetch.disable');ui.onRequestPaused(undefined);}
+  await ui.evaluate(`document.querySelector('.ms-back').click()`);
+  await ui.wait(`document.querySelectorAll('.server-card').length===2`);
+  assert.equal(await ui.evaluate(`!!document.querySelector('.ms-success')`),false,'The SSH list must not retain a save banner after adding a server');
   if(captureScreenshots){
     // Reset ephemeral fixture reports before capturing the home/detail page:
     // persisted configuration alone must never paint a successful SSH badge.
@@ -585,7 +676,7 @@ projects=["/srv/legacy"]
     await ui.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
     await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
     await ui.wait(`document.querySelectorAll('.server-card').length===2`);
-    assert.equal(await ui.evaluate(`document.querySelector('.server-controls .ms-pill').textContent.includes('not checked')`),true);
+    assert.equal(await ui.evaluate(`[...document.querySelectorAll('.server-controls .ms-pill')].some(badge=>badge.textContent.trim()==='SSH connected')`),false,'Restoring configured hosts must not imply a live connection');
     await Bun.write(join(owned,'settings-home-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='zh-CN';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
@@ -601,6 +692,9 @@ projects=["/srv/legacy"]
     await Bun.write(join(owned,'settings-projects-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     const bounds=await ui.evaluate(`({width:innerWidth,height:innerHeight,foot:document.querySelector('.ms-foot').getBoundingClientRect().bottom,overflow:document.documentElement.scrollWidth>innerWidth})`);
     assert.deepEqual(bounds,{width:960,height:704,foot:704,overflow:false});
+    await ui.evaluate(`document.querySelector('.settings-nav a[href="#updates"]').click()`);
+    await ui.wait(`document.querySelector('#update-title')?.textContent.includes(${JSON.stringify(build.version)})`);
+    await Bun.write(join(owned,'settings-updates-zh.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='en';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
     await ui.wait(`document.documentElement.lang==='en' && document.querySelector('.settings-status').textContent===''`);
@@ -624,6 +718,33 @@ projects=["/srv/legacy"]
   if(captureScreenshots){
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await Bun.write(join(owned,'settings-general-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    for(const section of ['panel','notifications','updates','about']){
+      await ui.evaluate(`document.querySelector('.settings-nav a[href="#${section}"]').click()`);
+      await ui.wait(`document.querySelector('.settings-nav a[href="#${section}"]').getAttribute('aria-current')==='page'`);
+      if(section==='updates'){
+        await ui.wait(`document.querySelector('#update-title')?.textContent.includes(${JSON.stringify(build.version)})`);
+        const cardBounds=`Array.from(document.querySelectorAll('.update-stack > .settings-group'), card => {
+          const {left,right}=card.getBoundingClientRect();
+          return {left,right};
+        })`;
+        const normal=await ui.evaluate(cardBounds);
+        assert.equal(normal.length,2);
+        assert.deepEqual(normal[0],normal[1],'Update cards must share both edges');
+        await ui.send('Emulation.setDeviceMetricsOverride',{width:440,height:520,deviceScaleFactor:1,mobile:false});
+        try{
+          await ui.wait(`innerWidth===440`);
+          const compact=await ui.evaluate(cardBounds);
+          assert.deepEqual(compact[0],compact[1],'Update cards must align in a compact window');
+          assert.ok(compact[0].left>=0&&compact[0].right<=440);
+          await Bun.write(join(owned,'settings-updates-compact-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+          console.log('Update card bounds at 960px and 440px:',JSON.stringify({normal,compact}));
+        }finally{
+          await ui.send('Emulation.clearDeviceMetricsOverride');
+          await ui.wait(`innerWidth===960`);
+        }
+      }
+      await Bun.write(join(owned,`settings-${section}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    }
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
     await ui.evaluate(`document.querySelector('.ms-back')?.click()`);
     await Bun.write(join(owned,'settings-sources-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -631,47 +752,57 @@ projects=["/srv/legacy"]
   await root.invoke('open_management',{section:'sources'});
   await ui.wait(`!!document.querySelector('.ms-tabs button')`);
   await ui.evaluate(`document.querySelector('.ms-back')?.click();document.querySelector('.ms-tabs button').click()`);
-  await ui.wait(`!!document.querySelector('[data-existing-advanced] .event-sources')`);
-  assert.ok(await ui.evaluate(`!document.querySelector('[data-event-adapter]') && !!document.querySelector('[data-agent-kind="qoder"]') && !document.querySelector('[data-agent-kind="scanner"]')`));
+  await ui.wait(`!!document.querySelector('.local-agents')`);
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-existing-advanced], [data-maintenance-tools], [data-saved-event-connections], [data-agent-kind="scanner"]')`));
   const beforeEvent=await ui.invoke('get_monitoring_settings');
-  await ui.evaluate(`document.querySelector('[data-supported-sources]').open=true;document.querySelector('[data-existing-advanced]').open=true;document.querySelector('[data-existing-advanced] .event-sources').open=true;document.querySelector('[data-maintenance-tools]').open=true;`);
-  assert.ok(await ui.evaluate(`!document.querySelector('[data-event-picker]')&&document.querySelector('[data-event-add]').textContent.includes('Add MCP or script connection')`));
-  await ui.wait(`!document.querySelector('[data-event-add]').disabled`);
-  await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
-  await ui.wait(`document.querySelectorAll('[data-event-adapter="standard-events"]').length===1`);
-  await ui.evaluate(`document.querySelector('[data-event-add]').click()`);
-  await ui.wait(`document.querySelectorAll('[data-event-adapter="standard-events"]').length===2`);
-  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-event-adapter="standard-events"] .agent-row strong')].map(el=>el.textContent)`),['Connection 1','Connection 2']);
-  const standardSelector='[data-event-adapter="standard-events"]:last-child';
+  // Seed previously configured connections in this disposable profile only.
+  // A new profile has no generic creation or maintenance menu.
+  const savedBridges=['A','B'].map(suffix=>({
+    id:`generic_event:existing-${suffix}`,kind:'generic_event',name:`Existing script ${suffix}`,
+    enabled:false,location:'',projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,
+    integration:{agent_id:'custom-agent',adapter_id:'standard-events',transport:'local',accept_since_ms:0},
+  }));
+  const savedHooks=[['kimi-code-cli','kimi-code-cli'],['trae-cn-ide','trae-cn'],['zcode-desktop','zcode']].map(([adapter,agent])=>({
+    ...savedBridges[0], id:`generic_event:existing-${adapter}`, name:`Existing ${adapter}`,
+    integration:{...savedBridges[0].integration,adapter_id:adapter,agent_id:agent},
+  }));
+  await ui.invoke('save_monitoring_settings',{settings:{...beforeEvent,sources:[...beforeEvent.sources,...savedBridges,...savedHooks]},expected:beforeEvent});
+  await ui.wait(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length===5`);
+  assert.deepEqual(await ui.evaluate(`[...document.querySelectorAll('[data-saved-event-connections] .agent-row strong')].map(el=>el.textContent)`),['Existing script A','Existing script B',...savedHooks.map(source=>source.name)]);
+  await ui.evaluate(`document.querySelector('[data-saved-event-connections]').open=true`);
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-saved-event-connections] [data-event-add]')`));
+  const seededEvents=await ui.invoke('get_monitoring_settings');
+  const standardSelector='[data-event-source="generic_event:existing-B"]';
+  await ui.evaluate(`document.querySelector('${standardSelector} .agent-row button').click()`);
   await ui.wait(`!!document.querySelector('${standardSelector} .universal li')`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('${standardSelector} .universal li').length`),3);
   assert.ok(await ui.evaluate(`document.querySelector('${standardSelector} .universal .actions button').disabled`));
-  // A real import in the owned profile refreshes maintenance choices without
-  // applying or dropping the two current connection drafts.
+  // Existing custom manifests still import without changing source settings.
   const manifest=await Bun.file(resolve('integrations/community-template.json')).json();
   manifest.adapter_id='taskpulse-native-fixture';manifest.agent_id='taskpulse-native-fixture';manifest.display_name='Native fixture manifest';
-  await ui.evaluate(`(()=>{const area=document.querySelector('[data-event-adapter="standard-events"]:last-child .manifest');area.open=true;const input=area.querySelector('textarea');input.value=${JSON.stringify(JSON.stringify(manifest))};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
-  await ui.evaluate(`document.querySelector('[data-event-adapter="standard-events"]:last-child .manifest button').click()`);
-  await ui.wait(`!!document.querySelector('[data-event-picker] option[value="taskpulse-native-fixture"]')`);
-  assert.equal(await ui.evaluate(`document.querySelectorAll('[data-event-adapter="standard-events"]').length`),2);
-  for(const [kind,adapter] of [['trae','trae-cn-ide'],['zcode','zcode-desktop'],['kimi_code','kimi-code-cli']]){
+  await ui.evaluate(`(()=>{const area=document.querySelector('${standardSelector} .manifest');area.open=true;const input=area.querySelector('textarea');input.value=${JSON.stringify(JSON.stringify(manifest))};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
+  await ui.evaluate(`document.querySelector('${standardSelector} .manifest button').click()`);
+  await ui.wait(`__TAURI_INTERNALS__.invoke('get_source_catalog').then(c=>c.some(x=>x.adapter_id==='taskpulse-native-fixture'))`);
+  assert.equal(await ui.evaluate(`document.querySelectorAll('[data-saved-event-connections] [data-event-source]').length`),5);
+  await ui.evaluate(`document.querySelector('[data-supported-sources]').open=true`);
+  for(const kind of ['trae','zcode','kimi_code']){
     const row=`[data-agent-kind="${kind}"]`;
     assert.equal(await ui.evaluate(`document.querySelectorAll(${JSON.stringify(row)}).length`),1);
     await ui.evaluate(`document.querySelector(${JSON.stringify(row+' .agent-row button')}).click()`);
-    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' .local-hook summary')})`);
-    await ui.evaluate(`document.querySelector(${JSON.stringify(row+' .local-hook summary')}).click()`);
-    await ui.evaluate(`document.querySelector(${JSON.stringify(row+' [data-event-add]')}).click()`);
-    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' [data-event-adapter="'+adapter+'"] [data-integration-editor]')})`);
-    assert.equal(await ui.evaluate(`document.querySelector(${JSON.stringify(row+' [data-event-adapter="'+adapter+'"] .agent-row strong')}).textContent`),'Connection 1');
+    await ui.wait(`!!document.querySelector(${JSON.stringify(row+' .agent-config')})`);
+    assert.ok(await ui.evaluate(`!document.querySelector(${JSON.stringify(row+' .local-hook, '+row+' [data-event-source]')})`));
   }
-  await ui.wait(`!!document.querySelector('[data-event-adapter="kimi-code-cli"] [data-integration-editor]')`);
-  assert.deepEqual((await ui.invoke('get_monitoring_settings')).sources,beforeEvent.sources,'Opening an event draft must not write configuration or Hooks');
-  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
-  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  assert.ok(await ui.evaluate(`![...document.querySelectorAll('button')].some(button=>['Add Hook connection','Preview Hook installation'].includes(button.textContent.trim()))`));
   const eventSaved=await ui.invoke('get_monitoring_settings');
-  const eventSource=eventSaved.sources.find((s:any)=>s.integration?.adapter_id==='kimi-code-cli');
-  assert.equal(eventSource.enabled,false);assert.equal(eventSource.integration.agent_id,'kimi-code-cli');
-  assert.ok(eventSource.id.startsWith('generic_event:'));
+  assert.deepEqual(eventSaved.sources,seededEvents.sources,'Opening native source configuration must not add event connections');
+  const existingKimi='[data-event-source="generic_event:existing-kimi-code-cli"]';
+  await ui.evaluate(`document.querySelector('${existingKimi} .agent-row button').click()`);
+  await ui.wait(`!!document.querySelector('${existingKimi} [data-integration-editor]')`);
+  assert.ok(await ui.evaluate(`!!document.querySelector('${existingKimi} .settings-switch')`));
+  if(await ui.evaluate(`!!document.querySelector('.ms-foot .primary')`)){
+    await ui.evaluate(`document.querySelector('.ms-foot button').click()`);
+    await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  }
   const standardSaved=eventSaved.sources.filter((s:any)=>s.integration?.adapter_id==='standard-events');
   assert.equal(standardSaved.length,2);
   assert.equal(new Set(standardSaved.map((s:any)=>s.id)).size,2);
@@ -797,6 +928,6 @@ projects=["/srv/legacy"]
   root=await connect(await tab(''));await root.wait(`!!document.querySelector('.dashboard')`);
   const restored=await root.invoke('get_monitoring_settings');assert.equal(restored.preferences.language,'en');assert.equal(restored.preferences.theme,'dark');assert.equal(restored.preferences.show_model,false);assert.equal(restored.preferences.task_font_size,14);assert.deepEqual(restored.sources[0].projects,['protected-project']);
   assert.deepEqual(errors,[]);
-  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,firstPaint,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','initial preferred size across six sections; active native maximize/restore and maximized warm reuse','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language/theme/font size synchronized and persisted across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
+  await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,firstPaint,...buildEvidence,platform:{version:osRelease(),arch:arch(),browserProduct},resourceSamples,resourceSampling,resourceScope:sampleResources?'Isolated Windows settings: root and live descendants; working sets sum shared pages; CPU is cumulative for live processes':null,checks:['panel gear and default settings open General; explicit sources routing preserved','invalid section rejected','panel gear and tray command restore minimized settings and bring the existing window forward',...(!sourcesOnly?['same-monitor drag does not snap back','native monitor transitions fit work area']:[]),'catalog-driven local Agents and collapsed advanced settings','three-step SSH wizard with independent SSH/data states','management-only SSH permission and real unreachable-host probe','bilingual light/dark native layout with internal scroll and sticky footer','non-Codex local source save preserves ID and disabled state','project link delegates to OS and popup permission is denied','two saved SSH source instances','duplicate source rejected','initial preferred size across six sections; active native maximize/restore and maximized warm reuse','catalog and process capability','isolated startup rejection','source draft retained across navigation and preferences','language/theme/font size synchronized and persisted across native windows','native dirty-close confirmation','cancel source draft','apply source scope preserves preferences','failed disk write restores control and settings','unknown config preserved','restart restores preferences and scope'],windowSizes,startup,errors,nativeMonitors:nativeMonitors.length,movementChecks},null,2));
   console.log('Native settings acceptance passed, including cold/warm routing, source drafts and two SSH sources.');
 });

@@ -26,6 +26,7 @@ nocommit
 nocommit/
 .codex
 *.trace
+*.har
 *.profraw
 *.profdata
 *.cpuprofile
@@ -88,6 +89,9 @@ skills-lock.json
 *.tfvars
 !*.tfvars.example
 *.exe
+*.msi
+*.dmg
+*.app/
 *.dll
 *.pdb
 *.so
@@ -131,15 +135,7 @@ skills-lock.json
 !/assets/promo/manifest.json
 !/assets/architecture/
 /assets/architecture/*
-!/assets/promo/
-/assets/promo/*
-!/assets/promo/teaser-8s.gif
-!/assets/promo/manifest.json
 !/assets/architecture/architecture-zh.svg
-!/assets/promo/
-/assets/promo/*
-!/assets/promo/teaser-8s.gif
-!/assets/promo/manifest.json
 !/assets/architecture/architecture-en.svg
 !/assets/brand/
 !/assets/screenshots/

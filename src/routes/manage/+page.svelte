@@ -19,7 +19,7 @@
   let section=$state<Section>('general'),sourceDirty=$state(false),scroll:HTMLDivElement;
   let busy=$state(false),loadError=$state(''),sourceReviewRequest=$state(0);
   const positions:Partial<Record<Section,number>>={};
-  const sections=[['general','通用','让 TaskPulse 按你的习惯工作。',SlidersHorizontal],['panel','任务面板','只保留此刻值得关注的任务信息。',PanelsTopLeft],['sources','监控来源','选择要关注的 Agent，以及它们的项目范围。',RadioTower],['notifications','通知提醒','在任务需要你时提醒，而不是打断你。',Bell],['updates','应用更新','自动发现新版本，由你决定何时安装。',RefreshCw],['about','关于','TaskPulse，你的 Agent 任务关注中心。',Info]] as const;
+  const sections=[['general','通用',SlidersHorizontal],['panel','任务面板',PanelsTopLeft],['sources','监控来源',RadioTower],['notifications','通知提醒',Bell],['updates','应用更新',RefreshCw],['about','关于',Info]] as const;
   const current=$derived(sections.find(item=>item[0]===section)!);
   async function navigate(next:Section,review=false){if(scroll)positions[section]=scroll.scrollTop;section=next;if(review)sourceReviewRequest++;await tick();if(scroll)scroll.scrollTop=review?0:positions[next]??0;}
   async function reload(){try{appSettings.set(await invoke<DashboardSettings>('get_monitoring_settings'));preferenceError.set('');loadError='';}catch(e){loadError=String(e);}}
@@ -38,10 +38,10 @@
   });
 </script>
 <div class="settings-shell tp-theme" class:monitoring-shell={section==='sources'}>
-  <aside class="settings-side"><div class="settings-brand"><BrandMark size={34}/><div><strong>TaskPulse</strong><small>{$t('偏好设置')}</small></div></div>
-    <nav class="settings-nav" aria-label={$t('设置分类')}>{#each sections as [id,label,,Icon]}<a href={'#'+id} aria-current={section===id?'page':undefined} onclick={e=>{e.preventDefault();void navigate(id);}}><Icon size={17} aria-hidden="true"/><span>{$t(label)}</span></a>{/each}</nav>
+  <aside class="settings-side"><div class="settings-brand"><BrandMark size={34}/><div><strong>TaskPulse</strong></div></div>
+    <nav class="settings-nav" aria-label={$t('设置分类')}>{#each sections as [id,label,Icon]}<a href={'#'+id} aria-current={section===id?'page':undefined} onclick={e=>{e.preventDefault();void navigate(id);}}><Icon size={17} aria-hidden="true"/><span>{$t(label)}</span></a>{/each}</nav>
   </aside>
-  <main class="settings-main" class:source-page={section==='sources'}>{#if section!=='sources'}<header class="settings-heading"><div><h1>{$t(current[1])}</h1><p>{$t(current[2])}</p></div></header>{/if}
+  <main class="settings-main" class:source-page={section==='sources'}>{#if section!=='sources'}<header class="settings-heading"><h1>{$t(current[1])}</h1></header>{/if}
     <div class="settings-content glass-scroll" class:source-layout={section==='sources'} bind:this={scroll}>
       {#if $preferenceError||loadError}<div class="settings-inline-error" role="alert">{$t($preferenceError||loadError)} <button class="tp-btn" onclick={reload}>{$t('重新加载')}</button></div>{/if}
       {#if !$appSettings}<p role="status">{$t(isTauri()?'正在读取设置…':'请在 TaskPulse 应用中打开设置。')}</p>{:else}

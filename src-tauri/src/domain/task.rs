@@ -409,6 +409,25 @@ impl TaskSnapshot {
             && self.session_id.is_none()
             && self.finished_at.is_some()
     }
+    /// A partial observation of the same native turn can revoke live proof,
+    /// but cannot replace the last confirmed execution with an unknown state.
+    pub(crate) fn loses_open_turn_evidence(&self, incoming: &Self) -> bool {
+        self.status == TaskStatus::Running
+            && self.finished_at.is_none()
+            && incoming.finished_at.is_none()
+            && incoming.stale
+            && matches!(
+                incoming.status,
+                TaskStatus::Unknown | TaskStatus::Disconnected
+            )
+            && self.source == incoming.source
+            && self.source_instance == incoming.source_instance
+            && self.session_id.is_some()
+            && self.session_id == incoming.session_id
+            && self.turn_key.is_some()
+            && self.turn_key == incoming.turn_key
+    }
+
     pub fn requires_action(&self) -> bool {
         self.status == TaskStatus::WaitingInput
             && matches!(

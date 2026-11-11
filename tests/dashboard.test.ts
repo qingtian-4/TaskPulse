@@ -57,6 +57,31 @@ test('default attention shows current work, unread results and explicit pins; un
   expect(defaultDashboardTasks([{...stale,stale:false}])).toEqual([{...stale,stale:false}]);
 });
 
+test('tracked long Agent turns stay visible through stale polls and later recover under the same ID',()=>{
+  for(const [source,agent_id,source_instance] of [
+    ['native_agent','kimi-code','kimi_code'],
+    ['native_agent','qoder-desktop','qoder'],
+    ['native_agent','qoder-transcript','qoder'],
+    ['native_agent','opencode','opencode'],
+    ['native_agent','workbuddy','workbuddy'],
+    ['native_agent','zcode','zcode'],
+    ['claude_code',undefined,'remote_claude_code:test'],
+    ['codex',undefined,'codex-wsl:ubuntu'],
+    ['hermes',undefined,'hermes'],
+    ['deepseek_harness',undefined,'deepseek_harness_desktop'],
+  ] as const){
+    const task:TaskSnapshot={...base,id:`${source_instance}:long`,source,agent_id,source_instance,
+      session_id:'known-session',turn_key:'known-turn',pinned:false,unread:false};
+    const pending={...task,stale:true};
+    const samples=[task,pending,pending,task];
+    expect(samples.map(row=>defaultDashboardTasks([row]).map(t=>t.id))).toEqual(samples.map(()=>[task.id]));
+    expect(samples.map(taskSection)).toEqual(['ongoing','uncertain','uncertain','ongoing']);
+    expect(isEndedResult(pending)).toBe(false);
+    expect(defaultDashboardTasks([{...pending,status:'unknown'}])).toEqual([]);
+    expect(defaultDashboardTasks([{...pending,finished_at:20}])).toEqual([]);
+  }
+});
+
 test('Doubao conversation titles remain separate from project membership and filters',()=>{
   const task:TaskSnapshot={...base,source:'doubao',name:'真实会话名称'};
   expect(taskContext(task)).toBe('独立会话 · 豆包 · 本机');

@@ -1,14 +1,14 @@
 {
   "version": "0.0.1",
-  "capture_commit": "a918a4e7983140a2b1f0f0099cf6b82964148188",
+  "capture_commit": "f68028a7936caf86dd2d517b1f4c71b7e16f8f28",
   "modified": false,
-  "executable_sha256": "5c841fa751b00d9ab62437af21736a791d053249b6f21c3c5d0176b487428f38",
+  "executable_sha256": "3913f5417639a49523151fc7f27a117bc70af8e3944073a142cf180544d73e3b",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
   "authorization": "Maintainer requested current-interface public screenshots",
   "rendering": "Native WebView capture at DPR 2; no UI or IPC mocks",
-  "captured_on": "2026-11-10",
+  "captured_on": "2026-11-11",
   "assets": [
     {
       "file": "dashboard.png",
@@ -55,7 +55,7 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "17591933e1adcc1634c81736d3e4604afad10920a39cb28b91a7b9ab194396f0",
+      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
       "bytes": 25774
     },
     {
@@ -103,16 +103,16 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
-      "bytes": 23209
+      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
+      "bytes": 23208
     }
   ],
-  "frontend_tree": "3d86e0b36318684352251dc73259ab080852d5f0",
-  "runtime_tree": "0eaa7c83df8c88cf1a14bf722a07536a3635caec",
-  "locale_tree": "aca4c7bb51c2679ae701e48c60e26a45768f62d6",
-  "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
+  "frontend_tree": "caa4633a307949360f86b8845203f5b3d028902c",
+  "runtime_tree": "694b1e3dee5d148d68763baf5bacc27a19af9708",
+  "locale_tree": "a224a063c0b576010ec29abe804d6a5959a0e005",
+  "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",
   "lockfiles": {
-    "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
+    "bun.lock": "e2a101df744f36f142261f9fab4fba1052c1d1054cbbfe96ec0f404ed6175645",
     "src-tauri/Cargo.lock": "00e4edc3f6383203043cd3cdcf09d85cfa19238a42ecb7bf725b242b0fb73458"
   },
   "capture_timezone": "Asia/Shanghai"

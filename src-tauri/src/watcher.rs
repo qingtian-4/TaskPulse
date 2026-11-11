@@ -1202,7 +1202,11 @@ fn update_provider_health(
         ProviderHealth {
             task_observations,
             provider: provider.to_string(),
-            status: ProviderStatus::Degraded,
+            status: if output.error.is_none() {
+                ProviderStatus::Paginating
+            } else {
+                ProviderStatus::Degraded
+            },
             last_success: previous_success,
             last_attempt: Some(now),
             message: output.error.clone(),

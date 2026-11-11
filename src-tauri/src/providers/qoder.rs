@@ -2,7 +2,7 @@
 //! Per-tool completion and blockable Stop hooks never finish a task.
 use super::{
     kimi::{stamp, text},
-    native_sessions::{self, Sessions},
+    native_sessions::{self, BatchRead, Sessions},
     Provider, ProviderOutput,
 };
 use crate::domain::{ExecutionPhase, TaskSnapshot, TaskStatus, WaitingReason};
@@ -39,6 +39,7 @@ pub struct QoderProvider {
     models: HashMap<(String, String), String>,
     transcripts: super::qoder_transcript::Transcripts,
     cursors: HashMap<PathBuf, DesktopCursor>,
+    next_head: HashMap<PathBuf, String>,
 }
 impl QoderProvider {
     pub fn new(location: Option<PathBuf>) -> Self {
@@ -48,6 +49,7 @@ impl QoderProvider {
             models: HashMap::new(),
             transcripts: Default::default(),
             cursors: HashMap::new(),
+            next_head: HashMap::new(),
         }
     }
     pub fn resume(&mut self, tasks: Vec<TaskSnapshot>) {
@@ -71,7 +73,7 @@ impl QoderProvider {
             );
         }
     }
-    fn desktop(&mut self, path: &Path) -> Result<(Vec<TaskSnapshot>, bool), String> {
+    fn desktop(&mut self, path: &Path) -> Result<(Vec<TaskSnapshot>, BatchRead), String> {
         let mut db = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
@@ -86,7 +88,11 @@ impl QoderProvider {
             .into_iter()
             .collect();
         protected.sort();
-        let mut incomplete = protected.len() > 128;
+        let mut status = if protected.len() > 128 {
+            BatchRead::Paginating
+        } else {
+            BatchRead::Complete
+        };
         protected.truncate(128);
         let priority = serde_json::to_string(&protected).map_err(|_| "session_ids")?;
         let cursor = self.cursors.get(path).cloned();
@@ -115,6 +121,13 @@ impl QoderProvider {
             .map_err(|_| "desktop_read")?
             .collect::<rusqlite::Result<Vec<_>>>()
             .map_err(|_| "desktop_read")?;
+        if let Some(index) = self
+            .next_head
+            .get(path)
+            .and_then(|id| rows.iter().position(|row| &row.0 == id))
+        {
+            rows.rotate_left(index);
+        }
         let mut page = tx
             .prepare(&format!(
                 "{SELECT} AND (?1 IS NULL OR coalesce(updated_at,'')<?1
@@ -132,7 +145,9 @@ impl QoderProvider {
         let next_cursor = entries
             .last()
             .map(|(id, _, _, _, at)| (at.clone(), id.clone()));
-        incomplete |= more || cursor.is_some();
+        if more || cursor.is_some() {
+            status = BatchRead::Paginating;
+        }
         if more {
             if let Some(next) = next_cursor {
                 self.cursors.insert(path.to_path_buf(), next);
@@ -147,24 +162,33 @@ impl QoderProvider {
         let storage_key = native_sessions::storage_key(path);
         let mut out = vec![];
         let mut bytes = 0usize;
+        let mut next_head = None;
         for (id, title, cwd, model, _) in rows {
-            let limit = if head_ids.contains(&id) {
+            let is_head = head_ids.contains(&id);
+            if is_head && next_head.is_some() {
+                continue;
+            }
+            let limit = if is_head {
                 12 * 1024 * 1024
             } else {
                 16 * 1024 * 1024
             };
             if bytes >= 16 * 1024 * 1024 {
-                incomplete = true;
+                status = status.max(BatchRead::Paginating);
                 break;
             }
+            let used_before_session = bytes;
             let task = (|| -> Result<Option<TaskSnapshot>, &'static str> {
                 let mut q=tx.prepare("SELECT turn_id,status,source,created_at,length(CAST(payload_json AS BLOB)),payload_json,updated_at FROM chat_session_messages WHERE session_id=?1 ORDER BY sequence DESC LIMIT 129").map_err(|_|"message_schema")?;
                 let mut r = q.query([&id]).map_err(|_| "message_read")?;
                 let mut messages = vec![];
                 while let Some(row) = r.next().map_err(|_| "message_read")? {
                     let len: usize = row.get(4).map_err(|_| "message_size")?;
-                    if len > 4 * 1024 * 1024 || bytes.saturating_add(len) > limit {
+                    if len > 4 * 1024 * 1024 {
                         return Err("message_budget");
+                    }
+                    if bytes.saturating_add(len) > limit {
+                        return Err("poll_budget");
                     }
                     bytes += len;
                     let json: String = row.get(5).map_err(|_| "message_read")?;
@@ -300,30 +324,47 @@ impl QoderProvider {
             match task {
                 Ok(Some(task)) => out.push(task),
                 Ok(None) => {}
-                Err(_) => incomplete = true,
+                Err("poll_budget") => {
+                    // Start the next poll at the first deferred head. A session
+                    // that alone exhausts its budget cannot pin the cursor.
+                    if used_before_session == 0 {
+                        status = BatchRead::Failed;
+                    } else {
+                        if is_head {
+                            next_head = Some(id);
+                        }
+                        status = status.max(BatchRead::Paginating);
+                    }
+                }
+                Err(_) => status = BatchRead::Failed,
             }
         }
-        Ok((out, incomplete))
+        if let Some(id) = next_head {
+            self.next_head.insert(path.to_path_buf(), id);
+        } else {
+            self.next_head.remove(path);
+        }
+        Ok((out, status))
     }
-    fn read(&mut self) -> (Vec<TaskSnapshot>, bool) {
+    fn read(&mut self) -> (Vec<TaskSnapshot>, BatchRead) {
         let mut rows = vec![];
-        let mut incomplete = false;
+        let mut status = BatchRead::Complete;
         let protected = self.sessions.protected_ids("qoder-transcript");
         for root in self.roots.clone() {
             let db = root.join("main.sqlite");
             let result = if db.exists() {
                 self.desktop(&db)
             } else if root.join("projects").exists() {
-                self.transcripts.read(&root, &protected)
+                Ok(self.transcripts.read(&root, &protected))
             } else {
                 continue;
             };
             match result {
-                Ok((items, partial)) => {
+                Ok((items, batch_status)) => {
                     rows.extend(items);
-                    incomplete |= partial;
+                    status = status.max(batch_status);
                 }
-                Err(_) => incomplete = true,
+                Err(_) => status = BatchRead::Failed,
             }
         }
         let live: std::collections::HashSet<_> = rows
@@ -337,12 +378,14 @@ impl QoderProvider {
                 duplicate.insert(task.id.clone());
             }
         }
-        incomplete |= !duplicate.is_empty();
+        if !duplicate.is_empty() {
+            status = BatchRead::Failed;
+        }
         rows.retain(|task| !duplicate.contains(&task.id));
         let protected = self.sessions.protected_ids("qoder-desktop");
         self.models
             .retain(|key, _| live.contains(key) || protected.contains(&key.0));
-        (rows, incomplete)
+        (rows, status)
     }
 }
 impl Provider for QoderProvider {
@@ -350,12 +393,14 @@ impl Provider for QoderProvider {
         "qoder"
     }
     fn poll(&mut self, now: SystemTime) -> ProviderOutput {
-        let (rows, incomplete) = self.read();
-        self.sessions.observe_batch(
+        let (rows, status) = self.read();
+        let mut output = self.sessions.observe_batch(
             rows,
             now,
-            incomplete.then(|| "Qoder 会话分批读取或部分记录不可读；保留上次状态".into()),
-        )
+            (status == BatchRead::Failed).then(|| "Qoder 记录读取失败；保留上次状态".into()),
+        );
+        output.authoritative &= status == BatchRead::Complete;
+        output
     }
 }
 
@@ -468,6 +513,60 @@ mod tests {
             .catalog
             .iter()
             .any(|task| task.session_id.as_deref() == Some("old-0200")));
+    }
+
+    #[test]
+    fn desktop_message_budget_rotates_five_followed_sessions() {
+        let (_dir, db, mut provider) = fixture();
+        db.execute("DELETE FROM chat_sessions", []).unwrap();
+        let now = super::super::codex::parse_rfc3339("2026-11-07T00:00:03Z").unwrap();
+        for index in 0..5 {
+            let id = format!("session-{index}");
+            db.execute("INSERT INTO chat_sessions VALUES(?1,'Fixture','/project',NULL,NULL,0,NULL,'2026-11-07')",[&id]).unwrap();
+            for (message, seq, value, status) in [
+                ("u", 1, json!({"role":"user"}), "completed"),
+                (
+                    "a",
+                    2,
+                    json!({"role":"assistant","turnId":"t"}),
+                    "streaming",
+                ),
+            ] {
+                db.execute("INSERT INTO chat_session_messages VALUES(?1,?2,'t',?3,?4,?5,'host-projection','2026-11-07T00:00:00Z','2026-11-07T00:00:00Z')",
+                    rusqlite::params![id,message,seq,value.to_string(),status]).unwrap();
+            }
+        }
+        assert_eq!(provider.poll(now).tasks.len(), 5);
+        let filler = "x".repeat(3 * 1024 * 1024 - 512);
+        db.execute(
+            "UPDATE chat_session_messages SET payload_json=?1 WHERE message_id='a'",
+            [json!({"role":"assistant","turnId":"t","text":filler}).to_string()],
+        )
+        .unwrap();
+        db.execute("UPDATE chat_session_messages SET status='completed',payload_json=?1 WHERE session_id='session-4' AND message_id='a'",
+            [json!({"role":"assistant","turnId":"t","text":filler,"turnMetrics":{"durationMs":5000,"turnCount":1}}).to_string()]).unwrap();
+
+        let first = provider.poll(now + Duration::from_secs(6));
+        assert!(!first.authoritative);
+        assert!(
+            first.error.is_none(),
+            "Budget-limited reads are not I/O errors"
+        );
+        let mut finished = first.tasks.iter().any(|task| {
+            task.session_id.as_deref() == Some("session-4")
+                && task.waiting_reason == Some(WaitingReason::TurnEnded)
+        });
+        for _ in 0..3 {
+            let batch = provider.poll(now + Duration::from_secs(6));
+            finished |= batch.tasks.iter().any(|task| {
+                task.session_id.as_deref() == Some("session-4")
+                    && task.waiting_reason == Some(WaitingReason::TurnEnded)
+            });
+        }
+        assert!(
+            finished,
+            "Head budget exhaustion must not starve the last followed session"
+        );
     }
 
     #[test]

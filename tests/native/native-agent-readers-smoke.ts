@@ -75,7 +75,27 @@ await withSmokeWorkspace('native-agent-readers',async({owned,onStop})=>{
   await Bun.write(join(owned,'native-reader-settings.png'),Buffer.from((await manage.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   sockets.forEach(s=>s.close());await stopOwnedChild(app);start();root=await connect();await root.wait(`typeof __TAURI_INTERNALS__!=='undefined'&&!!document.querySelector('.dashboard')`);await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${k.id}'&&t.finished_at&&t.unread&&t.pinned&&t.reasoning_effort==='high')&&t.some(t=>t.id==='${q.id}'&&t.finished_at&&t.model==='qoder-public-model'))`);
   assert.equal((await root.invoke('get_agents')).length,2);
-  const result={passed:true,commit,modified:false,executableSha256:createHash('sha256').update(await Bun.file(exe).bytes()).digest('hex'),checks:['Kimi native v1.5 request → panel → independent popup → exact resolution','unrelated response and queued cancel cannot end or resolve active request','partial native write preserves unresolved request and degrades health','explicit Kimi/Qoder end freezes source duration','opaque TRAE data never invents tasks or healthy state','12 catalog-driven native entries; Trae catalog-only and healthy empty Claude reads','same native session IDs, unread, pin, model and effort survive restart'],inputs:'Public synthetic native schema; not real Agent-host certification',realAgentConfigurationsChanged:false};
+  // Exercise real provider freshness without making the test wait two
+  // minutes: the new native start is already 108 seconds old at admission.
+  const quiet=join(kimi,'sessions','public','session-quiet','agents','main');
+  await mkdir(quiet,{recursive:true});
+  const quietWire=join(quiet,'wire.jsonl');
+  const quietAt=Date.now()-108000;
+  const quietId='public-kimi:kimi-code:session-quiet';
+  await Bun.write(quietWire,JSON.stringify({type:'turn.started',turnId:'quiet',time:quietAt})+'\n');
+  if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.tasks.some(t=>t.id==='${quietId}'&&t.status==='running'&&!t.stale))`);
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.view.counts.ongoing===0&&s.tasks.some(t=>t.id==='${quietId}'&&t.stale&&!t.finished_at))`);
+  await root.wait(`document.querySelector('[data-task-id="${quietId}"] .status-label')?.textContent==='状态待更新'`);
+  const refresh=await root.invoke('request_refresh');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.providers.some(p=>p.provider==='public-kimi'&&p.last_attempt>=${refresh}))`);
+  assert.equal(await root.evaluate(`document.querySelector('[data-task-id="${quietId}"] .status-label')?.textContent`),'状态待更新');
+  await appendFile(quietWire,JSON.stringify({type:'llm.request',model:'kimi-public-model',time:Date.now()})+'\n');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.view.counts.ongoing===1&&!s.view.unconfirmed_task_ids.includes('${quietId}')&&s.tasks.filter(t=>t.id==='${quietId}'&&t.status==='running'&&!t.stale).length===1)`);
+  await root.wait(`document.querySelector('[data-task-id="${quietId}"] .status-label')?.textContent==='运行中'`);
+  await appendFile(quietWire,JSON.stringify({type:'turn.ended',turnId:'quiet',reason:'completed',time:Date.now()})+'\n');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_agents').then(t=>t.some(t=>t.id==='${quietId}'&&t.waiting_reason==='turn_ended'&&t.finished_at))`);
+  const result={passed:true,commit,modified:false,executableSha256:createHash('sha256').update(await Bun.file(exe).bytes()).digest('hex'),checks:['Kimi native v1.5 request → panel → independent popup → exact resolution','unrelated response and queued cancel cannot end or resolve active request','partial native write preserves unresolved request and degrades health','explicit Kimi/Qoder end freezes source duration','opaque TRAE data never invents tasks or healthy state','12 catalog-driven native entries; Trae catalog-only and healthy empty Claude reads','same native session IDs, unread, pin, model and effort survive restart','Kimi quiet open turn remains visible as unconfirmed through a refresh, recovers the same card, and ends only on an explicit event'],inputs:'Public synthetic native schema; not real Agent-host certification',realAgentConfigurationsChanged:false};
   await Bun.write(join(owned,'result.json'),JSON.stringify(result,null,2));console.log(JSON.stringify(result));
  }catch(error){await Bun.write(join(owned,'failure.json'),JSON.stringify({error:String(error),stderr},null,2));throw error;}finally{db.close();}
 });

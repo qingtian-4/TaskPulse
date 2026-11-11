@@ -87,15 +87,15 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 | Hermes | Reads local sessions, models and running state. |
 | OpenCode | Reads local sessions, execution phases and explicit turn outcomes. |
 | WorkBuddy | Reads local tasks and turn results. Cloud tasks are outside this source. |
-| ZCode | Reads local tasks, models and turn results. Standard Events and MCP are optional. |
-| Kimi Code / kimi-cli | Reads local main sessions and explicit requests. Standard Events and MCP are optional. |
+| ZCode | Reads local tasks, models and turn results. |
+| Kimi Code / kimi-cli | Reads local main sessions, explicit requests and turn outcomes. |
 | Qoder | Reads local Desktop turns and IDE or CLI journals. Native approvals and questions are unsupported. |
-| Trae | Discovers sessions in the workspace catalog. Task progress requires a separately configured sender. |
+| Trae | Discovers local sessions in the workspace catalog. Task progress and completion reminders are unsupported. |
 | Gemini CLI | Discovers running processes. Task lifecycle requires an event connection. |
-| Other agents | Connect through Standard Events, MCP or compatible status files. |
+| Saved event sources | Continue receiving Standard Events, MCP or compatible status files. |
 | Shell / remote tmux | `tp-run` records the foreground command exit code. An ordinary tmux shell return only provides an inferred result. |
 
-Supported local data is detected automatically. Use Advanced connections if an agent or script sends its own task events. See [compatibility and setup details (Chinese)](docs/AGENT_COMPATIBILITY.md).
+TaskPulse detects supported local data automatically. Choose the agents and projects to monitor. Manage previously configured senders under Saved event connections. See [compatibility and setup details (Chinese)](docs/AGENT_COMPATIBILITY.md).
 
 ## How it works
 

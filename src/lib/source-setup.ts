@@ -39,12 +39,6 @@ const LOCAL_HOOKS:Readonly<Record<string,SourceKind>>={
 export function localHookKind(adapterId:string|undefined):SourceKind|undefined {
   return adapterId&&Object.hasOwn(LOCAL_HOOKS,adapterId)?LOCAL_HOOKS[adapterId]:undefined;
 }
-export function eventConnections(catalog:SourceDefinition[],sources:MonitorSource[]){
-  return catalog.flatMap(definition=>{
-    const connections=sources.filter(s=>s.kind==='generic_event'&&s.integration?.adapter_id===definition.adapter_id);
-    return connections.length?[{definition,connections}]:[];
-  });
-}
 export function isDefaultEventName(name:string,definition:SourceDefinition):boolean {
   return name===definition.name||name===eventAdapterLabel(definition.adapter_id??'',definition.name)||
     definition.adapter_id==='standard-events'&&[
@@ -59,10 +53,6 @@ export function eventAdapterLabel(adapterId:string,displayName:string):string {
     'zcode-desktop':'ZCode',
     'workbuddy-candidate':'WorkBuddy',
   } as Record<string,string>)[adapterId]??displayName;
-}
-export function createEventSource(definition:SourceDefinition,name=definition.name):MonitorSource {
-  if(definition.kind!=='generic_event'||!definition.adapter_id||!definition.agent_id)throw Error('invalid_event_definition');
-  return {id:`generic_event:${crypto.randomUUID()}`,kind:'generic_event',name,location:'',enabled:false,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:3000,integration:{agent_id:definition.agent_id,adapter_id:definition.adapter_id,transport:'local',accept_since_ms:0}};
 }
 export function sourceCatalogRows(catalog:SourceDefinition[],sources:MonitorSource[],discovery:SourceDiscovery[],category:string,platform:string,foundOnly:boolean,live:SourceSnapshot[] = []):SourceCatalogRow[] {
   const saved=sources.filter(s=>sourceDefinitionFor(catalog,s).category===category)
@@ -118,6 +108,7 @@ export const CAPABILITY_EVIDENCE:Record<CapabilityEvidence,string>={
 
 const READ_LABELS:Record<SourceReadState,string>={
   disabled:'未读取',waiting:'等待首次读取',healthy:'来源读取正常',
+  paginating:'正在分批读取',
   partial:'部分会话需检查',failed:'读取异常 · 需检查',stale:'读取结果待更新',
 };
 export function sourceReadState(observation:SourceSnapshot|undefined, enabled:boolean):string {
@@ -126,6 +117,7 @@ export function sourceReadState(observation:SourceSnapshot|undefined, enabled:bo
 export function summarizeSources(sources:SourceSnapshot[]) {
   const enabled=sources.filter(s=>s.enabled);
   return {enabled:enabled.length,waiting:enabled.filter(s=>s.read_state==='waiting').length,
+    paginating:enabled.filter(s=>s.read_state==='paginating').length,
     issues:enabled.filter(s=>['partial','failed','stale'].includes(s.read_state)).length};
 }
 
@@ -153,7 +145,7 @@ const notes:Record<SourceKind,string>={
   remote_claude_code:'只读 SSH 账号的 Claude Code 会话记录；明确结束才提醒，不读取审批或提问。',
   remote_codex:'读取已配置 SSH 主机的 Codex 会话；依赖主机可达、权限与远端数据格式。',
   claude_code:'原生会话读取为尽力推断；精确生命周期需自愿配置官方 Hook，与代理模型无关。',
-  hermes:'原生标题、项目和运行租约；没有明确结束证据时不猜测任务完成。',
+  hermes:'读取原生标题、项目和运行租约；已跟踪轮次有明确最终回复时可确认结束。',
   deepseek_desktop:'读取原生 Desktop / CLI 存储，支持旧版与 v4 日志；状态能力取决于宿主记录。',
   deepseek_wsl:'独立读取已启用 WSL 安装，不与 Windows 桌面会话混合。',
   tmux:'普通 shell 返回仅为推断结束，退出码未知；前台 tp-run 可报告直接子进程退出。',

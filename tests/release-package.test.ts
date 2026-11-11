@@ -76,4 +76,12 @@ test('draft publication requires native acceptance on every included architectur
   expect(contracts.jobs['arm64-build'].if).toContain("'test:installers'");
   expect(contracts.jobs['arm64-build'].if).toContain('head.repo.full_name == github.repository');
   expect(contracts.on.pull_request.types).toContain('labeled');
+  const armPreview=contracts.jobs['arm64-install'];
+  expect(armPreview?.needs).toContain('arm64-build');
+  expect(armPreview['runs-on']).toBe('windows-11-arm');
+  expect(armPreview.steps.find((step:any)=>step.uses?.startsWith('actions/download-artifact')).with.name)
+    .toBe(contracts.jobs['arm64-build'].steps.find((step:any)=>step.uses?.startsWith('actions/upload-artifact')).with.name);
+  const previewCommands=armPreview.steps.map((step:any)=>step.run??'').join('\n');
+  expect(previewCommands).toContain('pr-preview');
+  expect(previewCommands).toContain('-Architecture arm64 -VerifyRenamedExecutable');
 });
