@@ -245,8 +245,10 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await root.wait(`${ongoing}===2`);
   assert.ok((await root.invoke('get_agents')).some((t:any)=>t.id==='codex:public-good'&&t.status==='running'&&!t.stale));
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
-  const readState=`document.querySelector('[data-source-id="codex"] .read-state')`;
-  await ui.wait(`${readState}?.textContent?.includes('Some sessions need attention')`);
+  await ui.wait(`!!document.querySelector('.ms-tabs button')`);
+  await ui.evaluate(`document.querySelector('.ms-tabs button:first-child').click()`);
+  const readState=`document.querySelector('[data-agent-kind="codex"] .agent-row small')`;
+  await ui.wait(`${readState}?.textContent?.includes('Some data needs refreshing')`);
   // The source badge has its own receiver and clock. Observe it independently
   // of the dashboard so a steady headline cannot hide a settings regression.
   await ui.evaluate(`(()=>{const badge=${readState};window.__sourceReadSamples=[badge.textContent];window.__sourceReadObserver=new MutationObserver(()=>window.__sourceReadSamples.push(badge.textContent));window.__sourceReadObserver.observe(badge,{childList:true,characterData:true,subtree:true});})()`);
@@ -265,7 +267,7 @@ accept_since_ms=${now}`:''}`).join('\n')}
   assert.equal(new Set(attempts).size,8,'Eight distinct native collection attempts are required');
   assert.ok(ongoingSamples.length>0);
   assert.ok(ongoingSamples.every(count=>count===2),`Running count flickered between clock ticks: ${JSON.stringify(ongoingSamples)}`);
-  assert.ok(sourceReadSamples.every(label=>label.includes('Some sessions need attention')),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
+  assert.ok(sourceReadSamples.every(label=>label.includes('Some data needs refreshing')),`Source badge flickered between clock ticks: ${JSON.stringify(sourceReadSamples)}`);
   checks.push('two running sessions stay visible across eight partial-source collections between UI clock ticks');
   checks.push('settings partial-source badge stays stable across the same eight collections');
   // Once that session itself is no longer verified, its previous proof must
@@ -273,15 +275,15 @@ accept_since_ms=${now}`:''}`).join('\n')}
   await rename(rollout,join(codex,'moved-good.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!p.task_observations?.['codex:public-good']))`);
   await root.wait(`${ongoing}===1`);
-  await ui.wait(`${readState}?.textContent?.includes('Some sessions need attention')`);
+  await ui.wait(`${readState}?.textContent?.includes('Some data needs refreshing')`);
   checks.push('partial Codex collection preserves an independently verified ongoing task; missing task proof is revoked');
   await rename(join(codex,'sessions/rollout-public-second.jsonl'),join(codex,'moved-second.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='degraded'&&!Object.keys(p.task_observations??{}).length))`);
   await root.wait(`${ongoing}===0`);
-  await ui.wait(`${readState}?.textContent?.includes('Source access failed')`);
+  await ui.wait(`${readState}?.textContent?.includes('Read error')`);
   await rename(badRollout,join(codex,'moved-bad.jsonl'));
   await root.wait(`__TAURI_INTERNALS__.invoke('get_providers').then(p=>p.some(p=>p.provider==='codex'&&p.status==='connected'))`);
-  await ui.wait(`${readState}?.textContent?.includes('Source access healthy')`);
+  await ui.wait(`${readState}?.textContent?.includes('Reads healthy')`);
   checks.push('source badge still reports unavailable session evidence and real source recovery');
   if(focusTarget){
     assert.equal(await root.invoke('open_task',{id:'file:pinned'}),'focus_unavailable');
@@ -290,8 +292,10 @@ accept_since_ms=${now}`:''}`).join('\n')}
     assert.equal(selected.unread,true,'Falling back to details must preserve unread state');
     checks.push('expired native window reports failed focus and opens task details without marking it read');
   }
-  await ui.wait(`document.querySelector('[data-source-id="scanner"]')?.textContent.includes('No data detected')`);
-  checks.push('healthy generic source without an event reports no data, sessions or current tasks');
+  assert.ok(await ui.evaluate(`!document.querySelector('[data-agent-kind="scanner"], [data-saved-source="scanner"]')`));
+  const generic=(await root.invoke('get_dashboard_snapshot')).view.sources.find((row:any)=>row.id==='scanner');
+  assert.deepEqual(generic,emptySource);
+  checks.push('hidden generic source remains healthy without falsely reporting data, sessions or tasks');
   const stampNow=Date.now();
   await Bun.write(join(home,'blocker.pending'),JSON.stringify({v:2,name:'Public request fixture',status:'needs-input',turn_key:'public-blocker',
     waiting_reason:'question',input_request_id:'public-question',execution_activity_at:stampNow,confidence:'hook',cli:'codex'}));
@@ -321,9 +325,9 @@ accept_since_ms=${now}`:''}`).join('\n')}
   checks.push('a vanished CLI-tagged request becomes uncertain in the dashboard and inbox while its actual file reader stays healthy');
   const currentSettings=await ui.invoke('get_monitoring_settings');
   await ui.invoke('save_monitoring_settings',{expected:currentSettings,settings:{...currentSettings,sources:[]}});
-  await root.wait(`document.querySelector('.dashboard footer')?.textContent.includes('No enabled sources')`);
-  assert.equal((await root.invoke('get_dashboard_snapshot')).view.sources.length,0);
-  checks.push('zero enabled sources is explicit in the native dashboard');
+  await root.wait(`__TAURI_INTERNALS__.invoke('get_dashboard_snapshot').then(s=>s.view.sources.length===0)`);
+  assert.ok(await root.evaluate(`!document.querySelector('.dashboard > footer')`));
+  checks.push('zero enabled sources removes the sources from the snapshot without a dashboard footer');
   assert.deepEqual(errors,[]);
   assert.equal(await fileSha256(exe),executableSha256);
   assert.equal(await fileSha256(original),executableSha256);

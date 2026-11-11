@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "f68028a7936caf86dd2d517b1f4c71b7e16f8f28",
+  "capture_commit": "7535f0c9954ab3413febba212c841e78c838f42a",
   "modified": false,
-  "executable_sha256": "3913f5417639a49523151fc7f27a117bc70af8e3944073a142cf180544d73e3b",
+  "executable_sha256": "dae117ae6b4865c6f7f2e8e75096fe1fc032134f5737577f0e1e168900e8fc19",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -15,12 +15,12 @@
       "language": "zh-CN",
       "kind": "dashboard",
       "width": 736,
-      "height": 1576,
+      "height": 1314,
       "logical_width": 368,
-      "logical_height": 788,
+      "logical_height": 657,
       "dpr": 2,
-      "sha256": "66e3af340f9d4651c5f9f18a925ef4a4f37e0616151be13b3d6b00b2e7775254",
-      "bytes": 161740
+      "sha256": "6575e1eed9b1faeada76cb0df306aa04d7fb4a4902f23ef86d7bce351b50bd27",
+      "bytes": 146420
     },
     {
       "file": "notice-input.png",
@@ -63,12 +63,12 @@
       "language": "en",
       "kind": "dashboard",
       "width": 736,
-      "height": 1612,
+      "height": 1350,
       "logical_width": 368,
-      "logical_height": 806,
+      "logical_height": 675,
       "dpr": 2,
-      "sha256": "669c50441320c21a18ae8b9769b9b31012f6077adb2e12477a02bd58a86d71ef",
-      "bytes": 145606
+      "sha256": "14fdcdb23eb50d2923ece7aba9c4d662c518c87b78e402e5f831bedc472ec6f0",
+      "bytes": 131606
     },
     {
       "file": "notice-input-en.png",
@@ -103,11 +103,11 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "73dd3893267fa946c28c6e9fc781b5d391aa16458373ce44adc1dd7c8455775d",
-      "bytes": 23208
+      "sha256": "4c0589e361b14bf546814e74521ef25d1aac5f8b24dfc5a2e01c3b28bd486c18",
+      "bytes": 23209
     }
   ],
-  "frontend_tree": "caa4633a307949360f86b8845203f5b3d028902c",
+  "frontend_tree": "4549e137516e4bcb9e4afb7b7c2a531e78fab3b2",
   "runtime_tree": "694b1e3dee5d148d68763baf5bacc27a19af9708",
   "locale_tree": "a224a063c0b576010ec29abe804d6a5959a0e005",
   "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",

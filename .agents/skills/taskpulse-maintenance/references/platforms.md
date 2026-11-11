@@ -53,4 +53,4 @@ Opt-in WSL read-only smoke (Python 3 and a running distro required, default Ubun
 cargo test --manifest-path src-tauri/Cargo.toml --bin agent-tray live_wsl_codex_snapshot -- --ignored --nocapture
 ```
 
-Set `TASKPULSE_WSL_DISTRO` for another distro. `tests/native/native-wsl-codex-smoke.ts` validates actual source discovery, save, native session titles and isolated scopes with temporary WebView2 CDP, restoring settings by default.
+Set `TASKPULSE_WSL_DISTRO` for another distro. `tests/native/native-wsl-codex-smoke.ts` verifies native session titles and source identity over test-owned WebView2 CDP for an enabled WSL source in an isolated profile. It does not save settings.
