@@ -181,7 +181,7 @@ projects=["/srv/legacy"]
   await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
   assert.equal(await ui.evaluate(`document.querySelectorAll('[data-agent-kind="trae"]').length`),1);
   await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
-  await ui.wait(`!!document.querySelector('.server-list')`);
+  await ui.wait(`document.querySelector('.ms-tabs button[aria-pressed="true"]')?.textContent.includes('SSH') && !!document.querySelector('.ms-empty')`);
   await root.evaluate(`document.querySelector('[data-source-review] button').click()`);
   await ui.wait(`!!document.querySelector('[data-discovery-review] [data-agent-kind="trae"]')`);
   assert.equal(await ui.evaluate(`document.querySelector('.ms-scroll').scrollTop`),0);
@@ -568,6 +568,17 @@ projects=["/srv/legacy"]
       await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);
       await ui.wait(`!!document.querySelector('.wizard-agents')`);
       if(captureScreenshots)await Bun.write(join(owned,`settings-wizard-${host==='taskpulse-claude-fixture.invalid'?'projects':'read-error'}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      if(captureScreenshots&&host==='taskpulse-claude-fixture.invalid'){
+        await ui.send('Emulation.setDeviceMetricsOverride',{width:440,height:520,deviceScaleFactor:1,mobile:false});
+        try{
+          await ui.wait(`innerWidth===440`);
+          assert.equal(await ui.evaluate(`(()=>{const dialog=document.querySelector('.ssh-wizard'),rect=dialog.getBoundingClientRect();return rect.left>=0&&rect.right<=innerWidth&&rect.bottom<=innerHeight&&dialog.scrollWidth<=dialog.clientWidth+1;})()`),true,'Compact wizard must fit the viewport');
+          await Bun.write(join(owned,'settings-wizard-compact-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+        }finally{
+          await ui.send('Emulation.clearDeviceMetricsOverride');
+          await ui.wait(`innerWidth===960`);
+        }
+      }
       assert.equal(await ui.evaluate(`document.querySelectorAll('.wizard-agents input')[1].disabled`),host==='taskpulse-empty-fixture.invalid');
       if(host==='taskpulse-claude-fixture.invalid'){
         assert.equal(await ui.evaluate(`document.querySelector('.wizard-agents input').checked`),true);
@@ -602,7 +613,7 @@ projects=["/srv/legacy"]
     await ui.wait(`document.querySelectorAll('.local-agents [data-agent-kind]').length===10`);
     await ui.evaluate(`document.querySelectorAll('.ms-tabs button')[1].click()`);
     await ui.wait(`document.querySelectorAll('.server-card').length===2`);
-    assert.equal(await ui.evaluate(`document.querySelector('.server-controls .ms-pill').textContent.includes('not checked')`),true);
+    assert.equal(await ui.evaluate(`[...document.querySelectorAll('.server-controls .ms-pill')].some(badge=>badge.textContent.trim()==='SSH connected')`),false,'Restoring configured hosts must not imply a live connection');
     await Bun.write(join(owned,'settings-home-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await ui.evaluate(`(()=>{const s=document.querySelector('.setting-row select');s.value='zh-CN';s.dispatchEvent(new Event('change',{bubbles:true}));})()`);
@@ -641,6 +652,11 @@ projects=["/srv/legacy"]
   if(captureScreenshots){
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#general"]').click()`);
     await Bun.write(join(owned,'settings-general-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    for(const section of ['panel','notifications','updates','about']){
+      await ui.evaluate(`document.querySelector('.settings-nav a[href="#${section}"]').click()`);
+      await ui.wait(`document.querySelector('.settings-nav a[href="#${section}"]').getAttribute('aria-current')==='page'`);
+      await Bun.write(join(owned,`settings-${section}-en.png`),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+    }
     await ui.evaluate(`document.querySelector('.settings-nav a[href="#sources"]').click()`);
     await ui.evaluate(`document.querySelector('.ms-back')?.click()`);
     await Bun.write(join(owned,'settings-sources-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));

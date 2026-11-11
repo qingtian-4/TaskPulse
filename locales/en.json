@@ -1,4 +1,5 @@
 {
+  "较早的任务移入归档。": "Older tasks move to the archive.",
   "当前关注": "Attention",
   " · 待更新": " · Awaiting update",
   " · 来源已移除": " · Source removed",
@@ -633,7 +634,8 @@
   "已有事件连接": "Existing event connections",
   "启用更准确的提醒": "Enable more precise reminders",
   "远端 Claude Code 的 SSH 连接失败": "Could not connect to remote Claude Code over SSH",
-  "SSH 连接异常：{connections} · 数据读取需检查：{sources}": "SSH connection issues: {connections} · Data sources to check: {sources}",
+  "SSH 连接异常：{count}": "SSH connection issues: {count}",
+  "数据读取异常：{count}": "Data read issues: {count}",
   "数据读取需检查": "Check data access",
   "项目列表不完整": "Project list is incomplete",
   "项目列表不完整，未列出的项目可以手动添加路径。": "The project list is incomplete. Add missing project paths manually.",
