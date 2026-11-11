@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "333d5309607eb78ec540a478772f3e01bdb898fd",
+  "capture_commit": "a93e52f3512e07160f8f1ad9bab5e069a6f1b7a9",
   "modified": false,
-  "executable_sha256": "294a35e677a515394848ca8e3a302a4f3e319df13cb38c4bb2a079db9e3c0542",
+  "executable_sha256": "0c4dba09706c27cbe0e691a0cfd2a811438794db9c95f6f126deeb6a82a04f97",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 788,
       "dpr": 2,
-      "sha256": "71e4b016706a1465ccdbc34d579d70d5e2a40e568f55953748cc82c76ea7b85d",
-      "bytes": 161792
+      "sha256": "370006e147a98f626fc920f08252e3876f6b436c5a46263bc8daaaf0e0f5da8b",
+      "bytes": 161741
     },
     {
       "file": "notice-input.png",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "5a10f8106040a2d2f3beca8a2b1d7d69eda11240774719014b38e3b008a958a7",
-      "bytes": 25775
+      "sha256": "2f711440fe572d257bcf92fd0752da886857bdf959133e9d9aeafb3b7798f91b",
+      "bytes": 25774
     },
     {
       "file": "dashboard-en.png",
@@ -107,12 +107,12 @@
       "bytes": 23208
     }
   ],
-  "frontend_tree": "b846a9f3f2697c6eee6e3dae6d31bfaa3c8ccf63",
-  "runtime_tree": "197b37dcd687a83992a8b7481f0b972cd0b0a881",
-  "locale_tree": "8f9b1340f294de17e7237cc80d9f05796424a5aa",
-  "application_config_sha256": "ab48b9d0ef7e807329f0955f56a97de321e2d82227d7863a4b8453364e495424",
+  "frontend_tree": "8e8bdff77f8f026142b9f074b0cefcaaa4263d8d",
+  "runtime_tree": "9fbb29f889602065b72c389913a54a49e96c8ddd",
+  "locale_tree": "95e9a1447c8d5d86b62ae85b3c5d14721f9cddb8",
+  "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",
   "lockfiles": {
-    "bun.lock": "fca792ebc812be68a1d434e95ec4ef603f54639a0e1b383fb780a61293e79036",
+    "bun.lock": "e2a101df744f36f142261f9fab4fba1052c1d1054cbbfe96ec0f404ed6175645",
     "src-tauri/Cargo.lock": "00e4edc3f6383203043cd3cdcf09d85cfa19238a42ecb7bf725b242b0fb73458"
   },
   "capture_timezone": "Asia/Shanghai"
