@@ -1,8 +1,8 @@
 {
   "version": "0.0.1",
-  "capture_commit": "65405e28083fef9e6b710aa7bd4c6d6ab86e27ee",
+  "capture_commit": "61fe287279a42636b6b215837062ae8cbf122834",
   "modified": false,
-  "executable_sha256": "737416cdcea93d39d97ace27ad87d67baf25a729a52d211d10e44206dd1bc30a",
+  "executable_sha256": "06d980e76512c3d55a963cbd562a42e1dbef39f29fd1cda4c24183aee7357d6e",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 657,
       "dpr": 2,
-      "sha256": "60909800e625639b3863b188074bd103fc4a04abd3ed703992994656c196ba62",
-      "bytes": 145183
+      "sha256": "42dbec1e5974259ac2754680d16784d406489cb2097ffd161dcd89ff437b4cca",
+      "bytes": 145193
     },
     {
       "file": "notice-input.png",
@@ -31,8 +31,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "014e2d4cbf2978e3e5baa958ddd3677eebc383fb5e35a28028f4199109a7b4bd",
-      "bytes": 25613
+      "sha256": "bfb96ab5b69cf80046c18f049d966c7ad96278ce83f3c48e994c7b3c785f9ae1",
+      "bytes": 24262
     },
     {
       "file": "notice-approval.png",
@@ -43,8 +43,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "c12a9f134fb33bc39e9d23775329de45046371ca707c370ef4d363d628a01b8c",
-      "bytes": 24350
+      "sha256": "db53d1690271f0f5cc2d8a3bee8296f3c26258b02e02b833c7f8e5f0c5a30664",
+      "bytes": 23247
     },
     {
       "file": "notice-completed.png",
@@ -55,8 +55,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "17591933e1adcc1634c81736d3e4604afad10920a39cb28b91a7b9ab194396f0",
-      "bytes": 25774
+      "sha256": "8be7bc5b476fe64b6c4d35aeb64f6b418a0f1cb4aafe0c81477647560a30be3b",
+      "bytes": 25342
     },
     {
       "file": "dashboard-en.png",
@@ -67,8 +67,8 @@
       "logical_width": 368,
       "logical_height": 675,
       "dpr": 2,
-      "sha256": "7af252211c3cf216f17dd3ec017130300f258d5f6835402853ea3cb9637d3158",
-      "bytes": 129577
+      "sha256": "8676a7a04d2481616136e93009dccf919b08cc2f6cca526efed6152ff615d4ad",
+      "bytes": 129638
     },
     {
       "file": "notice-input-en.png",
@@ -79,8 +79,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "9876f3fd13820c6148239c27f9fcc2a9fd2160773332032416cce045ab1e3a7b",
-      "bytes": 21213
+      "sha256": "f2f8eb576a04b32d7ee66d71c5754404552836bd6ca07ba38998b5d058f1838f",
+      "bytes": 21208
     },
     {
       "file": "notice-approval-en.png",
@@ -91,8 +91,8 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "449890570115abec5ef1143435cf5705a4dfc608d724aa8e54cb717e2a89641a",
-      "bytes": 20832
+      "sha256": "a45c1ecbf2cd635d42b55aedaef09ca4aa71d40efea693dabf4080489351a849",
+      "bytes": 20498
     },
     {
       "file": "notice-completed-en.png",
@@ -103,11 +103,11 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "820a751e0d3f3cce1f28fc04e3e4bacdb4a51fbbcd5e22a80c54f583b7c3d554",
-      "bytes": 23208
+      "sha256": "e1d98529f2230177605bb87d4fdb5bc4069eb1d10c1128197b1597af829f62ea",
+      "bytes": 23446
     }
   ],
-  "frontend_tree": "9a969e007c1ae4374d8439c93e13d3f5b9631fc6",
+  "frontend_tree": "66d44b25d9508264dd1ba59acfa8e3cd34303dd5",
   "runtime_tree": "5c58f22f2c85fdddb47299f8432aa4878842a448",
   "locale_tree": "a224a063c0b576010ec29abe804d6a5959a0e005",
   "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",
