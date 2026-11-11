@@ -65,7 +65,13 @@ Dismissing a reminder, opening details or focusing a host does not mark results 
 
 ## Task panel
 
-**Blue** means running, **amber** means awaiting input or approval, and **teal** means there is a result to review. The tray icon uses the same colors. “Turn ended” means the agent has finished its current turn.
+The task panel and tray icon use the same colors:
+
+- **Blue · Ongoing:** The agent is running a task.
+- **Amber · Needs attention:** The agent is waiting for input or approval. These tasks also count as ongoing.
+- **Teal · Unviewed:** The turn has ended and the result is ready to review. Failures appear in red.
+
+Each card shows whether the task runs locally or on a named SSH server. When the source reports them, the card shows the model and reasoning effort, such as `high`. The timer shows elapsed time while the task runs and keeps the final duration after it ends. The panel fits its cards up to four; additional cards scroll within the list.
 
 <p align="center"><a href="assets/screenshots/dashboard-en.png"><img src="assets/screenshots/dashboard-en.png" width="368" alt="TaskPulse v0.0.1 showing running tasks, input, approval and unread results"></a></p>
 

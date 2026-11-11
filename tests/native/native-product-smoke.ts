@@ -12,7 +12,9 @@ import {clickDashboardFilter} from '../support/dashboard-filters';
 const arg=process.argv.indexOf('--exe');if(arg<0)throw Error('--exe required');
 const original=resolve(process.argv[arg+1]);
 const captureOnly=process.argv.includes('--capture-only');
+const layoutOnly=process.argv.includes('--layout-only');
 if(captureOnly)assert.ok(process.argv.includes('--capture'),'--capture-only requires --capture');
+assert.ok(!layoutOnly||!process.argv.includes('--capture'),'--layout-only does not update public screenshots');
 const commitAt=process.argv.indexOf('--commit'),expectedCommit=commitAt<0?undefined:process.argv[commitAt+1];
 if(commitAt>=0 || process.argv.includes('--capture'))assert.match(expectedCommit??'',/^[a-f0-9]{40}$/);
 await withSmokeWorkspace('product-native',async({owned,evidenceDir,onStop})=>{
@@ -165,6 +167,56 @@ try{
   if(!await root.invoke('get_pinned'))await root.invoke('toggle_pin');
   let layout={scroll:false,height:0,horizontal:false};
   if(!captureOnly){
+  // The reported case has no running or waiting tasks. Count the unread
+  // cards on the default panel before any filter has been selected.
+  let unreadFourHeight=0;
+  const unreadHeights:number[]=[];
+  for(let n=1;n<=6;n++){
+    const id='layout-unread-'+n;
+    event(id,'turn.started',{title:'合成待查看结果 '+n,project:'示例项目 '+n,model:'example-model'});
+    event(id,'turn.completed');
+    await root.wait(`document.querySelector('.counts [data-tone="unread"] b')?.textContent==='${n}'`);
+    const height=await fittedCards(n);
+    unreadHeights.push(height);
+    if(n===4){
+      unreadFourHeight=height;
+      const fullHeight=height;
+      const win=await root.invoke('plugin:window|inner_size',{label:'popup'});
+      const scale=await root.invoke('plugin:window|scale_factor',{label:'popup'});
+      // Reproduce the short native viewport without touching the task list or
+      // changing its width. The panel must recover without a filter click.
+      await root.invoke('plugin:window|set_size',{label:'popup',value:{Physical:{width:win.width,height:Math.round(306*scale)}}});
+      await fittedCards(4);
+      assert.ok(Math.abs(await root.evaluate('innerHeight')-fullHeight)<=1,'Four unread cards must restore their measured height');
+      assert.equal(await root.evaluate(`document.querySelector('.counts [data-tone="unread"]').getAttribute('aria-pressed')`),'false');
+      await click(root,'.counts [data-tone="unread"]');
+      await root.invoke('open_management',{section:'general'});management=await page('/manage');
+      await management.wait('document.hasFocus()');
+      await root.wait('!document.hasFocus()');
+      const title=await root.evaluate(`(()=>{const r=document.querySelector('.brand').getBoundingClientRect();return {x:r.right-6,y:r.top+r.height/2};})()`);
+      await root.send('Input.dispatchMouseEvent',{type:'mousePressed',...title,button:'left',buttons:1,clickCount:1});
+      await root.send('Input.dispatchMouseEvent',{type:'mouseReleased',...title,button:'left',buttons:0,clickCount:1});
+      await root.wait('document.hasFocus()');
+      await fittedCards(4);
+      assert.equal(await root.evaluate(`document.querySelector('.counts [data-tone="unread"]').getAttribute('aria-pressed')`),'true','Title activation preserves the chosen filter');
+      assert.ok(Math.abs(await root.evaluate('innerHeight')-fullHeight)<=1,'Title activation must leave all four results visible');
+      await Bun.write(join(owned,'four-unread-after-title-click.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
+      await click(root,'.counts [data-tone="unread"]');
+      await fittedCards(4);
+    }
+    if(n>4){
+      assert.ok(Math.abs(height-unreadFourHeight)<=1,'Unread scrolling uses the same four-card height');
+      assert.ok(await root.evaluate(`(()=>{const m=document.querySelector('.task-scroll');return m.scrollHeight>m.clientHeight})()`),'More than four unread cards scroll');
+    }
+  }
+  for(const task of await root.invoke('get_agents'))await root.invoke('update_task_attention',{id:task.id,action:'hide'});
+  await fittedCards(0);
+  checks.push('one through four unread cards fit without filter; native height-only drift and title activation preserve four cards; fifth and sixth scroll');
+  if(layoutOnly){
+    await Bun.write(join(owned,'result.json'),JSON.stringify({passed:true,...buildEvidence,checks,unreadHeights},null,2));
+    console.log(JSON.stringify({passed:true,...buildEvidence,checks,unreadHeights}));
+    return;
+  }
   const nativeLayout=await root.evaluate(`({width:innerWidth})`);
   await fittedCards(0);
   await Bun.write(join(owned,'empty-native.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -613,8 +665,8 @@ try{
     await management.wait(`!!document.querySelector('.settings-shell')`);
   }
   if(process.argv.includes('--capture')){
-    // Curated public examples use the real event/store/UI pipeline. They are
-    // deliberately custom-agent tasks, not fabricated native provider output.
+    // Public examples use standard events and an isolated Codex-format
+    // rollout to render real model/effort and explicit elapsed time fields.
     const settings=await root.invoke('get_monitoring_settings');
     const english=process.argv.includes('--english');
     const suffix=english?'-en':'';
@@ -647,8 +699,24 @@ try{
     event('readme-overview-input','input.requested',{request_kind:'question'},{request_id:'readme-format'});
     event('readme-overview-approval','turn.started',{title:caption('运行项目测试','Run project checks'),project:caption('TaskPulse 示例','TaskPulse'),model:'gpt-5.4'});
     event('readme-overview-approval','input.requested',{request_kind:'approval'},{request_id:'readme-test'});
-    event('readme-overview-result','turn.started',{title:caption('整理快速入门指南','Write the quick-start guide'),project:caption('Docs 示例','Documentation'),model:'gpt-5.4'});
-    event('readme-overview-result','turn.completed');
+    const readmeStarted=Date.now()-61000;
+    const readmeTurn='readme-turn';
+    const readmeResult=caption('整理快速入门指南','Write the quick-start guide');
+    const readmeRollout=join(codexRoot,'sessions','rollout-readme-fixture.jsonl');
+    const readmeEvent=(at:number,payload:Record<string,unknown>)=>({timestamp:new Date(at).toISOString(),type:'event_msg',payload});
+    await Bun.write(readmeRollout,[
+      {type:'session_meta',payload:{id:'public-readme-result',cwd:'C:/Example/Docs'}},
+      readmeEvent(readmeStarted,{type:'task_started',turn_id:readmeTurn}),
+      readmeEvent(readmeStarted+100,{type:'user_message',message:readmeResult}),
+      {type:'turn_context',payload:{turn_id:readmeTurn,model:'gpt-5.4',effort:'high'}},
+    ].map(row=>JSON.stringify(row)).join('\n')+'\n');
+    const beforeCodex=await management.invoke('get_monitoring_settings');
+    const readmeSettings={...beforeCodex,sources:[...beforeCodex.sources.filter((s:any)=>s.id!=='codex'),
+      {id:'codex',name:'Codex',kind:'codex',location:'',enabled:true,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:500}]};
+    await management.invoke('save_monitoring_settings',{settings:readmeSettings,expected:beforeCodex});
+    await root.wait(`document.querySelector('[data-task-id="codex:public-readme-result"] .effort')?.textContent==='high'`);
+    await appendFile(readmeRollout,JSON.stringify(readmeEvent(readmeStarted+61000,{type:'task_complete',turn_id:readmeTurn}))+'\n');
+    await root.wait(`document.querySelector('[data-task-id="codex:public-readme-result"] .elapsed')?.textContent==='1m 1s'`);
     await root.wait(`document.querySelectorAll('.task-row').length===4&&document.querySelectorAll('.model').length===4&&document.body.innerText.includes(${JSON.stringify(caption('等待输入','Awaiting input'))})&&document.body.innerText.includes(${JSON.stringify(caption('本轮结束','Turn ended'))})`);
     const overview=await root.invoke('get_agents');
     assert.equal(overview.filter((t:any)=>t.status==='running').length,1);
@@ -660,7 +728,8 @@ try{
     const dashboardHeight=await fittedCards(4);
     await screenshot(root,'readme-dashboard',368,dashboardHeight);
     assert.ok(await root.evaluate(`[...document.querySelectorAll('.task-item')].every(e=>{const r=e.getBoundingClientRect(),list=document.querySelector('.task-scroll').getBoundingClientRect();return r.top>=list.top&&r.bottom<=list.bottom})`),'Every representative task must be visible');
-    settings.notifications=true;await management.invoke('save_monitoring_settings',{settings});
+    const noticeSettings=await management.invoke('get_monitoring_settings');
+    await management.invoke('save_monitoring_settings',{settings:{...noticeSettings,notifications:true},expected:noticeSettings});
     for(const [kind,title,project,label] of [
       ['input',caption('确认导出文件格式','Choose the export format'),caption('TaskPulse 示例','TaskPulse'),'等待输入'],
       ['approval',caption('运行项目测试','Run project checks'),caption('TaskPulse 示例','TaskPulse'),'需要授权'],
@@ -697,7 +766,7 @@ try{
     await mkdir('assets/screenshots',{recursive:true});
     for(const [from,to] of [['readme-dashboard','dashboard'],['readme-notice-input','notice-input'],['readme-notice-approval','notice-approval'],['readme-notice-completed','notice-completed']])await copyFile(join(owned,from+'.png'),join('assets/screenshots',to+suffix+'.png'));
     await Bun.write(join(owned,'capture-media.json'),JSON.stringify({...buildEvidence,language:english?'en':'zh-CN',files:['dashboard','notice-input','notice-approval','notice-completed'].map(name=>name+suffix+'.png')},null,2));
-    checks.push('public README native captures at DPR 2: four visible tasks across running/input/approval/unviewed states and input/approval/completed notices; no acknowledgement or fabricated native-agent identities');
+    checks.push('public README native captures at DPR 2: four visible tasks across running/input/approval/unviewed states, native Codex model/effort and fixed duration, and input/approval/completed notices; no acknowledgement or real host data');
   }
   const report={passed:true,captureOnly,...buildEvidence,checks,layout:captureOnly?null:layout,scaleChecks,statusAccents,trayStates,trayCaptures,nativeTrayEvidence:captureOnly?'Not sampled during image-only capture':'successful native set_icon calls; taskbar pixels require separate visual acceptance',scalingMethod:captureOnly?'Native WebView2 DPR 2 capture; not OS display-scale acceptance':'WebView2 CDP deviceScaleFactor 1/1.25/1.5/2 with fixed logical windows; not OS mixed-monitor DPI acceptance',screenshots:process.argv.includes('--capture'),renderer:'Windows native Tauri WebView2',inputs:'public synthetic standard events and native-format files; not real Agent-host certification',realHostsVerified:[],realHostConfigurationsChanged:false,notVerified:['external editor focus on locked desktop','real Agent-host lifecycle','installer acceptance','OS display-scale changes and mixed-DPI monitor migration'],evidence:evidenceDir};
   await Bun.write(join(owned,'result.json'),JSON.stringify(report,null,2));console.log(JSON.stringify(report));

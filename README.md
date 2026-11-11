@@ -65,7 +65,13 @@ curl -fsSL https://raw.githubusercontent.com/qingtian-4/TaskPulse/main/install.s
 
 ## 任务面板
 
-**蓝色**表示运行中，**琥珀色**表示等待输入或授权，**青绿色**表示结果待查看。托盘图标使用同一套颜色。卡片显示「本轮结束」时，表示 Agent 已结束这一轮执行。
+任务面板和托盘图标用同一套颜色：
+
+- **蓝色 · 进行中**：Agent 正在执行任务。
+- **琥珀色 · 待处理**：Agent 等待输入或授权。这些任务也计入进行中。
+- **青绿色 · 待查看**：本轮已结束，结果还没查看。失败会单独标红。
+
+卡片会标明任务来自本机，还是哪台 SSH 服务器。来源提供模型和推理强度时，卡片会一并显示，例如 `high`。任务运行时显示已用时间，结束后保留本轮总时长。面板随任务数调整高度，超过四张卡片时在列表内滚动。
 
 <p align="center"><a href="assets/screenshots/dashboard.png"><img src="assets/screenshots/dashboard.png" width="368" alt="TaskPulse v0.0.1：运行中、等待输入、请求批准与未读结果"></a></p>
 

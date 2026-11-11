@@ -258,7 +258,7 @@
         await subscribe(win.onResized(({payload})=>{if(payload.width!==lastWidth){lastWidth=payload.width;layoutEpoch++;}}));
         void document.fonts.ready.then(()=>{if(mounted)layoutEpoch++;});
         await subscribe(win.onFocusChanged(({payload:focused})=>{
-          if(focused) {showArchive=false;resetFilters();void snapshots().catch(e=>error=String(e));}
+          if(focused)void snapshots().catch(e=>error=String(e));
         }));
       } catch(e) { error='无法读取监控数据：'+String(e); }
       finally { layoutReady=true; await tick(); await layoutQueue; await resizeQueue; await emit('popup-ready',null).catch(()=>{}); }

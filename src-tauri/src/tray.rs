@@ -423,8 +423,13 @@ fn create_popup(app: &AppHandle) {
     {
         Ok(win) => {
             let events = app.clone();
+            let popup_window = win.clone();
+            let fit_queued = Arc::new(AtomicBool::new(false));
             win.on_window_event(move |event| match event {
                 tauri::WindowEvent::Focused(_) => dispatch_popup(&events, PopupEvent::FocusChanged),
+                tauri::WindowEvent::Resized(_) | tauri::WindowEvent::ScaleFactorChanged { .. } => {
+                    queue_popup_fit(&popup_window, &fit_queued);
+                }
                 tauri::WindowEvent::Destroyed => {
                     dispatch_popup(&events, PopupEvent::Intent(Input::Destroyed))
                 }
@@ -828,6 +833,30 @@ fn popup_geometry(
     (width, height, x.clamp(min_x, max_x), y.clamp(min_y, max_y))
 }
 
+// Native move/resize handling can change just the height while all rendered
+// cards and their measured height stay the same. Reconcile against the latest
+// content request, after the current native event (including a DPI resize).
+fn queue_popup_fit(window: &tauri::WebviewWindow, queued: &Arc<AtomicBool>) {
+    if queued.swap(true, Ordering::AcqRel) {
+        return;
+    }
+    let window = window.clone();
+    let queued = queued.clone();
+    tauri::async_runtime::spawn(async move {
+        let target = window.clone();
+        let pending = queued.clone();
+        if let Err(error) = window.run_on_main_thread(move || {
+            pending.store(false, Ordering::Release);
+            if let Err(error) = fit_popup(&target, DASHBOARD_HEIGHT.load(Ordering::SeqCst), true) {
+                log::debug!("Could not refit popup after native resize: {error}");
+            }
+        }) {
+            queued.store(false, Ordering::Release);
+            log::debug!("Could not queue popup fit: {error}");
+        }
+    });
+}
+
 fn fit_popup(
     window: &tauri::WebviewWindow,
     height: u32,
@@ -840,10 +869,7 @@ fn fit_popup(
         .or_else(|| window.primary_monitor().ok().flatten())
         .ok_or("无法读取窗口所在屏幕")?;
     let area = monitor.work_area();
-    let current = keep_position
-        .then(|| window.outer_position().ok())
-        .flatten()
-        .map(|p| (p.x, p.y));
+    let current = window.outer_position().ok().map(|p| (p.x, p.y));
     let (width, height, x, y) = popup_geometry(
         (
             area.position.x,
@@ -853,14 +879,21 @@ fn fit_popup(
         ),
         monitor.scale_factor(),
         height,
-        current,
+        if keep_position { current } else { None },
     );
-    window
-        .set_size(tauri::PhysicalSize::new(width, height))
-        .map_err(|e| e.to_string())?;
-    window
-        .set_position(tauri::PhysicalPosition::new(x, y))
-        .map_err(|e| e.to_string())
+    // Refits caused by our own native events are no-ops. Compare with the
+    // work-area-clamped size, so a small monitor never causes a resize loop.
+    if window.inner_size().ok().map(|s| (s.width, s.height)) != Some((width, height)) {
+        window
+            .set_size(tauri::PhysicalSize::new(width, height))
+            .map_err(|e| e.to_string())?;
+    }
+    if current != Some((x, y)) {
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|e| e.to_string())?;
+    }
+    Ok(())
 }
 
 #[tauri::command]
