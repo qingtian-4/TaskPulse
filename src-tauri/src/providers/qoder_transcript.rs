@@ -231,14 +231,29 @@ impl Transcripts {
                 .to_string_lossy()
                 .into_owned();
             visited.insert(path.clone());
-            // Reserve admission for followed sessions and existing resumable
-            // readers, even if unrelated files are stalled at a partial line.
-            if unfinished >= 8
-                && !is_protected(&path)
-                && !self.logs.get(&path).is_some_and(Journal::resumable)
+            if !self
+                .logs
+                .get(&path)
+                .is_some_and(|journal| journal.resumable() || is_protected(&path))
             {
-                status = status.max(BatchRead::Paginating);
-                continue;
+                while unfinished >= 8 {
+                    // These untracked tails have read every byte on disk. Let a
+                    // new candidate use their slot; followed or unread logs
+                    // retain their existing cursor.
+                    let stalled = self.logs.iter().find_map(|(path, journal)| {
+                        (journal.resumable()
+                            && !journal.tail.has_unread_bytes()
+                            && !is_protected(path))
+                        .then(|| path.clone())
+                    });
+                    let Some(stalled) = stalled else { break };
+                    self.logs.remove(&stalled);
+                    unfinished -= 1;
+                }
+                if unfinished >= 8 {
+                    status = status.max(BatchRead::Paginating);
+                    continue;
+                }
             }
             let journal = self.logs.entry(path.clone()).or_default();
             let was_resumable = journal.resumable();
@@ -381,6 +396,36 @@ mod tests {
         assert!(rows
             .iter()
             .any(|task| task.waiting_reason == Some(WaitingReason::TurnEnded)));
+    }
+
+    #[test]
+    fn stalled_untracked_eof_lines_cannot_block_a_new_session() {
+        let dir = tempfile::tempdir().unwrap();
+        let project = dir.path().join("projects/fixture");
+        std::fs::create_dir_all(&project).unwrap();
+        for index in 0..8 {
+            std::fs::write(
+                project.join(format!("partial-{index}.jsonl")),
+                b"{\"type\":",
+            )
+            .unwrap();
+        }
+        let protected = HashSet::new();
+        let mut reader = Transcripts::default();
+        assert!(reader.read(dir.path(), &protected).1 == BatchRead::Paginating);
+        std::fs::write(project.join("new.jsonl"),
+            b"{\"type\":\"user\",\"uuid\":\"u\",\"timestamp\":\"2026-11-07T00:00:00Z\",\"message\":{\"content\":\"Fixture\"}}\n").unwrap();
+        let mut found = false;
+        for _ in 0..4 {
+            let (rows, _) = reader.read(dir.path(), &protected);
+            found |= rows
+                .iter()
+                .any(|task| task.session_id.as_deref() == Some("new"));
+        }
+        assert!(
+            found,
+            "Stalled partial lines cannot consume every new-reader slot"
+        );
     }
 
     #[test]
