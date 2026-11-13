@@ -1191,7 +1191,10 @@ fn apply_codex_rollout(
                     reasoning_effort = value
                         .as_str()
                         .filter(|s| {
-                            matches!(*s, "none" | "minimal" | "low" | "medium" | "high" | "xhigh")
+                            matches!(
+                                *s,
+                                "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max"
+                            )
                         })
                         .map(str::to_owned);
                 }

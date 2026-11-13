@@ -708,15 +708,15 @@ try{
       {type:'session_meta',payload:{id:'public-readme-result',cwd:'C:/Example/Docs'}},
       readmeEvent(readmeStarted,{type:'task_started',turn_id:readmeTurn}),
       readmeEvent(readmeStarted+100,{type:'user_message',message:readmeResult}),
-      {type:'turn_context',payload:{turn_id:readmeTurn,model:'gpt-5.4',effort:'high'}},
+      {type:'turn_context',payload:{turn_id:readmeTurn,model:'gpt-6.1-sol',effort:'max'}},
     ].map(row=>JSON.stringify(row)).join('\n')+'\n');
     const beforeCodex=await management.invoke('get_monitoring_settings');
     const readmeSettings={...beforeCodex,sources:[...beforeCodex.sources.filter((s:any)=>s.id!=='codex'),
       {id:'codex',name:'Codex',kind:'codex',location:'',enabled:true,projects:['*'],excluded_projects:[],tmux_sessions:[],tmux_panes:[],poll_interval_ms:500}]};
     await management.invoke('save_monitoring_settings',{settings:readmeSettings,expected:beforeCodex});
-    await root.wait(`document.querySelector('[data-task-id="codex:public-readme-result"] .effort')?.textContent==='high'`);
+    await root.wait(`document.querySelector('[data-task-id="codex:public-readme-result"] .effort')?.textContent==='max'`);
     await appendFile(readmeRollout,JSON.stringify(readmeEvent(readmeStarted+61000,{type:'task_complete',turn_id:readmeTurn}))+'\n');
-    await root.wait(`document.querySelector('[data-task-id="codex:public-readme-result"] .elapsed')?.textContent==='1m 1s'`);
+    await root.wait(`document.querySelector('[data-task-id="codex:public-readme-result"] .elapsed')?.textContent==='1m 1s' && document.querySelector('[data-task-id="codex:public-readme-result"] .effort')?.textContent==='max'`);
     await root.wait(`document.querySelectorAll('.task-row').length===4&&document.querySelectorAll('.model').length===4&&document.body.innerText.includes(${JSON.stringify(caption('等待输入','Awaiting input'))})&&document.body.innerText.includes(${JSON.stringify(caption('本轮结束','Turn ended'))})`);
     const overview=await root.invoke('get_agents');
     assert.equal(overview.filter((t:any)=>t.status==='running').length,1);

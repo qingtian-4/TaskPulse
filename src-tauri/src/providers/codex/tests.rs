@@ -2152,11 +2152,21 @@ fn reported_effort_and_explicit_end_are_metadata_not_lifecycle_guesses() {
             .unwrap(),
         Duration::from_secs(61)
     );
+    let max = apply_codex_rollout(
+        r#"{"type":"turn_context","payload":{"turn_id":"t","model":"gpt-test","effort":"max"}}"#,
+        now,
+        "s",
+        Some(ended.clone()),
+    )
+    .unwrap();
+    assert_eq!(max.reasoning_effort.as_deref(), Some("max"));
+    assert_eq!(max.finished_at, ended.finished_at);
+    assert_eq!(max.updated_at, ended.updated_at);
     let refreshed = apply_codex_rollout(
         r#"{"type":"turn_context","payload":{"turn_id":"t","model":"gpt-test","effort":"low"}}"#,
         now,
         "s",
-        Some(ended.clone()),
+        Some(max),
     )
     .unwrap();
     assert_eq!(refreshed.finished_at, ended.finished_at);
