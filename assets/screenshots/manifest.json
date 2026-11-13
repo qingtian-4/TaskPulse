@@ -1,14 +1,14 @@
 {
   "version": "0.0.1",
-  "capture_commit": "61fe287279a42636b6b215837062ae8cbf122834",
+  "capture_commit": "af8042b123bd26c525481fe2211272077729ca26",
   "modified": false,
-  "executable_sha256": "06d980e76512c3d55a963cbd562a42e1dbef39f29fd1cda4c24183aee7357d6e",
+  "executable_sha256": "3b77d7637263df6b2f9eba70823d9fe904ff125694a5fbec40a4b635b9b37a04",
   "platform": "Windows",
   "renderer": "Native Tauri WebView2",
   "data": "Example tasks via Standard Events; no private Agent sessions",
   "authorization": "Maintainer requested current-interface public screenshots",
   "rendering": "Native WebView capture at DPR 2; no UI or IPC mocks",
-  "captured_on": "2026-11-11",
+  "captured_on": "2026-11-13",
   "assets": [
     {
       "file": "dashboard.png",
@@ -19,8 +19,8 @@
       "logical_width": 368,
       "logical_height": 657,
       "dpr": 2,
-      "sha256": "42dbec1e5974259ac2754680d16784d406489cb2097ffd161dcd89ff437b4cca",
-      "bytes": 145193
+      "sha256": "315dbbf0c3324993f867c3ae60ee8cc175fae0590e78ec153043a85b838f6a93",
+      "bytes": 145810
     },
     {
       "file": "notice-input.png",
@@ -67,8 +67,8 @@
       "logical_width": 368,
       "logical_height": 675,
       "dpr": 2,
-      "sha256": "8676a7a04d2481616136e93009dccf919b08cc2f6cca526efed6152ff615d4ad",
-      "bytes": 129638
+      "sha256": "f32320a5cf3a0af1ce92deefa56b7fed4b95d15467489aa384aba33c34e847e7",
+      "bytes": 130219
     },
     {
       "file": "notice-input-en.png",
@@ -103,12 +103,12 @@
       "logical_width": 320,
       "logical_height": 132,
       "dpr": 2,
-      "sha256": "e1d98529f2230177605bb87d4fdb5bc4069eb1d10c1128197b1597af829f62ea",
+      "sha256": "9d6f172baa518a5f05b24beb23dd8afc4db4e4019acc1cc60019b7568abdde60",
       "bytes": 23446
     }
   ],
   "frontend_tree": "66d44b25d9508264dd1ba59acfa8e3cd34303dd5",
-  "runtime_tree": "5c58f22f2c85fdddb47299f8432aa4878842a448",
+  "runtime_tree": "b401c3a6b90e64b204852ed3e89e957a2a0e0901",
   "locale_tree": "a224a063c0b576010ec29abe804d6a5959a0e005",
   "application_config_sha256": "adaaa265c464566b581dc876b3c46021760cee6d62586500c6b2c4675ea2935f",
   "lockfiles": {
