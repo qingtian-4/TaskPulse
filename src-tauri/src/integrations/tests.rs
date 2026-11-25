@@ -194,7 +194,9 @@ fn f01_scoped_gap_requires_matching_recovery_and_survives_restart() {
             ["unresolved_fact_gaps"],
         0
     );
-    super::health::record(home.path(), &src.id, "invalid_json", None).unwrap();
+    for invalid in ["invalid_json", "invalid_turn_reasoning_effort"] {
+        super::health::record(home.path(), &src.id, invalid, None).unwrap();
+    }
     assert!(p
         .poll(std::time::SystemTime::now())
         .tasks
@@ -1243,6 +1245,8 @@ fn late_metadata_conflicting_call_and_heartbeat_rename_are_safe() {
     assert_eq!(renamed.name, "renamed while idle");
     assert_eq!(renamed.updated_at, b.updated_at);
     let mut request = event(Kind::Requested, "b", 5);
+    request.payload.model = Some("trusted-model".into());
+    request.payload.reasoning_effort = Some("high".into());
     request.request_id = Some("r".into());
     request.call_id = Some("correct".into());
     request.payload.request_kind = Some(WaitingReason::Approval);
@@ -1250,8 +1254,13 @@ fn late_metadata_conflicting_call_and_heartbeat_rename_are_safe() {
     let mut bad = event(Kind::Resolved, "b", 6);
     bad.request_id = Some("r".into());
     bad.call_id = Some("other".into());
+    bad.payload.model = Some("unrelated-model".into());
+    bad.payload.reasoning_effort = Some("low".into());
     assert!(state.apply(&envelope(bad, 6), "Fixture").unwrap().is_none());
-    assert_eq!(state.task.unwrap().input_request_ids, ["r"]);
+    let next = apply(&mut state, event(Kind::Heartbeat, "b", 7), 7);
+    assert_eq!(next.input_request_ids, ["r"]);
+    assert_eq!(next.model.as_deref(), Some("trusted-model"));
+    assert_eq!(next.reasoning_effort.as_deref(), Some("high"));
 }
 
 #[test]

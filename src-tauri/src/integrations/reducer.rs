@@ -117,6 +117,22 @@ impl Session {
         if e.kind == Kind::Test {
             return Ok(None);
         }
+        let resolution_key = (e.kind == Kind::Resolved).then(|| {
+            request_key(
+                e.turn_id.as_deref().unwrap_or(""),
+                e.request_id.as_deref().unwrap_or(""),
+            )
+        });
+        if resolution_key
+            .as_ref()
+            .and_then(|key| self.pending.get(key))
+            .and_then(|pending| pending.call.as_ref())
+            .zip(e.call_id.as_ref())
+            .is_some_and(|(expected, reported)| expected != reported)
+        {
+            // Reject before touching either current presentation or old-turn requests.
+            return Ok(None);
+        }
         let metadata_only = matches!(
             e.kind,
             Kind::Discovered
@@ -136,18 +152,8 @@ impl Session {
             // Old-turn cleanup is causally associated by explicit turn/request
             // IDs. Release its retained resources without changing the current
             // task or notifying a completion for the current turn.
-            if e.kind == Kind::Resolved {
-                let key = request_key(
-                    e.turn_id.as_deref().unwrap_or(""),
-                    e.request_id.as_deref().unwrap_or(""),
-                );
-                if self
-                    .pending
-                    .get(&key)
-                    .is_some_and(|p| p.call.is_none() || e.call_id.is_none() || p.call == e.call_id)
-                {
-                    self.pending.remove(&key);
-                }
+            if let Some(key) = &resolution_key {
+                self.pending.remove(key);
             } else if matches!(e.kind, Kind::Completed | Kind::Failed | Kind::Interrupted) {
                 if let Some(turn) = e.turn_id.as_ref().filter(|turn| self.has_turn(turn)) {
                     self.pending.retain(|_, p| p.turn != *turn);
@@ -327,18 +333,7 @@ impl Session {
                     );
                 }
                 Kind::Resolved => {
-                    if self
-                        .pending
-                        .get(&request_key(turn, e.request_id.as_ref().unwrap()))
-                        .is_some_and(|p| {
-                            p.call.is_some() && e.call_id.is_some() && p.call != e.call_id
-                        })
-                    {
-                        return Ok(None);
-                    }
-                    let pending = self
-                        .pending
-                        .remove(&request_key(turn, e.request_id.as_ref().unwrap()));
+                    let pending = resolution_key.and_then(|key| self.pending.remove(&key));
                     if e.payload.phase.is_some()
                         && pending
                             .as_ref()
