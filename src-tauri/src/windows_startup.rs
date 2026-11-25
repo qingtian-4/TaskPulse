@@ -3,8 +3,6 @@
 use std::path::Path;
 use windows_registry::{Key, Value, CURRENT_USER, LOCAL_MACHINE};
 
-const RUN: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
-const APPROVED: &str = r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run";
 const ENABLED: [u8; 12] = [2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0];
 
 fn optional<T>(value: windows_registry::Result<T>) -> Result<Option<T>, String> {
@@ -30,6 +28,8 @@ pub(super) fn command(exe: &Path) -> Result<String, String> {
 struct Registration<'a> {
     user: &'a Key,
     machine: &'a Key,
+    entries_path: &'a str,
+    approval_path: &'a str,
     name: &'a str,
     quoted: String,
     legacy_quoted: Option<String>,
@@ -37,7 +37,7 @@ struct Registration<'a> {
 
 impl Registration<'_> {
     fn existing(&self, hive: &Key) -> Result<Option<String>, String> {
-        let Some(key) = optional(hive.open(RUN))? else {
+        let Some(key) = optional(hive.open(self.entries_path))? else {
             return Ok(None);
         };
         let Some(value) = optional(key.get_string(self.name))? else {
@@ -56,7 +56,7 @@ impl Registration<'_> {
     }
 
     fn approval(&self, hive: &Key) -> Result<Option<Value>, String> {
-        match optional(hive.open(APPROVED))? {
+        match optional(hive.open(self.approval_path))? {
             Some(key) => optional(key.get_value(self.name)),
             None => Ok(None),
         }
@@ -100,7 +100,7 @@ impl Registration<'_> {
                 if value.trim() != self.quoted {
                     hive.options()
                         .write()
-                        .open(RUN)
+                        .open(self.entries_path)
                         .and_then(|key| key.set_string(self.name, &self.quoted))
                         .map_err(|e| format!("Cannot repair login startup command: {e}"))?;
                 }
@@ -120,7 +120,7 @@ impl Registration<'_> {
                 if present.is_some() {
                     hive.options()
                         .write()
-                        .open(RUN)
+                        .open(self.entries_path)
                         .and_then(|key| key.remove_value(self.name))
                         .map_err(|e| e.to_string())?;
                 }
@@ -135,7 +135,7 @@ impl Registration<'_> {
             self.user
         };
         let previous = if machine.is_some() { machine } else { user };
-        let key = hive.create(RUN).map_err(|e| e.to_string())?;
+        let key = hive.create(self.entries_path).map_err(|e| e.to_string())?;
         let approvals: Vec<_> = [self.machine, self.user]
             .into_iter()
             .map(|h| self.approval(h).map(|v| (h, v)))
@@ -144,9 +144,13 @@ impl Registration<'_> {
             .map_err(|e| e.to_string())?;
         for (scope, value) in &approvals {
             if value.is_some() {
-                let result = scope.options().write().open(APPROVED).and_then(|key| {
-                    key.set_bytes(self.name, windows_registry::Type::Bytes, &ENABLED)
-                });
+                let result = scope
+                    .options()
+                    .write()
+                    .open(self.approval_path)
+                    .and_then(|key| {
+                        key.set_bytes(self.name, windows_registry::Type::Bytes, &ENABLED)
+                    });
                 if let Err(error) = result {
                     // Preserve the confirmed state on a partial registration failure.
                     let rollback = match &previous {
@@ -158,7 +162,7 @@ impl Registration<'_> {
                             let _ = scope
                                 .options()
                                 .write()
-                                .open(APPROVED)
+                                .open(self.approval_path)
                                 .and_then(|key| key.set_value(self.name, old));
                         }
                     }
@@ -182,6 +186,8 @@ fn registration<'a>(name: &'a str, exe: &Path) -> Result<Registration<'a>, Strin
     Ok(Registration {
         user: CURRENT_USER,
         machine: LOCAL_MACHINE,
+        entries_path: r"Software\Microsoft\Windows\CurrentVersion\Run",
+        approval_path: r"Software\Microsoft\Windows\CurrentVersion\Explorer\StartupApproved\Run",
         name,
         quoted,
         legacy_quoted,
@@ -313,7 +319,13 @@ mod tests {
             .unwrap();
         let user = root.create("User").unwrap();
         let machine = root.create("Machine").unwrap();
+        // Some startup managers watch the system key suffixes even below a
+        // test hive and create their own non-transacted subkeys there.
+        const RUN: &str = "Entries";
+        const APPROVED: &str = "Approval";
         let registration = Registration {
+            entries_path: RUN,
+            approval_path: APPROVED,
             user: &user,
             machine: &machine,
             name: "agent-tray",
@@ -345,11 +357,10 @@ mod tests {
             assert_eq!(&*approved.get_value("agent-tray").unwrap(), &disabled);
 
             let installed = Registration {
-                user: &user,
-                machine: &machine,
                 name: "TaskPulse",
                 quoted: command(Path::new(r"C:\Test App\TaskPulse.exe")).unwrap(),
                 legacy_quoted: Some(registration.quoted.clone()),
+                ..registration
             };
             let run = user.options().read().write().open(RUN).unwrap();
             run.set_string(installed.name, r"C:\Test App\agent-tray.exe")
@@ -410,7 +421,13 @@ mod tests {
         drop(user);
         drop(machine);
         drop(root);
-        // The entire private registry fixture rolls back, including on failure.
+        // Finish rollback before checking for cleanup. Closing the last transaction
+        // handle initiates rollback but doesn't wait for the registry to finish it.
+        // SAFETY: this test owns the live transaction handle until the drop below.
+        let rolled_back = unsafe {
+            windows_sys::Win32::Storage::FileSystem::RollbackTransaction(transaction.as_raw())
+        };
+        assert_ne!(rolled_back, 0, "{}", std::io::Error::last_os_error());
         drop(transaction);
         assert!(optional(CURRENT_USER.open(&path)).unwrap().is_none());
         if let Err(panic) = result {

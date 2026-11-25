@@ -147,7 +147,16 @@ async function screenshot(client:any,name:string,width:number,height:number){
 }
 async function fittedCards(count:number){
   await root.wait(`document.querySelectorAll('.task-row').length===${count}`);
-  await root.wait(`(()=>{const main=document.querySelector('.task-scroll'),box=main.getBoundingClientRect(),rows=[...main.querySelectorAll('.task-item')];if(!rows.length)return true;return rows.slice(0,4).every(row=>{const r=row.getBoundingClientRect();return r.top>=box.top-1&&r.bottom<=box.bottom+1})&&Math.abs(box.bottom-rows[Math.min(4,rows.length)-1].getBoundingClientRect().bottom-8)<=3;})()`);
+  // A short card can leave extra space when the native 280px minimum is active.
+  await root.wait(`(() => {
+    const main = document.querySelector('.task-scroll');
+    const box = main.getBoundingClientRect();
+    const rows = [...main.querySelectorAll('.task-item')].slice(0, 4).map(row => row.getBoundingClientRect());
+    if (!rows.length) return true;
+    const gap = box.bottom - rows.at(-1).bottom;
+    const fitted = Math.max(280, innerHeight - gap + 8);
+    return rows.every(row => row.top >= box.top-1 && row.bottom <= box.bottom+1) && Math.abs(innerHeight-fitted) <= 3;
+  })()`);
   return root.evaluate('innerHeight');
 }
 try{
