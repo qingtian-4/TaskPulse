@@ -296,61 +296,25 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
             });
 
         let mut snapshot = TaskSnapshot {
-            integration_epoch: None,
-            integration_sequence: 0,
-            agent_id: None,
-            agent_name: None,
-            evidence_channel: None,
-            native_storage: None,
-            outcome: None,
-            pending_confirmed_at: None,
-            source_instance: None,
-            model: None,
-            reasoning_effort: None,
-            internal: false,
-            project_path: None,
-            tmux_session: None,
-            tmux_pane: None,
-            tmux_target: None,
-            waiting_reason: None,
-            input_request_id: None,
-            input_request_ids: vec![],
-            attention_since: 0,
-            new_execution: false,
-            id: format!("file:{name}"),
-            name: display_name,
-            source: TaskSource::LocalFile,
-            status,
-            host: None,
             project: cwd_project,
             message: (!message.is_empty()).then_some(message),
             activity: val
                 .get("activity")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
-            phase: None,
             started_at: started_at.or(Some(mtime)),
-            updated_at: activity_at.or(finished_at).unwrap_or(mtime),
             finished_at,
             pid: val
                 .get("pid")
                 .and_then(|v| v.as_u64())
                 .and_then(|p| u32::try_from(p).ok()),
             exit_code,
-            confidence,
-            remote: false,
-            stale: false,
-            recent: false,
-            unread: false,
-            pinned: false,
             turn_key: val
                 .get("turn_key")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
-            native_unread: None,
             terminal,
             can_focus,
-            cpu: None,
             cli: val.get("cli").and_then(|s| s.as_str()).map(String::from),
             session_id: val
                 .get("session_id")
@@ -364,10 +328,14 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
                 .get("hook_matcher")
                 .and_then(|s| s.as_str())
                 .map(String::from),
-            quota_5h_used_pct: None,
-            quota_5h_resets_at: None,
-            quota_1w_used_pct: None,
-            quota_1w_resets_at: None,
+            ..TaskSnapshot::new(
+                format!("file:{name}"),
+                display_name,
+                TaskSource::LocalFile,
+                status,
+                confidence,
+                activity_at.or(finished_at).unwrap_or(mtime),
+            )
         };
         snapshot.project_path = val.get("cwd").and_then(|v| v.as_str()).map(str::to_string);
         snapshot.source = match snapshot.cli.as_deref() {
@@ -391,60 +359,16 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
             None => (checked_status(trimmed)?, None),
         };
         Some(TaskSnapshot {
-            integration_epoch: None,
-            integration_sequence: 0,
-            agent_id: None,
-            agent_name: None,
-            evidence_channel: None,
-            native_storage: None,
-            outcome: None,
-            pending_confirmed_at: None,
-            source_instance: None,
-            model: None,
-            reasoning_effort: None,
-            internal: false,
-            project_path: None,
-            tmux_session: None,
-            tmux_pane: None,
-            tmux_target: None,
-            waiting_reason: None,
-            input_request_id: None,
-            input_request_ids: vec![],
-            attention_since: 0,
-            new_execution: false,
-            id: format!("file:{name}"),
-            name,
-            source: TaskSource::LocalFile,
-            status,
-            host: None,
-            project: None,
             message,
-            activity: None,
-            phase: None,
             started_at: Some(mtime),
-            updated_at: mtime,
-            finished_at: None,
-            pid: None,
-            exit_code: None,
-            confidence: DetectionConfidence::Hook,
-            remote: false,
-            stale: false,
-            recent: false,
-            unread: false,
-            pinned: false,
-            turn_key: None,
-            native_unread: None,
-            terminal: None,
-            can_focus: false,
-            cpu: None,
-            cli: None,
-            session_id: None,
-            hook_event: None,
-            hook_matcher: None,
-            quota_5h_used_pct: None,
-            quota_5h_resets_at: None,
-            quota_1w_used_pct: None,
-            quota_1w_resets_at: None,
+            ..TaskSnapshot::new(
+                format!("file:{name}"),
+                name,
+                TaskSource::LocalFile,
+                status,
+                DetectionConfidence::Hook,
+                mtime,
+            )
         })
     }
 }
