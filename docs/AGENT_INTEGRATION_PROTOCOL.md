@@ -24,7 +24,9 @@ macOS 使用安装后的 `TaskPulse.app/Contents/MacOS/agent-tray`，其他参�
 | kind | 下表枚举，不接受任意状态字符串 |
 | occurred_at | 可选 UTC epoch 毫秒，最大 253402300799000；展示时间不超过接收时间，不用时间戳代替因果关联 |
 | request_id / call_id | 请求/调用身份；请求及解除必填 request_id，工具事件必填 call_id |
-| payload | 可选对象，仅允许 title、project、project_path、model、phase、activity、request_kind |
+| payload | 可选对象，仅允许 title、project、project_path、model、reasoning_effort、phase、activity、request_kind |
+
+可选的 `reasoning_effort` 用于上报本轮明确的推理强度，例如 `high`。填写时须同时提供 `turn_id`，标签最长 64 个 UTF-8 字节。接收端在更换轮次或模型时清除旧强度。
 
 原始 ID 允许 Unicode、冒号和斜杠，非空、无控制字符、最多 512 UTF-8 字节。实际路径与任务身份组件使用 SHA-256；原始 ID 不拼接文件名。展示字段每项最多 2048 UTF-8 字节，无控制字符。拒绝未知顶层/payload 字段；不接收 prompt、tool_input、output、凭据或任意执行代码。`activity` 只能是最小安全标签；生产者仍有责任脱敏标题/活动中的隐私内容。
 

@@ -1,10 +1,10 @@
 <script lang="ts">
-  import {t} from '$lib/i18n';
+  import {t} from '#lib/i18n.ts';
   import {onMount} from 'svelte';
   import {RefreshCw} from '@lucide/svelte';
   import {invoke,isTauri} from '@tauri-apps/api/core';
   import {listen} from '@tauri-apps/api/event';
-  import type {UpdateStatus} from '$lib/types';
+  import type {UpdateStatus} from '#lib/types.ts';
   let {blocked=false}:{blocked?:boolean}=$props();
   let status=$state<UpdateStatus|null>(null),error=$state('');
   const busy=$derived(!!status && ['checking','downloading','verifying','installing'].includes(status.phase));

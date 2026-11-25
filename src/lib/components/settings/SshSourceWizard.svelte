@@ -1,9 +1,10 @@
 <script lang="ts">
+  import {modal} from '#lib/modal.ts';
   import {onMount} from 'svelte';
   import {invoke} from '@tauri-apps/api/core';
   import {Check,RefreshCw,X,ChevronRight,ArrowLeft} from '@lucide/svelte';
-  import {t} from '$lib/i18n';
-  import {canRead,readLabel,sshAgents,type NewServer,type SshProbe,type SshSelections} from '$lib/monitor-sources';
+  import {t} from '#lib/i18n.ts';
+  import {canRead,readLabel,sshAgents,type NewServer,type SshProbe,type SshSelections} from '#lib/monitor-sources.ts';
   import ProjectScope from './ProjectScope.svelte';
   let {existing,onadd,oncancel}:{existing:string[];onadd:(value:NewServer)=>Promise<boolean>;oncancel:()=>void}=$props();
   let step=$state(1),host=$state(''),name=$state(''),aliases=$state<string[]>([]),hostError=$state('');
@@ -22,22 +23,8 @@
     catch(e){if(alive&&request===ticket)hostError=String(e);}finally{if(alive&&request===ticket)testing=false;}
   }
   async function finish(){if(!report||saving)return;saving=true;hostError='';try{const saved=await onadd({host:host.trim(),name:name.trim()||host.trim(),agents:$state.snapshot(agents),report});if(!saved)hostError='配置未保存，请检查冲突后重试。';}catch(e){hostError=String(e);}finally{saving=false;}}
-  function focus(dialog:HTMLElement){
-    (dialog.querySelector<HTMLElement>('input:not(:disabled)')??dialog.querySelector<HTMLElement>('button'))?.focus();
-    const handler=(e:KeyboardEvent)=>{
-      if(e.key==='Escape'){e.preventDefault();if(!saving)oncancel();}
-      if(e.key==='Tab'){
-        const nodes=[...dialog.querySelectorAll<HTMLElement>('button:not(:disabled),input:not(:disabled),select:not(:disabled)')].filter(n=>n.getClientRects().length);
-        if(!nodes.length){e.preventDefault();return;}
-        if(e.shiftKey&&document.activeElement===nodes[0]){e.preventDefault();nodes.at(-1)?.focus();}
-        else if(!e.shiftKey&&document.activeElement===nodes.at(-1)){e.preventDefault();nodes[0]?.focus();}
-      }
-    };
-    dialog.addEventListener('keydown',handler);return{destroy(){dialog.removeEventListener('keydown',handler);}};
-  }
 </script>
-<div class="ms-overlay">
-  <dialog open aria-modal="true" class="ms-modal ssh-wizard" aria-labelledby="ssh-wizard-title" use:focus>
+<dialog class="ms-modal ssh-wizard" aria-labelledby="ssh-wizard-title" use:modal={'input:not(:disabled)'} oncancel={e=>{e.preventDefault();if(!saving)oncancel();}}>
     <header class="modal-top">
       <div class="modal-topline">
         <h2 id="ssh-wizard-title">{$t('添加 SSH 服务器')}</h2>
@@ -122,5 +109,4 @@
         <button class="ms-btn primary" disabled={saving} onclick={finish}><Check size={14}/>{$t(saving?'正在保存…':sshAgents.some(agent=>agents[agent.key].enabled)?'添加并开始监控':'保存连接，暂不启用')}</button>
       {/if}
     </footer>
-  </dialog>
-</div>
+</dialog>

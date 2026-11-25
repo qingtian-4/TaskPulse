@@ -1,7 +1,7 @@
 <script lang="ts">
   import {Plus,Folder,Search} from '@lucide/svelte';
-  import {t} from '$lib/i18n';
-  import {scopeOptions,type ProjectChoice} from '$lib/project-options';
+  import {t} from '#lib/i18n.ts';
+  import {scopeOptions,type ProjectChoice} from '#lib/project-options.ts';
   let {projects,choices=[],aliases=[],onchange,disabled=false}:{projects:string[];choices?:string[];aliases?:ProjectChoice[];onchange:(value:string[])=>void;disabled?:boolean}=$props();
   const group=$props.id();
   let path=$state(''),query=$state(''),selectedBeforeAll=$state<string[]>([]);

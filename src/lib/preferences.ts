@@ -52,6 +52,11 @@ export function savePreference(patch:PreferencePatch,control?:HTMLInputElement|H
   }).finally(()=>{pending--;preferencePending.set(pending>0);});
   queue=work.catch(()=>{});return work;
 }
+// Settings controls report persistence failures through the shared preferenceError store.
+export function savePreferenceFromControl(patch: PreferencePatch, control: HTMLInputElement | HTMLSelectElement) {
+  void savePreference(patch, control).catch(() => {});
+}
+
 export async function connectPreferences():Promise<()=>void>{
   if(!isTauri())return ()=>{};
   let active=true;

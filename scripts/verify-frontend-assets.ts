@@ -1,21 +1,33 @@
 // Check the emitted desktop entry pages before Tauri embeds the frontend.
-import {readFileSync} from 'node:fs';
-import {join,resolve} from 'node:path';
+import { accessSync, readFileSync } from 'node:fs';
+import { join, resolve } from 'node:path';
 
-const root=resolve(process.argv[2]??'build');
-const pages=['index.html','manage/index.html','notice.html'];
-for(const page of pages){
-  const html=readFileSync(join(root,page),'utf8');
-  const payloads=new Set([...html.matchAll(/\b(__sveltekit_[a-z0-9]+)\s*=\s*\{/g)].map(m=>m[1]));
-  const assets=new Set([...html.matchAll(/(?:href=|import\()["']\/_app\/immutable\/((?:[\w-]+\/)*[\w.-]+\.js)["']/g)].map(m=>m[1]));
-  const runtimes=new Set<string>();
-  for(const asset of assets){
-    const source=readFileSync(join(root,'_app','immutable',asset),'utf8');
-    for(const match of source.matchAll(/\bglobalThis\.(__sveltekit_[a-z0-9]+)\.data\b/g))runtimes.add(match[1]);
+const root = resolve(process.argv[2] ?? 'build');
+const scan = new Bun.Transpiler({ loader: 'js' });
+const pages = ['index.html', 'manage/index.html', 'notice.html'];
+let sharedEntries: string | undefined;
+
+for (const page of pages) {
+  const html = readFileSync(join(root, page), 'utf8');
+  const assets = [...html.matchAll(/(?:href=|import\()["'](\/_app\/immutable\/[\w./-]+)["']/g)].map(match => match[1]);
+  for (const asset of new Set(assets)) accessSync(join(root, asset));
+
+  // Kit 3 passes the HTML payload into init() before starting the route app.
+  // The global name is no longer compiled into a JS chunk.
+  const payloads = [...html.matchAll(/\b(__sveltekit_[a-z0-9]+)\s*=\s*\{/g)].map(match => match[1]);
+  const initialized = html.match(/\bkit\.init\((__sveltekit_[a-z0-9]+)\)/)?.[1];
+  const imported = [...html.matchAll(/\bimport\(["'](\/_app\/immutable\/entry\/[\w.-]+\.js)["']\)/g)].map(match => match[1]);
+  const [runtime, app] = imported;
+  if (payloads.length !== 1 || initialized !== payloads[0] ||
+      imported.length !== 2 || !runtime?.includes('/start.') || !app?.includes('/app.') ||
+      !/\bkit\.start\(app,/.test(html)) {
+    throw Error(`Invalid frontend startup in ${page}`);
   }
-  const [payload]=payloads;
-  if(payloads.size!==1||runtimes.size!==1||!runtimes.has(payload)){
-    throw Error(`Frontend startup payload mismatch in ${page}: HTML=${[...payloads].join(',')} client=${[...runtimes].join(',')}`);
-  }
+
+  const entries = [runtime, app].join(',');
+  if (sharedEntries && sharedEntries !== entries) throw Error(`Frontend entry modules differ in ${page}`);
+  sharedEntries = entries;
+  const exports = scan.scan(readFileSync(join(root, runtime), 'utf8')).exports;
+  if (!exports.includes('init') || !exports.includes('start')) throw Error(`Missing frontend startup exports in ${runtime}`);
 }
-console.log('Frontend startup payloads match for dashboard, settings and reminders.');
+console.log('Frontend startup payloads and assets match for dashboard, settings and reminders.');

@@ -306,7 +306,8 @@ fn live_codex_async_question_replay() {
                 current.waiting_reason,
                 if others.is_empty() {
                     current
-                        .turn_completed
+                        .turn_end
+                        .is_some()
                         .then_some(crate::domain::WaitingReason::TurnEnded)
                 } else {
                     Some(crate::domain::WaitingReason::Question)
@@ -314,7 +315,7 @@ fn live_codex_async_question_replay() {
             );
             assert_eq!(
                 current.status,
-                if others.is_empty() && !current.turn_completed {
+                if others.is_empty() && current.turn_end.is_none() {
                     TaskStatus::Running
                 } else {
                     TaskStatus::WaitingInput
@@ -1625,6 +1626,83 @@ fn aborted_turn_returns_to_waiting() {
 }
 
 #[test]
+fn repeated_start_and_history_rollback_preserve_pending_and_ended_turns() {
+    let now = SystemTime::now();
+    let body = format!(
+        "{}{}",
+        turn_event("task_started", "active", 60),
+        question_call("request_user_input", "req", 1)
+    );
+    let pending = parse_codex_rollout(&body, now, "session").unwrap();
+    assert_eq!(pending.input_request_id.as_deref(), Some("req"));
+    let replay = format!(
+        "{}{}{}",
+        turn_event("task_started", "active", 5),
+        turn_event("thread_rolled_back", "active", 4),
+        turn_event("task_started", "prior", 100)
+    );
+    assert_eq!(
+        apply_codex_rollout(&replay, now, "session", Some(pending.clone())).unwrap(),
+        pending
+    );
+
+    let interrupted = apply_codex_rollout(
+        &turn_event("turn_aborted", "active", 3),
+        now,
+        "session",
+        Some(pending.clone()),
+    )
+    .unwrap();
+    let task = CodexProvider::with_root(PathBuf::new()).session_to_task(&interrupted, None, now);
+    assert_eq!(task.outcome.as_deref(), Some("interrupted"));
+    assert_eq!(task.started_at, pending.started_at);
+    assert!(task.finished_at.unwrap() >= task.started_at.unwrap());
+    assert!(task.input_request_ids.is_empty());
+    let retry = format!(
+        "{}{}",
+        turn_event("task_started", "active", 1),
+        turn_event("task_complete", "active", 0)
+    );
+    assert_eq!(
+        apply_codex_rollout(&retry, now, "session", Some(interrupted.clone())).unwrap(),
+        interrupted
+    );
+}
+
+#[test]
+fn remote_end_record_preserves_native_turn_identity_and_reported_duration() {
+    let now = UNIX_EPOCH + Duration::from_secs(1100);
+    let section =
+        "===S:s===F:rollout-2026-10-09T20-12-14-01a12094-0536-7b01-bbb0-c3dc63696fac.jsonl===\n";
+    for (kind, outcome) in [
+        ("task_complete", None),
+        ("turn_aborted", Some("interrupted")),
+    ] {
+        let end = serde_json::json!({"timestamp":"1970-01-01T00:17:45.500Z",
+            "payload":{"type":kind,"turn_id":"active","started_at":1000,"completed_at":1065,"duration_ms":65250}});
+        let tasks = tasks_from_codex_section(&format!("{section}{end}\n"), "Server", "server", now);
+        assert_eq!(tasks.len(), 1);
+        let task = &tasks[0];
+        assert_eq!(task.turn_key.as_deref(), Some("active"));
+        assert_eq!(task.outcome.as_deref(), outcome);
+        assert_eq!(
+            task.finished_at
+                .unwrap()
+                .duration_since(task.started_at.unwrap())
+                .unwrap(),
+            Duration::from_millis(65250)
+        );
+        assert_eq!(task.updated_at, task.finished_at.unwrap());
+    }
+    let start = serde_json::json!({"timestamp":"1970-01-01T00:16:50Z","payload":{"type":"task_started","turn_id":"active","started_at":1000}});
+    let state = parse_codex_rollout(&start.to_string(), now, "session").unwrap();
+    assert_eq!(
+        state.started_at,
+        Some(UNIX_EPOCH + Duration::from_secs(1000))
+    );
+}
+
+#[test]
 fn stale_running_state_is_retained_but_not_treated_as_fresh_discovery() {
     let body = format!(
         "{}{}",
@@ -2105,17 +2183,26 @@ fn live_codex_model_replay() {
     let mut paths = walk(&root).unwrap();
     paths.retain(|p| p.extension().is_some_and(|e| e == "jsonl"));
     paths.sort_by_key(|p| std::fs::metadata(p).and_then(|m| m.modified()).ok());
-    let mut found = 0;
+    let mut models = 0;
+    let mut effort = 0;
+    let mut durations = 0;
+    let mut interrupted = 0;
+    let now = SystemTime::now();
     for path in paths.into_iter().rev().take(30) {
         let mut provider = CodexProvider::with_root(root.clone());
-        if let Some(state) = provider.cached_session_state(&path, SystemTime::now()) {
-            if let Some(model) = &state.model {
-                println!("reported_model={model} status={:?}", state.status);
-                found += 1;
+        if let Some(state) = (0..16).find_map(|_| provider.cached_session_state(&path, now)) {
+            let task = provider.session_to_task(&state, None, now);
+            models += usize::from(task.model.is_some());
+            effort += usize::from(task.reasoning_effort.is_some());
+            interrupted += usize::from(task.outcome.as_deref() == Some("interrupted"));
+            if let Some((start, end)) = task.started_at.zip(task.finished_at) {
+                assert!(end >= start);
+                durations += 1;
             }
         }
     }
-    assert!(found > 0, "No real model metadata found");
+    println!("Codex replay: models={models} effort={effort} durations={durations} interrupted={interrupted}");
+    assert!(models > 0, "No real model metadata found");
 }
 
 #[test]
@@ -2183,6 +2270,7 @@ fn reported_effort_and_explicit_end_are_metadata_not_lifecycle_guesses() {
     assert_eq!(stored.reasoning_effort, task.reasoning_effort);
     let next=apply_codex_rollout(r#"{"timestamp":"2026-11-07T00:02:00Z","payload":{"type":"task_started","turn_id":"next"}}"#,now,"s",Some(refreshed)).unwrap();
     assert!(next.finished_at.is_none());
+    assert!(next.reasoning_effort.is_none());
 }
 
 #[test]

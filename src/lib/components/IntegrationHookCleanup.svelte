@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {t} from '$lib/i18n';
+  import {t} from '#lib/i18n.ts';
   import { onMount } from 'svelte';
   import { invoke } from '@tauri-apps/api/core';
   let {revision}:{revision:string}=$props();

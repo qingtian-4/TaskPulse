@@ -1,25 +1,26 @@
 <script lang="ts">
-  import {t} from '$lib/i18n';
-  import {DEFAULT_TASK_FONT_SIZE,preferences} from '$lib/preferences';
+  import {t} from '#lib/i18n.ts';
+  import {DEFAULT_TASK_FONT_SIZE,preferences} from '#lib/preferences.ts';
   import { onMount, tick } from 'svelte';
   import { invoke, isTauri } from '@tauri-apps/api/core';
   import { emit, listen } from '@tauri-apps/api/event';
   import { getCurrentWindow } from '@tauri-apps/api/window';
-  import { CONFIDENCE_LABEL, formatAgo, type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery, type DashboardView, type DashboardSnapshot } from '$lib/types';
-  import { taskSection, taskTone, compareTasks, matchesSignal, taskLabel, taskActivity, taskContext, taskElapsed, projectKey, sourceFreshness, enabledDashboardSources, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '$lib/dashboard';
+  import { type TaskSnapshot, type DashboardSettings, type ProviderHealth, type SourceDiscovery, type DashboardView, type DashboardSnapshot } from '#lib/types.ts';
+  import { taskSection, compareTasks, matchesSignal, taskContext, taskModel, projectKey, enabledDashboardSources, refreshProgress, refreshResultMessage, dashboardCandidates, defaultDashboardTasks, dashboardContinuity, filterTasks, overviewFilters, runningOutsideView, filterDescription, shouldApplyDashboardSnapshot, type TaskSection, type TaskSignal } from '#lib/dashboard.ts';
   import TaskList from './TaskList.svelte';
+  import TaskDetails from './TaskDetails.svelte';
   import MessageCenter from './MessageCenter.svelte';
-  import {projectDashboardTasks} from '$lib/dashboard';
-  import {measureDashboard} from '$lib/dashboard-layout';
-  import {localDiscoveryCandidates,type SourceDefinition} from '$lib/source-setup';
-  import {acceptMessageState} from '$lib/messages';
-  import type {MessageCenterState} from '$lib/types';
+  import {projectDashboardTasks} from '#lib/dashboard.ts';
+  import {measureDashboard} from '#lib/dashboard-layout.ts';
+  import {localDiscoveryCandidates,type SourceDefinition} from '#lib/source-setup.ts';
+  import {acceptMessageState} from '#lib/messages.ts';
+  import type {MessageCenterState} from '#lib/types.ts';
   import Settings from '@lucide/svelte/icons/settings';
   import RefreshCw from '@lucide/svelte/icons/refresh-cw';
   import Pin from '@lucide/svelte/icons/pin';
   import PinOff from '@lucide/svelte/icons/pin-off';
   import Search from '@lucide/svelte/icons/search';
-  import BrandMark from './BrandMark.svelte';
+  import BrandMark from '../BrandMark.svelte';
   import SlidersHorizontal from '@lucide/svelte/icons/sliders-horizontal';
   import Bell from '@lucide/svelte/icons/bell';
 
@@ -37,6 +38,7 @@
   let filterProject = $state('');
   let filterLocation = $state('');
   let query = $state('');
+  let searchInput: HTMLInputElement;
   let unreadOnly = $state(false);
   let view = $state<'tasks' | 'projects'>('tasks');
   let error = $state('');
@@ -79,14 +81,14 @@
   const refreshResult = $derived(refreshSources.length ? refreshResultMessage(refreshSources,providers.filter(p=>p.status==='degraded').map(p=>p.provider),Object.fromEntries(settings?.sources.map(s=>[s.id,s.name])??[])) : '');
   const filterText = $derived(filterDescription(filters,displayed,settings));
   const sorted = $derived([...filtered].sort(compareTasks));
-  const projects = $derived([...new Map(displayed.map(t => [projectKey(t,settings), { key:projectKey(t,settings), label:taskContext(t,settings), path:t.project_path }])).values()]);
+  const projects = $derived([...new Map(displayed.map(task => [projectKey(task,settings), { key:projectKey(task,settings), label:taskContext(task,settings,$t), path:task.project_path }])).values()]);
   const locations = $derived([...new Set(displayed.map(t => t.host ?? '本机'))]);
   const projectGroups = $derived.by(() => {
     const groups = new Map<string, {title:string;tasks:TaskSnapshot[]}>();
     for (const task of sorted) {
       const key = projectKey(task,settings);
       let group = groups.get(key);
-      if (!group) { group = {title:taskContext(task,settings),tasks:[]}; groups.set(key,group); }
+      if (!group) { group = {title:taskContext(task,settings,$t),tasks:[]}; groups.set(key,group); }
       group.tasks.push(task);
     }
     return [...groups.values()];
@@ -168,7 +170,7 @@
     } catch(e) { error=String(e); }
   }
   async function copy(task:TaskSnapshot) {
-    try {await navigator.clipboard.writeText(`${task.name}\n${taskContext(task,settings)}\n上报模型：${task.model ?? '来源未提供'}\n${task.project_path ?? ''}\n${task.session_id ?? task.id}`);note='已复制任务标题、项目、模型及会话 ID';}catch(e){error='复制失败：'+String(e);}
+    try {await navigator.clipboard.writeText(`${task.name}\n${taskContext(task,settings,$t)}\n${$t('上报模型：')}${taskModel(task) ?? $t('来源未提供')}\n${task.project_path ?? ''}\n${task.session_id ?? task.id}`);note='已复制任务标题、项目、模型及会话 ID';}catch(e){error='复制失败：'+String(e);}
   }
   function resetFilters(){filterSource='';filterProject='';filterLocation='';filterSection=null;filterSignal=null;query='';unreadOnly=false;}
   function chooseSection(section:TaskSection){
@@ -194,7 +196,8 @@
   // Measure natural card content after rendering, including status/filter chrome.
   $effect(()=>{
     if(!layoutReady)return;
-    JSON.stringify([sorted,view,showPrompts,selectedTask,showFilters,showArchive,error,note,$preferences,$t,layoutEpoch,now]);
+    // Track layout inputs without serializing complete task payloads on every clock tick.
+    void [sorted,view,showPrompts,selectedTask,showFilters,showArchive,error,note,$preferences,$t,layoutEpoch,now];
     const ticket=++layoutTicket;
     layoutQueue=tick().then(()=>{if(ticket===layoutTicket&&panel)sessionHeight=measureDashboard(panel,showPrompts||!!selectedTask);}).then(()=>tick());
   });
@@ -208,7 +211,7 @@
   onMount(()=>{
     const searchShortcut=(event:KeyboardEvent)=>{
       const target=event.target as HTMLElement;
-      if(!showPrompts && event.key==='/' && !['INPUT','TEXTAREA','SELECT'].includes(target.tagName) && !target.isContentEditable){event.preventDefault();panel?.querySelector<HTMLInputElement>('[aria-label="搜索任务"]')?.focus();}
+      if(!showPrompts && event.key==='/' && !['INPUT','TEXTAREA','SELECT'].includes(target.tagName) && !target.isContentEditable){event.preventDefault();searchInput?.focus();}
     };
     window.addEventListener('keydown',searchShortcut);
     const clock=setInterval(()=>now=Date.now(),1000);
@@ -220,7 +223,7 @@
           {id:'demo-gate',name:'演示：梳理项目流程',source:'codex',status:'waiting_input',waiting_reason:'approval',project:'demo-project',host:'DemoServer',remote:true,updated_at:now,confidence:'hook',unread:true},
           {id:'demo-run',remote:false,name:'演示：研究记忆机制',source:'codex',status:'running',project:'demo-project',source_instance:'codex',activity:'执行测试 · pytest tests/',started_at:now-310000,updated_at:now,confidence:'hook',unread:true},
           {id:'demo-dsh',remote:false,name:'演示：客服任务',source:'deepseek_harness',status:'running',project:'demo-shop',source_instance:'deepseek_harness_desktop',activity:'读取项目文件',started_at:now-120000,updated_at:now,confidence:'hook',unread:true},
-          {id:'demo-done',remote:false,name:'演示：界面评审',source:'codex',status:'waiting_input',waiting_reason:'turn_ended',project:'demo-ui',updated_at:now-60000,confidence:'hook',unread:true},
+          {id:'demo-done',remote:false,name:'演示：界面评审',source:'codex',status:'waiting_input',waiting_reason:'turn_ended',project:'demo-ui',model:'demo-model',reasoning_effort:'high',started_at:now-121000,finished_at:now-60000,updated_at:now-60000,confidence:'hook',unread:true},
         ];
       }
       return ()=>{clearInterval(clock);window.removeEventListener('keydown',searchShortcut);};
@@ -288,7 +291,7 @@
     {#if candidates.some(t=>matchesSignal(t,'failed'))}<button class="tp-chip tp-tone" data-tone="danger" class:active={filterSignal==='failed'} aria-pressed={filterSignal==='failed'} onclick={()=>chooseSignal('failed')}>{$t("失败结果")} {candidates.filter(t=>matchesSignal(t,'failed')).length}</button>{/if}
   </div>{/if}
   <div class="view-bar">
-    <label class="search"><Search size={15}/><input aria-label={$t("搜索任务")} placeholder={$t("搜索任务、项目、Agent 或模型   /")} bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label={$t("清除搜索")}>×</button>{/if}</label>
+    <label class="search"><Search size={15}/><input bind:this={searchInput} aria-label={$t("搜索任务")} placeholder={$t("搜索任务、项目、Agent 或模型   /")} bind:value={query} onkeydown={e=>{if(e.key==='Escape'){query='';e.stopPropagation();}}}/>{#if query}<button onclick={()=>query=''} aria-label={$t("清除搜索")}>×</button>{/if}</label>
     <button class="filter-toggle tp-btn tp-icon" class:active={!!filterText||showArchive||showFilters} aria-label={$t('筛选 / 分组')} title={$t('筛选 / 分组')} aria-expanded={showFilters} onclick={()=>showFilters=!showFilters}><SlidersHorizontal size={16}/></button>
     {#if showFilters}<div class="filters">
       <select bind:value={filterSource} aria-label={$t("筛选来源")}><option value="">{$t("全部来源")}</option>{#each enabledDashboardSources(settings) as s}<option value={s.id}>{s.name}</option>{/each}</select>
@@ -319,35 +322,19 @@
     {:else}{#each projectGroups as group}<section><h2>{group.title}</h2><TaskList fitFour={sorted.length>=4} tasks={group.tasks} {settings} {now} selectedId={selected?.id ?? null} onSelect={t=>selected=t}/></section>{/each}{/if}
   </main>
   {#if selectedTask}
-    <aside class="detail glass-scroll tp-tone" data-tone={taskTone(selectedTask)} aria-label={$t("任务详情")}>
-      <div class="detail-heading"><strong title={selectedTask.name}>{selectedTask.name}</strong><span class="tp-chip">{$t(taskLabel(selectedTask))}</span><button class="tp-icon" onclick={()=>selected=null} aria-label={$t("关闭详情")}>×</button></div>
-      <p>{taskContext(selectedTask,settings)}</p>
-      {#if $preferences.show_model&&selectedTask.model}<p class="model-detail">{selectedTask.model}{#if selectedTask.reasoning_effort}<span class="detail-effort">{selectedTask.reasoning_effort}</span>{/if}</p>{/if}
-      {#if $preferences.show_elapsed&&taskElapsed(selectedTask,now)}<p>{$t(selectedTask.status==='running'?'运行时长':'总时长')} {taskElapsed(selectedTask,now)}</p>{/if}
-      <details class="evidence tp-fold"><summary>{$t("状态依据与采集时间")}</summary><p>{$t("状态依据：")}{$t(CONFIDENCE_LABEL[selectedTask.confidence])}</p><p>{$t(sourceFreshness(selectedTask,settings,providers,now))} {$t("· 最后活动")} {$t(formatAgo(selectedTask.updated_at,now))}</p></details>
-      <div class="command glass-scroll"><span>{selectedTask.stale?$t('上次观测活动（非实时）'):selectedTask.status==='running'?$t('当前活动'):$t('最近消息')}</span><pre>{taskActivity(selectedTask)}</pre></div>
-      <div class="detail-actions">
-        {#if selectedTask.can_focus}<button class="tp-btn" title={$t("只聚焦宿主窗口，不标记已查看")} onclick={()=>open(selectedTask!)}>{selectedTask.terminal?.kind==='windows_native'?$t('聚焦运行窗口'):$t('请求返回终端')}</button>{/if}
-        <button class="tp-btn" data-variant="ghost" onclick={()=>copy(selectedTask!)}>{$t("复制任务信息")}</button>
-        {#if selectedTask.unread}<button class="tp-btn" data-variant="primary" title={$t("更新本轮已查看标记，不代表批准或项目完成")} onclick={()=>action(selectedTask!,'viewed')}>{$t("已查看")}</button>{/if}
-        {#if showArchive}<button class="tp-btn" onclick={()=>action(selectedTask!,'follow')}>{$t("重新加入")}</button>{/if}
-        <button class="tp-btn" data-variant="ghost" onclick={()=>action(selectedTask!,'pin',showArchive ? true : !selectedTask!.pinned)}>{showArchive?$t('固定到近期面板'):selectedTask.pinned?$t('取消固定'):$t('固定')}</button>
-        <details class="more tp-fold"><summary>{$t("更多关注操作")}</summary>{#if selectedTask.status!=='running'}<button onclick={()=>action(selectedTask!,'hide')}>{$t("隐藏本轮（新执行会恢复）")}</button>{/if}<button onclick={()=>action(selectedTask!,'ignore')}>{$t("停止监控此会话（需手动恢复）")}</button></details>
-      </div>
-    </aside>
+    <TaskDetails task={selectedTask} {settings} {providers} {now} archived={showArchive}
+      onClose={() => selected = null} onOpen={open} onCopy={copy} onAction={action}/>
   {/if}
 
 </div>
 <style>
-  .detail{font-size:var(--tp-task-font-size,12px);line-height:1.5}
-  .model-detail{overflow-wrap:anywhere}.detail-effort{margin-left:6px;padding:1px 5px;border-radius:4px;background:var(--tp-accent-soft);color:var(--tp-accent);font-size:10px}
   .dashboard{position:relative;height:100dvh;display:flex;flex-direction:column;overflow:hidden;border:1px solid var(--tp-border-strong);border-radius:var(--tp-radius-panel);background:var(--tp-panel)}
   header{display:flex;justify-content:space-between;align-items:center;padding:10px 12px 10px 16px;border-bottom:1px solid var(--tp-border);flex:none;min-height:52px}
   .brand{display:flex;align-items:center;gap:8px;font-size:14px;font-weight:650;color:var(--tp-text)}
   .header-actions{display:flex;gap:4px}.header-actions button{border:0;position:relative}.header-actions span{position:absolute;right:0;top:0;font-size:10px;min-width:14px;line-height:14px;text-align:center;border-radius:4px;background:var(--tp-card);color:var(--tp-action)}
   .counts{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px;padding:12px 12px 8px;flex:none}
-  .overview{text-align:left;padding:8px 12px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-card);min-width:0}
-  .overview span{font-size:12px;color:var(--tp-muted);white-space:nowrap}.overview b{display:block;font-size:24px;line-height:1.25;font-weight:600;letter-spacing:-.03em;color:var(--tone);margin-top:4px;font-variant-numeric:tabular-nums}
+  .overview{display:flex;flex-direction:column;align-items:flex-start;justify-content:space-between;text-align:start;padding:8px 12px;border:1px solid var(--tp-border);border-radius:8px;background:var(--tp-card);min-width:0}
+  .overview span{display:block;font-size:12px;color:var(--tp-muted);line-height:1.35;overflow-wrap:anywhere}.overview b{display:block;font-size:24px;line-height:1.25;font-weight:600;letter-spacing:-.03em;color:var(--tone);margin-top:4px;font-variant-numeric:tabular-nums}
   .overview:hover{border-color:var(--tone-line);background:var(--tp-raised)}.overview.active{border-color:var(--tone-line);background:var(--tone-soft)}.overview.active span{color:var(--tp-text)}
   .signals{display:flex;gap:8px;flex-wrap:wrap;padding:0 12px 4px;max-height:68px;overflow:auto;flex:none}.signals button{font-size:11px;padding:2px 8px;border-radius:16px}.signals .active{box-shadow:inset 0 0 0 1px var(--tone)}
   .view-bar{position:relative;display:flex;align-items:center;gap:8px;padding:2px 12px 8px;flex:none}
@@ -363,15 +350,9 @@
   .notice{margin:0;padding:6px 12px;font-size:11px;line-height:1.6;background:var(--tp-accent-soft);color:var(--tp-accent);display:flex;align-items:center;gap:8px;max-height:60px;overflow:auto;flex:none;overflow-wrap:anywhere}.notice.error{color:var(--tp-danger);background:#f09ba70b}.dismiss{margin-left:auto;flex:none}.link{margin-left:auto;color:var(--tp-accent);white-space:nowrap;font-size:11px}
   .filters{position:absolute;z-index:3;left:12px;right:12px;top:calc(100% - 2px);display:flex;gap:8px;padding:12px;flex-wrap:wrap;max-height:42dvh;overflow:auto;background:var(--tp-raised);border:1px solid var(--tp-border-strong);border-radius:8px;box-shadow:var(--tp-shadow-window)}
   .filters select{font-size:12px;flex:1;padding:6px;min-width:110px;max-width:100%}.view-toggle{font-size:12px;border:1px solid var(--tp-border-strong);border-radius:6px;padding:4px 8px}.view-toggle[aria-pressed=true]{color:var(--tp-accent);background:var(--tp-accent-soft);border-color:var(--tp-accent-line)}
-  .detail{margin:0 12px 8px;padding:12px;border:1px solid var(--tone-line);border-radius:8px;background:var(--tp-card);max-height:32dvh;min-height:96px;overflow:auto;flex:0 1 auto}
-  .detail-heading{display:flex;gap:8px;align-items:flex-start}.detail-heading strong{flex:1;min-width:0;display:-webkit-box;-webkit-line-clamp:2;line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;overflow-wrap:anywhere;font-size:14px;font-weight:600;line-height:1.5}.detail-heading>.tp-chip{flex:none;max-width:100px}.detail-heading>button{height:24px;width:24px;flex:none}
-  .detail p{font-size:11px;color:var(--tp-muted);margin:4px 0;line-height:1.6;overflow-wrap:anywhere}
-  .command{max-height:72px;overflow:auto;margin:8px 0;padding:8px;background:var(--tp-input);border:1px solid var(--tp-border);border-radius:4px}.command span{font-size:11px;color:var(--tp-quiet)}.command pre{white-space:pre-wrap;overflow-wrap:anywhere;font-family:inherit;font-size:12px;line-height:1.5;color:var(--tp-text);margin:4px 0}
-  .evidence{font-size:11px;color:var(--tp-muted);margin:8px 0}.evidence>summary{padding:4px 8px}.evidence p{padding:0 8px}
-  .detail-actions{display:flex;gap:8px;flex-wrap:wrap}.detail-actions>.tp-btn{font-size:11px;min-height:28px;padding:4px 8px}.more{font-size:11px;color:var(--tp-muted);width:100%}.more summary{padding:4px 8px}.more button{display:block;padding:8px;white-space:normal;text-align:left;font-size:11px}
   .onboarding{padding:12px;border-bottom:1px solid var(--tp-border)}.onboarding strong{font-size:14px}.onboarding p{font-size:12px;color:var(--tp-muted);line-height:1.6;margin:8px 0}
   @media(max-width:380px){header{min-height:46px;padding:6px 10px 6px 12px}.counts{gap:6px;padding:8px 10px 6px}.overview{padding:6px 10px}.overview b{font-size:22px;margin-top:2px}.header-actions{gap:2px}}
-  @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.filters{left:8px;right:8px}.detail-heading{flex-wrap:wrap}}
+  @media(max-width:350px){header{padding:8px}.brand{gap:4px}.header-actions{gap:0}.counts{gap:4px;padding:8px}.overview{padding:8px}.overview b{font-size:23px}.task-scroll{padding:0 8px 8px}.view-bar{gap:8px;padding-left:8px;padding-right:8px}.filters{left:8px;right:8px}}
 
-  @media(max-height:500px){.dashboard:has(.detail) header{min-height:44px;padding-top:6px;padding-bottom:6px}.dashboard:has(.detail) .counts{padding-top:8px}.dashboard:has(.detail) .overview{padding-top:4px;padding-bottom:4px}.detail{max-height:30dvh;min-height:80px;padding:8px}.task-scroll{min-height:40px}}
+  @media(max-height:500px){.dashboard:has(:global(.detail)) header{min-height:44px;padding-top:6px;padding-bottom:6px}.dashboard:has(:global(.detail)) .counts{padding-top:8px}.dashboard:has(:global(.detail)) .overview{padding-top:4px;padding-bottom:4px}.task-scroll{min-height:40px}}
 </style>

@@ -22,6 +22,25 @@ pub fn default_db() -> PathBuf {
         })
         .join("opencode/opencode.db")
 }
+struct ModelSelection {
+    id: String,
+    variant: Option<String>,
+}
+
+impl ModelSelection {
+    fn from_value(value: &Value, id_key: &str) -> Option<Self> {
+        let field = |key: &str| value.get(key)?.as_str().and_then(super::reported_model);
+        Some(Self {
+            id: field(id_key)?,
+            variant: field("variant"),
+        })
+    }
+
+    fn from_json(json: Option<&str>, id_key: &str) -> Option<Self> {
+        Self::from_value(&serde_json::from_str(json?).ok()?, id_key)
+    }
+}
+
 pub struct OpenCodeProvider {
     path: PathBuf,
     sessions: Sessions,
@@ -70,23 +89,35 @@ impl OpenCodeProvider {
         let mut out = Vec::new();
         for (id, title, project, model) in rows {
             let user_sql = if v2 {
-                "SELECT id,time_created,seq FROM session_message WHERE session_id=?1 AND type='user' AND coalesce(json_extract(data,'$.synthetic'),0)=0 ORDER BY seq DESC LIMIT 1"
+                "SELECT id,time_created,seq,CAST(json_extract(data,'$.metadata.model') AS TEXT)
+                 FROM session_message WHERE session_id=?1 AND type='user'
+                   AND coalesce(json_extract(data,'$.synthetic'),0)=0 ORDER BY seq DESC LIMIT 1"
             } else {
-                "SELECT id,json_extract(data,'$.time.created'),time_created FROM message WHERE session_id=?1 AND json_extract(data,'$.role')='user' AND coalesce(json_extract(data,'$.synthetic'),0)=0 ORDER BY time_created DESC,id DESC LIMIT 1"
+                "SELECT id,json_extract(data,'$.time.created'),time_created,
+                        json_object('modelID',json_extract(data,'$.model.modelID'),
+                                    'variant',coalesce(json_extract(data,'$.variant'),json_extract(data,'$.model.variant')))
+                 FROM message WHERE session_id=?1 AND json_extract(data,'$.role')='user'
+                   AND coalesce(json_extract(data,'$.synthetic'),0)=0 ORDER BY time_created DESC,id DESC LIMIT 1"
             };
-            let user: Option<(String, u64, i64)> = tx
-                .query_row(user_sql, [&id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            let user: Option<(String, u64, i64, Option<String>)> = tx
+                .query_row(user_sql, [&id], |r| {
+                    Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
+                })
                 .optional()?;
-            let Some((turn, started, sequence)) = user else {
+            let Some((turn, started, sequence, selected_model)) = user else {
                 continue;
             };
             let latest_sql = if v2 {
-                "SELECT type,data,time_updated FROM session_message WHERE session_id=?1 AND seq>=?2 AND type IN ('user','assistant','idle') ORDER BY seq DESC LIMIT 1"
+                "SELECT type,data,CASE WHEN type='idle' THEN time_created ELSE time_updated END
+                 FROM session_message WHERE session_id=?1 AND seq>=?2
+                   AND (id=?3 OR type IN ('assistant','idle')) ORDER BY seq DESC LIMIT 1"
             } else {
-                "SELECT json_extract(data,'$.role'),data,time_updated FROM message WHERE session_id=?1 AND time_created>=?2 ORDER BY time_created DESC,id DESC LIMIT 1"
+                "SELECT json_extract(data,'$.role'),data,time_updated FROM message
+                 WHERE session_id=?1 AND time_created>=?2 AND (id=?3 OR (json_extract(data,'$.role')='assistant'
+                   AND json_extract(data,'$.parentID')=?3)) ORDER BY time_created DESC,id DESC LIMIT 1"
             };
             let latest: Option<(String, String, u64)> = tx
-                .query_row(latest_sql, rusqlite::params![id, sequence], |r| {
+                .query_row(latest_sql, rusqlite::params![id, sequence, turn], |r| {
                     Ok((r.get(0)?, r.get(1)?, r.get(2)?))
                 })
                 .optional()?;
@@ -101,7 +132,7 @@ impl OpenCodeProvider {
                 .or_else(|| data.pointer("/time/created").and_then(Value::as_u64))
                 .unwrap_or(started)
                 .max(started);
-            // v2 time_updated is only for messages, not session title/config edits.
+            // For idle records the query uses creation time, so later storage edits cannot extend a result.
             let activity = if v2 { activity.max(updated) } else { activity };
             let Some(mut task) = native_sessions::task(
                 ("opencode", "OpenCode"),
@@ -114,22 +145,24 @@ impl OpenCodeProvider {
             ) else {
                 continue;
             };
-            task.model = data
-                .pointer("/model/id")
-                .or_else(|| data.get("modelID"))
-                .and_then(Value::as_str)
-                .and_then(super::reported_model)
-                .or_else(|| {
-                    model
-                        .as_deref()
-                        .and_then(|s| serde_json::from_str::<Value>(s).ok())
-                        .and_then(|v| {
-                            v.get("id")
-                                .or_else(|| v.get("modelID"))
-                                .and_then(Value::as_str)
-                                .and_then(super::reported_model)
-                        })
-                });
+            // An idle row has no model. Read only the model object from the
+            // last assistant in this turn, even on the first poll after restart.
+            let response_model = match (v2, kind.as_str()) {
+                (true, "idle") => {
+                    let last: Option<String> = tx.query_row(
+                        "SELECT CAST(json_extract(data,'$.model') AS TEXT) FROM session_message
+                         WHERE session_id=?1 AND seq>=?2 AND type='assistant' ORDER BY seq DESC LIMIT 1",
+                        rusqlite::params![id, sequence],
+                        |r| r.get(0),
+                    ).optional()?.flatten();
+                    ModelSelection::from_json(last.as_deref(), "id")
+                }
+                (true, "assistant") => data
+                    .get("model")
+                    .and_then(|m| ModelSelection::from_value(m, "id")),
+                (false, "assistant") => ModelSelection::from_value(&data, "modelID"),
+                _ => None,
+            };
             let outcome = if v2 && kind == "idle" {
                 Some(
                     data.get("outcome")
@@ -155,7 +188,6 @@ impl OpenCodeProvider {
                 }
             } else if !v2
                 && kind == "assistant"
-                && data.get("parentID").and_then(Value::as_str) == Some(turn.as_str())
                 && data
                     .pointer("/time/completed")
                     .and_then(Value::as_u64)
@@ -171,13 +203,29 @@ impl OpenCodeProvider {
                     task.status = TaskStatus::Succeeded;
                 }
             }
+            // Session settings can change after a result, independently of
+            // the execution. They are a fallback for an active turn only.
+            let selected = response_model
+                .or_else(|| ModelSelection::from_json(selected_model.as_deref(), "modelID"))
+                .or_else(|| {
+                    let config = model
+                        .as_deref()
+                        .filter(|_| task.status == TaskStatus::Running)?;
+                    let value = serde_json::from_str(config).ok()?;
+                    ModelSelection::from_value(&value, "id")
+                        .or_else(|| ModelSelection::from_value(&value, "modelID"))
+                });
+            if let Some(selection) = selected {
+                task.model = Some(selection.id);
+                task.model_variant = selection.variant;
+            }
             if task.status == TaskStatus::Running {
                 // v2 embeds streaming parts in the assistant message itself.
                 let content = data.get("content").and_then(Value::as_array);
                 task.phase = Some(
                     if content.is_some_and(|c| {
                         c.iter().any(|p| {
-                            p.get("type") == Some(&Value::String("tool".into()))
+                            p.get("type").and_then(Value::as_str) == Some("tool")
                                 && matches!(
                                     p.pointer("/state/status").and_then(Value::as_str),
                                     Some("running" | "pending")
@@ -217,173 +265,4 @@ impl Provider for OpenCodeProvider {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::json;
-    fn fixture() -> (tempfile::TempDir, Connection, OpenCodeProvider) {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("opencode.db");
-        let db = Connection::open(&path).unwrap();
-        db.execute_batch("CREATE TABLE session_v2(id TEXT PRIMARY KEY,title TEXT,slug TEXT,directory TEXT,model TEXT,time_archived INTEGER,time_updated INTEGER);CREATE TABLE session_message(id TEXT PRIMARY KEY,session_id TEXT,type TEXT,seq INTEGER,time_created INTEGER,time_updated INTEGER,data TEXT);
-        INSERT INTO session_v2 VALUES('s','Actual native title','native-slug','C:/project','{\"id\":\"source-model\"}',NULL,100000);").unwrap();
-        let provider = OpenCodeProvider::new(path);
-        (dir, db, provider)
-    }
-    fn message(db: &Connection, id: &str, kind: &str, seq: i64, time: u64, data: Value) {
-        db.execute(
-            "INSERT INTO session_message VALUES(?1,'s',?2,?3,?4,?4,?5)",
-            rusqlite::params![id, kind, seq, time, data.to_string()],
-        )
-        .unwrap();
-    }
-    #[test]
-    fn v2_busy_tools_and_older_idle_cannot_finish_the_current_turn() {
-        let (_dir, db, mut p) = fixture();
-        message(
-            &db,
-            "u1",
-            "user",
-            1,
-            100000,
-            json!({"time":{"created":100000}}),
-        );
-        message(
-            &db,
-            "idle1",
-            "idle",
-            2,
-            101000,
-            json!({"time":{"created":101000},"outcome":"failed"}),
-        );
-        message(
-            &db,
-            "u2",
-            "user",
-            3,
-            102000,
-            json!({"time":{"created":102000}}),
-        );
-        message(
-            &db,
-            "a2",
-            "assistant",
-            4,
-            103000,
-            json!({"time":{"created":103000,"completed":103500},"finish":"tool-calls","content":[{"type":"tool","state":{"status":"running"}}]}),
-        );
-        let rows = p.read().unwrap();
-        assert_eq!(rows[0].status, TaskStatus::Running);
-        assert_eq!(rows[0].turn_key.as_deref(), Some("u2"));
-        assert_eq!(rows[0].phase, Some(ExecutionPhase::Tool));
-        assert_eq!(rows[0].model.as_deref(), Some("source-model"));
-        p.sessions.resume("opencode", rows);
-        message(
-            &db,
-            "idle2",
-            "idle",
-            5,
-            104000,
-            json!({"time":{"created":104000},"outcome":"succeeded"}),
-        );
-        message(
-            &db,
-            "config",
-            "model-switched",
-            6,
-            105000,
-            json!({"time":{"created":105000}}),
-        );
-        let ended = p.poll(native_sessions::time(106000).unwrap());
-        assert_eq!(ended.tasks.len(), 1);
-        assert_eq!(ended.tasks[0].status, TaskStatus::Succeeded);
-        assert_eq!(ended.tasks[0].turn_key.as_deref(), Some("u2"));
-        db.execute(
-            "UPDATE session_v2 SET title='Renamed',time_updated=900000",
-            [],
-        )
-        .unwrap();
-        let renamed = p.poll(native_sessions::time(900000).unwrap());
-        assert_eq!(renamed.tasks[0].name, "Renamed");
-        assert!(!renamed.tasks[0].new_execution);
-        assert_eq!(renamed.tasks[0].updated_at, ended.tasks[0].updated_at);
-    }
-    #[test]
-    fn idle_history_is_catalog_only_unknown_outcomes_and_io_failures_do_not_invent_success() {
-        let (_dir, db, mut p) = fixture();
-        message(
-            &db,
-            "u",
-            "user",
-            1,
-            100000,
-            json!({"time":{"created":100000}}),
-        );
-        message(
-            &db,
-            "idle",
-            "idle",
-            2,
-            101000,
-            json!({"time":{"created":101000},"outcome":"succeeded"}),
-        );
-        let historical = p.poll(native_sessions::time(200000).unwrap());
-        assert!(historical.tasks.is_empty());
-        assert_eq!(historical.catalog.len(), 1);
-        p.resume(historical.catalog);
-        db.execute(
-            "UPDATE session_message SET data='{\"time\":{\"created\":101000}}' WHERE id='idle'",
-            [],
-        )
-        .unwrap();
-        let missing = p.poll(native_sessions::time(200001).unwrap());
-        assert_eq!(missing.tasks[0].status, TaskStatus::Unknown);
-        assert!(missing.tasks[0].finished_at.is_none());
-
-        db.execute("UPDATE session_message SET data='{\"outcome\":\"unknown\",\"time\":{\"created\":101000}}' WHERE id='idle'",[]).unwrap();
-        let uncertain = p.poll(native_sessions::time(201000).unwrap());
-        assert_eq!(uncertain.tasks[0].status, TaskStatus::Unknown);
-        assert!(uncertain.tasks[0].finished_at.is_none());
-        db.execute_batch("DROP TABLE session_message").unwrap();
-        let degraded = p.poll(native_sessions::time(202000).unwrap());
-        assert_eq!(degraded.tasks[0].status, TaskStatus::Unknown);
-        assert!(degraded.tasks[0].stale);
-    }
-    #[test]
-    fn legacy_message_finish_requires_current_parent_and_an_explicit_final_finish() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("legacy.db");
-        let db = Connection::open(&path).unwrap();
-        db.execute_batch("CREATE TABLE session(id TEXT,title TEXT,directory TEXT,time_archived INTEGER,time_updated INTEGER);CREATE TABLE message(id TEXT,session_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);INSERT INTO session VALUES('s','Old format','/project',NULL,100000);INSERT INTO message VALUES('u','s',100000,100000,'{\"role\":\"user\",\"time\":{\"created\":100000}}');").unwrap();
-        let p = OpenCodeProvider::new(path);
-        for (parent, finish, status) in [
-            ("other", "stop", TaskStatus::Running),
-            ("u", "tool-calls", TaskStatus::Running),
-            ("u", "stop", TaskStatus::Succeeded),
-        ] {
-            db.execute("DELETE FROM message WHERE id='a'", []).unwrap();
-            db.execute("INSERT INTO message VALUES('a','s',101000,102000,?1)",[json!({"role":"assistant","parentID":parent,"time":{"created":101000,"completed":102000},"finish":finish}).to_string()]).unwrap();
-            assert_eq!(p.read().unwrap()[0].status, status);
-        }
-    }
-    #[test]
-    #[ignore = "read-only real local OpenCode database"]
-    fn live_opencode_snapshot() {
-        let p = OpenCodeProvider::new(default_db());
-        let rows = p.read().expect("native database must be readable");
-        assert!(!rows.is_empty(), "run one real OpenCode task first");
-        assert!(rows
-            .iter()
-            .all(|t| t.agent_id.as_deref() == Some("opencode")
-                && t.turn_key.is_some()
-                && t.started_at.is_some()));
-        println!(
-            "OpenCode native rows={} running={} ended={} models={}",
-            rows.len(),
-            rows.iter()
-                .filter(|t| t.status == TaskStatus::Running)
-                .count(),
-            rows.iter().filter(|t| t.finished_at.is_some()).count(),
-            rows.iter().filter(|t| t.model.is_some()).count()
-        );
-    }
-}
+mod tests;

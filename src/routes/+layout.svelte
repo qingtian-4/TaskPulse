@@ -2,7 +2,7 @@
   import '../app.css';
   import { page } from '$app/state';
   import { onMount } from 'svelte';
-  import { connectPreferences } from '$lib/preferences';
+  import { connectPreferences } from '#lib/preferences.ts';
   let { children } = $props();
   let ready=$state(false), error=$state('');
   onMount(()=>{

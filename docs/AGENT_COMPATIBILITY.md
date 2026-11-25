@@ -8,17 +8,18 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 
 | Agent | 读取来源 | 任务状态与边界 |
 | --- | --- | --- |
-| Codex | `CODEX_HOME` 或 `~/.codex` 中的元数据与会话日志 | 原生任务、项目、模型和执行阶段；读取宿主留下的明确提问，审批需有明确事件，见[审批观察器](CODEX_APPROVAL_OBSERVER.md)。可配置 SSH 主机与项目范围。已有 WSL 来源继续读取正在运行的发行版，需要 Python 3；不会唤醒停止的发行版 |
+| Codex | `CODEX_HOME` 或 `~/.codex` 中的元数据与会话日志 | 读取任务、项目、模型、本轮推理强度和执行阶段。明确结束或中断时保留结果及可用的总时长；读取宿主留下的明确提问，审批需有明确事件，见[审批观察器](CODEX_APPROVAL_OBSERVER.md)。可配置 SSH 主机与项目范围。已有 WSL 来源继续读取正在运行的发行版，需要 Python 3；不会唤醒停止的发行版 |
 | Claude Code | `CLAUDE_CONFIG_DIR` 或 `~/.claude` | 本机原生会话观测，可用官方 Hook 确认审批与生命周期。也可[通过 SSH 读取服务器上的运行和结束状态](PRODUCT_DASHBOARD.md#个性化设置)，远端审批和原生提问未支持 |
 | Hermes | 原生 SQLite 数据库与运行租约 | 标题、已记录的项目路径、模型、推理强度及运行状态。没有路径的会话可选「未关联项目」；已跟踪的轮次有明确最终回复时可进入待查看，仅有会话记录不会生成任务 |
 | DeepSeek Harness | `DSH_HOME` 或 `~/.dsh`，可用 `TASKPULSE_DSH_HOME` 覆盖 | Desktop / CLI 原生会话，支持旧日志与 v4 日志；明确提问按调用与问题 ID 匹配回答，审批按请求 ID 匹配决定；读取请求中报告的推理强度 |
-| OpenCode | `~/.local/share/opencode/opencode.db`，支持 `XDG_DATA_HOME` | 读取运行阶段、模型与明确结束记录；支持 v2 和旧版会话表；不提供独立提问或审批提醒 |
+| OpenCode | `~/.local/share/opencode/opencode.db`，支持 `XDG_DATA_HOME` | 读取运行阶段、本轮模型、模型变体与明确结束记录。结束后保留该轮模型和时长；支持 v2 和旧版会话表；不提供独立提问或审批提醒 |
 | WorkBuddy | `~/.workbuddy/workbuddy.db` 与 `projects/*.jsonl` 会话目录 | 数据库与增量日志关联本轮开始/结束；不包含云端任务，不提供独立提问或审批提醒 |
 | ZCode | `~/.zcode/cli/db/db.sqlite` 与桌面项目索引 | 原生标题、项目、模型、本轮推理强度、工具阶段与整轮结果；桌面项目可独立发现，不导入旧任务；不提供独立审批事件 |
 | Kimi Code / kimi-cli | `~/.kimi-code` / `KIMI_CODE_HOME`；旧版 `~/.kimi` / `KIMI_SHARE_DIR` | 只读主会话 wire；明确轮次结束、审批、提问按原生请求 ID 匹配。使用主会话请求报告的模型与推理强度，有匹配的本机模型显示名时一并采用；后台子 Agent 暂不单独导入。宿主版本的实机验证仍待完成 |
 | Qoder | Desktop 的 `main.sqlite`，以及 `~/.qoder/projects` 转录 | Desktop 完整轮次投影提供结束与时长；IDE/CLI 需要实际存在的顶层 `result`，不把 Stop Hook 或模型回复结束当作整轮结束。原生审批和提问尚未支持。原生读取外可选标准事件；IDE 与 CLI Hook 不等同 |
 | Trae | 本机公开工作区元数据 | 可发现公开会话。当前主会话库不是标准 SQLite；完整任务状态、模型、审批、提问和结束仍未适配，不显示为读取健康 |
-| Gemini CLI | 已配置的进程识别 | 仅识别进程，无法仅凭进程判断任务状态 |
+| Gemini CLI | 前台单次命令，或已配置的进程识别 | 用包装器运行 `gemini -p` 可记录本次调用的开始、退出和总时长。进程识别只提供发现线索 |
+| GitHub Copilot CLI、Cursor Agent CLI | 前台单次命令 | 用包装器运行 `copilot -p` 或 `agent -p`。任务标签由用户指定，结果来自该命令的退出码 |
 | 其他 Agent | 已配置的标准事件、MCP 或兼容状态文件 | 能力取决于来源发送的事件 |
 | 命令行与远程 tmux | 按需配置 | `tp-run` 可报告前台子进程退出码；普通 shell 返回只能表示推断结束 |
 
@@ -27,6 +28,8 @@ TaskPulse 关注正在执行、等待处理和结束后未查看的任务。原�
 OpenCode 2.2.2 和 WorkBuddy 5.9.3 的 Windows 本机记录已做只读核对；这不代表所有旧版、国际版或 macOS 版本均已实机验收。接入操作见[本机 Agent](LOCAL_AGENTS.md#opencode-与-workbuddy)。
 
 ## 平台与返回任务
+
+在「设置 → 监控来源 → 本机」启用「前台命令（包装器）」，选择项目范围。macOS / Linux 用仓库的 `scripts/wrap.sh`，Windows 用 `scripts/wrap.ps1`。SSH 精确模式使用远端的 `tp-run`。这些入口只覆盖所启动的单次前台进程，交互会话中的多轮对话、IDE 内部任务、审批和模型推理强度需要宿主专用信号。目前验证覆盖隔离的命令行子进程，三款宿主仍待实机验收。[命令示例与读取范围](REMOTE_TMUX.md#单次-coding-agent-命令)
 
 Windows 10/11 x64 是主要验收平台。Windows 11 ARM64 使用独立的 ARM64 EXE 安装包，实际下载以对应 Release 为准。macOS 13.3+ 提供 Intel 与 Apple Silicon 包；编译和打包通过不代表每个 Agent、每种宿主都已实测。Linux 桌面当前没有同等交付验收。Windows 的 WSL 是独立来源，不等同于 Linux 桌面支持。
 

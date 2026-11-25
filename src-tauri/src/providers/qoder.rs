@@ -233,7 +233,7 @@ impl QoderProvider {
                 let started = assistant
                     .and_then(|(_, _, _, _, _, v)| v.get("turnStartedAt"))
                     .and_then(stamp)
-                    .or_else(|| super::codex::parse_rfc3339(user_at))
+                    .or_else(|| super::timestamp::parse_rfc3339(user_at))
                     .ok_or("turn_timestamp")?;
                 let Some(mut task) = native_sessions::task(
                     ("qoder-desktop", "Qoder Desktop"),
@@ -296,7 +296,7 @@ impl QoderProvider {
                         task.status = TaskStatus::Unknown;
                         task.phase = None;
                     } else {
-                        task.updated_at = super::codex::parse_rfc3339(update)
+                        task.updated_at = super::timestamp::parse_rfc3339(update)
                             .or_else(|| value.get("timestamp").and_then(stamp))
                             .unwrap_or(started);
                         if value
@@ -473,7 +473,7 @@ mod tests {
     #[test]
     fn qoder_capacity_retains_followed_turn_and_paginates_old_sessions() {
         let (_dir, db, mut provider) = fixture();
-        let now = super::super::codex::parse_rfc3339("2026-11-07T00:00:03Z").unwrap();
+        let now = super::super::timestamp::parse_rfc3339("2026-11-07T00:00:03Z").unwrap();
         message(
             &db,
             "u",
@@ -519,7 +519,7 @@ mod tests {
     fn desktop_message_budget_rotates_five_followed_sessions() {
         let (_dir, db, mut provider) = fixture();
         db.execute("DELETE FROM chat_sessions", []).unwrap();
-        let now = super::super::codex::parse_rfc3339("2026-11-07T00:00:03Z").unwrap();
+        let now = super::super::timestamp::parse_rfc3339("2026-11-07T00:00:03Z").unwrap();
         for index in 0..5 {
             let id = format!("session-{index}");
             db.execute("INSERT INTO chat_sessions VALUES(?1,'Fixture','/project',NULL,NULL,0,NULL,'2026-11-07')",[&id]).unwrap();

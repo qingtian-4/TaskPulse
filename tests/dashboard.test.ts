@@ -1,4 +1,4 @@
-import {taskElapsed,taskSummaryIsAppCopy} from '../src/lib/dashboard';
+import {taskElapsed,taskModel} from '../src/lib/dashboard';
 import {dashboardHeightForRows} from '../src/lib/dashboard-layout';
 // Pure presentation regression tests. Run with `bun test tests/dashboard.test.ts`.
 import { test, expect } from 'bun:test';
@@ -9,6 +9,13 @@ import { taskSection, sectionRank, matchesSignal, taskLabel, taskActivity, proje
 import type { TaskSnapshot, DashboardSettings } from '../src/lib/types';
 import {taskTone,unconfirmedRunning,refreshResultMessage,dashboardContinuity} from '../src/lib/dashboard';
 const base: TaskSnapshot = {id:'a',name:'Native title',source:'codex',status:'running',updated_at:1,remote:false,confidence:'hook',unread:true};
+
+test('model display preserves the provider variant independently of reasoning effort',()=>{
+  const task={...base,model:'Provider/A.B',model_variant:'Custom-Mix',reasoning_effort:'high'};
+  expect(taskModel(task)).toBe('Provider/A.B#Custom-Mix');
+  expect(taskModel({...task,model_variant:undefined})).toBe('Provider/A.B');
+  expect(taskModel({...task,model:undefined})).toBeUndefined();
+});
 
 test('normal turn end has one label and leaves attention colors distinct',()=>{
   const done:TaskSnapshot={...base,status:'succeeded',finished_at:2};
@@ -21,17 +28,21 @@ test('normal turn end has one label and leaves attention colors distinct',()=>{
 });
 
 test('translate reducer-owned terminal copy while preserving identical native and producer text',()=>{
+  const translate=(key:string)=>'translated '+key;
   for(const [outcome,message] of Object.entries({turn_ended:'本轮结束，尚未查看',failed:'来源明确报告本轮失败',interrupted:'本轮已中断，非成功'})){
     const ended:TaskSnapshot={...base,source:'generic_event',status:outcome==='failed'?'failed':'waiting_input',waiting_reason:'turn_ended',finished_at:2,outcome,message};
     const original=structuredClone(ended);
-    expect(taskSummaryIsAppCopy(ended)).toBe(true);
-    expect(taskSummaryIsAppCopy({...ended,source:'codex'})).toBe(false);
-    expect(taskSummaryIsAppCopy({...ended,message:'Native output: '+message})).toBe(false);
+    expect(taskSummary(ended,translate)).toBe(translate(message));
+    expect(taskSummary({...ended,source:'codex'},translate)).toBe(message);
+    expect(taskSummary({...ended,message:'Native output: '+message},translate)).toBe('Native output: '+message);
     expect(ended).toEqual(original);
   }
   const question:TaskSnapshot={...base,status:'waiting_input',waiting_reason:'question',message:'Host text'};
-  expect(taskSummaryIsAppCopy(question)).toBe(true);
-  expect(taskSummary(question)).toBe('等待你在原 Agent 中回答');
+  expect(taskSummary(question,translate)).toBe(translate('等待你在原 Agent 中回答'));
+  expect(taskSummary({...question,waiting_reason:'quota_exhausted'},translate)).toBe(translate('额度已用完'));
+  const tool={...base,phase:'tool' as const,activity:'正在思考'};
+  expect(taskSummary(tool,translate)).toBe(tool.activity);
+  expect(taskActivity({...tool,phase:'awaiting_tool'},translate)).toBe(translate('等待工具响应 · ')+tool.activity);
 });
 
 test('anonymous scanner processes are discovery evidence, not independent task cards',()=>{
@@ -363,6 +374,8 @@ test('reported models are searchable without changing Agent identity or task ord
   const task={...base,source:'claude_code' as const,model:'deepseek-v4-flash'};
   expect(taskAgent(task)).toBe(taskAgent({...task,model:undefined}));
   expect(filterTasks([task],{...EMPTY_FILTERS,query:'DEEPSEEK flash'})).toEqual([task]);
+  const variant={...task,model_variant:'Team-A',reasoning_effort:'high'};
+  expect(filterTasks([variant],{...EMPTY_FILTERS,query:'flash#team-a HIGH'})).toEqual([variant]);
   expect(filterTasks([base],{...EMPTY_FILTERS,query:'deepseek'})).toEqual([]);
   expect(taskSection(task)).toBe(taskSection({...task,model:'another-model'}));
   expect(compareTasks(task,{...task,model:'another-model'})).toBe(0);
@@ -391,6 +404,16 @@ test('elapsed runs only for active execution and freezes at the source end acros
   const ended={...task,status:'waiting_input' as const,waiting_reason:'turn_ended' as const,finished_at:62000};
   expect(taskElapsed(ended,900000)).toBe('1m 1s');
   expect(taskElapsed({...ended,updated_at:800000},1000000)).toBe('1m 1s');
+  for(const viewed of [
+    {...ended,unread:false,pinned:true},
+    {...ended,unread:false,stale:true},
+    {...ended,status:'failed' as const,unread:false}
+  ]) {
+    expect(isEndedResult(viewed)).toBe(false);
+    expect(taskElapsed(viewed,1000000)).toBe('1m 1s');
+  }
+  expect(taskElapsed({...ended,waiting_reason:'approval'},900000)).toBeNull();
+  expect(taskElapsed({...ended,finished_at:900},900000)).toBeNull();
   expect(taskElapsed({...ended,finished_at:undefined},900000)).toBeNull();
   expect(taskElapsed({...task,stale:true},900000)).toBeNull();
 });

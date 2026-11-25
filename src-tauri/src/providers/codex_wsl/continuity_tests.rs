@@ -155,7 +155,7 @@ fn wsl_continuity_real_parser_pin_corruption_missing_and_explicit_end() {
     std::fs::create_dir_all(root.join("sessions")).unwrap();
     let path = root.join("sessions/rollout-session.jsonl");
     let timestamp = "2026-10-23T00:00:00Z";
-    let now = crate::providers::codex::parse_rfc3339(timestamp).unwrap();
+    let now = crate::providers::timestamp::parse_rfc3339(timestamp).unwrap();
     let start = format!(
         "{}\n{}\n",
         serde_json::json!({"type":"session_meta","payload":{"id":"one"}}),
@@ -222,7 +222,7 @@ fn wsl_continuity_incomplete_resumed_file_cannot_publish_an_old_rollout_end() {
     std::fs::create_dir_all(root.join("sessions")).unwrap();
     let current = root.join("sessions/rollout-current.jsonl");
     let old = root.join("sessions/rollout-old.jsonl");
-    let now = crate::providers::codex::parse_rfc3339("2026-10-23T00:00:00Z").unwrap();
+    let now = crate::providers::timestamp::parse_rfc3339("2026-10-23T00:00:00Z").unwrap();
     let meta = serde_json::json!({"type":"session_meta","payload":{"id":"one"}});
     let start = serde_json::json!({"timestamp":"2026-10-23T00:00:00Z","payload":{"type":"task_started","turn_id":"current"}});
     std::fs::write(&current, format!("{meta}\n{start}\n")).unwrap();

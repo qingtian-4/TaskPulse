@@ -296,61 +296,25 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
             });
 
         let mut snapshot = TaskSnapshot {
-            integration_epoch: None,
-            integration_sequence: 0,
-            agent_id: None,
-            agent_name: None,
-            evidence_channel: None,
-            native_storage: None,
-            outcome: None,
-            pending_confirmed_at: None,
-            source_instance: None,
-            model: None,
-            reasoning_effort: None,
-            internal: false,
-            project_path: None,
-            tmux_session: None,
-            tmux_pane: None,
-            tmux_target: None,
-            waiting_reason: None,
-            input_request_id: None,
-            input_request_ids: vec![],
-            attention_since: 0,
-            new_execution: false,
-            id: format!("file:{name}"),
-            name: display_name,
-            source: TaskSource::LocalFile,
-            status,
-            host: None,
             project: cwd_project,
             message: (!message.is_empty()).then_some(message),
             activity: val
                 .get("activity")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
-            phase: None,
             started_at: started_at.or(Some(mtime)),
-            updated_at: activity_at.or(finished_at).unwrap_or(mtime),
             finished_at,
             pid: val
                 .get("pid")
                 .and_then(|v| v.as_u64())
                 .and_then(|p| u32::try_from(p).ok()),
             exit_code,
-            confidence,
-            remote: false,
-            stale: false,
-            recent: false,
-            unread: false,
-            pinned: false,
             turn_key: val
                 .get("turn_key")
                 .and_then(|v| v.as_str())
                 .map(str::to_owned),
-            native_unread: None,
             terminal,
             can_focus,
-            cpu: None,
             cli: val.get("cli").and_then(|s| s.as_str()).map(String::from),
             session_id: val
                 .get("session_id")
@@ -364,10 +328,14 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
                 .get("hook_matcher")
                 .and_then(|s| s.as_str())
                 .map(String::from),
-            quota_5h_used_pct: None,
-            quota_5h_resets_at: None,
-            quota_1w_used_pct: None,
-            quota_1w_resets_at: None,
+            ..TaskSnapshot::new(
+                format!("file:{name}"),
+                display_name,
+                TaskSource::LocalFile,
+                status,
+                confidence,
+                activity_at.or(finished_at).unwrap_or(mtime),
+            )
         };
         snapshot.project_path = val.get("cwd").and_then(|v| v.as_str()).map(str::to_string);
         snapshot.source = match snapshot.cli.as_deref() {
@@ -391,60 +359,16 @@ fn parse_status(path: &Path, content: &str, mtime: SystemTime) -> Option<TaskSna
             None => (checked_status(trimmed)?, None),
         };
         Some(TaskSnapshot {
-            integration_epoch: None,
-            integration_sequence: 0,
-            agent_id: None,
-            agent_name: None,
-            evidence_channel: None,
-            native_storage: None,
-            outcome: None,
-            pending_confirmed_at: None,
-            source_instance: None,
-            model: None,
-            reasoning_effort: None,
-            internal: false,
-            project_path: None,
-            tmux_session: None,
-            tmux_pane: None,
-            tmux_target: None,
-            waiting_reason: None,
-            input_request_id: None,
-            input_request_ids: vec![],
-            attention_since: 0,
-            new_execution: false,
-            id: format!("file:{name}"),
-            name,
-            source: TaskSource::LocalFile,
-            status,
-            host: None,
-            project: None,
             message,
-            activity: None,
-            phase: None,
             started_at: Some(mtime),
-            updated_at: mtime,
-            finished_at: None,
-            pid: None,
-            exit_code: None,
-            confidence: DetectionConfidence::Hook,
-            remote: false,
-            stale: false,
-            recent: false,
-            unread: false,
-            pinned: false,
-            turn_key: None,
-            native_unread: None,
-            terminal: None,
-            can_focus: false,
-            cpu: None,
-            cli: None,
-            session_id: None,
-            hook_event: None,
-            hook_matcher: None,
-            quota_5h_used_pct: None,
-            quota_5h_resets_at: None,
-            quota_1w_used_pct: None,
-            quota_1w_resets_at: None,
+            ..TaskSnapshot::new(
+                format!("file:{name}"),
+                name,
+                TaskSource::LocalFile,
+                status,
+                DetectionConfidence::Hook,
+                mtime,
+            )
         })
     }
 }
@@ -458,7 +382,7 @@ fn status_time(v: Option<&serde_json::Value>) -> Option<Option<SystemTime>> {
         return Some(None);
     }
     parse_epoch_ms(Some(v))
-        .or_else(|| parse_rfc3339(Some(v)))
+        .or_else(|| v.as_str().and_then(super::timestamp::parse_rfc3339))
         .map(Some)
 }
 
@@ -468,60 +392,6 @@ fn parse_epoch_ms(v: Option<&serde_json::Value>) -> Option<SystemTime> {
         return None;
     }
     std::time::UNIX_EPOCH.checked_add(Duration::from_millis(ms as u64))
-}
-
-fn parse_rfc3339(v: Option<&serde_json::Value>) -> Option<SystemTime> {
-    let s = v?.as_str()?;
-    // Parse "2026-08-27T13:00:00Z" style timestamps (naive UTC).
-    let (date, time) = s.split_once('T')?;
-    let date = date.split('-').collect::<Vec<_>>();
-    if date.len() != 3 {
-        return None;
-    }
-    let time = time.trim_end_matches('Z');
-    let time = time.split('.').next().unwrap_or(time);
-    let hms = time.split(':').collect::<Vec<_>>();
-    if hms.len() != 3 {
-        return None;
-    }
-    if date[0].len() != 4 || !date[0].bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    let year: i64 = date[0].parse().ok()?;
-    let month: u32 = date[1].parse().ok()?;
-    let day: u32 = date[2].parse().ok()?;
-    let hour: u32 = hms[0].parse().ok()?;
-    let min: u32 = hms[1].parse().ok()?;
-    let sec: u32 = hms[2].parse().ok()?;
-    let leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-    let days_in_month = match month {
-        2 if leap => 29,
-        2 => 28,
-        4 | 6 | 9 | 11 => 30,
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        _ => return None,
-    };
-    if !(1..=days_in_month).contains(&day) || hour > 23 || min > 59 || sec > 59 {
-        return None;
-    }
-    let days = days_from_civil(year, month, day)?;
-    let secs = days * 86_400 + hour as i64 * 3_600 + min as i64 * 60 + sec as i64;
-    if secs < 0 {
-        std::time::UNIX_EPOCH.checked_sub(Duration::from_secs(secs.unsigned_abs()))
-    } else {
-        std::time::UNIX_EPOCH.checked_add(Duration::from_secs(secs as u64))
-    }
-}
-
-/// Days since 1970-01-01 (Howard Hinnant's algorithm).
-fn days_from_civil(y: i64, m: u32, d: u32) -> Option<i64> {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let mp = (m as i64 + 9) % 12;
-    let doy = (153 * mp + 2) / 5 + d as i64 - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    Some(era * 146_097 + doe - 719_468)
 }
 
 /// Read status files without deleting producer-owned records. A missing
@@ -1001,7 +871,7 @@ mod tests {
 
     #[test]
     fn rfc3339_and_epoch_parsing() {
-        let t1 = parse_rfc3339(Some(&serde_json::json!("2026-08-27T05:00:00Z"))).unwrap();
+        let t1 = super::super::timestamp::parse_rfc3339("2026-08-27T05:00:00Z").unwrap();
         let t2 = parse_epoch_ms(Some(&serde_json::json!(1787806800000u64))).unwrap();
         // Both should be ~the same instant (2026-08-27 05:00:00 UTC).
         let d1 = t1.duration_since(std::time::UNIX_EPOCH).unwrap().as_secs();

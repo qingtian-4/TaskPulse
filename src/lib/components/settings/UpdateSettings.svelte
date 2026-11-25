@@ -1,7 +1,7 @@
 <script lang="ts">
   import {Clock3} from '@lucide/svelte';
-  import {appSettings,savePreference,preferencePending} from '$lib/preferences';
-  import {t} from '$lib/i18n';
+  import {appSettings,savePreferenceFromControl,preferencePending} from '#lib/preferences.ts';
+  import {t} from '#lib/i18n.ts';
   import AppUpdates from '../AppUpdates.svelte';
   let {blocked=false}:{blocked?:boolean}=$props();
 </script>
@@ -12,7 +12,7 @@
     <label class="setting-row preference-row">
       <Clock3 size={18} class="update-icon" aria-hidden="true"/>
       <span class="setting-label setting-copy">{$t('自动检查更新')}</span>
-      <input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_check_updates??true} disabled={$preferencePending} onchange={e=>{void savePreference({auto_check_updates:e.currentTarget.checked},e.currentTarget).catch(()=>{});}}/>
+      <input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_check_updates??true} disabled={$preferencePending} onchange={e=>savePreferenceFromControl({auto_check_updates:e.currentTarget.checked},e.currentTarget)}/>
     </label>
   </div>
 </div>

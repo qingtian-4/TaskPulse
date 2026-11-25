@@ -89,6 +89,7 @@ impl Manifest {
                 "project",
                 "project_path",
                 "model",
+                "reasoning_effort",
             ]
             .contains(&name.as_str())
                 || !pointer(path)
@@ -521,6 +522,11 @@ pub fn map(
             project: m.text(input, "project").map(str::to_owned),
             project_path: m.text(input, "project_path").map(str::to_owned),
             model: m.text(input, "model").map(str::to_owned),
+            reasoning_effort: if kind == Kind::Unassociated || native_turn.is_none() {
+                None
+            } else {
+                m.text(input, "reasoning_effort").map(str::to_owned)
+            },
             phase,
             activity,
             request_kind: reason,

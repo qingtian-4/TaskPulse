@@ -53,6 +53,8 @@ pub struct Payload {
     pub project_path: Option<String>,
     #[serde(default)]
     pub model: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
     #[serde(default)]
     pub phase: Option<crate::domain::ExecutionPhase>,
     /// A minimal label, never raw tool inputs, prompts or outputs.
@@ -147,6 +149,11 @@ impl Event {
         {
             if s.len() > 2048 || s.chars().any(char::is_control) {
                 return Err("invalid_display_field".into());
+            }
+        }
+        if let Some(effort) = &self.payload.reasoning_effort {
+            if self.turn_id.is_none() || effort.len() > 64 || !identifier(effort) {
+                return Err("invalid_turn_reasoning_effort".into());
             }
         }
         if self.occurred_at.is_some_and(|n| n > 253_402_300_799_000) {

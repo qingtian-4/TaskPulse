@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""TaskPulse foreground command supervisor. Usage: tp-run <name> -- executable args...
+"""TaskPulse foreground supervisor. Usage: tp-run <name> [--hide-args] -- executable args...
 Stdio is inherited, never captured or scanned for approvals. A launcher/container/
 sbatch returning 0 proves only that launcher exited, not that its job completed.
 Requires Python 3.
@@ -52,9 +52,12 @@ def redacted_args(argv):
 
 def main():
     if len(sys.argv) < 3:
-        print("Usage: tp-run <name> -- <executable> [args...]", file=sys.stderr)
+        print("Usage: tp-run <name> [--hide-args] -- <executable> [args...]", file=sys.stderr)
         return 2
     name, argv = sys.argv[1], sys.argv[2:]
+    hide_args = argv[0] == "--hide-args"
+    if hide_args:
+        argv = argv[1:]
     if argv and argv[0] == "--":
         argv = argv[1:]
     if not argv:
@@ -77,10 +80,10 @@ def main():
         boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
     except OSError:
         ticks, boot = None, None
-    safe_argv = redacted_args(argv)
+    safe_argv = [] if hide_args else redacted_args(argv)
     state = {"schema_version": 2, "run_id": run_id, "label": name, "hostname": socket.gethostname(),
              "pane_id": os.environ.get("TMUX_PANE", ""), "cwd": os.getcwd(),
-             "argv": safe_argv, "command": subprocess.list2cmdline(safe_argv),
+             "argv": safe_argv, "command": None if hide_args else subprocess.list2cmdline(safe_argv),
              "pid": pid, "pid_start_ticks": ticks, "boot_id": boot,
              "started_at": started // 1000, "started_at_ms": started,
              "execution_activity_at": started // 1000, "execution_activity_at_ms": started}

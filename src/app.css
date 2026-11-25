@@ -106,7 +106,7 @@ button, input, select, textarea, summary { font: inherit; }
 }
 html, body {
   margin: 0; padding: 0; background: transparent; overflow: hidden;
-  font-family: 'Segoe UI', 'Microsoft YaHei UI', -apple-system, BlinkMacSystemFont, sans-serif;
+  font-family: system-ui, -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei UI', sans-serif;
   -webkit-font-smoothing: antialiased;
 }
 .glass-panel {
@@ -125,5 +125,5 @@ html, body {
 .glass-scroll::-webkit-scrollbar-thumb:hover { background: var(--tp-muted); }
 
 /* The same tokens drive settings, task cards, notices and the inbox. */
-:root[data-theme=light]{color-scheme:light;--tp-bg:#ffffff;--tp-panel:#f1f4f4;--tp-card:#f6f8f8;--tp-raised:#ffffff;--tp-input:#ffffff;--tp-text:#20312f;--tp-muted:#64726f;--tp-quiet:#667973;--tp-accent:#167e6c;--tp-on-accent:#ffffff;--tp-accent-soft:#e2f1ed;--tp-accent-line:#167e6c55;--tp-running:#306d99;--tp-action:#8a611c;--tp-unread:#167e6c;--tp-stale:#64726f;--tp-danger:#a2424e;--tp-success:#28714f;--tp-border:#e2e8e6;--tp-border-strong:#cad5d1;--tp-hover:#20312f08;--tp-shadow-card:0 1px 4px #00000008;--tp-shadow-window:0 10px 32px #00000018;--tp-glow:none}
+:root[data-theme=light]{color-scheme:light;--tp-bg:#ffffff;--tp-panel:#f1f4f4;--tp-card:#f6f8f8;--tp-raised:#ffffff;--tp-input:#ffffff;--tp-text:#20312f;--tp-muted:#53665f;--tp-quiet:#596d66;--tp-accent:#127462;--tp-on-accent:#ffffff;--tp-accent-soft:#e2f1ed;--tp-accent-line:#167e6c55;--tp-running:#306d99;--tp-action:#8a611c;--tp-unread:#127462;--tp-stale:#64726f;--tp-danger:#a2424e;--tp-success:#28714f;--tp-border:#e2e8e6;--tp-border-strong:#cad5d1;--tp-hover:#20312f08;--tp-shadow-card:0 1px 4px #00000008;--tp-shadow-window:0 10px 32px #00000018;--tp-glow:none}
 :root[data-theme=dark]{color-scheme:dark}

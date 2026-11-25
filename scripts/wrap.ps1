@@ -1,12 +1,20 @@
 ﻿# Compatibility entry: wrap.ps1 <name> <native executable> [arguments...]
 # Supervises process boundaries, not internal Agent turns or approvals.
+# Place '--hide-args' first in -Command to omit the executable and arguments from status.
 param(
     [Parameter(Mandatory=$true, Position=0)][string]$AgentName,
     [Parameter(Mandatory=$true, Position=1, ValueFromRemainingArguments=$true)][AllowEmptyString()][string[]]$Command
 )
 $ErrorActionPreference = 'Stop'
+$hideJobArgs = $Command[0] -ceq '--hide-args'
+if ($hideJobArgs) {
+    $Command = @($Command | Select-Object -Skip 1)
+    if ($Command.Length -eq 0) {
+        [Console]::Error.WriteLine('wrap.ps1: no executable supplied')
+        exit 2
+    }
+}
 $jobDirectory = if ($env:TASKPULSE_STATUS_DIR) { $env:TASKPULSE_STATUS_DIR } else { Join-Path $env:USERPROFILE '.agent-monitor' }
-$null = New-Item -ItemType Directory -Path $jobDirectory -Force
 $jobId = [Guid]::NewGuid().ToString()
 $jobStatus = Join-Path $jobDirectory "$jobId.status"
 $jobStart = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
@@ -16,7 +24,7 @@ $jobStarted = $false
 $jobOutputCopy = $null
 $jobErrorCopy = $null
 $jobInputCopy = $null
-$jobMessage = $Command[0]
+$jobMessage = if ($hideJobArgs) { $null } else { $Command[0] }
 
 # Windows CRT argv quoting, including empty strings, quotes and trailing slashes.
 function Quote-JobArgument([string]$value) {
@@ -37,7 +45,7 @@ function Write-JobStatus([string]$status, $code=$null, $finished=$null) {
         execution_activity_at=$jobActivity
         heartbeat_at=[DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
         pid=$PID; exit_code=$code; confidence='exact'; message=$jobMessage
-        activity=$(if ($status -eq 'running') { $Command[0] } else { $null })
+        activity=$(if ($status -eq 'running') { $jobMessage } else { $null })
     }
     $temporary = "$jobStatus.tmp"
     [System.IO.File]::WriteAllText($temporary, ($value | ConvertTo-Json -Compress), (New-Object System.Text.UTF8Encoding($false)))
@@ -45,6 +53,7 @@ function Write-JobStatus([string]$status, $code=$null, $finished=$null) {
 }
 $jobExit = 1
 try {
+    $null = New-Item -ItemType Directory -Path $jobDirectory -Force
     $jobExecutable = (Get-Command $Command[0] -CommandType Application -ErrorAction Stop).Source
     if ([IO.Path]::GetExtension($jobExecutable) -in @('.cmd','.bat')) {
         throw 'Batch files require an explicit cmd.exe command; shell syntax is not reinterpreted.'
@@ -98,8 +107,15 @@ public static class TaskPulseInputRelay {
     $jobExit = 127
     $jobMessage = "运行监督器错误：$($_.Exception.GetType().Name)"
     $jobActivity = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-    Write-JobStatus 'failed' $jobExit $jobActivity
-    Write-Error $_ -ErrorAction Continue
+    if ($hideJobArgs) {
+        # An ErrorRecord can render the caller line, including all CLI arguments.
+        [Console]::Error.WriteLine('TaskPulse could not supervise the command.')
+        try { Write-JobStatus 'failed' $jobExit $jobActivity }
+        catch { [Console]::Error.WriteLine('TaskPulse could not save the run status.') }
+    } else {
+        Write-JobStatus 'failed' $jobExit $jobActivity
+        Write-Error $_ -ErrorAction Continue
+    }
 } finally {
     if ($jobStarted -and -not $jobProcess.HasExited) {
         $jobProcess.Kill()

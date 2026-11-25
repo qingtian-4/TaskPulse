@@ -14,7 +14,7 @@
 //!   `event_msg.agent_message` / `token_count` / tool
 //!     `*_end` events (activity)                       → RUNNING
 //!   `event_msg.task_complete`                          → WAITING_INPUT
-//!   `event_msg.turn_aborted` / `thread_rolled_back`    → WAITING_INPUT
+//!   `event_msg.turn_aborted`                           → interrupted result
 //!
 //! The `notify = ["...", "turn-ended"]` config key exists in Codex Desktop;
 //! wiring TaskPulse's own receiver there would give EXACT turn-end events, but
@@ -29,7 +29,7 @@ use std::sync::{mpsc, OnceLock, RwLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use crate::domain::{DetectionConfidence, TaskSnapshot, TaskSource, TaskStatus};
-use crate::providers::{Provider, ProviderOutput};
+use crate::providers::{timestamp::parse_rfc3339, Provider, ProviderOutput};
 use std::collections::HashMap;
 
 mod observer;
@@ -505,9 +505,7 @@ impl CodexProvider {
             .or_else(|| host.cwd.clone());
         task.model = host.model.clone();
         task.reasoning_effort = host.reasoning_effort.clone();
-        if host.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
-            task.finished_at = host.finished_at;
-        }
+        host.project_end(&mut task);
         task.cli = Some("codex".into());
         task.session_id = Some(host.session_id.clone());
         task.quota_5h_used_pct = host.quota_5h_used_pct;
@@ -577,7 +575,7 @@ pub struct SessionState {
     active_tools: std::collections::BTreeMap<String, String>,
     confirmed_approvals: std::collections::BTreeMap<String, Option<String>>,
     questions: questions::Questions,
-    turn_completed: bool,
+    turn_end: Option<TurnEnd>,
     pub session_id: String,
     /// The first native header owns this rollout. Forked transcripts can embed
     /// another session_meta from the parent; that is history, not a new owner.
@@ -590,7 +588,22 @@ pub struct SessionState {
     pub quota_1w_resets_at: Option<i64>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum TurnEnd {
+    Completed,
+    Interrupted,
+}
+
 impl SessionState {
+    fn project_end(&self, task: &mut TaskSnapshot) {
+        if self.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
+            task.finished_at = self.finished_at;
+            if self.turn_end == Some(TurnEnd::Interrupted) {
+                task.outcome = Some("interrupted".into());
+            }
+        }
+    }
+
     fn parser_protected(&self) -> bool {
         self.status == TaskStatus::Running
             || !self.confirmed_approvals.is_empty()
@@ -1009,7 +1022,7 @@ fn apply_codex_rollout(
         mut active_tools,
         mut confirmed_approvals,
         mut questions,
-        mut turn_completed,
+        mut turn_end,
         mut session_id,
         mut metadata_session_id,
         mut turn_key,
@@ -1036,7 +1049,7 @@ fn apply_codex_rollout(
         active_tools: Default::default(),
         confirmed_approvals: Default::default(),
         questions: Default::default(),
-        turn_completed: false,
+        turn_end: None,
         session_id: default_session_id.into(),
         metadata_session_id: None,
         turn_key: None,
@@ -1237,25 +1250,40 @@ fn apply_codex_rollout(
 
         match ptype {
             "task_started" => {
+                let start = codex_event_time(payload.get("started_at"), ts);
+                let key = payload
+                    .get("turn_id")
+                    .and_then(|v| v.as_str())
+                    .filter(|id| !id.is_empty())
+                    .map(str::to_owned)
+                    .or_else(|| value_timestamp_key(start));
+                if turn_key.is_some() && (key == turn_key || key.is_none()) {
+                    // A repeated start cannot reopen a result or dismiss an outstanding request.
+                    continue;
+                }
+                // Native start seconds can be coarser than the previous envelope.
+                if started_at.zip(start).is_some_and(|(old, new)| {
+                    old.duration_since(new)
+                        .is_ok_and(|age| age >= Duration::from_secs(1))
+                }) {
+                    continue;
+                }
+                reasoning_effort = None;
+                turn_key = key;
                 questions.clear();
-                turn_completed = false;
+                turn_end = None;
                 finished_at = None;
                 status = TaskStatus::Running;
                 waiting_reason = None;
                 input_request_id = None;
-                started_at = ts;
+                started_at = start;
                 activity = None;
                 active_tools.clear();
                 confirmed_approvals.clear();
                 phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
-                if let Some(t) = ts {
+                if let Some(t) = start {
                     updated_at = t;
                 }
-                turn_key = payload
-                    .get("turn_id")
-                    .and_then(|value| value.as_str())
-                    .map(str::to_string)
-                    .or_else(|| value_timestamp_key(ts));
             }
             "user_message" | "message"
                 if ptype == "user_message"
@@ -1264,15 +1292,16 @@ fn apply_codex_rollout(
                 if let Some(changed) = questions.replied(payload) {
                     if changed {
                         if waiting_reason == Some(crate::domain::WaitingReason::Question) {
-                            status = if turn_completed {
+                            status = if turn_end.is_some() {
                                 TaskStatus::WaitingInput
                             } else {
                                 TaskStatus::Running
                             };
-                            waiting_reason =
-                                turn_completed.then_some(crate::domain::WaitingReason::TurnEnded);
+                            waiting_reason = turn_end
+                                .is_some()
+                                .then_some(crate::domain::WaitingReason::TurnEnded);
                             input_request_id = None;
-                            phase = (!turn_completed).then_some(if active_tools.is_empty() {
+                            phase = turn_end.is_none().then_some(if active_tools.is_empty() {
                                 crate::domain::ExecutionPhase::AwaitingModel
                             } else {
                                 crate::domain::ExecutionPhase::Tool
@@ -1297,6 +1326,7 @@ fn apply_codex_rollout(
                     )
                 {
                     started_at = ts;
+                    reasoning_effort = None;
                     finished_at = None;
                     turn_key = value_timestamp_key(ts);
                     waiting_reason = None;
@@ -1305,7 +1335,7 @@ fn apply_codex_rollout(
                     activity = None;
                     active_tools.clear();
                     questions.clear();
-                    turn_completed = false;
+                    turn_end = None;
                     phase = Some(crate::domain::ExecutionPhase::AwaitingModel);
                 }
                 if status != TaskStatus::WaitingInput {
@@ -1426,26 +1456,41 @@ fn apply_codex_rollout(
                 if waiting_reason == Some(crate::domain::WaitingReason::Question)
                     && !questions.has_active()
                 {
-                    status = if turn_completed {
+                    status = if turn_end.is_some() {
                         TaskStatus::WaitingInput
                     } else {
                         TaskStatus::Running
                     };
-                    waiting_reason =
-                        turn_completed.then_some(crate::domain::WaitingReason::TurnEnded);
+                    waiting_reason = turn_end
+                        .is_some()
+                        .then_some(crate::domain::WaitingReason::TurnEnded);
                     input_request_id = None;
-                    phase = (!turn_completed).then_some(if active_tools.is_empty() {
+                    phase = turn_end.is_none().then_some(if active_tools.is_empty() {
                         crate::domain::ExecutionPhase::AwaitingModel
                     } else {
                         crate::domain::ExecutionPhase::Tool
                     });
                 }
             }
-            "task_complete" => {
-                questions.finish_turn();
-                turn_completed = true;
+            "task_complete" | "turn_aborted" => {
+                if turn_end.is_some() && finished_at.is_some() {
+                    continue;
+                }
+                if ptype == "turn_aborted" {
+                    questions.clear();
+                    turn_end = Some(TurnEnd::Interrupted);
+                } else {
+                    questions.finish_turn();
+                    turn_end = Some(TurnEnd::Completed);
+                }
                 if waiting_reason == Some(crate::domain::WaitingReason::QuotaExhausted) {
                     continue;
+                }
+                if turn_key.is_none() {
+                    turn_key = payload
+                        .get("turn_id")
+                        .and_then(|v| v.as_str())
+                        .map(str::to_owned);
                 }
                 status = TaskStatus::WaitingInput;
                 waiting_reason = Some(crate::domain::WaitingReason::TurnEnded);
@@ -1454,29 +1499,22 @@ fn apply_codex_rollout(
                 active_tools.clear();
                 confirmed_approvals.clear();
                 phase = None;
-                if let Some(t) = payload
-                    .get("completed_at")
-                    .and_then(parse_rfc3339_value)
-                    .or(ts)
-                {
+                if let Some(t) = codex_event_time(payload.get("completed_at"), ts) {
                     updated_at = t;
                     finished_at = Some(t);
+                    // A bounded tail may begin with the result. The host's elapsed
+                    // time recovers its subsecond start even without the start line.
+                    if started_at.is_none() {
+                        let by_duration = payload
+                            .get("duration_ms")
+                            .and_then(|v| v.as_u64())
+                            .and_then(|ms| t.checked_sub(Duration::from_millis(ms)))
+                            .filter(|start| *start >= UNIX_EPOCH);
+                        started_at = codex_event_time(payload.get("started_at"), by_duration);
+                    }
                 }
                 if let Some(msg) = payload.get("last_agent_message").and_then(|v| v.as_str()) {
                     last_message = Some(truncate(msg, 120));
-                }
-            }
-            "turn_aborted" | "thread_rolled_back" => {
-                questions.clear();
-                status = TaskStatus::WaitingInput;
-                waiting_reason = Some(crate::domain::WaitingReason::Unknown);
-                input_request_id = None;
-                activity = None;
-                active_tools.clear();
-                confirmed_approvals.clear();
-                phase = None;
-                if let Some(t) = ts {
-                    updated_at = t;
                 }
             }
             "error" if explicit_quota_error(payload) => {
@@ -1534,7 +1572,7 @@ fn apply_codex_rollout(
         active_tools,
         confirmed_approvals,
         questions,
-        turn_completed,
+        turn_end,
         session_id,
         metadata_session_id,
         turn_key,
@@ -1917,6 +1955,7 @@ fn flush_codex(
         )
         .with_host(ssh_host.to_string())
         .with_remote();
+        state.project_end(&mut t);
         t.internal = state.internal || meta.is_some_and(|m| m.internal);
         // Remote tails usually do not include the file's early session_meta
         // record. The authoritative cwd travels with META; use it before the
@@ -1941,9 +1980,6 @@ fn flush_codex(
         t.phase = state.phase;
         t.model = state.model;
         t.reasoning_effort = state.reasoning_effort;
-        if state.waiting_reason == Some(crate::domain::WaitingReason::TurnEnded) {
-            t.finished_at = state.finished_at;
-        }
         t.cli = Some("codex".into());
         t.session_id = Some(sid);
         t.turn_key = state.turn_key;
@@ -2322,66 +2358,28 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Newer Codex events report whole Unix seconds. Preserve the envelope's finer
+/// precision when it was written in the same second as the event.
+fn codex_event_time(
+    value: Option<&serde_json::Value>,
+    envelope: Option<SystemTime>,
+) -> Option<SystemTime> {
+    let Some(value) = value else { return envelope };
+    if let Some(seconds) = value.as_u64().filter(|s| (1..=253_402_300_799).contains(s)) {
+        return envelope
+            .filter(|stamp| {
+                stamp
+                    .duration_since(UNIX_EPOCH)
+                    .is_ok_and(|d| d.as_secs() == seconds)
+            })
+            .or_else(|| UNIX_EPOCH.checked_add(Duration::from_secs(seconds)));
+    }
+    parse_rfc3339_value(value).or(envelope)
+}
+
 fn parse_rfc3339_value(v: &serde_json::Value) -> Option<SystemTime> {
     let s = v.as_str()?;
     parse_rfc3339(s)
-}
-
-pub(crate) fn parse_rfc3339(s: &str) -> Option<SystemTime> {
-    let s = s.trim();
-    // Accept "2026-07-06T08:22:01.075Z" and "+00:00" offsets.
-    let cleaned = s.replace('Z', "+00:00");
-    let dt = chrono_like_parse(&cleaned)?;
-    // Preserve sub-second event order. Resumed rollouts and very short turns
-    // can both change within one second; truncating precision lets the old
-    // turn override the new one or gives two executions the same fallback ID.
-    let fraction = cleaned.get(19..).and_then(|tail| tail.strip_prefix('.'));
-    let mut nanos = 0;
-    let mut place = 100_000_000;
-    if let Some(fraction) = fraction {
-        for digit in fraction.bytes().take_while(u8::is_ascii_digit).take(9) {
-            nanos += u32::from(digit - b'0') * place;
-            place /= 10;
-        }
-    }
-    Some(UNIX_EPOCH + Duration::new(dt, nanos))
-}
-
-/// Minimal RFC3339 → unix-seconds parser (no external chrono dependency in the
-/// MVP; handles the Codex timestamp shape exactly).
-fn chrono_like_parse(s: &str) -> Option<u64> {
-    // 2026-07-06T08:22:01.075+00:00
-    let bytes = s.as_bytes();
-    if bytes.len() < 19 {
-        return None;
-    }
-    let year = num(&s[0..4])?;
-    let month = num(&s[5..7])?;
-    let day = num(&s[8..10])?;
-    let hour = num(&s[11..13])?;
-    let min = num(&s[14..16])?;
-    let sec = num(&s[17..19])?;
-    let days = days_from_civil(year as i64, month as i64, day as i64);
-    let secs = days * 86_400 + hour as i64 * 3600 + min as i64 * 60 + sec as i64;
-    if secs >= 0 {
-        Some(secs as u64)
-    } else {
-        None
-    }
-}
-
-fn num(s: &str) -> Option<u64> {
-    s.parse::<u64>().ok()
-}
-
-/// Days since 1970-01-01 (Howard Hinnant's civil-days algorithm).
-fn days_from_civil(y: i64, m: i64, d: i64) -> i64 {
-    let y = if m <= 2 { y - 1 } else { y };
-    let era = if y >= 0 { y } else { y - 399 } / 400;
-    let yoe = y - era * 400;
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
-    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-    era * 146_097 + doe - 719_468
 }
 
 #[cfg(test)]

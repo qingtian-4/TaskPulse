@@ -36,6 +36,7 @@ pub fn operational(code: &str) -> bool {
             | "call_id_required"
             | "explicit_request_kind_required"
             | "invalid_display_field"
+            | "invalid_turn_reasoning_effort"
             | "invalid_timestamp"
             | "agent_binding_mismatch"
             | "adapter_or_transport_mismatch"

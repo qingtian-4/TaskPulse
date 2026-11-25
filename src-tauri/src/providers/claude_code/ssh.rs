@@ -254,7 +254,7 @@ fn parse_session(session: &Session, host: &str, now: SystemTime) -> Option<TaskS
             apply_record(&mut transcript, row, &session.id, now);
             continue;
         }
-        let Some(at) = timestamp.and_then(crate::providers::codex::parse_rfc3339) else {
+        let Some(at) = timestamp.and_then(crate::providers::timestamp::parse_rfc3339) else {
             continue;
         };
         if at > now + Duration::from_secs(120) || latest.is_some_and(|last| at < last) {
@@ -310,7 +310,7 @@ mod tests {
     const END: &str = "2026-11-10T12:00:04.789Z";
 
     fn at(stamp: &str) -> SystemTime {
-        crate::providers::codex::parse_rfc3339(stamp).unwrap()
+        crate::providers::timestamp::parse_rfc3339(stamp).unwrap()
     }
 
     fn start() -> Value {

@@ -1,5 +1,5 @@
 <script lang="ts">
-  import brand from '$lib/assets/brand.svg';
+  import brand from '#lib/assets/brand.svg';
   let { size = 24 }: { size?: number } = $props();
 </script>
 

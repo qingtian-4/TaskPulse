@@ -259,6 +259,9 @@ pub struct TaskSnapshot {
     /// Model reported by the agent/response, never part of session identity.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// Host-defined preset for this model (for example an OpenCode variant).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model_variant: Option<String>,
     /// Explicit source-reported reasoning effort; presentation only.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<String>,
@@ -488,6 +491,7 @@ impl TaskSnapshot {
             status,
             source_instance: None,
             model: None,
+            model_variant: None,
             reasoning_effort: None,
             phase: None,
             internal: false,

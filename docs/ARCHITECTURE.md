@@ -10,6 +10,8 @@ The SVGs are editable source assets. The flow below and ownership table are the
 reference for implementation. Kimi separates filesystem admission (`kimi.rs`),
 pure wire reduction (`kimi/wire.rs`) and regression cases (`kimi/tests.rs`).
 Qoder readers separate Desktop SQLite projections from IDE/CLI transcripts.
+OpenCode's current-turn SQLite queries and row projection live in
+`providers/opencode.rs`, with fixture regressions in `providers/opencode/tests.rs`.
 TRAE's public metadata reader does not claim full lifecycle support.
 
 ```mermaid
@@ -52,7 +54,9 @@ task-result outputs.
 | `transition.rs`, `notifier.rs`, `task_notice.rs` | Deduplicate lifecycle notifications and manage presentation. Dismissal/focus is not user-read. |
 | `monitoring.rs`, `monitoring/discovery.rs`, `source_catalog.rs` | Registry owns source IDs, migration/CAS and catalog state. Discovery is read-only. The catalog owns shared capability metadata. Support, detection, health and current tasks stay separate. |
 | `popup_interaction.rs`, `tray.rs`, native window/startup/focus modules | Backend visibility/focus and OS resources. Validate live identity and release locks before native setters. |
-| `src/lib/`, `src/routes/` | Typed presentation and IPC clients. Shared stores own preferences/drafts. SourceSettings owns editing and management close protection. |
+| `src/lib/`, `src/routes/` | Typed presentation, shared stores, IPC clients and route entrypoints. |
+| `src/lib/components/dashboard/` | Tray panel, task list, selected task details and message center. The dashboard coordinates selection, snapshots, native actions and window sizing. |
+| `src/lib/components/settings/` | Management sections and source editors. SourceSettings owns editing and management close protection. |
 | `locales/` | One pair of app-owned catalogs for Svelte and native Rust, with key-consistency tests. Native task/source text stays data. |
 | `scripts/`, package scripts, `.github/workflows/` | Build/development/audit/delivery entrypoints, with stable shipped runtime resources. |
 | `tests/`, `tests/native/`, `tests/install/`, `tests/support/`, `tests/fixtures/` | Automated contracts, opt-in native/installation acceptance, shared lifecycle helpers and sanitized inputs. |
