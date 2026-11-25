@@ -1,15 +1,14 @@
-use chrono::{DateTime, NaiveDateTime};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use time::{format_description::well_known::Rfc3339, OffsetDateTime};
 
 /// Native events carry RFC 3339 times. Older status writers omit the zone and use UTC.
 pub(super) fn parse_rfc3339(text: &str) -> Option<SystemTime> {
     let text = text.trim();
-    let utc = DateTime::parse_from_rfc3339(text)
-        .map(|dt| dt.to_utc())
-        .or_else(|_| text.parse::<NaiveDateTime>().map(|dt| dt.and_utc()))
+    let stamp = OffsetDateTime::parse(text, &Rfc3339)
+        .or_else(|_| OffsetDateTime::parse(&format!("{text}Z"), &Rfc3339))
         .ok()?;
-    let fraction = Duration::from_nanos(u64::from(utc.timestamp_subsec_nanos()));
-    let seconds = utc.timestamp();
+    let fraction = Duration::from_nanos(u64::from(stamp.nanosecond()));
+    let seconds = stamp.unix_timestamp();
     let epoch = UNIX_EPOCH.checked_add(fraction)?;
     if seconds < 0 {
         epoch.checked_sub(Duration::from_secs(seconds.unsigned_abs()))
