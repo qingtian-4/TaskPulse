@@ -492,6 +492,48 @@ fn apply(s: &mut Session, e: Event, n: u64) -> crate::domain::TaskSnapshot {
 }
 
 #[test]
+fn reported_effort_follows_only_the_matching_turn_and_model() {
+    let mut session = Session::default();
+    let mut start = event(Kind::Started, "first", 1);
+    start.payload.model = Some("model-a".into());
+    start.payload.reasoning_effort = Some("high".into());
+    assert_eq!(
+        apply(&mut session, start.clone(), 1)
+            .reasoning_effort
+            .as_deref(),
+        Some("high")
+    );
+    let end = apply(&mut session, event(Kind::Completed, "first", 2), 2);
+    assert_eq!(end.reasoning_effort.as_deref(), Some("high"));
+
+    let next = apply(&mut session, event(Kind::Started, "second", 3), 3);
+    assert!(next.model.is_none() && next.reasoning_effort.is_none());
+    let mut late = event(Kind::Heartbeat, "first", 4);
+    late.payload.reasoning_effort = Some("max".into());
+    assert!(apply(&mut session, late, 4).reasoning_effort.is_none());
+
+    let mut phase = event(Kind::Phase, "second", 5);
+    phase.payload.model = Some("model-a".into());
+    phase.payload.reasoning_effort = Some("low".into());
+    assert_eq!(
+        apply(&mut session, phase, 5).reasoning_effort.as_deref(),
+        Some("low")
+    );
+    let mut changed = event(Kind::Phase, "second", 6);
+    changed.payload.model = Some("model-b".into());
+    assert!(apply(&mut session, changed, 6).reasoning_effort.is_none());
+
+    start.kind = Kind::Heartbeat;
+    start.turn_id = None;
+    assert!(start.validate("fixture-agent").is_err());
+    start.turn_id = Some("second".into());
+    for invalid in [" ".into(), "x".repeat(65), "a\nb".into()] {
+        start.payload.reasoning_effort = Some(invalid);
+        assert!(start.validate("fixture-agent").is_err());
+    }
+}
+
+#[test]
 fn protocol_rejects_unknown_versions_unbound_identity_and_secret_fields() {
     let e = event(Kind::Started, "a", 1);
     assert!(e.validate("fixture-agent").is_ok());

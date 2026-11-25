@@ -229,20 +229,23 @@ impl Session {
                         .map(str::to_owned);
                 }
             }
+            // A new turn or model cannot inherit the last reasoning setting.
+            if e.kind == Kind::Started && task.turn_key.is_some() {
+                task.model = None;
+                task.reasoning_effort = None;
+            }
             if let Some(value) = &e.payload.model {
+                if task.model.as_ref() != Some(value) {
+                    task.reasoning_effort = None;
+                }
                 task.model = Some(value.clone());
+            }
+            if let Some(effort) = &e.payload.reasoning_effort {
+                task.reasoning_effort = Some(effort.clone());
             }
         }
         task.new_execution = false;
-        if matches!(
-            e.kind,
-            Kind::Discovered
-                | Kind::Renamed
-                | Kind::Heartbeat
-                | Kind::Closed
-                | Kind::Submitted
-                | Kind::Unassociated
-        ) {
+        if metadata_only {
             if e.kind == Kind::Unassociated {
                 task.message =
                     Some("宿主事件缺少可靠轮次/调用关联；保留原状态，不推断结束或授权".into());

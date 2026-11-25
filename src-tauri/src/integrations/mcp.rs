@@ -47,6 +47,7 @@ fn tool() -> Value {
                 "kind":{"type":"string","enum":KINDS},
                 "payload":{"type":"object","additionalProperties":false,"properties":{
                     "title":display,"project":display,"project_path":display,"model":display,"activity":display,
+                    "reasoning_effort":{"type":"string","minLength":1,"maxLength":64},
                     "phase":{"type":"string","enum":["thinking","tool","responding","awaiting_model","awaiting_tool"]},
                     "request_kind":{"type":"string","enum":["approval","question"]}
                 }}

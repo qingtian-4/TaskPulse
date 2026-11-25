@@ -127,6 +127,11 @@
           ],
           "maxLength": 2048
         },
+        "reasoning_effort": {
+          "type": ["string", "null"],
+          "minLength": 1,
+          "maxLength": 64
+        },
         "phase": {
           "enum": [
             null,
@@ -157,6 +162,18 @@
     }
   },
   "allOf": [
+    {
+      "if": {
+        "required": ["payload"],
+        "properties": {
+          "payload": {
+            "required": ["reasoning_effort"],
+            "properties": {"reasoning_effort": {"type": "string"}}
+          }
+        }
+      },
+      "then": {"required": ["turn_id"], "properties": {"turn_id": {"type": "string"}}}
+    },
     {
       "if": {
         "properties": {

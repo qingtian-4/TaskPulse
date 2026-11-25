@@ -59,10 +59,11 @@ accept_since_ms = 0
     replies = exchange(handshake + [request(2, "tools/list"), report(3, "connection.test", "test")])
     assert replies[0]["result"]["protocolVersion"] == "2025-11-25"
     assert [tool["name"] for tool in replies[1]["result"]["tools"]] == ["taskpulse_report"]
+    assert "reasoning_effort" in replies[1]["result"]["tools"][0]["inputSchema"]["properties"]["payload"]["properties"]
     assert replies[2]["result"]["isError"] is False
     assert not list(profile.glob("integrations/*/events/*.jsonl")), "Connection test created a task"
 
-    reports = [report(2, "turn.started", "start", payload={"title": "合成 MCP 会话", "project": "fixture"}),
+    reports = [report(2, "turn.started", "start", payload={"title": "合成 MCP 会话", "project": "fixture", "model": "fixture-model", "reasoning_effort": "high"}),
                report(3, "input.requested", "request-a", request_id="request-a", payload={"request_kind": "approval"}),
                report(4, "input.requested", "request-b", request_id="request-b", payload={"request_kind": "question"}),
                report(5, "input.resolved", "resolved-a", request_id="request-a"),
@@ -73,6 +74,7 @@ accept_since_ms = 0
     assert len(journals) == 1
     journal = journals[0]
     events = [json.loads(line) for line in journal.read_text(encoding="utf-8").splitlines()]
+    assert events[0]["event"]["payload"]["reasoning_effort"] == "high"
     assert all(item["evidence"] == "self_reported" for item in events)
     assert [item["sequence"] for item in events] == list(range(1, 6))
     assert events[-1]["context"]["admission"]["pending"][0]["request"] == "request-b"
