@@ -116,7 +116,12 @@ async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:
         for(let p=e.parentElement;p;p=p.parentElement){const s=getComputedStyle(p),b=p.getBoundingClientRect();if(/auto|scroll|hidden|clip/.test(s.overflowY)&&(y<b.top||y>=b.bottom))return false;if(/auto|scroll|hidden|clip/.test(s.overflowX)&&(x<b.left||x>=b.right))return false;}
         return true;
       });
-      const occluded=buttons.filter(e=>{const r=e.getBoundingClientRect();const hit=document.elementFromPoint(r.left+r.width/2,r.top+r.height/2);return !hit||!(e===hit||e.contains(hit));}).map(e=>e.getAttribute('aria-label')||e.textContent?.trim());
+      const occluded=buttons.flatMap(e=>{
+        const r=e.getBoundingClientRect(),x=r.left+r.width/2,y=r.top+r.height/2;
+        const hit=document.elementFromPoint(x,y);
+        return e===hit||e.contains(hit)?[]:[{control:e.getAttribute('aria-label')||e.className,
+          x,y,hit:hit?.tagName,hitClass:hit?.className,insideFilter:!!hit?.closest('.filters')}];
+      });
       const titles=[...document.querySelectorAll('.row-title,.heading')].map(box);
       const labels=[...document.querySelectorAll('.status-label')].map(box);
       const overlapping=titles.some(t=>labels.some(s=>s.top<t.bottom&&s.bottom>t.top&&s.left<t.right&&s.right>t.left));
@@ -125,7 +130,7 @@ async function checkScales(client:any,kind:'dashboard'|'sources'|'notice',width:
     })()`);
     assert.equal(layout.dpr,scale);assert.equal(layout.horizontal,false,kind+' '+scale+' horizontal overflow');
     assert.equal(layout.overlapping,false,kind+' '+scale+' title / state overlap');
-    assert.deepEqual(layout.occluded,[],kind+' '+scale+' inaccessible controls');
+    assert.deepEqual(layout.occluded,[],kind+' '+width+'×'+height+' @'+scale+' inaccessible controls');
     assert.ok(layout.panel.bottom<=height+1,kind+' '+scale+' panel outside logical window');
     if(kind==='notice')assert.ok(await client.evaluate(`document.querySelector('.summary').getBoundingClientRect().bottom<=document.querySelector('footer').getBoundingClientRect().top`),'Notice summary overlaps actions');
     await Bun.write(join(owned,kind+'-'+width+'x'+height+'-'+Math.round(scale*100)+'.png'),Buffer.from((await client.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
@@ -290,7 +295,9 @@ try{
   const thinking=initial.find((t:any)=>t.session_id==='thinking'),done=initial.find((t:any)=>t.session_id==='done');
   assert.equal(await root.evaluate(`document.querySelector('.task-row').dataset.taskId`),initial.find((t:any)=>t.session_id==='question').id);
   const fontSizes=await root.evaluate(`({title:getComputedStyle(document.querySelector('.row-title')).fontSize,context:getComputedStyle(document.querySelector('.context')).fontSize,activity:getComputedStyle(document.querySelector('.activity')).fontSize,number:getComputedStyle(document.querySelector('.overview b')).fontSize})`);
-  assert.deepEqual(fontSizes,{title:'14px',context:'14px',activity:'14px',number:nativeLayout.width<=350?'23px':'22px'});
+  const initialFontSize=(await root.invoke('get_monitoring_settings')).preferences.task_font_size;
+  const initialFont=String(initialFontSize)+'px';
+  assert.deepEqual(fontSizes,{title:initialFont,context:initialFont,activity:initialFont,number:nativeLayout.width<=350?'23px':'22px'});
   const originalTheme=await root.evaluate('document.documentElement.dataset.theme');
   for(const theme of ['light','dark']){
     await root.evaluate(`document.documentElement.dataset.theme=${JSON.stringify(theme)}`);
@@ -372,7 +379,7 @@ try{
   await root.wait(`document.querySelectorAll('.task-row').length===1&&document.querySelector('.unread-filter').getAttribute('aria-pressed')==='true'&&!document.querySelector('.filter-note')`);
   await Bun.write(join(owned,'search-filter-368x560.png'),Buffer.from((await root.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
   await clickDashboardFilter(root.evaluate,'.all-tasks');
-  await click(root,'.filter-toggle');
+  await root.wait(`document.querySelector('.filter-toggle').getAttribute('aria-expanded')==='false'`);
   await click(root,'[data-task-id="'+done.id+'"]');
   await root.wait(`!!document.querySelector('.detail-actions [data-variant="primary"]')`);
   assert.equal((await root.invoke('get_agents')).find((task:any)=>task.id===done.id).unread,true);
@@ -425,7 +432,18 @@ try{
   await checkScales(management,'sources',960,704);
   await management.send('Emulation.setDeviceMetricsOverride',{width:640,height:600,deviceScaleFactor:2,mobile:false});
   await management.evaluate('document.fonts.ready.then(()=>true)');
-  assert.ok(await management.evaluate(`document.documentElement.scrollWidth<=innerWidth&&document.querySelector('.ms-scroll').scrollHeight>document.querySelector('.ms-scroll').clientHeight`),'The Local list must scroll internally without horizontal overflow');
+  assert.ok(await management.evaluate('document.documentElement.scrollWidth<=innerWidth'));
+  // Undetected sources are initially folded. Open the catalog so the fixture
+  // exercises the actual long list at this size.
+  await click(management,'details[data-supported-sources] > summary');
+  await management.wait(`document.querySelector('[data-supported-sources]').open`);
+  const sourceScroll=await management.evaluate(`(()=>{
+    const scroller=document.querySelector('.ms-scroll');
+    scroller.scrollTop=scroller.scrollHeight;
+    return {top:scroller.scrollTop,height:scroller.clientHeight,content:scroller.scrollHeight,horizontal:document.documentElement.scrollWidth>innerWidth};
+  })()`);
+  assert.ok(!sourceScroll.horizontal&&sourceScroll.top>0&&sourceScroll.content>sourceScroll.height,JSON.stringify(sourceScroll));
+  await click(management,'details[data-supported-sources] > summary');
   checks.push('fixed-size management layout opens local Agents directly and retains internal scrolling at compact emulated dimensions');
   await screenshot(management,'sources-current',960,704);
   await management.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
@@ -434,10 +452,10 @@ try{
   await root.wait(`['.row-title','.context','.activity'].every(selector=>getComputedStyle(document.querySelector(selector)).fontSize==='18px')`);
   const textMetrics=await root.evaluate(`['.row-title','.context','.activity'].map(selector=>({size:getComputedStyle(document.querySelector(selector)).fontSize,line:getComputedStyle(document.querySelector(selector)).lineHeight}))`);
   assert.ok(textMetrics.every((value:any)=>value.size==='18px'&&value.line==='27px'));
-  await management.evaluate(`(()=>{const select=document.querySelector('[aria-label="任务字号"]');select.value='14';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
-  await root.wait(`getComputedStyle(document.querySelector('.row-title')).fontSize==='14px'`);
+  await management.evaluate(`(()=>{const select=document.querySelector('[aria-label="任务字号"]');select.value=${JSON.stringify(String(initialFontSize))};select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
+  await root.wait(`getComputedStyle(document.querySelector('.row-title')).fontSize===${JSON.stringify(initialFont)}`);
   assert.equal(await root.evaluate('document.documentElement.scrollWidth<=innerWidth'),true);
-  checks.push('task size changes live to 18px with uniform 27px line height and restores to 14px; density never changes text size');
+  checks.push('task size changes live to 18px with uniform 27px line height and restores the initial font size; density never changes text size');
   // Separate test notice is real renderer delivery, never a monitored Agent completion.
   const config=await root.invoke('get_monitoring_settings');config.notifications=true;await management.invoke('save_monitoring_settings',{settings:config});
   await management.invoke('test_notification');notice=await page('/notice');
