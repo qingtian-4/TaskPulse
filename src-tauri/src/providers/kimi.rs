@@ -40,7 +40,7 @@ pub(super) fn text<'a>(v: &'a Value, k: &str) -> Option<&'a str> {
 }
 pub(super) fn stamp(v: &Value) -> Option<SystemTime> {
     if let Some(s) = v.as_str() {
-        return super::codex::parse_rfc3339(s);
+        return super::timestamp::parse_rfc3339(s);
     }
     let n = v.as_f64()?;
     if !n.is_finite() || n <= 0.0 {

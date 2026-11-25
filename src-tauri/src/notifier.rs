@@ -657,7 +657,13 @@ mod tests {
         task.turn_key = Some("turn-2".into());
         engine.apply(&[task.clone()], &[], SystemTime::now());
         task.status = TaskStatus::WaitingInput;
-        assert_eq!(engine.apply(&[task], &[], SystemTime::now()).len(), 1);
+        task.outcome = Some("interrupted".into());
+        let events = engine.apply(&[task], &[], SystemTime::now());
+        let [TaskEvent::WaitingInput { task, .. }] = events.as_slice() else {
+            panic!("expected one interrupted turn");
+        };
+        let (title, _) = notification_copy(&NotifyEvent::WaitingInput { task: task.clone() });
+        assert_eq!(title, "TaskPulse · 本轮已中断，非成功");
     }
 
     #[test]

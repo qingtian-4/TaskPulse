@@ -21,6 +21,7 @@ pub mod qoder;
 mod qoder_transcript;
 pub mod remote_tmux;
 pub mod resources;
+mod timestamp;
 pub mod trae;
 pub mod workbuddy;
 pub mod worker;

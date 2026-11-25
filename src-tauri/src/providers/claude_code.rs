@@ -681,7 +681,7 @@ fn apply_record(state: &mut Transcript, value: &Value, id: &str, now: SystemTime
     if let Some(cwd) = text(value, "cwd") {
         set_project(task, cwd);
     }
-    let at = text(value, "timestamp").and_then(super::codex::parse_rfc3339);
+    let at = text(value, "timestamp").and_then(super::timestamp::parse_rfc3339);
     match text(value, "type") {
         Some("custom-title") => state.manual_title = text(value, "customTitle").map(str::to_owned),
         Some("ai-title") => state.native_title = text(value, "aiTitle").map(str::to_owned),
