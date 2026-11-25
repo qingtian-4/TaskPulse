@@ -2,8 +2,8 @@
   import {
     appSettings, preferences, preferencePending, savePreferenceFromControl,
     DEFAULT_TASK_FONT_SIZE
-  } from '$lib/preferences';
-  import {t} from '$lib/i18n';
+  } from '#lib/preferences.ts';
+  import {t} from '#lib/i18n.ts';
   import SettingGroup from './SettingGroup.svelte';
   import SettingRow from './SettingRow.svelte';
 

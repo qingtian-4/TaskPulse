@@ -1,11 +1,11 @@
 <script lang="ts">
-  import {modal} from '$lib/modal';
-  import {t} from '$lib/i18n';
+  import {modal} from '#lib/modal.ts';
+  import {t} from '#lib/i18n.ts';
   import BrandMark from '../BrandMark.svelte';
   import {getCurrentWindow} from '@tauri-apps/api/window';
   import {isTauri} from '@tauri-apps/api/core';
-  import {SOURCE_LABEL,formatAgo,type MessageCenterState,type MessageEntry,type TaskSnapshot} from '$lib/types';
-  import {MESSAGE_LABELS,messageStatus,unreadMessageIds} from '$lib/messages';
+  import {SOURCE_LABEL,formatAgo,type MessageCenterState,type MessageEntry,type TaskSnapshot} from '#lib/types.ts';
+  import {MESSAGE_LABELS,messageStatus,unreadMessageIds} from '#lib/messages.ts';
   let {center,prompts,now,onRead,onClose,onSelect,onReopen,onReopenPrompt,onPrompt}:
     {center:MessageCenterState;prompts:TaskSnapshot[];now:number;onRead:(ids:string[])=>Promise<void>;
     onClose:()=>void;onSelect:(id:string)=>void;onReopen:(entry:MessageEntry)=>void;onReopenPrompt:(task:TaskSnapshot)=>void;onPrompt:(task:TaskSnapshot)=>void}=$props();

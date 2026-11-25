@@ -1,8 +1,8 @@
 <script lang="ts">
   import {onMount} from 'svelte';
-  import {autostart} from '$lib/autostart';
-  import {preferences,savePreferenceFromControl,preferencePending} from '$lib/preferences';
-  import {t} from '$lib/i18n';
+  import {autostart} from '#lib/autostart.ts';
+  import {preferences,savePreferenceFromControl,preferencePending} from '#lib/preferences.ts';
+  import {t} from '#lib/i18n.ts';
   import SettingGroup from './SettingGroup.svelte';
   import SettingRow from './SettingRow.svelte';
   const themes=[{value:'system',label:'跟随系统'},{value:'light',label:'浅色'},{value:'dark',label:'深色'}] as const;

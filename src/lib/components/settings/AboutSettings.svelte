@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {onMount} from 'svelte';import {invoke,isTauri} from '@tauri-apps/api/core';import {t} from '$lib/i18n';import BrandMark from '../BrandMark.svelte';import SettingGroup from './SettingGroup.svelte';import SettingRow from './SettingRow.svelte';
+  import {onMount} from 'svelte';import {invoke,isTauri} from '@tauri-apps/api/core';import {t} from '#lib/i18n.ts';import BrandMark from '../BrandMark.svelte';import SettingGroup from './SettingGroup.svelte';import SettingRow from './SettingRow.svelte';
   let info=$state<{version:string}|null>(null),error=$state('');
   async function load(){try{info=await invoke('get_build_info');}catch(e){error=String(e);}}
   async function openLink(event:MouseEvent,target:'project'|'license'){if(!isTauri())return;event.preventDefault();error='';try{await invoke('open_project_link',{target});}catch(e){error=String(e);}}

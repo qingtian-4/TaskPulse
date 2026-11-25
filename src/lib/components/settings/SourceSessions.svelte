@@ -1,10 +1,10 @@
 <script lang="ts">
-  import {modal} from '$lib/modal';
+  import {modal} from '#lib/modal.ts';
   import {onMount} from 'svelte';
   import {invoke} from '@tauri-apps/api/core';
   import {X,RefreshCw} from '@lucide/svelte';
-  import {t} from '$lib/i18n';
-  import type {MonitorSource,SessionPage} from '$lib/types';
+  import {t} from '#lib/i18n.ts';
+  import type {MonitorSource,SessionPage} from '#lib/types.ts';
   let {source,ondismiss}:{source:MonitorSource;ondismiss:()=>void}=$props();
   let page=$state<SessionPage>({items:[],total:0}),offset=$state(0),query=$state(''),loading=$state(false),error=$state('');
   let ticket=0,alive=true;

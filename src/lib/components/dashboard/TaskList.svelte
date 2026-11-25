@@ -1,11 +1,11 @@
 <script lang="ts">
-  import { t } from '$lib/i18n';
-  import { preferences } from '$lib/preferences';
-  import type { TaskSnapshot, DashboardSettings } from '$lib/types';
+  import { t } from '#lib/i18n.ts';
+  import { preferences } from '#lib/preferences.ts';
+  import type { TaskSnapshot, DashboardSettings } from '#lib/types.ts';
   import {
     taskContext, taskProjectLabel, taskLabel, taskAgent, taskSummary,
     taskSource, matchesSignal, taskTone, taskElapsed, taskModel
-  } from '$lib/dashboard';
+  } from '#lib/dashboard.ts';
   import Pin from '@lucide/svelte/icons/pin';
   import Timer from '@lucide/svelte/icons/timer';
 

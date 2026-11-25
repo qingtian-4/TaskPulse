@@ -1,7 +1,7 @@
 <script lang="ts">
   import {Clock3} from '@lucide/svelte';
-  import {appSettings,savePreferenceFromControl,preferencePending} from '$lib/preferences';
-  import {t} from '$lib/i18n';
+  import {appSettings,savePreferenceFromControl,preferencePending} from '#lib/preferences.ts';
+  import {t} from '#lib/i18n.ts';
   import AppUpdates from '../AppUpdates.svelte';
   let {blocked=false}:{blocked?:boolean}=$props();
 </script>

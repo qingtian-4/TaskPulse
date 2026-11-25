@@ -1,5 +1,5 @@
 <script lang="ts">
-  import {invoke} from '@tauri-apps/api/core';import {appSettings,savePreferenceFromControl,preferencePending} from '$lib/preferences';import {t} from '$lib/i18n';
+  import {invoke} from '@tauri-apps/api/core';import {appSettings,savePreferenceFromControl,preferencePending} from '#lib/preferences.ts';import {t} from '#lib/i18n.ts';
   import SettingGroup from './SettingGroup.svelte';import SettingRow from './SettingRow.svelte';
   let testResult=$state(''),testError=$state(''),busy=$state(false);
   async function test(){busy=true;testError='';testResult='';try{await invoke('test_notification');testResult='测试提醒已发送。';}catch(e){testError=String(e);}finally{busy=false;}}

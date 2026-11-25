@@ -1,9 +1,20 @@
 import { sveltekit } from '@sveltejs/kit/vite';
+import adapter from '@sveltejs/adapter-static';
 import tailwindcss from '@tailwindcss/vite';
 import { defineConfig, loadEnv } from 'vite';
+import packageInfo from './package.json' with { type: 'json' };
 
 export default defineConfig(({mode}) => ({
-  plugins: [sveltekit(), tailwindcss()],
+  plugins: [
+    sveltekit({
+      adapter: adapter({ fallback: 'index.html' }),
+      paths: { relative: false },
+      // All embedded pages share a stable startup identifier. Desktop updates
+      // are delivered by Tauri, so there is no web deployment to poll for.
+      version: { name: packageInfo.version, pollInterval: 0 },
+    }),
+    tailwindcss(),
+  ],
   clearScreen: false,
   server: {
     host: '127.0.0.1',

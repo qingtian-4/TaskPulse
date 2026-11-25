@@ -1,10 +1,10 @@
 <script lang="ts">
-  import {modal} from '$lib/modal';
+  import {modal} from '#lib/modal.ts';
   import {onMount} from 'svelte';
   import {invoke} from '@tauri-apps/api/core';
   import {Check,RefreshCw,X,ChevronRight,ArrowLeft} from '@lucide/svelte';
-  import {t} from '$lib/i18n';
-  import {canRead,readLabel,sshAgents,type NewServer,type SshProbe,type SshSelections} from '$lib/monitor-sources';
+  import {t} from '#lib/i18n.ts';
+  import {canRead,readLabel,sshAgents,type NewServer,type SshProbe,type SshSelections} from '#lib/monitor-sources.ts';
   import ProjectScope from './ProjectScope.svelte';
   let {existing,onadd,oncancel}:{existing:string[];onadd:(value:NewServer)=>Promise<boolean>;oncancel:()=>void}=$props();
   let step=$state(1),host=$state(''),name=$state(''),aliases=$state<string[]>([]),hostError=$state('');

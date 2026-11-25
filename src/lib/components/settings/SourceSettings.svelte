@@ -1,19 +1,19 @@
 <script lang="ts">
-  import {modal} from '$lib/modal';
+  import {modal} from '#lib/modal.ts';
   import {onMount,tick} from 'svelte';
   import {get} from 'svelte/store';
   import {invoke,isTauri} from '@tauri-apps/api/core';
   import {listen} from '@tauri-apps/api/event';
   import {getCurrentWindow} from '@tauri-apps/api/window';
   import {Plus,Server,Search,RefreshCw,ChevronRight,ArrowLeft,ShieldCheck,Link,Info,Terminal,Save,Trash2,Pause,Play,X,Settings2} from '@lucide/svelte';
-  import {t} from '$lib/i18n';
-  import {appSettings,savePreferenceFromControl,preferencePending} from '$lib/preferences';
-  import {autostart} from '$lib/autostart';
-  import {reconcileSourceDraft} from '$lib/settings-draft';
-  import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,sshAgents,readLabel,canRead,type AgentKind,type NewServer,type SshAgent,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
-  import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '$lib/types';
-  import type {ProjectChoice} from '$lib/project-options';
-  import {configuredSource,localDiscoveryCandidates,type SourceDefinition} from '$lib/source-setup';
+  import {t} from '#lib/i18n.ts';
+  import {appSettings,savePreferenceFromControl,preferencePending} from '#lib/preferences.ts';
+  import {autostart} from '#lib/autostart.ts';
+  import {reconcileSourceDraft} from '#lib/settings-draft.ts';
+  import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,sshAgents,readLabel,canRead,type AgentKind,type NewServer,type SshAgent,type SshProbe,type ServerGroup} from '#lib/monitor-sources.ts';
+  import type {DashboardSettings,MonitorSource,SourceDiscovery,DashboardSnapshot,SessionPage,SourceSnapshot} from '#lib/types.ts';
+  import type {ProjectChoice} from '#lib/project-options.ts';
+  import {configuredSource,localDiscoveryCandidates,type SourceDefinition} from '#lib/source-setup.ts';
   import SshSourceWizard from './SshSourceWizard.svelte';
   import ProjectScope from './ProjectScope.svelte';
   import SourceSessions from './SourceSessions.svelte';

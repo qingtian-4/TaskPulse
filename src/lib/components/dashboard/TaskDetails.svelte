@@ -1,9 +1,9 @@
 <script lang="ts">
   import X from '@lucide/svelte/icons/x';
-  import { t } from '$lib/i18n';
-  import { preferences } from '$lib/preferences';
-  import { taskActivity, taskContext, taskElapsed, taskLabel, taskModel, taskTone, sourceFreshness } from '$lib/dashboard';
-  import { CONFIDENCE_LABEL, formatAgo, type DashboardSettings, type ProviderHealth, type TaskSnapshot } from '$lib/types';
+  import { t } from '#lib/i18n.ts';
+  import { preferences } from '#lib/preferences.ts';
+  import { taskActivity, taskContext, taskElapsed, taskLabel, taskModel, taskTone, sourceFreshness } from '#lib/dashboard.ts';
+  import { CONFIDENCE_LABEL, formatAgo, type DashboardSettings, type ProviderHealth, type TaskSnapshot } from '#lib/types.ts';
 
   let { task, settings, providers, now, archived, onClose, onOpen, onCopy, onAction }: {
     task: TaskSnapshot;
