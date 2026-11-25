@@ -32,7 +32,7 @@ notifications=false
 sound=false
 notification_mode="popup"
 default_view="tasks"
-recent_days=7
+recent_days=21
 [dashboard.preferences]
 theme="light"
 language="zh-CN"
@@ -466,6 +466,26 @@ accept_since_ms=0
   await ui.wait(`![...document.querySelectorAll('.ms-foot button')].some(b=>b.textContent==='Apply changes')`);
   assert.equal(await ui.evaluate(`document.querySelector('.ms-head h1').textContent`),'Sources');
   await ui.evaluate(`document.querySelector('.settings-nav a[href="#panel"]').click()`);
+  const recentDays = 'input[aria-label="Recent activity"]';
+  async function enterDays(value: string) {
+    await ui.evaluate(`(() => {
+      const input = document.querySelector('${recentDays}');
+      input.value = ${JSON.stringify(value)};
+      input.dispatchEvent(new Event('change', {bubbles:true}));
+    })()`);
+  }
+  assert.equal(await ui.evaluate(`document.querySelector('${recentDays}').value`), '21');
+  for (const days of ['365', '0', '21']) {
+    await enterDays(days);
+    await ui.wait(`document.querySelector('${recentDays}').value === '${days}' && !document.querySelector('${recentDays}').disabled`);
+    assert.equal((await ui.invoke('get_monitoring_settings')).recent_days, Number(days));
+  }
+  for (const value of ['', '-1', '366', '1.5']) {
+    await enterDays(value);
+    assert.equal(await ui.evaluate(`document.querySelector('${recentDays}').value`), '21');
+    await ui.wait(`!!document.querySelector('.days-error[role="alert"]')`);
+    assert.equal((await ui.invoke('get_monitoring_settings')).recent_days, 21);
+  }
   await ui.evaluate(`(()=>{const select=document.querySelector('[aria-label="Task text size"]');select.value='18';select.dispatchEvent(new Event('change',{bubbles:true}));})()`);
   await ui.wait(`document.querySelector('[aria-label="Task text size"]').value==='18' && document.querySelector('.settings-status').textContent===''`);
   await root.wait(`getComputedStyle(document.querySelector('.dashboard')).getPropertyValue('--tp-task-font-size').trim()==='18px'`);
@@ -595,6 +615,11 @@ accept_since_ms=0
       probeCase=host==='taskpulse-claude-fixture.invalid'?'readable':'read_error';
       await ui.evaluate(`document.querySelector('.ms-head .ms-btn').click()`);
       await ui.wait(`document.querySelectorAll('.alias-choice').length===2`);
+      assert.equal(await ui.evaluate(`(() => {
+        const dialog = document.querySelector('.ssh-wizard');
+        document.querySelector('.settings-nav a').focus();
+        return dialog.matches(':modal') && document.activeElement === dialog.querySelector('input');
+      })()`), true, 'The SSH wizard keeps keyboard focus on the host while the underlying settings are inert');
       if(captureScreenshots&&host==='taskpulse-claude-fixture.invalid')await Bun.write(join(owned,'settings-wizard-host-en.png'),Buffer.from((await ui.send('Page.captureScreenshot',{format:'png'})).data,'base64'));
       await ui.evaluate(`(()=>{const input=document.querySelector('.ssh-wizard [aria-label="SSH Host"]');input.value=${JSON.stringify(host)};input.dispatchEvent(new Event('input',{bubbles:true}));})()`);
       await ui.evaluate(`document.querySelector('.ssh-wizard .modal-footer .primary').click()`);

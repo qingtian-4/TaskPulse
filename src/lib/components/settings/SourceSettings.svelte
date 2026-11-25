@@ -1,4 +1,5 @@
 <script lang="ts">
+  import {modal} from '$lib/modal';
   import {onMount,tick} from 'svelte';
   import {get} from 'svelte/store';
   import {invoke,isTauri} from '@tauri-apps/api/core';
@@ -6,7 +7,7 @@
   import {getCurrentWindow} from '@tauri-apps/api/window';
   import {Plus,Server,Search,RefreshCw,ChevronRight,ArrowLeft,ShieldCheck,Link,Info,Terminal,Save,Trash2,Pause,Play,X,Settings2} from '@lucide/svelte';
   import {t} from '$lib/i18n';
-  import {appSettings,savePreference,preferencePending} from '$lib/preferences';
+  import {appSettings,savePreferenceFromControl,preferencePending} from '$lib/preferences';
   import {autostart} from '$lib/autostart';
   import {reconcileSourceDraft} from '$lib/settings-draft';
   import {servers,createSource,pauseServer,removeServer,projectChoices,sourceStatus,localSourceStatus,sshAgents,readLabel,canRead,type AgentKind,type NewServer,type SshAgent,type SshProbe,type ServerGroup} from '$lib/monitor-sources';
@@ -222,7 +223,6 @@
         before?.data_detected!==after?.data_detected||
         before?.discovered_sessions!==after?.discovered_sessions)void loadProjects(source);
   }
-  function trap(dialog:HTMLDialogElement){const previous=document.activeElement as HTMLElement|null;dialog.querySelector<HTMLElement>('button')?.focus();const key=(e:KeyboardEvent)=>{if(e.key==='Escape'){e.preventDefault();closePrompt=false;removePrompt=false;eventPrompt=null;}if(e.key==='Tab'){const items=[...dialog.querySelectorAll<HTMLButtonElement>('button:not(:disabled)')];if(e.shiftKey&&document.activeElement===items[0]){e.preventDefault();items.at(-1)?.focus();}else if(!e.shiftKey&&document.activeElement===items.at(-1)){e.preventDefault();items[0]?.focus();}}};dialog.addEventListener('keydown',key);return{destroy(){dialog.removeEventListener('keydown',key);if(previous?.isConnected)previous.focus();}};}
   async function saveClose(){await save();if(!dirty&&!error){closing=true;await getCurrentWindow().close();}}
   async function discardClose(){if(saving)return;closing=true;await getCurrentWindow().close();}
   async function confirmHook(){if(saving)return;const id=eventPrompt;eventPrompt=null;if(!id)return;saving=true;try{notice=await invoke<string>('configure_claude_events',{sourceId:id.id,enabled:id.enabled,confirmed:true});}catch(e){fail(e);}finally{saving=false;}}
@@ -376,7 +376,7 @@
             {#each optionalLocal as agent (agent.id)}{@render localAgentRow(agent)}{/each}
           </details>
         {/if}
-<div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>void savePreference({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
+<div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>savePreferenceFromControl({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
       </section>
     {:else if selected}
       {@const source=selected.agents[activeRemote]}
@@ -442,5 +442,5 @@
   <footer class="ms-foot" class:idle={!dirty&&page!=='server'}><span>{#if dirty}<ShieldCheck size={14}/>{$t('有未保存的配置更改')}{/if}</span><div>{#if dirty}<button class="ms-btn ghost" disabled={saving} onclick={reload}>{$t('取消更改')}</button><button class="ms-btn primary" disabled={saving||conflict||updating||!detectionSettled} onclick={save}><Save size={13}/>{$t(saving?'正在保存…':settings&&!settings.onboarding_complete?'确认并开始监控':'应用更改')}</button>{:else if page==='server'}<button class="ms-btn danger" disabled={saving} onclick={()=>removePrompt=true}><Trash2 size={13}/>{$t('移除服务器')}</button>{/if}</div></footer>
   {#if sessionSource}<SourceSessions source={sessionSource} ondismiss={()=>sessionSource=null}/>{/if}
   {#if wizard}<SshSourceWizard existing={groups.map(s=>s.host)} onadd={addServer} oncancel={()=>wizard=false}/>{/if}
-  {#if closePrompt||removePrompt||eventPrompt}<div class="ms-overlay"><dialog open aria-modal="true" class="ms-modal confirm-modal" use:trap aria-labelledby="source-confirm-title"><header class="modal-top"><h2 id="source-confirm-title">{$t(closePrompt?'还有未保存的配置':removePrompt?'移除服务器':'配置 Claude 精确事件')}</h2></header><div class="modal-body"><p>{$t(closePrompt?'关闭窗口前，请处理未保存的编辑。':removePrompt?'移除会停止此服务器的采集，并按现有范围规则移出其任务；不会修改远端文件。':'这会修改所选 Claude 配置。已有 Hook、代理和模型设置会保留，首次修改会备份。')}</p></div><footer class="modal-footer">{#if closePrompt}<button class="ms-btn" onclick={()=>closePrompt=false}>{$t('继续编辑')}</button><button class="ms-btn" onclick={discardClose}>{$t('放弃未保存编辑')}</button><button class="ms-btn primary" disabled={saving||conflict||wizard} onclick={saveClose}>{$t('保存并关闭')}</button>{:else if removePrompt}<button class="ms-btn" onclick={()=>removePrompt=false}>{$t('取消')}</button><button class="ms-btn danger" disabled={saving} onclick={remove}>{$t('确认移除')}</button>{:else}<button class="ms-btn" onclick={()=>eventPrompt=null}>{$t('取消')}</button><button class="ms-btn primary" onclick={confirmHook}>{$t('确认')}</button>{/if}</footer></dialog></div>{/if}
+  {#if closePrompt||removePrompt||eventPrompt}<dialog class="ms-modal confirm-modal" use:modal oncancel={e=>{e.preventDefault();closePrompt=false;removePrompt=false;eventPrompt=null;}} aria-labelledby="source-confirm-title"><header class="modal-top"><h2 id="source-confirm-title">{$t(closePrompt?'还有未保存的配置':removePrompt?'移除服务器':'配置 Claude 精确事件')}</h2></header><div class="modal-body"><p>{$t(closePrompt?'关闭窗口前，请处理未保存的编辑。':removePrompt?'移除会停止此服务器的采集，并按现有范围规则移出其任务；不会修改远端文件。':'这会修改所选 Claude 配置。已有 Hook、代理和模型设置会保留，首次修改会备份。')}</p></div><footer class="modal-footer">{#if closePrompt}<button class="ms-btn" onclick={()=>closePrompt=false}>{$t('继续编辑')}</button><button class="ms-btn" onclick={discardClose}>{$t('放弃未保存编辑')}</button><button class="ms-btn primary" disabled={saving||conflict||wizard} onclick={saveClose}>{$t('保存并关闭')}</button>{:else if removePrompt}<button class="ms-btn" onclick={()=>removePrompt=false}>{$t('取消')}</button><button class="ms-btn danger" disabled={saving} onclick={remove}>{$t('确认移除')}</button>{:else}<button class="ms-btn" onclick={()=>eventPrompt=null}>{$t('取消')}</button><button class="ms-btn primary" onclick={confirmHook}>{$t('确认')}</button>{/if}</footer></dialog>{/if}
 </div>
