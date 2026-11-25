@@ -1,6 +1,6 @@
 # Contributing to TaskPulse
 
-Report bugs, improve documentation or add an Agent integration through [issues](https://github.com/qingtian-4/TaskPulse/issues) and pull requests to `main`. Use Bun, Rust 1.90+, Python 3 and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Windows uses the MSVC toolchain in CI; macOS needs Xcode Command Line Tools.
+Report bugs, improve documentation or add an Agent integration through [issues](https://github.com/qingtian-4/TaskPulse/issues) and pull requests to `main`. Use Bun, Node.js 22.17+ for SvelteKit, Rust 1.90+, Python 3 and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/). Windows uses the MSVC toolchain in CI; macOS needs Xcode Command Line Tools.
 
 ## Daily development — no installation
 
