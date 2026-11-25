@@ -2,11 +2,11 @@ import {test,expect} from 'bun:test';
 import {readFileSync} from 'node:fs';
 const css=readFileSync('src/app.css','utf8');
 test('dashboard fills the native viewport without a self-referential resize observer',()=>{
-  const dashboard=readFileSync('src/lib/components/Dashboard.svelte','utf8');
+  const dashboard=readFileSync('src/lib/components/dashboard/Dashboard.svelte','utf8');
   expect(dashboard).toContain('height:100dvh');
   expect(dashboard).not.toContain('new ResizeObserver');
 });
-const hex=(token:string)=>{const value=css.match(new RegExp('--tp-'+token+': (#[0-9a-f]{6});'))?.[1];expect(value,'missing '+token).toBeDefined();return value!;};
+const hex=(token:string,theme=css)=>{const value=theme.match(new RegExp('--tp-'+token+':\\s*(#[0-9a-f]{6});'))?.[1];expect(value,'missing '+token).toBeDefined();return value!;};
 function luminance(hex:string){const [r,g,b]=[1,3,5].map(i=>{const v=parseInt(hex.slice(i,i+2),16)/255;return v<=.04045?v/12.92:((v+.055)/1.055)**2.4;});return .2126*r+.7152*g+.0722*b;}
 function contrast(a:string,b:string){const x=luminance(a),y=luminance(b);return (Math.max(x,y)+.05)/(Math.min(x,y)+.05);}
 test('shared desktop theme retains readable foregrounds and distinct uncertainty colors',()=>{
@@ -17,4 +17,11 @@ test('shared desktop theme retains readable foregrounds and distinct uncertainty
 test('shared controls retain focus, reduced motion and constrained lightweight surface variants',()=>{
   for(const rule of ['.tp-btn','.tp-chip','.tp-field','.tp-fold','.tp-surface',':focus-visible','prefers-reduced-motion','forced-colors'])expect(css).toContain(rule);
   for(const scale of ['space-1','space-6','radius-sm','radius-panel','shadow-card','glow'])expect(css).toContain('--tp-'+scale+':');
+});
+
+test('light dashboard metadata and duration remain readable on selected cards',()=>{
+  const theme=css.split(':root[data-theme=light]')[1];
+  for(const surface of ['bg','panel','card','accent-soft'])
+    for(const token of ['text','muted','quiet','accent'])
+      expect(contrast(hex(surface,theme),hex(token,theme)),surface+' / '+token).toBeGreaterThanOrEqual(4.5);
 });

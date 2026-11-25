@@ -1,6 +1,7 @@
 <script lang="ts">
+  import {modal} from '$lib/modal';
   import {t} from '$lib/i18n';
-  import BrandMark from './BrandMark.svelte';
+  import BrandMark from '../BrandMark.svelte';
   import {getCurrentWindow} from '@tauri-apps/api/window';
   import {isTauri} from '@tauri-apps/api/core';
   import {SOURCE_LABEL,formatAgo,type MessageCenterState,type MessageEntry,type TaskSnapshot} from '$lib/types';
@@ -8,20 +9,6 @@
   let {center,prompts,now,onRead,onClose,onSelect,onReopen,onReopenPrompt,onPrompt}:
     {center:MessageCenterState;prompts:TaskSnapshot[];now:number;onRead:(ids:string[])=>Promise<void>;
     onClose:()=>void;onSelect:(id:string)=>void;onReopen:(entry:MessageEntry)=>void;onReopenPrompt:(task:TaskSnapshot)=>void;onPrompt:(task:TaskSnapshot)=>void}=$props();
-  function modal(node:HTMLDialogElement) {
-    const previous=document.activeElement as HTMLElement|null;
-    node.showModal();
-    function keydown(event:KeyboardEvent) {
-      if(event.key!=='Tab')return;
-      const controls=[...node.querySelectorAll<HTMLElement>('button:not(:disabled),a[href],input:not(:disabled),summary,[tabindex="0"]')].filter(el=>el.getClientRects().length);
-      const first=controls[0],last=controls.at(-1);
-      if(!first){event.preventDefault();return;}
-      if(event.shiftKey && document.activeElement===first){event.preventDefault();last?.focus();}
-      else if(!event.shiftKey && document.activeElement===last){event.preventDefault();first.focus();}
-    }
-    node.addEventListener('keydown',keydown);
-    return {destroy(){node.removeEventListener('keydown',keydown);node.close();if(previous?.isConnected)previous.focus();}};
-  }
   // Read requires viewport intersection and a visible native popup.
   function readWhenVisible(node:HTMLElement,entry:MessageEntry) {
     let destroyed=false,reading=false;
