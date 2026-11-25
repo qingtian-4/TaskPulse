@@ -189,7 +189,13 @@ fn legacy_message_finish_requires_current_parent_and_an_explicit_final_finish() 
     let path = dir.path().join("legacy.db");
     let db = Connection::open(&path).unwrap();
     db.execute_batch("CREATE TABLE session(id TEXT,title TEXT,directory TEXT,time_archived INTEGER,time_updated INTEGER);CREATE TABLE message(id TEXT,session_id TEXT,time_created INTEGER,time_updated INTEGER,data TEXT);INSERT INTO session VALUES('s','Old format','/project',NULL,100000);INSERT INTO message VALUES('u','s',100000,100000,'{\"role\":\"user\",\"time\":{\"created\":100000}}');").unwrap();
+    db.execute("UPDATE message SET data=?1 WHERE id='u'", [
+        json!({"role":"user","time":{"created":100000},"model":{"modelID":"selection"},"variant":"deep"}).to_string(),
+    ]).unwrap();
     let p = OpenCodeProvider::new(path);
+    let first = p.read().unwrap().remove(0);
+    assert_eq!(first.model.as_deref(), Some("selection"));
+    assert_eq!(first.model_variant.as_deref(), Some("deep"));
     for (parent, finish, status) in [
         ("other", "stop", TaskStatus::Running),
         ("u", "tool-calls", TaskStatus::Running),
@@ -201,11 +207,15 @@ fn legacy_message_finish_requires_current_parent_and_an_explicit_final_finish() 
         assert_eq!(task.status, status);
         assert_eq!(
             task.model.as_deref(),
-            (parent == "u").then_some("legacy-model")
+            Some(if parent == "u" {
+                "legacy-model"
+            } else {
+                "selection"
+            })
         );
         assert_eq!(
             task.model_variant.as_deref(),
-            (parent == "u").then_some("high")
+            Some(if parent == "u" { "high" } else { "deep" })
         );
     }
 }

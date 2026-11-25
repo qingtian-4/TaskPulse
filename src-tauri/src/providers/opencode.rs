@@ -93,7 +93,9 @@ impl OpenCodeProvider {
                  FROM session_message WHERE session_id=?1 AND type='user'
                    AND coalesce(json_extract(data,'$.synthetic'),0)=0 ORDER BY seq DESC LIMIT 1"
             } else {
-                "SELECT id,json_extract(data,'$.time.created'),time_created,CAST(json_extract(data,'$.model') AS TEXT)
+                "SELECT id,json_extract(data,'$.time.created'),time_created,
+                        json_object('modelID',json_extract(data,'$.model.modelID'),
+                                    'variant',coalesce(json_extract(data,'$.variant'),json_extract(data,'$.model.variant')))
                  FROM message WHERE session_id=?1 AND json_extract(data,'$.role')='user'
                    AND coalesce(json_extract(data,'$.synthetic'),0)=0 ORDER BY time_created DESC,id DESC LIMIT 1"
             };
