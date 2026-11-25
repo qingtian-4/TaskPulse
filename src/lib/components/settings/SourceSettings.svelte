@@ -32,6 +32,7 @@
   let activeLocal=$state<AgentKind>('codex'),activeLocalSource=$state('');
   let expandedLocal=$state<AgentKind|null>(null);
   let localAgents=$state<SourceDefinition[]>([]);
+  const wrapperSource=$derived(settings?.sources.find(source=>source.id==='local_file' && source.kind==='hooks'));
   const discoveredLocal=$derived(localDiscoveryCandidates(localAgents,discovery,applied));
   const knownLocal=$derived(localAgents.filter(agent=>agent.kind!=='scanner'&&!discoveredLocal.some(row=>row.definition.kind===agent.kind)));
   const featuredLocal=$derived(knownLocal.filter(agent=>discovery.some(row=>row.data_location_detected===true
@@ -127,7 +128,15 @@
   }
   async function save(){if(settings)await commit({...$state.snapshot(settings),onboarding_complete:true});}
   async function reload(){if(saving)return;saving=true;try{settings=await invoke<DashboardSettings>('get_monitoring_settings');applied=structuredClone($state.snapshot(settings));dirty=false;conflict=false;error='';notice='';}catch(e){fail(e);}finally{saving=false;}}
-  function ensureLocal(kind:AgentKind){if(!settings||saving)return;let s=localRows.find(s=>s.kind===kind&&s.id===activeLocalSource)??settings.sources.find(s=>s.kind===kind);if(!s){const candidate=discoveredLocal.find(row=>row.definition.kind===kind)?.candidate;s=candidate?{...structuredClone($state.snapshot(candidate)),enabled:false}:createSource(kind,'',localAgents.find(agent=>agent.kind===kind)?.name);settings.sources.push(s);}return s;}
+  function ensureLocal(kind:AgentKind){
+    if(!settings||saving)return;
+    const existing=localRows.find(s=>s.kind===kind && s.id===activeLocalSource)??settings.sources.find(s=>s.kind===kind);
+    if(existing)return existing;
+    const candidate=discoveredLocal.find(row=>row.definition.kind===kind)?.candidate;
+    const name=kind==='hooks'?'兼容状态文件':localAgents.find(agent=>agent.kind===kind)?.name;
+    settings.sources.push(candidate ? {...structuredClone($state.snapshot(candidate)),enabled:false} : createSource(kind,'',name));
+    return settings.sources[settings.sources.length-1];
+  }
   function ensureRemote(group:ServerGroup,key=activeRemote){
     if(!settings||saving)return;
     let source=group.agents[key];
@@ -377,6 +386,36 @@
           </details>
         {/if}
 <div class="auto-discover"><span>{$t('自动发现本机 Agent')}</span><input class="settings-switch" type="checkbox" role="switch" checked={$appSettings?.auto_discover_local??false} disabled={$preferencePending} aria-label={$t('自动发现本机 Agent')} onchange={e=>savePreferenceFromControl({auto_discover_local:e.currentTarget.checked},e.currentTarget)}/></div>
+      </section>
+      <section class="detail-card" data-wrapper-source>
+        <div class="agent-row">
+          <span class="agent-icon"><Terminal size={18} aria-hidden="true"/></span>
+          <div class="source-grow"><strong>{$t('前台命令（包装器）')}</strong>
+            <small id="wrapper-hint">{$t('读取兼容状态目录中的任务记录，可使用已有包装脚本。')}</small>
+          </div>
+          <input class="settings-switch" type="checkbox" role="switch" aria-label={$t('前台命令（包装器）')}
+            aria-describedby="wrapper-hint" checked={wrapperSource?.enabled??false} disabled={saving||conflict||!detectionSettled}
+            onchange={async e=>{
+              const control=e.currentTarget;
+              await toggleLocal('hooks',control.checked);
+              control.checked=wrapperSource?.enabled??false;
+            }}/>
+        </div>
+        {#if wrapperSource}
+          <details class="ms-advanced" ontoggle={e=>{if(e.currentTarget.open)void loadProjects(wrapperSource);}}>
+            <summary><Settings2 size={13}/>{$t('项目范围')}</summary>
+            <div class="advanced-inner">
+              <ProjectScope projects={wrapperSource.projects}
+                choices={projectChoices(wrapperSource,snapshot?.tasks??[],projects[wrapperSource.id]??[])}
+                aliases={projectAliases[wrapperSource.id]??[]} disabled={saving||conflict}
+                onchange={projects=>wrapperSource&&patchSource(wrapperSource,{projects})}/>
+              <label class="ms-field">{$t('排除规则，每行一项')}
+                <textarea rows="2" value={wrapperSource.excluded_projects.join('\n')} disabled={saving||conflict}
+                  oninput={e=>wrapperSource&&patchSource(wrapperSource,{excluded_projects:list(e.currentTarget.value)})}></textarea>
+              </label>
+            </div>
+          </details>
+        {/if}
       </section>
     {:else if selected}
       {@const source=selected.agents[activeRemote]}

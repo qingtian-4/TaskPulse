@@ -44,7 +44,31 @@ tp-run "LoCoMo Eval" -- python eval.py
 - 保留退出码；SIGINT/SIGTERM 转发给直接子进程并记录 interrupted。SIGKILL／机器重启无法写终态，采集端标记过期，不写成功。
 - 仅保证直接前台子进程的边界；后台化、容器启动或 Slurm 提交退出不代表实际作业完成。不会安装到服务器或修改 Agent 配置，需用户自行更新旧脚本。
 
-结果：
+### 单次 Coding Agent 命令
+
+在仓库根目录运行以下示例需先安装并登录相应 CLI。将任务标签放在第一个参数，`--hide-args` 放在标签后。包装器向 TaskPulse 的本地状态文件和远端运行记录写入标签、目录、时间和退出码，省略程序及其参数。终端仍显示子进程自己的输出，操作系统进程列表和 shell 历史有各自的记录规则。
+
+```bash
+./scripts/wrap.sh "Gemini CLI" --hide-args -- gemini -p "Explain what git status shows"
+./scripts/wrap.sh "GitHub Copilot CLI" --hide-args -- copilot -p "Explain what git status shows"
+./scripts/wrap.sh "Cursor Agent" --hide-args -- agent -p "Explain what git status shows"
+```
+
+以上使用各 CLI 的非交互模式，每次调用对应一个任务。SSH 主机已安装本节的监督脚本并配置 tmux 采集时，可将 `./scripts/wrap.sh` 换成 `tp-run`。[Gemini CLI](https://geminicli.com/docs/cli/headless/) · [GitHub Copilot CLI](https://docs.github.com/en/copilot/concepts/copilot-surfaces/copilot-cli) · [Cursor Agent CLI](https://cursor.com/docs/cli/headless)
+
+Windows PowerShell 可直接监督独立安装的原生可执行文件，例如已在 PATH 中的 `copilot.exe`。对于 npm 生成的 `.ps1` 入口，可在系统允许执行该脚本时指定 PowerShell 和脚本路径。包装器的 `-Command` 接收参数数组，要求其中的程序是原生可执行文件。
+
+```powershell
+.\scripts\wrap.ps1 -AgentName 'GitHub Copilot CLI' -Command @('--hide-args', 'copilot.exe', '-p', 'Explain what git status shows')
+$geminiEntry = (Get-Command gemini.ps1 -CommandType ExternalScript -ErrorAction Stop).Source
+.\scripts\wrap.ps1 -AgentName 'Gemini CLI' -Command @('--hide-args', 'powershell.exe', '-NoProfile', '-File', $geminiEntry, '-p', 'Explain what git status shows')
+```
+
+本机两个包装器默认向当前用户的 `~/.agent-monitor` 写入 `.status`。已安装的 TaskPulse 通过启用的 `local_file` 兼容来源读取该目录，来源和项目范围沿用现有配置。脚本位于仓库 `scripts/` 目录，运行脚本不会启用来源。直接使用 `tp-run` 时，默认只写运行记录。
+
+在「设置 → 监控来源 → 本机」启用「前台命令（包装器）」。首次设置时点击「确认并开始监控」，新增来源时点击「应用更改」。展开该项的「项目范围」可选择目录或填写排除规则。停用后再次启用会沿用已有配置。
+
+#### 退出状态
 
 | tp-run 状态 | TaskPulse 显示 |
 |---|---|

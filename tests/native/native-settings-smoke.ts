@@ -525,7 +525,7 @@ accept_since_ms=0
     assert.equal(await ui.evaluate(`/[\\u3400-\\u9fff]/.test(document.querySelector('.ms-success')?.textContent??'')`),false,'Application save feedback must follow the selected language');
     const current=await ui.invoke('get_monitoring_settings');assert.deepEqual(current.sources[0].projects,[project]);assert.equal(current.preferences.show_model,false);assert.equal(current.preferences.language,'en');
   }
-  // Editing a native Agent must preserve the configuration of hidden source kinds.
+  // Editing a native Agent must preserve other configured sources.
   const legacySaved=(await ui.invoke('get_monitoring_settings')).sources;
   for(const [id,scope] of [['wsl-legacy','/srv/legacy'],['local_file','legacy-files'],['generic_event:existing-kimi','legacy-events']]){
     const source=legacySaved.find((row:any)=>row.id===id);
@@ -534,6 +534,35 @@ accept_since_ms=0
   }
   assert.equal(legacySaved.find((row:any)=>row.id==='scanner')?.enabled,false);
   assert.ok(await ui.evaluate(`!document.querySelector('[data-wsl-sources], [data-saved-source], [data-saved-event-connections], [data-agent-kind="scanner"]')`));
+  const wrapperSwitch = '[data-wrapper-source] input[role="switch"]';
+  const wrapperBaseline = await ui.invoke('get_monitoring_settings');
+  const savedWrapper = wrapperBaseline.sources.find((s:any)=>s.id==='local_file');
+  for (const enabled of [true,false]) {
+    await ui.evaluate(`document.querySelector('${wrapperSwitch}').click()`);
+    await ui.wait(`document.querySelector('${wrapperSwitch}').checked===${enabled} && !document.querySelector('${wrapperSwitch}').disabled`);
+    const current = await ui.invoke('get_monitoring_settings');
+    assert.deepEqual(current.sources.find((s:any)=>s.id==='local_file'), {...savedWrapper,enabled});
+  }
+  // A missing source is a draft until explicit first confirmation, even if other
+  // sources are already present in the configuration.
+  const beforeRemoval = await ui.invoke('get_monitoring_settings');
+  const unconfirmed = {...beforeRemoval,onboarding_complete:false,sources:beforeRemoval.sources.filter((s:any)=>s.id!=='local_file')};
+  await ui.invoke('save_monitoring_settings',{settings:unconfirmed,expected:beforeRemoval});
+  await ui.wait(`!document.querySelector('[data-wrapper-source] details')`);
+  await ui.evaluate(`document.querySelector('${wrapperSwitch}').click()`);
+  await ui.wait(`document.querySelector('${wrapperSwitch}').checked && !!document.querySelector('.ms-foot .primary')`);
+  const draftBaseline = await ui.invoke('get_monitoring_settings');
+  assert.equal(draftBaseline.onboarding_complete,false);
+  assert.ok(!draftBaseline.sources.some((s:any)=>s.id==='local_file'));
+  await ui.evaluate(`document.querySelector('.ms-foot .primary').click()`);
+  await ui.wait(`!document.querySelector('.ms-foot .primary')`);
+  const confirmed = await ui.invoke('get_monitoring_settings');
+  assert.equal(confirmed.onboarding_complete,true);
+  const wrappers = confirmed.sources.filter((s:any)=>s.kind==='hooks');
+  assert.equal(wrappers.length,1);
+  assert.deepEqual([wrappers[0].id,wrappers[0].enabled,wrappers[0].projects],['local_file',true,['*']]);
+  await ui.invoke('save_monitoring_settings',{settings:wrapperBaseline,expected:confirmed});
+  await ui.wait(`!document.querySelector('${wrapperSwitch}').checked`);
   // Actual filesystem aliases produce one picker row without rewriting scopes.
   const aliasProject=join(owned,'public-project');await mkdir(aliasProject);
   const drive=aliasProject[0].toLowerCase(),relative=aliasProject.slice(3).split(String.fromCharCode(92)).join('/');
